@@ -357,7 +357,7 @@ export default function App() {
                     style={{ border: `1px solid ${C.border}`, borderRadius: 7, padding: "6px 12px", fontSize: 13, color: C.text, background: C.white, outline: "none" }} />
                 </div>
               </div>
-              <div style={{ marginLeft: "auto", fontSize: 12, color: C.textLight, background: C.blueLight, color: C.blue, padding: "6px 14px", borderRadius: 20 }}>
+              <div style={{ marginLeft: "auto", fontSize: 12, background: C.blueLight, color: C.blue, padding: "6px 14px", borderRadius: 20 }}>
                 Période : {dates.from} → {dates.to}
               </div>
             </div>
