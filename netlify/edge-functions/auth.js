@@ -1,15 +1,21 @@
 export default async function handler(request, context) {
-    const PASSWORD = Netlify.env.get("DASHBOARD_PASSWORD"); // 👈 Plus de mot de passe en dur
+  const PASSWORD = Netlify.env.get("DASHBOARD_PASSWORD");
 
   const authHeader = request.headers.get("authorization");
 
-  if (authHeader) {
-    const base64 = authHeader.replace("Basic ", "");
-    const decoded = atob(base64);
-    const [, password] = decoded.split(":");
+  if (authHeader && authHeader.startsWith("Basic ")) {
+    try {
+      const base64 = authHeader.slice(6);
+      const decoded = new TextDecoder().decode(
+        Uint8Array.from(atob(base64), c => c.charCodeAt(0))
+      );
+      const password = decoded.split(":").slice(1).join(":");
 
-    if (password === PASSWORD) {
-      return context.next();
+      if (password === PASSWORD) {
+        return context.next();
+      }
+    } catch (e) {
+      // décodage échoué
     }
   }
 
