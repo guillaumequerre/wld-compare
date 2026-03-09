@@ -1,5 +1,5 @@
 export default async function handler(request, context) {
-  const PASSWORD = Netlify.env.get("DASHBOARD_PASSWORD");
+  const PASSWORD = Deno.env.get("DASHBOARD_PASSWORD");
 
   const authHeader = request.headers.get("authorization");
 
