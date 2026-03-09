@@ -161,11 +161,15 @@ function extractGA(rows) {
 // ── EXTRACT BING ─────────────────────────────────────────────
 function extractBing(rows) {
   if (!rows.length) return null;
-  const mentions = rows.map(r => safeNum(r["mentions"] || r["impressions"] || r["appearancecount"] || 0));
-  const clicks   = rows.map(r => safeNum(r["clicks"] || r["clics"] || r["clickcount"] || 0));
+  const mentions = rows.map(r => safeNum(
+    r["citations"] || r["mentions"] || r["impressions"] || r["appearancecount"] || 0
+  ));
+  const clicks = rows.map(r => safeNum(
+    r["clicks"] || r["clics"] || r["clickcount"] || 0
+  ));
   return {
-    geoMentions: mentions.reduce((a,b)=>a+b,0),
-    geoClicks:   clicks.reduce((a,b)=>a+b,0),
+    geoMentions: mentions.reduce((a, b) => a + b, 0),
+    geoClicks:   clicks.reduce((a, b) => a + b, 0),
   };
 }
 
