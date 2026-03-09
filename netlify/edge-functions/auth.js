@@ -1,5 +1,5 @@
 export default async function handler(request, context) {
-  const PASSWORD = "wld-tool-001"; // 👈 Changez ici
+    const PASSWORD = Netlify.env.get("DASHBOARD_PASSWORD"); // 👈 Plus de mot de passe en dur
 
   const authHeader = request.headers.get("authorization");
 
