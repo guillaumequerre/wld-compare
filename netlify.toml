@@ -15,3 +15,8 @@
 [[edge_functions]]
   function = "supabase-proxy"
   path = "/api/supabase/*"
+
+  [[edge_functions]]
+  function = "anthropic-proxy"
+  path = "/api/anthropic"
+```

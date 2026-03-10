@@ -167,7 +167,8 @@ function intraCorr(sfRows, gscRows, gaRows, bingRows, dimKey, kpiKey) {
   for (const r of sfRows) {
     const ct = (r["type de contenu"] || r["content type"] || "").toLowerCase();
     const sc = safeNum(r["code http"] || r["status code"] || 200);
-    if ((!ct.includes("html") && ct !== "") || sc >= 400) continue;
+    const isHtml = ct.includes("html") || (ct === "" && (r["title 1"] || r["h1-1"] || r["h1"] || "").trim() !== "");
+    if (!isHtml || sc >= 400) continue;
 
     const sfRaw = r["adresse"] || r["address"] || r["url"] || "";
 
@@ -364,7 +365,10 @@ function extractSF(rows, mode = "all", bingRows = [], gscRows = []) {
   const html = filtered.filter(r => {
     const ct = (r["type de contenu"] || r["content type"] || r["type"] || "").toLowerCase();
     const sc = safeNum(r["code http"] || r["status code"] || r["statuscode"] || 200);
-    return (ct.includes("html") || ct === "") && sc < 400;
+    // Exclure les ressources (images, css, js, fonts...) — garder uniquement text/html
+    // Si ct vide, vérifier qu'il y a un title ou h1 (signe que c'est une vraie page)
+    const isHtml = ct.includes("html") || (ct === "" && (r["title 1"] || r["h1-1"] || r["h1"] || "").trim() !== "");
+    return isHtml && sc < 400;
   });
   const total = html.length || 1;
   const allTotal = filtered.length || 1;
@@ -708,7 +712,7 @@ function AnalyseTab({ metrics, corrMatrix, resultVals, analysis, setAnalysis, an
     setAnalysisError(null);
     try {
       const prompt = buildPrompt(metrics, corrMatrix, resultVals);
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
+      const res = await fetch("/api/anthropic", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1038,7 +1042,6 @@ export default function App() {
   const [analysis, setAnalysis] = useState(null);
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [analysisError, setAnalysisError] = useState(null);
-  const [corrLoading, setCorrLoading] = useState(false);
 
   const [sfData,   setSfData]   = useState({ wedig: [], deux: [], lets: [] });
   const [gscData,  setGscData]  = useState({ wedig: [], deux: [], lets: [] });
@@ -1127,7 +1130,6 @@ export default function App() {
     const gscRows  = matrixSites.flatMap(id => gscData[id]  || []);
     const gaRows   = matrixSites.flatMap(id => gaData[id]   || []);
     const bingRows = matrixSites.flatMap(id => bingData[id] || []);
-    setCorrLoading(false);
     return SF_DIMS.map(dim => ({
       dim,
       corrs: RES_KPIS.map(kpi => {
@@ -1138,7 +1140,6 @@ export default function App() {
   }, [matrixSites, sfData, gscData, gaData, bingData]);
 
   // Trigger loading spinner when deps change
-  useEffect(() => { setCorrLoading(true); }, [matrixSites, sfData, gscData, gaData, bingData]);
 
   const radarData = useMemo(() => RADAR_DIMS.map(d => {
     const row = { dim: d.label };
@@ -1442,13 +1443,8 @@ export default function App() {
                 <tbody>
                   {matrixSites.length === 0 ? (
                     <tr><td colSpan={RES_KPIS.length + 1} style={{ padding: 40, textAlign: "center", color: C.textLight, fontSize: 13 }}>Sélectionnez au moins un site pour afficher la matrice</td></tr>
-                  ) : corrLoading ? (
-                    <tr><td colSpan={RES_KPIS.length + 1} style={{ padding: 48, textAlign: "center" }}>
-                      <div style={{ display: "inline-flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
-                        <div style={{ width: 32, height: 32, border: `3px solid ${C.blueLight}`, borderTop: `3px solid ${C.blue}`, borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
-                        <span style={{ fontSize: 13, color: C.textLight }}>Calcul des corrélations en cours…</span>
-                      </div>
-                    </td></tr>
+                  ) : matrixSites.every(id => !sfData[id]?.length) ? (
+                    <tr><td colSpan={RES_KPIS.length + 1} style={{ padding: 40, textAlign: "center", color: C.textLight, fontSize: 13 }}>Chargez un fichier Screaming Frog pour afficher la matrice</td></tr>
                   ) : filteredCorrMatrix.map(({ dim, corrs }, ri) => (
                     <tr key={dim.key} style={{ background: ri % 2 === 0 ? C.white : "#FAFBFC" }}>
                       <SfDimCell dim={dim} rowBg={ri % 2 === 0 ? C.white : "#FAFBFC"} />
