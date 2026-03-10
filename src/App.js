@@ -1263,7 +1263,23 @@ export default function App() {
   const [dbLoading,    setDbLoading]    = useState(true);
   const [showHistory,  setShowHistory]  = useState(false);
 
-  // Load projects list on mount
+  // Shared: download + inject all latest CSVs for a given project id
+  const loadedProjectsRef = useRef(new Set());
+  const loadProjectData = useCallback(async (pid) => {
+    const [latest, history] = await Promise.all([sbGetLatest(pid), sbGetHistory(pid)]);
+    setDbHistory(history);
+    await Promise.all(Object.values(latest).map(async (row) => {
+      try {
+        const text = await sbDownload(row.storage_path);
+        const rows = parseCSV(text);
+        const sid = row.site_id, src = row.source;
+        const key = src === "sf" ? "sfData" : src === "gsc" ? "gscData" : src === "ga" ? "gaData" : src === "bing" ? "bingData" : null;
+        if (key) setProjects(prev => prev.map(p => p.id === pid ? {...p, [key]: {...p[key], [sid]: rows}} : p));
+      } catch(e) { console.warn("Auto-load row failed:", row.source, e); }
+    }));
+  }, []);
+
+  // Load projects list + data on mount
   useEffect(() => {
     (async () => {
       setDbLoading(true);
@@ -1278,22 +1294,13 @@ export default function App() {
             bingData: emptyDataMap(p.sites),
           }));
           setProjects(restored);
-          setCurrentProjectId(restored[0].id);
-          const [latest, history] = await Promise.all([sbGetLatest(restored[0].id), sbGetHistory(restored[0].id)]);
-          setDbHistory(history);
-          for (const row of Object.values(latest)) {
-            try {
-              const text = await sbDownload(row.storage_path);
-              const rows = parseCSV(text);
-              const sid = row.site_id, src = row.source;
-              if (src === "sf")   setProjects(prev => prev.map(p => p.id === restored[0].id ? {...p, sfData:   {...p.sfData,   [sid]: rows}} : p));
-              if (src === "gsc")  setProjects(prev => prev.map(p => p.id === restored[0].id ? {...p, gscData:  {...p.gscData,  [sid]: rows}} : p));
-              if (src === "ga")   setProjects(prev => prev.map(p => p.id === restored[0].id ? {...p, gaData:   {...p.gaData,   [sid]: rows}} : p));
-              if (src === "bing") setProjects(prev => prev.map(p => p.id === restored[0].id ? {...p, bingData: {...p.bingData, [sid]: rows}} : p));
-            } catch(e) { console.warn("Auto-load row failed:", e); }
-          }
+          const firstId = restored[0].id;
+          setCurrentProjectId(firstId);
+          loadedProjectsRef.current.add(firstId); // prevent switch useEffect from double-loading
+          await loadProjectData(firstId);
         } else {
           await sbSaveProject(INITIAL_PROJECT);
+          loadedProjectsRef.current.add(INITIAL_PROJECT.id);
           const history = await sbGetHistory(INITIAL_PROJECT.id);
           setDbHistory(history);
         }
@@ -1302,31 +1309,17 @@ export default function App() {
     })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // When switching project: refresh history + auto-load latest CSVs
-  const loadedProjectsRef = useRef(new Set());
+  // When switching project: load its data (once per session)
   useEffect(() => {
     if (loadedProjectsRef.current.has(currentProjectId)) return;
     loadedProjectsRef.current.add(currentProjectId);
     (async () => {
       setDbLoading(true);
-      try {
-        const [latest, history] = await Promise.all([sbGetLatest(currentProjectId), sbGetHistory(currentProjectId)]);
-        setDbHistory(history);
-        for (const row of Object.values(latest)) {
-          try {
-            const text = await sbDownload(row.storage_path);
-            const rows = parseCSV(text);
-            const sid = row.site_id, src = row.source, pid = currentProjectId;
-            if (src === "sf")   setProjects(prev => prev.map(p => p.id === pid ? {...p, sfData:   {...p.sfData,   [sid]: rows}} : p));
-            if (src === "gsc")  setProjects(prev => prev.map(p => p.id === pid ? {...p, gscData:  {...p.gscData,  [sid]: rows}} : p));
-            if (src === "ga")   setProjects(prev => prev.map(p => p.id === pid ? {...p, gaData:   {...p.gaData,   [sid]: rows}} : p));
-            if (src === "bing") setProjects(prev => prev.map(p => p.id === pid ? {...p, bingData: {...p.bingData, [sid]: rows}} : p));
-          } catch(e) { console.warn("Auto-load row failed:", e); }
-        }
-      } catch(e) { console.warn("Supabase project switch error", e); }
+      try { await loadProjectData(currentProjectId); }
+      catch(e) { console.warn("Supabase project switch error", e); }
       finally { setDbLoading(false); }
     })();
-  }, [currentProjectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [currentProjectId, loadProjectData]);
 
   // Auto-save project meta (name + sites) when it changes
   useEffect(() => {
