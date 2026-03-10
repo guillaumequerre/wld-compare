@@ -13,11 +13,38 @@ const C = {
   teal: "#0891B2", tealLight: "#ECFEFF",
 };
 
-const SITES = [
-  { id: "wedig", label: "wedig.fr",      color: "#2563EB", bg: "#EFF6FF" },
-  { id: "deux",  label: "deux.io",       color: "#059669", bg: "#ECFDF5" },
-  { id: "lets",  label: "lets-clic.com", color: "#7C3AED", bg: "#F5F3FF" },
+// Color palette for up to 3 sites
+const SITE_PALETTE = [
+  { color: "#2563EB", bg: "#EFF6FF" },
+  { color: "#059669", bg: "#ECFDF5" },
+  { color: "#7C3AED", bg: "#F5F3FF" },
 ];
+const DEFAULT_SITES = [
+  { id: "site-1", label: "wedig.fr",      color: "#2563EB", bg: "#EFF6FF" },
+  { id: "site-2", label: "deux.io",       color: "#059669", bg: "#ECFDF5" },
+  { id: "site-3", label: "lets-clic.com", color: "#7C3AED", bg: "#F5F3FF" },
+];
+// Helper to build empty data map from sites array
+function emptyDataMap(sites) {
+  return Object.fromEntries(sites.map(s => [s.id, []]));
+}
+
+// Build a fresh project object
+function newProject(name, sites) {
+  return {
+    id: `proj-${Date.now()}-${Math.random().toString(36).slice(2,6)}`,
+    name,
+    sites,
+    sfData:   emptyDataMap(sites),
+    gscData:  emptyDataMap(sites),
+    gaData:   emptyDataMap(sites),
+    bingData: emptyDataMap(sites),
+  };
+}
+
+const INITIAL_PROJECT = newProject("Projet 1", DEFAULT_SITES);
+// Override id so it's stable
+INITIAL_PROJECT.id = "proj-default";
 
 // ── SF DIMENSIONS ───────────────────────────────────────────────
 const SF_DIMS = [
@@ -639,40 +666,31 @@ INSTRUCTIONS:
 Produis un JSON STRICT avec exactement cette structure (rien d'autre, pas de markdown, pas de backticks):
 {
   "insights_seo": [
-    {"title": "titre court", "detail": "explication 2-3 phrases basée sur les données", "impact": "fort|moyen|faible"}
+    {"title": "titre court", "detail": "1-2 phrases max", "impact": "fort|moyen|faible"}
   ],
   "insights_geo": [
-    {"title": "titre court", "detail": "explication 2-3 phrases basée sur les données", "impact": "fort|moyen|faible"}
+    {"title": "titre court", "detail": "1-2 phrases max", "impact": "fort|moyen|faible"}
   ],
   "roadmaps": {
-    "wedig": {
-      "quick_wins": [
-        {"action": "action concrète", "metric": "métrique SF concernée", "why": "pourquoi basé sur les données", "effort": "1-3j|1sem|2sem"}
-      ],
-      "moyen_terme": [
-        {"action": "action concrète", "metric": "métrique SF concernée", "why": "pourquoi basé sur les données", "effort": "1mois|2mois|3mois"}
-      ],
-      "long_terme": [
-        {"action": "action concrète", "metric": "métrique SF concernée", "why": "pourquoi basé sur les données", "effort": "3-6mois|6-12mois"}
-      ]
-    },
-    "deux": { "quick_wins": [], "moyen_terme": [], "long_terme": [] },
-    "lets": { "quick_wins": [], "moyen_terme": [], "long_terme": [] }
+    ${metrics.map((m, i) => `"${m.site.id}": ${i === 0
+      ? `{"quick_wins": [{"action": "action concrète", "metric": "métrique SF concernée", "why": "pourquoi basé sur les données", "effort": "1-3j|1sem|2sem"}], "moyen_terme": [{"action": "action concrète", "metric": "métrique SF concernée", "why": "pourquoi basé sur les données", "effort": "1mois|2mois|3mois"}], "long_terme": [{"action": "action concrète", "metric": "métrique SF concernée", "why": "pourquoi basé sur les données", "effort": "3-6mois|6-12mois"}]}`
+      : `{"quick_wins": [], "moyen_terme": [], "long_terme": []}`
+    }`).join(",\n    ")}
   }
 }
 
 Règles:
-- 3 à 5 insights SEO et 3 à 5 insights GEO
-- 3 à 5 actions par horizon temporel par site
-- Chaque action doit être concrète, mesurable et basée sur les données fournies
-- Distingue clairement les leviers SEO (GSC/GA4) des leviers GEO (Bing AI)
-- Utilise les corrélations pour justifier les priorités
-- Réponds UNIQUEMENT avec le JSON, sans texte avant ou après`;
+- 3 insights SEO et 3 insights GEO maximum
+- 2 actions par horizon temporel par site maximum
+- Chaque action doit être concrète et basée sur les données
+- Distingue les leviers SEO (GSC/GA4) des leviers GEO (Bing AI)
+- Réponds UNIQUEMENT avec le JSON valide et complet, sans texte avant ou après
+- IMPORTANT: le JSON doit être complet et bien fermé, ne tronque pas`;
 }
 
 // ── ANALYSE TAB COMPONENT ────────────────────────────────────────
 function AnalyseTab({ metrics, corrMatrix, resultVals, analysis, setAnalysis, analysisLoading, setAnalysisLoading, analysisError, setAnalysisError }) {
-  const [activeRoadmap, setActiveRoadmap] = useState("wedig");
+  const [activeRoadmap, setActiveRoadmap] = useState(DEFAULT_SITES[0].id);
   const hasData = metrics.some(m => m.sf !== null);
 
   const runAnalysis = async () => {
@@ -685,20 +703,45 @@ function AnalyseTab({ metrics, corrMatrix, resultVals, analysis, setAnalysis, an
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: "claude-sonnet-4-20250514",
-          max_tokens: 2000,
+          max_tokens: 3500,
           messages: [{ role: "user", content: prompt }],
         }),
       });
       const text = await res.text();
-      if (!res.ok) throw new Error(`Proxy error ${res.status}: ${text.slice(0, 120)}`);
+      if (res.status === 500) {
+        let msg = text.slice(0, 200);
+        try { const j = JSON.parse(text); msg = j.error || msg; } catch {}
+        throw new Error(`Erreur serveur (500) — vérifiez que ANTHROPIC_API_KEY est configurée dans Netlify. Détail : ${msg}`);
+      }
+      if (!res.ok) {
+        let msg = text.slice(0, 200);
+        try { const j = JSON.parse(text); msg = j.error?.message || j.error || msg; } catch {}
+        throw new Error(`Erreur ${res.status} : ${msg}`);
+      }
       const data = JSON.parse(text);
       if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
       const raw = data.content?.map(b => b.text || "").join("") || "";
       const clean = raw.replace(/```json|```/g, "").trim();
       const start = clean.indexOf("{");
       const end = clean.lastIndexOf("}");
-      const parsed = JSON.parse(clean.substring(start, end + 1));
-      setAnalysis(parsed);
+      if (start === -1 || end === -1) throw new Error("La réponse ne contient pas de JSON valide");
+      let jsonStr = clean.substring(start, end + 1);
+      // Fix truncated arrays/objects caused by token limit
+      let attempts = 0;
+      while (attempts++ < 20) {
+        try { const parsed = JSON.parse(jsonStr); setAnalysis(parsed); break; }
+        catch {
+          // Remove last incomplete element and close structures
+          jsonStr = jsonStr
+            .replace(/,\s*"[^"]*"\s*:\s*[^,}\]]*$/, "")  // trailing key:value
+            .replace(/,\s*\{[^}]*$/, "")                   // trailing open object
+            .replace(/,\s*"[^"]*"$/, "");                  // trailing string
+          // Close any open arrays/objects
+          const opens = (jsonStr.match(/\[/g)||[]).length - (jsonStr.match(/\]/g)||[]).length;
+          const objs  = (jsonStr.match(/\{/g)||[]).length - (jsonStr.match(/\}/g)||[]).length;
+          jsonStr += "]".repeat(Math.max(0,opens)) + "}".repeat(Math.max(0,objs));
+        }
+      }
     } catch(e) {
       setAnalysisError("Erreur lors de l'analyse : " + e.message);
     } finally {
@@ -807,7 +850,7 @@ function AnalyseTab({ metrics, corrMatrix, resultVals, analysis, setAnalysis, an
             <div style={{ padding: "20px 24px", borderBottom: `1px solid ${C.border}` }}>
               <div style={{ fontWeight: 700, fontSize: 15, color: C.text, marginBottom: 12 }}>🗺️ Roadmaps par site</div>
               <div style={{ display: "flex", gap: 8 }}>
-                {SITES.map(s => (
+                {sites.map(s => (
                   <button key={s.id} onClick={() => setActiveRoadmap(s.id)} style={{
                     padding: "7px 18px", border: `1px solid ${activeRoadmap === s.id ? s.color : C.border}`,
                     borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: activeRoadmap === s.id ? 700 : 400,
@@ -1107,18 +1150,55 @@ function CorrCell({ kpi, value, n, dim, base, delta, showDelta }) {
 
 // ── MAIN APP ────────────────────────────────────────────────────
 export default function App() {
+  // ── Projects ──
+  const [projects, setProjects] = useState([INITIAL_PROJECT]);
+  const [currentProjectId, setCurrentProjectId] = useState(INITIAL_PROJECT.id);
+  const [projectMenuOpen, setProjectMenuOpen] = useState(false);
+  const [editingProjectName, setEditingProjectName] = useState(null); // project id being renamed
+
+  const currentProject = projects.find(p => p.id === currentProjectId) || projects[0];
+
+  // Helpers to mutate current project's data
+  const updateProject = (updater) => setProjects(prev => prev.map(p => p.id === currentProjectId ? {...p, ...updater(p)} : p));
+
+  // Derived from current project
+  const sites    = currentProject.sites;
+  const sfData   = currentProject.sfData;
+  const gscData  = currentProject.gscData;
+  const gaData   = currentProject.gaData;
+  const bingData = currentProject.bingData;
+
+  const setSites   = (fn) => updateProject(p => ({ sites:   typeof fn === "function" ? fn(p.sites)   : fn }));
+  const setSfData  = (fn) => updateProject(p => ({ sfData:  typeof fn === "function" ? fn(p.sfData)  : fn }));
+  const setGscData = (fn) => updateProject(p => ({ gscData: typeof fn === "function" ? fn(p.gscData) : fn }));
+  const setGaData  = (fn) => updateProject(p => ({ gaData:  typeof fn === "function" ? fn(p.gaData)  : fn }));
+  const setBingData= (fn) => updateProject(p => ({ bingData:typeof fn === "function" ? fn(p.bingData): fn }));
+
+  const [confirmModal, setConfirmModal] = useState(null); // {message, onConfirm}
   const [tab, setTab] = useState("import");
   const [pageMode, setPageMode] = useState("all");
-  const [matrixSites, setMatrixSites] = useState(["wedig", "deux", "lets"]);
-  const [radarSites,  setRadarSites]  = useState(["wedig", "deux", "lets"]);
+  const [matrixSites, setMatrixSites] = useState(DEFAULT_SITES.map(s => s.id));
+  const [radarSites,  setRadarSites]  = useState(DEFAULT_SITES.map(s => s.id));
   const [analysis, setAnalysis] = useState(null);
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [analysisError, setAnalysisError] = useState(null);
 
-  const [sfData,   setSfData]   = useState({ wedig: [], deux: [], lets: [] });
-  const [gscData,  setGscData]  = useState({ wedig: [], deux: [], lets: [] });
-  const [gaData,   setGaData]   = useState({ wedig: [], deux: [], lets: [] });
-  const [bingData, setBingData] = useState({ wedig: [], deux: [], lets: [] });
+  // Sync selection states when project or sites change
+  useEffect(() => {
+    const ids = sites.map(s => s.id);
+    setMatrixSites(ids);
+    setRadarSites(ids);
+    setActiveRoadmap(ids[0]);
+    setAnalysis(null);
+    setAnalysisError(null);
+  }, [currentProjectId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const ids = sites.map(s => s.id);
+    setMatrixSites(prev => { const kept = prev.filter(id => ids.includes(id)); return kept.length ? kept : ids; });
+    setRadarSites(prev => { const kept = prev.filter(id => ids.includes(id)); return kept.length ? kept : ids; });
+    setActiveRoadmap(prev => ids.includes(prev) ? prev : ids[0]);
+  }, [sites]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const today = new Date().toISOString().slice(0,10);
   const m3ago = new Date(Date.now() - 90*86400000).toISOString().slice(0,10);
@@ -1162,14 +1242,14 @@ export default function App() {
 
   // Computed metrics, mode-aware
   const baseMetrics = useMemo(() => {
-    return SITES.map(s => ({
+    return sites.map(s => ({
       site: s,
       sf: extractSF(sfData[s.id], "all", bingData[s.id], gscData[s.id]),
     }));
-  }, [sfData, gscData, bingData]);
+  }, [sites, sfData, gscData, bingData]);
 
   const metrics = useMemo(() => {
-    return SITES.map((s, si) => {
+    return sites.map((s, si) => {
       const sfRows   = sfData[s.id];
       const bingRows = bingData[s.id];
       return {
@@ -1181,7 +1261,7 @@ export default function App() {
         bing: extractBing(bingRows),
       };
     });
-  }, [sfData, gscData, gaData, bingData, pageMode, baseMetrics]);
+  }, [sites, sfData, gscData, gaData, bingData, pageMode, baseMetrics]);
 
   const resultVals = useMemo(() => metrics.map(m => ({
     clicks:          m.gsc?.clicks          ?? 0,
@@ -1261,7 +1341,72 @@ export default function App() {
               <span style={{ color: "#fff", fontSize: 14, fontWeight: 800 }}>C</span>
             </div>
             <span style={{ fontWeight: 700, fontSize: 15, letterSpacing: -0.3 }}>CorrelDash</span>
-            <span style={{ color: C.textLight, fontSize: 13, marginLeft: 4 }}>· SEO × GEO × Performance</span>
+            {/* Project dropdown */}
+            <div style={{ position: "relative", marginLeft: 8 }}>
+              <button
+                onClick={() => setProjectMenuOpen(o => !o)}
+                style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 12px", border: `1px solid ${C.border}`, borderRadius: 8, background: C.bg, cursor: "pointer", fontSize: 13, fontWeight: 600, color: C.text }}
+              >
+                <span style={{ color: C.blue }}>◈</span>
+                {editingProjectName === currentProjectId ? (
+                  <input
+                    autoFocus
+                    value={currentProject.name}
+                    onClick={e => e.stopPropagation()}
+                    onChange={e => setProjects(prev => prev.map(p => p.id === currentProjectId ? {...p, name: e.target.value} : p))}
+                    onBlur={() => setEditingProjectName(null)}
+                    onKeyDown={e => e.key === "Enter" && setEditingProjectName(null)}
+                    style={{ border: "none", outline: "none", background: "transparent", fontSize: 13, fontWeight: 600, color: C.text, width: 120 }}
+                  />
+                ) : (
+                  <span>{currentProject.name}</span>
+                )}
+                <span style={{ fontSize: 10, color: C.textLight }}>▾</span>
+              </button>
+              {projectMenuOpen && (
+                <div style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, background: C.white, border: `1px solid ${C.border}`, borderRadius: 10, boxShadow: "0 8px 32px rgba(0,0,0,0.12)", minWidth: 220, zIndex: 200, overflow: "hidden" }}
+                  onMouseLeave={() => setProjectMenuOpen(false)}>
+                  <div style={{ padding: "8px 0" }}>
+                    {projects.map(p => (
+                      <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", background: p.id === currentProjectId ? C.blueLight : "transparent", cursor: "pointer" }}
+                        onClick={() => { setCurrentProjectId(p.id); setProjectMenuOpen(false); }}>
+                        <span style={{ flex: 1, fontSize: 13, fontWeight: p.id === currentProjectId ? 700 : 400, color: p.id === currentProjectId ? C.blue : C.text }}>{p.name}</span>
+                        <span style={{ fontSize: 11, color: C.textLight }}>{p.sites.length} site{p.sites.length > 1 ? "s" : ""}</span>
+                        <button
+                          title="Renommer"
+                          onClick={e => { e.stopPropagation(); setCurrentProjectId(p.id); setEditingProjectName(p.id); setProjectMenuOpen(false); }}
+                          style={{ padding: "2px 6px", border: "none", background: "transparent", cursor: "pointer", fontSize: 13, color: C.textLight }}
+                        >✏️</button>
+                        {projects.length > 1 && (
+                          <button
+                            title="Supprimer ce projet"
+                            onClick={e => { e.stopPropagation(); setProjectMenuOpen(false); setConfirmModal({ message: `Supprimer le projet "${p.name}" ?`, onConfirm: () => {
+                              setProjects(prev => { const next = prev.filter(x => x.id !== p.id); if (currentProjectId === p.id) setCurrentProjectId(next[0].id); return next; });
+                            }}); }}
+                            style={{ padding: "2px 6px", border: "none", background: "transparent", cursor: "pointer", fontSize: 13, color: "#DC2626" }}
+                          >✕</button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ borderTop: `1px solid ${C.border}`, padding: "8px 14px" }}>
+                    {projects.length < 5 ? (
+                      <button
+                        onClick={() => {
+                          const p = newProject(`Projet ${projects.length + 1}`, [{ id: `site-${Date.now()}`, label: "Nouveau site", ...SITE_PALETTE[0] }]);
+                          setProjects(prev => [...prev, p]);
+                          setCurrentProjectId(p.id);
+                          setProjectMenuOpen(false);
+                        }}
+                        style={{ width: "100%", padding: "7px 0", border: `1px dashed ${C.blue}`, borderRadius: 7, background: C.blueLight, color: C.blue, cursor: "pointer", fontSize: 13, fontWeight: 600 }}
+                      >+ Nouveau projet</button>
+                    ) : (
+                      <div style={{ fontSize: 12, color: C.textLight, textAlign: "center" }}>Maximum 5 projets atteint</div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
           <div style={{ display: "flex", gap: 2 }}>
             {TABS.map(t => (
@@ -1307,7 +1452,7 @@ export default function App() {
                 ) : (
                   <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 320, overflowY: "auto" }}>
                     {dbHistory.map(row => {
-                      const site = SITES.find(s => s.id === row.site_id);
+                      const site = sites.find(s => s.id === row.site_id);
                       const srcLabel = { sf: "🕷️ SF", gsc: "🔍 GSC", ga: "📊 GA4", bing: "🤖 Bing" }[row.source] || row.source;
                       return (
                         <div key={row.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: C.bg, borderRadius: 8, fontSize: 12 }}>
@@ -1345,28 +1490,60 @@ export default function App() {
               </div>
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 20 }}>
-              {SITES.map(site => (
+            <div style={{ display: "grid", gridTemplateColumns: `repeat(${Math.min(sites.length + (sites.length < 3 ? 1 : 0), 3)}, 1fr)`, gap: 20 }}>
+              {sites.map(site => (
                 <div key={site.id} style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: 24 }}>
+                  {/* Site header with editable name */}
                   <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20, paddingBottom: 16, borderBottom: `1px solid ${C.borderLight}` }}>
-                    <div style={{ width: 36, height: 36, borderRadius: 10, background: site.bg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>🌐</div>
-                    <div>
-                      <div style={{ fontWeight: 700, fontSize: 15, color: site.color }}>{site.label}</div>
+                    <div style={{ width: 36, height: 36, borderRadius: 10, background: site.bg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0 }}>🌐</div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <input
+                        value={site.label}
+                        onChange={e => setSites(prev => prev.map(s => s.id === site.id ? {...s, label: e.target.value} : s))}
+                        style={{ fontWeight: 700, fontSize: 15, color: site.color, border: "none", outline: "none", background: "transparent", width: "100%", padding: "2px 0" }}
+                        placeholder="Nom du site"
+                      />
                       <div style={{ fontSize: 11, color: C.textLight }}>4 sources</div>
+                    </div>
+                    {/* Actions menu */}
+                    <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                      <button
+                        title="Vider les imports"
+                        onClick={() => setConfirmModal({ message: `Vider tous les imports de "${site.label}" ?`, onConfirm: () => {
+                          setSfData(p => ({...p, [site.id]: []}));
+                          setGscData(p => ({...p, [site.id]: []}));
+                          setGaData(p => ({...p, [site.id]: []}));
+                          setBingData(p => ({...p, [site.id]: []}));
+                        }})}
+                        style={{ padding: "4px 8px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.white, cursor: "pointer", fontSize: 13, color: C.textLight }}
+                      >🗑</button>
+                      {sites.length > 1 && (
+                        <button
+                          title="Supprimer ce site"
+                          onClick={() => setConfirmModal({ message: `Supprimer le site "${site.label}" et tous ses imports ?`, onConfirm: () => {
+                            setSites(prev => prev.filter(s => s.id !== site.id));
+                            setSfData(p => { const n = {...p}; delete n[site.id]; return n; });
+                            setGscData(p => { const n = {...p}; delete n[site.id]; return n; });
+                            setGaData(p => { const n = {...p}; delete n[site.id]; return n; });
+                            setBingData(p => { const n = {...p}; delete n[site.id]; return n; });
+                          }})}
+                          style={{ padding: "4px 8px", border: `1px solid #FCA5A5`, borderRadius: 6, background: "#FFF5F5", cursor: "pointer", fontSize: 13, color: "#DC2626" }}
+                        >✕</button>
+                      )}
                     </div>
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                     <UploadCard label="Screaming Frog Internal" icon="🕷️" hint="Export interne SF · données techniques uniquement" color={site.color}
-                      loaded={sfData[site.id].length > 0} onData={rows => setSfData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="sf" />
+                      loaded={sfData[site.id]?.length > 0} onData={rows => setSfData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="sf" />
                     <UploadCard label="Google Search Console" icon="🔍" hint="Export GSC · clics, impressions, CTR, position" color={site.color}
-                      loaded={gscData[site.id].length > 0} onData={rows => setGscData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="gsc" />
+                      loaded={gscData[site.id]?.length > 0} onData={rows => setGscData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="gsc" />
                     <UploadCard label="Google Analytics 4" icon="📊" hint="Export GA4 · sessions, vues" color={site.color}
-                      loaded={gaData[site.id].length > 0} onData={rows => setGaData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="ga" />
+                      loaded={gaData[site.id]?.length > 0} onData={rows => setGaData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="ga" />
                     <UploadCard label="Bing AI Performance" icon="🤖" hint="Export Bing Webmaster · colonne Citations" color={site.color}
-                      loaded={bingData[site.id].length > 0} onData={rows => setBingData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="bing" />
+                      loaded={bingData[site.id]?.length > 0} onData={rows => setBingData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="bing" />
                   </div>
                   <div style={{ marginTop: 16, display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    {[["SF", sfData[site.id].length], ["GSC", gscData[site.id].length], ["GA4", gaData[site.id].length], ["Bing", bingData[site.id].length]].map(([src, n]) => (
+                    {[["SF", sfData[site.id]?.length || 0], ["GSC", gscData[site.id]?.length || 0], ["GA4", gaData[site.id]?.length || 0], ["Bing", bingData[site.id]?.length || 0]].map(([src, n]) => (
                       <div key={src} style={{ fontSize: 11, padding: "3px 9px", borderRadius: 20, fontWeight: 600, background: n > 0 ? site.bg : C.borderLight, color: n > 0 ? site.color : C.textLight }}>
                         {src} {n > 0 ? `· ${n}` : "· vide"}
                       </div>
@@ -1374,7 +1551,44 @@ export default function App() {
                   </div>
                 </div>
               ))}
+
+              {/* Add site button */}
+              {sites.length < 3 && (
+                <div
+                  onClick={() => {
+                    const palette = SITE_PALETTE[sites.length] || SITE_PALETTE[0];
+                    const newId = `site-${Date.now()}`;
+                    const newSite = { id: newId, label: `Site ${sites.length + 1}`, ...palette };
+                    setSites(prev => [...prev, newSite]);
+                    setSfData(p => ({...p, [newId]: []}));
+                    setGscData(p => ({...p, [newId]: []}));
+                    setGaData(p => ({...p, [newId]: []}));
+                    setBingData(p => ({...p, [newId]: []}));
+                  }}
+                  style={{ background: C.white, border: `2px dashed ${C.border}`, borderRadius: 14, padding: 24, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, cursor: "pointer", minHeight: 200, transition: "border-color 0.15s" }}
+                  onMouseEnter={e => e.currentTarget.style.borderColor = C.blue}
+                  onMouseLeave={e => e.currentTarget.style.borderColor = C.border}
+                >
+                  <div style={{ width: 48, height: 48, borderRadius: 12, background: C.blueLight, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, color: C.blue }}>+</div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: C.blue }}>Ajouter un site</div>
+                  <div style={{ fontSize: 12, color: C.textLight, textAlign: "center" }}>Max 3 sites par projet</div>
+                </div>
+              )}
             </div>
+
+            {/* Confirm modal */}
+            {confirmModal && (
+              <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <div style={{ background: C.white, borderRadius: 14, padding: 32, maxWidth: 400, width: "90%", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 12 }}>Confirmer</div>
+                  <div style={{ fontSize: 14, color: C.textMid, marginBottom: 24 }}>{confirmModal.message}</div>
+                  <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                    <button onClick={() => setConfirmModal(null)} style={{ padding: "8px 20px", border: `1px solid ${C.border}`, borderRadius: 8, background: C.white, cursor: "pointer", fontSize: 13, color: C.textMid }}>Annuler</button>
+                    <button onClick={() => { confirmModal.onConfirm(); setConfirmModal(null); }} style={{ padding: "8px 20px", border: "none", borderRadius: 8, background: "#DC2626", cursor: "pointer", fontSize: 13, color: "#fff", fontWeight: 600 }}>Confirmer</button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -1503,7 +1717,7 @@ export default function App() {
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
                 <div style={{ fontSize: 13, fontWeight: 600, color: C.textMid }}>Profil technique SF — radar</div>
                 <div style={{ display: "flex", gap: 8 }}>
-                  {SITES.map(s => {
+                  {sites.map(s => {
                     const active = radarSites.includes(s.id);
                     return (
                       <button key={s.id} onClick={() => setRadarSites(prev =>
@@ -1526,7 +1740,7 @@ export default function App() {
                 <RadarChart data={radarData}>
                   <PolarGrid stroke={C.border} />
                   <PolarAngleAxis dataKey="dim" tick={{ fill: C.textLight, fontSize: 11 }} />
-                  {SITES.filter(s => radarSites.includes(s.id)).map(s => <Radar key={s.id} name={s.label} dataKey={s.id} stroke={s.color} fill={s.color} fillOpacity={0.08} strokeWidth={2} dot={{ r: 3 }} />)}
+                  {sites.filter(s => radarSites.includes(s.id)).map(s => <Radar key={s.id} name={s.label} dataKey={s.id} stroke={s.color} fill={s.color} fillOpacity={0.08} strokeWidth={2} dot={{ r: 3 }} />)}
                   <Legend wrapperStyle={{ fontSize: 12 }} />
                 </RadarChart>
               </ResponsiveContainer>
@@ -1545,7 +1759,7 @@ export default function App() {
             {/* Site toggles */}
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
               <span style={{ fontSize: 12, color: C.textLight, fontWeight: 500 }}>Sites inclus dans le calcul :</span>
-              {SITES.map(s => {
+              {sites.map(s => {
                 const active = matrixSites.includes(s.id);
                 return (
                   <button key={s.id} onClick={() => setMatrixSites(prev =>
@@ -1569,7 +1783,7 @@ export default function App() {
               {matrixSites.length > 0 && (
                 <span style={{ fontSize: 11, color: C.purple, background: C.purpleLight, padding: "3px 10px", borderRadius: 20 }}>
                   Pearson par page · {matrixSites.length === 1
-                    ? SITES.find(s => s.id === matrixSites[0])?.label
+                    ? sites.find(s => s.id === matrixSites[0])?.label
                     : `${matrixSites.length} sites combinés`}
                 </span>
               )}
@@ -1647,7 +1861,7 @@ export default function App() {
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 20 }}>
-              {SITES.map(site => {
+              {sites.map(site => {
                 const sfRows   = sfData[site.id];
                 const bingRows = bingData[site.id];
                 const gscRows  = gscData[site.id] || [];
