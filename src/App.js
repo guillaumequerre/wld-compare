@@ -254,19 +254,6 @@ async function sbGetHistory(projectId, limit = 50) {
   return res.json();
 }
 
-async function sbGetLatest(projectId) {
-  const filter = projectId ? `&project_id=eq.${encodeURIComponent(projectId)}` : "";
-  const res = await fetch(`${PROXY}/rest/v1/imports?select=*&order=uploaded_at.desc&limit=200${filter}`);
-  if (!res.ok) return {};
-  const rows = await res.json();
-  const latest = {};
-  for (const row of rows) {
-    const key = `${row.site_id}_${row.source}`;
-    if (!latest[key]) latest[key] = row;
-  }
-  return latest;
-}
-
 async function sbDownload(storage_path) {
   const res = await fetch(`${PROXY}/storage/v1/object/csv-imports/${storage_path}`);
   if (!res.ok) throw new Error(`Download failed: ${res.status}`);
@@ -550,8 +537,9 @@ function SectionHeader({ title, sub }) {
   );
 }
 
-function UploadCard({ label, icon, hint, onData, loaded, color, siteId, source, projectId }) {
-  const [drag, setDrag]       = useState(false);
+function UploadCard({ label, icon, hint, onData, loaded, color, siteId, source, projectId, onLoadFromHistory }) {
+  const [drag, setDrag]           = useState(false);
+  const [dragHistory, setDragHistory] = useState(false); // dragging a history row over this card
   const [uploading, setUploading] = useState(false);
   const [uploadErr, setUploadErr] = useState(null);
   const ref = useRef();
@@ -564,7 +552,6 @@ function UploadCard({ label, icon, hint, onData, loaded, color, siteId, source, 
       const text = e.target.result;
       const rows = parseCSV(text);
       onData(rows);
-      // Upload to Supabase in background
       if (siteId && source) {
         setUploading(true);
         try {
@@ -583,20 +570,51 @@ function UploadCard({ label, icon, hint, onData, loaded, color, siteId, source, 
     reader.readAsText(file);
   }, [onData, siteId, source, projectId]);
 
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    // Distinguish history row drag from file drag
+    const types = Array.from(e.dataTransfer.types);
+    if (types.includes("historyrow")) { setDragHistory(true); setDrag(false); }
+    else { setDrag(true); setDragHistory(false); }
+  };
+  const handleDragLeave = () => { setDrag(false); setDragHistory(false); };
+  const handleDrop = (e) => {
+    e.preventDefault();
+    setDrag(false); setDragHistory(false);
+    const histJson = e.dataTransfer.getData("historyRow");
+    if (histJson) {
+      try {
+        const row = JSON.parse(histJson);
+        onLoadFromHistory && onLoadFromHistory(row);
+      } catch {}
+    } else {
+      handle(e.dataTransfer.files[0]);
+    }
+  };
+
+  const isHistDrag = dragHistory;
+  const borderColor = isHistDrag ? C.blue : drag ? color : loaded ? color : "#D1D5DB";
+  const bgColor     = isHistDrag ? `${C.blue}12` : drag ? `${color}08` : loaded ? `${color}0D` : "#FAFAFA";
+
   return (
     <div
       onClick={() => ref.current.click()}
-      onDragOver={e => { e.preventDefault(); setDrag(true); }}
-      onDragLeave={() => setDrag(false)}
-      onDrop={e => { e.preventDefault(); setDrag(false); handle(e.dataTransfer.files[0]); }}
-      style={{ border: `1.5px dashed ${drag ? color : loaded ? color : "#D1D5DB"}`, borderRadius: 10, padding: "14px 16px", cursor: "pointer", background: loaded ? `${color}0D` : drag ? `${color}08` : "#FAFAFA", transition: "all 0.18s", display: "flex", alignItems: "center", gap: 12 }}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+      style={{ border: `1.5px dashed ${borderColor}`, borderRadius: 10, padding: "14px 16px", cursor: "pointer", background: bgColor, transition: "all 0.18s", display: "flex", alignItems: "center", gap: 12, position: "relative" }}
     >
+      {isHistDrag && (
+        <div style={{ position: "absolute", inset: 0, borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center", background: `${C.blue}18`, fontSize: 13, fontWeight: 700, color: C.blue, pointerEvents: "none" }}>
+          Déposer ici
+        </div>
+      )}
       <input ref={ref} type="file" accept=".csv" style={{ display: "none" }} onChange={e => handle(e.target.files[0])} />
       <div style={{ fontSize: 22 }}>{uploading ? "⏳" : loaded ? "✅" : icon}</div>
       <div>
         <div style={{ fontSize: 13, fontWeight: 600, color: loaded ? color : C.textMid }}>{label}</div>
         <div style={{ fontSize: 11, color: uploadErr ? C.red : C.textLight, marginTop: 2 }}>
-          {uploading ? "Sauvegarde en cours…" : uploadErr ? uploadErr : loaded ? "Fichier chargé · sauvegardé" : hint}
+          {uploading ? "Chargement…" : uploadErr ? uploadErr : loaded ? "Fichier chargé · sauvegardé" : hint}
         </div>
       </div>
     </div>
@@ -1230,31 +1248,15 @@ export default function App() {
   // Supabase state
   const [dbHistory,    setDbHistory]    = useState([]);
   const [dbLoading,    setDbLoading]    = useState(true);
-  const [dbAutoLoaded, setDbAutoLoaded] = useState(false);
   const [showHistory,  setShowHistory]  = useState(false);
 
-  const loadCsv = useCallback(async (row) => {
-    try {
-      const text = await sbDownload(row.storage_path);
-      const rows = parseCSV(text);
-      const src = row.source;
-      const sid = row.site_id;
-      if (src === "sf")   setSfData(p => ({ ...p, [sid]: rows }));
-      if (src === "gsc")  setGscData(p => ({ ...p, [sid]: rows }));
-      if (src === "ga")   setGaData(p => ({ ...p, [sid]: rows }));
-      if (src === "bing") setBingData(p => ({ ...p, [sid]: rows }));
-    } catch(e) { console.warn("Load error", e); }
-  }, [setSfData, setGscData, setGaData, setBingData]);
-
-  // Load projects list + data for initial project on mount
+  // Load projects list on mount
   useEffect(() => {
     (async () => {
       setDbLoading(true);
       try {
-        // Try to restore saved projects list from Supabase
         const savedProjects = await sbLoadProjects();
         if (savedProjects && savedProjects.length > 0) {
-          // Restore projects with empty data maps (data loaded separately)
           const restored = savedProjects.map(p => ({
             ...p,
             sfData:   emptyDataMap(p.sites),
@@ -1263,50 +1265,30 @@ export default function App() {
             bingData: emptyDataMap(p.sites),
           }));
           setProjects(restored);
-          const firstId = restored[0].id;
-          setCurrentProjectId(firstId);
-          // Load data for first project
-          const [latest, history] = await Promise.all([sbGetLatest(firstId), sbGetHistory(firstId)]);
+          setCurrentProjectId(restored[0].id);
+          const history = await sbGetHistory(restored[0].id);
           setDbHistory(history);
-          if (Object.keys(latest).length > 0) {
-            await Promise.all(Object.values(latest).map(row => loadCsv(row)));
-            setDbAutoLoaded(true);
-          }
         } else {
-          // No saved projects — save the initial one and load its data
           await sbSaveProject(INITIAL_PROJECT);
-          const [latest, history] = await Promise.all([sbGetLatest(INITIAL_PROJECT.id), sbGetHistory(INITIAL_PROJECT.id)]);
+          const history = await sbGetHistory(INITIAL_PROJECT.id);
           setDbHistory(history);
-          if (Object.keys(latest).length > 0) {
-            await Promise.all(Object.values(latest).map(row => loadCsv(row)));
-            setDbAutoLoaded(true);
-          }
         }
       } catch(e) { console.warn("Supabase init error", e); }
       finally { setDbLoading(false); }
     })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // When switching project: load its CSV data from Supabase
-  const loadedProjectsRef = useRef(new Set([INITIAL_PROJECT.id]));
+  // When switching project: refresh history
   useEffect(() => {
-    if (loadedProjectsRef.current.has(currentProjectId)) return;
-    loadedProjectsRef.current.add(currentProjectId);
     (async () => {
       setDbLoading(true);
       try {
-        const [latest, history] = await Promise.all([sbGetLatest(currentProjectId), sbGetHistory(currentProjectId)]);
+        const history = await sbGetHistory(currentProjectId);
         setDbHistory(history);
-        if (Object.keys(latest).length > 0) {
-          await Promise.all(Object.values(latest).map(row => loadCsv(row)));
-          setDbAutoLoaded(true);
-        } else {
-          setDbAutoLoaded(false);
-        }
       } catch(e) { console.warn("Supabase project switch error", e); }
       finally { setDbLoading(false); }
     })();
-  }, [currentProjectId, loadCsv]);
+  }, [currentProjectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-save project meta (name + sites) when it changes
   useEffect(() => {
@@ -1551,9 +1533,9 @@ export default function App() {
             {/* DB status banner */}
             <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 20px", marginBottom: 16, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <div style={{ width: 8, height: 8, borderRadius: "50%", background: dbLoading ? C.amber : dbAutoLoaded ? C.green : C.textLight }} />
+                <div style={{ width: 8, height: 8, borderRadius: "50%", background: dbLoading ? C.amber : dbHistory.length > 0 ? C.green : C.textLight }} />
                 <span style={{ fontSize: 13, color: C.textMid }}>
-                  {dbLoading ? "Chargement des derniers imports…" : dbAutoLoaded ? `Données auto-chargées depuis Supabase (${dbHistory.length} imports en base)` : "Aucun import en base — chargez vos CSV ci-dessous"}
+                  {dbLoading ? "Chargement de l'historique…" : dbHistory.length > 0 ? `${dbHistory.length} import${dbHistory.length > 1 ? "s" : ""} en base` : "Aucun import en base — chargez vos CSV ci-dessous"}
                 </span>
               </div>
               <div style={{ display: "flex", gap: 8 }}>
@@ -1575,15 +1557,20 @@ export default function App() {
                       const site = sites.find(s => s.id === row.site_id);
                       const srcLabel = { sf: "🕷️ SF", gsc: "🔍 GSC", ga: "📊 GA4", bing: "🤖 Bing" }[row.source] || row.source;
                       return (
-                        <div key={row.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: C.bg, borderRadius: 8, fontSize: 12 }}>
+                        <div
+                          key={row.id}
+                          draggable
+                          onDragStart={e => { e.dataTransfer.setData("historyRow", JSON.stringify(row)); e.dataTransfer.effectAllowed = "copy"; }}
+                          style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: C.bg, borderRadius: 8, fontSize: 12, cursor: "grab", userSelect: "none" }}
+                          title="Glisser vers une case d'import"
+                        >
+                          <span style={{ fontSize: 14, color: C.textLight, flexShrink: 0 }}>⠿</span>
                           <span style={{ fontWeight: 600, color: site?.color || C.text, minWidth: 90 }}>{site?.label || row.site_id}</span>
                           <span style={{ color: C.textMid, minWidth: 60 }}>{srcLabel}</span>
                           <span style={{ color: C.textLight, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.filename}</span>
                           <span style={{ color: C.textLight, minWidth: 70 }}>{row.row_count} lignes</span>
                           <span style={{ color: C.textLight, minWidth: 140 }}>{new Date(row.uploaded_at).toLocaleString("fr-FR")}</span>
-                          <button onClick={() => loadCsv(row)} style={{ padding: "3px 10px", background: C.blueLight, color: C.blue, border: `1px solid ${C.blue}22`, borderRadius: 6, cursor: "pointer", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>
-                            ↺ Charger
-                          </button>
+
                         </div>
                       );
                     })}
@@ -1664,13 +1651,17 @@ export default function App() {
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                     <UploadCard label="Screaming Frog Internal" icon="🕷️" hint="Export interne SF · données techniques uniquement" color={site.color}
-                      loaded={sfData[site.id]?.length > 0} onData={rows => setSfData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="sf" projectId={currentProjectId} />
+                      loaded={sfData[site.id]?.length > 0} onData={rows => setSfData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="sf" projectId={currentProjectId}
+                      onLoadFromHistory={async row => { try { const text = await sbDownload(row.storage_path); setSfData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn("History load error", e); } }} />
                     <UploadCard label="Google Search Console" icon="🔍" hint="Export GSC · clics, impressions, CTR, position" color={site.color}
-                      loaded={gscData[site.id]?.length > 0} onData={rows => setGscData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="gsc" projectId={currentProjectId} />
+                      loaded={gscData[site.id]?.length > 0} onData={rows => setGscData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="gsc" projectId={currentProjectId}
+                      onLoadFromHistory={async row => { try { const text = await sbDownload(row.storage_path); setGscData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn("History load error", e); } }} />
                     <UploadCard label="Google Analytics 4" icon="📊" hint="Export GA4 · sessions, vues" color={site.color}
-                      loaded={gaData[site.id]?.length > 0} onData={rows => setGaData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="ga" projectId={currentProjectId} />
+                      loaded={gaData[site.id]?.length > 0} onData={rows => setGaData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="ga" projectId={currentProjectId}
+                      onLoadFromHistory={async row => { try { const text = await sbDownload(row.storage_path); setGaData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn("History load error", e); } }} />
                     <UploadCard label="Bing AI Performance" icon="🤖" hint="Export Bing Webmaster · colonne Citations" color={site.color}
-                      loaded={bingData[site.id]?.length > 0} onData={rows => setBingData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="bing" projectId={currentProjectId} />
+                      loaded={bingData[site.id]?.length > 0} onData={rows => setBingData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="bing" projectId={currentProjectId}
+                      onLoadFromHistory={async row => { try { const text = await sbDownload(row.storage_path); setBingData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn("History load error", e); } }} />
                   </div>
                   <div style={{ marginTop: 16, display: "flex", gap: 6, flexWrap: "wrap" }}>
                     {[["SF", sfData[site.id]?.length || 0], ["GSC", gscData[site.id]?.length || 0], ["GA4", gaData[site.id]?.length || 0], ["Bing", bingData[site.id]?.length || 0]].map(([src, n]) => (
