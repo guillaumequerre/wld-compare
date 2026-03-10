@@ -129,6 +129,87 @@ function parseCSV(text) {
   });
 }
 
+
+// ── INTRA-SITE CORRELATION (page-level) ─────────────────────────
+function intraCorr(sfRows, gscRows, gaRows, bingRows, dimKey, kpiKey) {
+  if (!sfRows.length) return null;
+
+  // Build URL-keyed map from GSC / GA4 / Bing
+  const gscMap = {};
+  for (const r of gscRows) {
+    const url = (r["page"] || r["adresse"] || r["address"] || r["url"] || "").trim().toLowerCase();
+    if (url) gscMap[url] = r;
+  }
+  const gaMap = {};
+  for (const r of gaRows) {
+    const url = (r["page"] || r["pagepath"] || r["page path"] || r["adresse"] || r["url"] || "").trim().toLowerCase();
+    if (url) gaMap[url] = r;
+  }
+  const bingMap = {};
+  for (const r of bingRows) {
+    const url = (r["url"] || r["page"] || r["adresse"] || r["address"] || "").trim().toLowerCase();
+    if (url) bingMap[url] = r;
+  }
+
+  const sfVals  = [];
+  const resVals = [];
+
+  for (const r of sfRows) {
+    const url = (r["adresse"] || r["address"] || r["url"] || "").trim().toLowerCase();
+    const ct  = (r["type de contenu"] || r["content type"] || "").toLowerCase();
+    const sc  = safeNum(r["code http"] || r["status code"] || 200);
+    if ((!ct.includes("html") && ct !== "") || sc >= 400) continue;
+
+    // SF dim value for this page
+    let sfVal = 0;
+    if (dimKey === "titleOptRate") {
+      const l = safeNum(r["longueur du title 1"] || r["title 1 length"] || 0) || (r["title 1"] || "").length;
+      sfVal = (l >= 30 && l <= 65) ? 1 : 0;
+    } else if (dimKey === "metaOptRate") {
+      const l = safeNum(r["longueur de la meta description 1"] || r["meta description 1 length"] || 0) || (r["meta description 1"] || "").length;
+      sfVal = (l >= 100 && l <= 160) ? 1 : 0;
+    } else if (dimKey === "h1Rate") {
+      sfVal = (r["h1-1"] || r["h1"] || "").trim() !== "" ? 1 : 0;
+    } else if (dimKey === "avgWords")      { sfVal = safeNum(r["nombre de mots"]   || r["word count"]  || 0); }
+    else if (dimKey === "avgPageSizeKB")   { sfVal = safeNum(r["taille (octets)"]  || r["size"]        || 0) / 1024; }
+    else if (dimKey === "avgInlinks")      { sfVal = safeNum(r["liens entrants"]   || r["inlinks"]     || 0); }
+    else if (dimKey === "avgOutlinks")     { sfVal = safeNum(r["liens sortants"]   || r["outlinks"]    || 0); }
+    else if (dimKey === "avgDepth")        { sfVal = safeNum(r["crawl profondeur"] || r["crawl depth"] || 0); }
+    else if (dimKey === "avgFlesch")       { sfVal = safeNum(r["score de lisibilité de flesch"] || r["flesch reading ease"] || 0); }
+    else if (dimKey === "tableRate") {
+      let has = false;
+      for (let i = 1; i <= 18; i++) { const v = r[`présence table ${i}`] || r[`presence table ${i}`] || ""; if (v && v.trim() !== "" && v.trim() !== "0") { has = true; break; } }
+      sfVal = has ? 1 : 0;
+    } else if (dimKey === "schemaRate") {
+      const jsons = [r["json 1"],r["json 2"],r["json 3"],r["json 4"],r["json 5"]].filter(Boolean).join(" ");
+      sfVal = jsons.length > 0 ? 1 : 0;
+    } else { continue; }
+
+    // KPI value for this page
+    let resVal = null;
+    const gscR = gscMap[url];
+    const gaR  = gaMap[url];
+    if (kpiKey === "clicks")      resVal = gscR ? safeNum(gscR["clics"]         || gscR["clicks"]      || 0) : null;
+    else if (kpiKey === "impressions") resVal = gscR ? safeNum(gscR["impressions"] || 0) : null;
+    else if (kpiKey === "ctr")    resVal = gscR ? safeNum(gscR["ctr"]            || 0) : null;
+    else if (kpiKey === "position") resVal = gscR ? safeNum(gscR["position"]     || 0) : null;
+    else if (kpiKey === "sessions") resVal = gaR  ? safeNum(gaR["sessions"]      || gaR["ga4 sessions"] || 0) : null;
+    else if (kpiKey === "views")  resVal = gaR  ? safeNum(gaR["views"]           || gaR["ga4 views"]    || 0) : null;
+    else if (kpiKey === "geoMentions") {
+      const bingR = bingMap[url];
+      resVal = bingR ? safeNum(bingR["citations"] || bingR["mentions"] || 0) : null;
+    }
+    else resVal = null;
+
+    if (resVal !== null) {
+      sfVals.push(sfVal);
+      resVals.push(resVal);
+    }
+  }
+
+  return sfVals.length >= 5 ? pearson(sfVals, resVals) : null;
+}
+
 // ── SUPABASE CONFIG ──────────────────────────────────────────────
 const PROXY = "/api/supabase";
 
@@ -983,13 +1064,11 @@ export default function App() {
     return SITES.map(s => {
       const sfRows   = sfData[s.id];
       const bingRows = bingData[s.id];
-      const hasSFGsc = sfRows.some(r => safeNum(r["clics"] || r["clicks"] || 0) > 0 || safeNum(r["impressions"] || 0) > 0);
-      const hasSFGa  = sfRows.some(r => safeNum(r["ga4 sessions"] || r["sessions"] || 0) > 0);
       return {
         site: s,
         sf:   extractSF(sfRows, pageMode, bingRows, gscData[s.id]),
-        gsc:  gscData[s.id].length > 0 ? extractGSC(gscData[s.id]) : hasSFGsc ? extractGSC(sfRows) : null,
-        ga:   gaData[s.id].length  > 0 ? extractGA(gaData[s.id])   : hasSFGa  ? extractGA(sfRows)  : null,
+        gsc:  gscData[s.id].length > 0 ? extractGSC(gscData[s.id]) : null,
+        ga:   gaData[s.id].length  > 0 ? extractGA(gaData[s.id])   : null,
         bing: extractBing(bingRows),
       };
     });
@@ -1016,23 +1095,20 @@ export default function App() {
     })),
   })), [metrics, resultVals]);
 
-  // Matrice filtrée selon les sites sélectionnés
-  const filteredMetrics    = useMemo(() => metrics.filter(m => matrixSites.includes(m.site.id)), [metrics, matrixSites]);
-  const filteredResultVals = useMemo(() => {
-    const idxs = SITES.map((s,i) => matrixSites.includes(s.id) ? i : -1).filter(i => i >= 0);
-    return idxs.map(i => resultVals[i]);
-  }, [resultVals, matrixSites]);
-
-  const filteredCorrMatrix = useMemo(() => SF_DIMS.map(dim => ({
-    dim,
-    corrs: RES_KPIS.map(kpi => ({
-      kpi,
-      value: pearson(
-        filteredMetrics.map(m => m.sf ? (m.sf[dim.key] ?? 0) : 0),
-        filteredResultVals.map(r => r[kpi.key] ?? 0)
-      ),
-    })),
-  })), [filteredMetrics, filteredResultVals]);
+  const filteredCorrMatrix = useMemo(() => {
+    // Always intra-site page-level Pearson — concat pages from all selected sites
+    const sfRows   = matrixSites.flatMap(id => sfData[id]   || []);
+    const gscRows  = matrixSites.flatMap(id => gscData[id]  || []);
+    const gaRows   = matrixSites.flatMap(id => gaData[id]   || []);
+    const bingRows = matrixSites.flatMap(id => bingData[id] || []);
+    return SF_DIMS.map(dim => ({
+      dim,
+      corrs: RES_KPIS.map(kpi => ({
+        kpi,
+        value: intraCorr(sfRows, gscRows, gaRows, bingRows, dim.key, kpi.key),
+      })),
+    }));
+  }, [matrixSites, sfData, gscData, gaData, bingData]);
 
   const radarData = useMemo(() => SF_DIMS.slice(0,8).map(d => {
     const row = { dim: d.label.split(" ")[0] };
@@ -1146,64 +1222,23 @@ export default function App() {
                       <div style={{ fontSize: 11, color: C.textLight }}>4 sources</div>
                     </div>
                   </div>
-                  {(() => {
-                    const sfRows = sfData[site.id];
-                    const hasSFGa  = sfRows.some(r => parseFloat(r["ga4 sessions"] || r["sessions"] || 0) > 0);
-                    const hasSFGsc = sfRows.some(r => parseFloat(r["clics"] || r["clicks"] || 0) > 0 || parseFloat(r["impressions"] || 0) > 0);
-                    const hasGaFile = gaData[site.id].length > 0;
-                    const hasGscFile = gscData[site.id].length > 0;
-                    return (
-                      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                        <UploadCard label="Screaming Frog Internal" icon="🕷️" hint="Export interne SF (inclut GA4 + GSC si connectés)" color={site.color}
-                          loaded={sfRows.length > 0} onData={rows => setSfData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="sf" />
-                        {sfRows.length > 0 && (hasSFGa || hasSFGsc) && (
-                          <div style={{ fontSize: 11, color: C.green, background: C.greenLight, borderRadius: 8, padding: "8px 12px", display: "flex", gap: 6 }}>
-                            ✅ Données {[hasSFGsc && "GSC", hasSFGa && "GA4"].filter(Boolean).join(" + ")} détectées dans le fichier SF
-                          </div>
-                        )}
-                        {sfRows.length > 0 && !hasSFGsc && (
-                          <div style={{ fontSize: 11, color: C.blue, background: C.blueLight, borderRadius: 8, padding: "8px 12px" }}>
-                            💡 Aucune donnée GSC dans ce fichier SF — import séparé disponible ci-dessous.
-                          </div>
-                        )}
-                        {!hasSFGsc && (
-                          <UploadCard label="Google Search Console" icon="🔍" hint="Export séparé GSC · clics, impressions, CTR" color={site.color}
-                            loaded={hasGscFile} onData={rows => setGscData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="gsc" />
-                        )}
-                        {!hasSFGa && !hasGaFile && sfRows.length > 0 && (
-                          <div style={{ fontSize: 11, color: C.textLight, background: C.bg, borderRadius: 8, padding: "8px 12px", border: `1px dashed ${C.border}` }}>
-                            ℹ️ Aucune donnée GA4 dans ce fichier SF — pas d'import GA4 nécessaire.
-                          </div>
-                        )}
-                        {!hasSFGa && (
-                          <UploadCard label="Google Analytics 4" icon="📊" hint="Export séparé GA4 · sessions, engagement" color={site.color}
-                            loaded={hasGaFile} onData={rows => setGaData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="ga" />
-                        )}
-                        <UploadCard label="Bing AI Performance" icon="🤖" hint="Export Bing Webmaster · colonne Citations" color={site.color}
-                          loaded={bingData[site.id].length > 0} onData={rows => setBingData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="bing" />
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    <UploadCard label="Screaming Frog Internal" icon="🕷️" hint="Export interne SF · données techniques uniquement" color={site.color}
+                      loaded={sfData[site.id].length > 0} onData={rows => setSfData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="sf" />
+                    <UploadCard label="Google Search Console" icon="🔍" hint="Export GSC · clics, impressions, CTR, position" color={site.color}
+                      loaded={gscData[site.id].length > 0} onData={rows => setGscData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="gsc" />
+                    <UploadCard label="Google Analytics 4" icon="📊" hint="Export GA4 · sessions, vues" color={site.color}
+                      loaded={gaData[site.id].length > 0} onData={rows => setGaData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="ga" />
+                    <UploadCard label="Bing AI Performance" icon="🤖" hint="Export Bing Webmaster · colonne Citations" color={site.color}
+                      loaded={bingData[site.id].length > 0} onData={rows => setBingData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="bing" />
+                  </div>
+                  <div style={{ marginTop: 16, display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {[["SF", sfData[site.id].length], ["GSC", gscData[site.id].length], ["GA4", gaData[site.id].length], ["Bing", bingData[site.id].length]].map(([src, n]) => (
+                      <div key={src} style={{ fontSize: 11, padding: "3px 9px", borderRadius: 20, fontWeight: 600, background: n > 0 ? site.bg : C.borderLight, color: n > 0 ? site.color : C.textLight }}>
+                        {src} {n > 0 ? `· ${n}` : "· vide"}
                       </div>
-                    );
-                  })()}
-                  {(() => {
-                    const sfRows = sfData[site.id];
-                    const hasSFGa  = sfRows.some(r => parseFloat(r["ga4 sessions"] || r["sessions"] || 0) > 0);
-                    const hasSFGsc = sfRows.some(r => parseFloat(r["clics"] || r["clicks"] || 0) > 0 || parseFloat(r["impressions"] || 0) > 0);
-                    const sources = [
-                      ["SF", sfRows.length],
-                      ...(!hasSFGsc ? [["GSC", gscData[site.id].length]] : [["GSC ✓SF", sfRows.length]]),
-                      ...(!hasSFGa  ? [["GA4", gaData[site.id].length]]  : [["GA4 ✓SF", sfRows.length]]),
-                      ["Bing", bingData[site.id].length],
-                    ];
-                    return (
-                      <div style={{ marginTop: 16, display: "flex", gap: 6, flexWrap: "wrap" }}>
-                        {sources.map(([src, n]) => (
-                          <div key={src} style={{ fontSize: 11, padding: "3px 9px", borderRadius: 20, fontWeight: 600, background: n > 0 ? site.bg : C.borderLight, color: n > 0 ? site.color : C.textLight }}>
-                            {src} {n > 0 ? `· ${n}` : "· vide"}
-                          </div>
-                        ))}
-                      </div>
-                    );
-                  })()}
+                    ))}
+                  </div>
                 </div>
               ))}
             </div>
@@ -1340,9 +1375,11 @@ export default function App() {
               {matrixSites.length === 0 && (
                 <span style={{ fontSize: 12, color: C.red, fontStyle: "italic" }}>Aucun site sélectionné — matrice vide</span>
               )}
-              {matrixSites.length < SITES.length && matrixSites.length > 0 && (
-                <span style={{ fontSize: 11, color: C.amber, background: C.amberLight, padding: "3px 10px", borderRadius: 20 }}>
-                  Pearson calculé sur {matrixSites.length} site{matrixSites.length > 1 ? "s" : ""}
+              {matrixSites.length > 0 && (
+                <span style={{ fontSize: 11, color: C.purple, background: C.purpleLight, padding: "3px 10px", borderRadius: 20 }}>
+                  Pearson par page · {matrixSites.length === 1
+                    ? SITES.find(s => s.id === matrixSites[0])?.label
+                    : `${matrixSites.length} sites combinés`}
                 </span>
               )}
             </div>
