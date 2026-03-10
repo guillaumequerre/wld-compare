@@ -19,4 +19,3 @@
   [[edge_functions]]
   function = "anthropic-proxy"
   path = "/api/anthropic"
-```
