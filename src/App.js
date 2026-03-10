@@ -115,18 +115,37 @@ const SCHEMA_TYPES = [
 ];
 
 // ── HELPERS ─────────────────────────────────────────────────────
+function splitCSVLine(line, sep) {
+  const fields = [];
+  let cur = "", inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQ && line[i+1] === '"') { cur += '"'; i++; }
+      else inQ = !inQ;
+    } else if (ch === sep && !inQ) {
+      fields.push(cur); cur = "";
+    } else { cur += ch; }
+  }
+  fields.push(cur);
+  return fields;
+}
+
 function parseCSV(text) {
   const lines = text.trim().split(/\r?\n/);
   if (lines.length < 2) return [];
   const raw = lines[0];
   const sep = raw.includes("\t") ? "\t" : ",";
-  const headers = raw.split(sep).map(h => h.trim().replace(/^["']|["']$/g, "").toLowerCase());
-  return lines.slice(1).map(line => {
-    const vals = line.split(sep).map(v => v.trim().replace(/^["']|["']$/g, ""));
+  const headers = splitCSVLine(raw, sep).map(h => h.trim().toLowerCase());
+  const result = [];
+  for (let i = 1; i < lines.length; i++) {
+    if (!lines[i].trim()) continue;
+    const vals = splitCSVLine(lines[i], sep);
     const obj = {};
-    headers.forEach((h, i) => { obj[h] = vals[i] ?? ""; });
-    return obj;
-  });
+    headers.forEach((h, idx) => { obj[h] = (vals[idx] ?? "").trim(); });
+    result.push(obj);
+  }
+  return result;
 }
 
 
@@ -176,7 +195,7 @@ function intraCorr(sfRows, gscRows, gaRows, bingRows, dimKey, kpiKey) {
     let sfVal = 0;
     if      (dimKey === "avgTitleLen")   { sfVal = safeNum(r["longueur du title 1"] || r["title 1 length"] || 0) || (r["title 1"] || "").length; }
     else if (dimKey === "avgMetaLen")    { sfVal = safeNum(r["longueur de la meta description 1"] || r["meta description 1 length"] || 0) || (r["meta description 1"] || "").length; }
-    else if (dimKey === "avgH1Len")      { sfVal = (r["h1-1"] || r["h1"] || "").trim().length; }
+    else if (dimKey === "avgH1Len")      { sfVal = safeNum(r["longueur du h1-1"] || r["h1-1 length"] || 0) || (r["h1-1"] || r["h1"] || "").trim().length; }
     else if (dimKey === "avgWords")      { sfVal = safeNum(r["nombre de mots"]   || r["word count"]  || 0); }
     else if (dimKey === "avgPageSizeKB") { sfVal = safeNum(r["taille (octets)"]  || r["size"]        || 0) / 1024; }
     else if (dimKey === "avgInlinks")    { sfVal = safeNum(r["liens entrants"]   || r["inlinks"]     || 0); }
@@ -380,7 +399,7 @@ function extractSF(rows, mode = "all", bingRows = [], gscRows = []) {
   const metaLens = html.map(r => safeNum(r["longueur de la meta description 1"] || r["meta description 1 length"] || 0) || (r["meta description 1"] || "").length).filter(l => l > 0);
 
   // H1 — longueur moyenne (pages avec H1)
-  const h1Lens = html.map(r => (r["h1-1"] || r["h1"] || "").trim().length).filter(l => l > 0);
+  const h1Lens = html.map(r => safeNum(r["longueur du h1-1"] || r["h1-1 length"] || 0) || (r["h1-1"] || r["h1"] || "").trim().length).filter(l => l > 0);
 
   // Content page weight (HTML pages only)
   const pageSizes = html.map(r => safeNum(r["taille (octets)"] || r["size"] || 0));
@@ -499,10 +518,11 @@ function extractBing(rows) {
 // ── CORRELATION CELL COLOR ───────────────────────────────────────
 function corrColor(v) {
   if (v === null) return { bg: "#F5F5F7", text: "#C0C0CC", border: "#E8E8ED" };
-  const a = Math.abs(v);
-  if (a >= 0.7) return v > 0 ? { bg: "#DCFCE7", text: "#15803D", border: "#86EFAC" } : { bg: "#FEE2E2", text: "#B91C1C", border: "#FCA5A5" };
-  if (a >= 0.4) return { bg: "#FEF9C3", text: "#92400E", border: "#FDE68A" };
-  return { bg: "#F1F5F9", text: "#64748B", border: "#CBD5E1" };
+  if (v <= -0.25) return { bg: "#FEE2E2", text: "#B91C1C", border: "#FCA5A5" }; // rouge vif
+  if (v <  -0.05) return { bg: "#FEF2F2", text: "#DC2626", border: "#FECACA" }; // rouge léger
+  if (v <   0.05) return { bg: "#F1F5F9", text: "#64748B", border: "#CBD5E1" }; // gris neutre
+  if (v <   0.25) return { bg: "#F0FDF4", text: "#16A34A", border: "#BBF7D0" }; // vert clair
+  return              { bg: "#DCFCE7", text: "#15803D", border: "#86EFAC" };     // vert vif
 }
 
 // ── COMPONENTS ──────────────────────────────────────────────────
@@ -1034,6 +1054,53 @@ const RADAR_DIMS = [
   { key: "avgWords",      label: "Mots moy.",     max: 1000  },
 ];
 
+// ── CORR CELL WITH TOOLTIP ───────────────────────────────────────
+function CorrCell({ kpi, value, n, dim }) {
+  const [show, setShow] = useState(false);
+  const col = corrColor(value);
+  const lines = value !== null
+    ? [
+        `r = ${value > 0 ? "+" : ""}${value}`,
+        `${n} pages matchées`,
+        ``,
+        `${dim.label}`,
+        `× ${kpi.label}`,
+      ]
+    : [
+        `Données insuffisantes`,
+        `${n} pages matchées`,
+        `(min. 5 requis)`,
+      ];
+  return (
+    <td
+      onMouseEnter={() => setShow(true)}
+      onMouseLeave={() => setShow(false)}
+      style={{ padding: "8px 6px", textAlign: "center", borderRight: `1px solid ${C.borderLight}`, borderBottom: `1px solid ${C.borderLight}`, cursor: "help", position: "relative" }}
+    >
+      <div style={{ background: col.bg, color: col.text, border: `1px solid ${col.border}`, borderRadius: 7, padding: "5px 6px", fontSize: 12, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>
+        {value !== null ? (value > 0 ? "+" : "") + value : "—"}
+      </div>
+      {n > 0 && <div style={{ fontSize: 9, color: C.textLight, marginTop: 2 }}>{n}p</div>}
+      {show && (
+        <div style={{
+          position: "absolute", bottom: "calc(100% + 6px)", left: "50%", transform: "translateX(-50%)",
+          background: "#1E1E2E", color: "#fff", borderRadius: 8, padding: "10px 13px",
+          fontSize: 12, whiteSpace: "nowrap", zIndex: 50, pointerEvents: "none",
+          boxShadow: "0 4px 16px rgba(0,0,0,0.25)", minWidth: 160,
+          lineHeight: 1.6,
+        }}>
+          {lines.map((l, i) => (
+            <div key={i} style={{ opacity: l === "" ? 0.3 : 1, fontWeight: i === 0 ? 700 : 400, fontSize: i === 0 ? 13 : 11 }}>
+              {l === "" ? "─────────────" : l}
+            </div>
+          ))}
+          <div style={{ position: "absolute", bottom: -5, left: "50%", transform: "translateX(-50%)", width: 10, height: 10, background: "#1E1E2E", clipPath: "polygon(0 0, 100% 0, 50% 100%)" }} />
+        </div>
+      )}
+    </td>
+  );
+}
+
 // ── MAIN APP ────────────────────────────────────────────────────
 export default function App() {
   const [tab, setTab] = useState("import");
@@ -1419,7 +1486,7 @@ export default function App() {
             </div>
 
             <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
-              {[[C.green,"#DCFCE7","#86EFAC","≥ 0.7","Corrélation positive forte"],[C.red,"#FEE2E2","#FCA5A5","≤ -0.7","Corrélation négative forte"],[C.amber,"#FEF9C3","#FDE68A","0.4–0.7","Modérée"],[C.textLight,"#F1F5F9","#CBD5E1","< 0.4","Faible"],[C.textLight,"#F5F5F7",C.border,"—","Données insuffisantes"]].map(([tc,bg,bc,label,desc]) => (
+              {[["#15803D","#DCFCE7","#86EFAC","≥ 0.25","Positif fort"],["#16A34A","#F0FDF4","#BBF7D0","0.05–0.25","Positif léger"],["#64748B","#F1F5F9","#CBD5E1","-0.05–0.05","Neutre"],["#DC2626","#FEF2F2","#FECACA","-0.25–-0.05","Négatif léger"],["#B91C1C","#FEE2E2","#FCA5A5","≤ -0.25","Négatif fort"],["#C0C0CC","#F5F5F7","#E8E8ED","—","Données insuffisantes"]].map(([tc,bg,bc,label,desc]) => (
                 <div key={label} style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <div style={{ width: 28, height: 22, background: bg, border: `1px solid ${bc}`, borderRadius: 5, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: tc, fontWeight: 700 }}>{label}</div>
                   <span style={{ fontSize: 12, color: C.textMid }}>{desc}</span>
@@ -1448,20 +1515,9 @@ export default function App() {
                   ) : filteredCorrMatrix.map(({ dim, corrs }, ri) => (
                     <tr key={dim.key} style={{ background: ri % 2 === 0 ? C.white : "#FAFBFC" }}>
                       <SfDimCell dim={dim} rowBg={ri % 2 === 0 ? C.white : "#FAFBFC"} />
-                      {corrs.map(({ kpi, value, n }) => {
-                        const col = corrColor(value);
-                        const tip = value !== null
-                          ? `Pearson r = ${value > 0 ? "+" : ""}${value}\n${n} pages avec données ${kpi.label}\n\nCalculé page par page :\n• ${dim.label} (valeur SF de la page)\n• ${kpi.label} (valeur importée pour la même URL)`
-                          : `Données insuffisantes\n${n} pages matchées — minimum 5 requis`;
-                        return (
-                          <td key={kpi.key} title={tip} style={{ padding: "8px 6px", textAlign: "center", borderRight: `1px solid ${C.borderLight}`, borderBottom: `1px solid ${C.borderLight}`, cursor: "help" }}>
-                            <div style={{ background: col.bg, color: col.text, border: `1px solid ${col.border}`, borderRadius: 7, padding: "5px 6px", fontSize: 12, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>
-                              {value !== null ? (value > 0 ? "+" : "") + value : "—"}
-                            </div>
-                            {n > 0 && <div style={{ fontSize: 9, color: C.textLight, marginTop: 2 }}>{n}p</div>}
-                          </td>
-                        );
-                      })}
+                      {corrs.map(({ kpi, value, n }) => (
+                        <CorrCell key={kpi.key} kpi={kpi} value={value} n={n} dim={dim} />
+                      ))}
                     </tr>
                   ))}
                 </tbody>
