@@ -131,96 +131,57 @@ function parseCSV(text) {
 
 
 // ── INTRA-SITE CORRELATION (page-level) ─────────────────────────
-// Normalize URL → always keep full URL lowercase, no trailing slash
-// SF has absolute URLs, GSC may have absolute or relative — we normalize both to full URL when possible
-function normUrl(raw) {
-  const s = (raw || "").trim().toLowerCase().replace(/\/+$/, "") || "/";
-  return s;
-}
-// Extract just the path from a URL for fallback matching
-function urlPath(raw) {
-  const s = (raw || "").trim().toLowerCase();
-  try { return new URL(s).pathname.replace(/\/+$/, "") || "/"; } catch { return s.replace(/\/+$/, "") || "/"; }
-}
-
-function debugUrlMatch(sfRows, gscRows, gaRows) {
-  if (!sfRows.length || (!gscRows.length && !gaRows.length)) return null;
-  const gscMap = {}; const gscPathMap = {};
-  for (const r of gscRows) {
-    const raw = r["page"] || r["adresse"] || r["address"] || r["url"] || "";
-    const full = normUrl(raw); const path = urlPath(raw);
-    if (full) { gscMap[full] = true; gscPathMap[path] = true; }
-  }
-  const gaMap = {}; const gaPathMap = {};
-  for (const r of gaRows) {
-    const raw = r["page"] || r["pagepath"] || r["page path"] || r["adresse"] || r["url"] || "";
-    const full = normUrl(raw); const path = urlPath(raw);
-    if (full) { gaMap[full] = true; gaPathMap[path] = true; }
-  }
-  const html = sfRows.filter(r => {
-    const ct = (r["type de contenu"] || r["content type"] || "").toLowerCase();
-    const sc = safeNum(r["code http"] || r["status code"] || 200);
-    return (ct.includes("html") || ct === "") && sc < 400;
-  });
-  let gscFull=0, gscPath=0, gaFull=0, gaPath=0, total=html.length;
-  const sfSample = html.slice(0,3).map(r => normUrl(r["adresse"] || r["address"] || r["url"] || ""));
-  const gscSample = gscRows.slice(0,3).map(r => normUrl(r["page"] || r["adresse"] || r["url"] || ""));
-  const gaSample  = gaRows.slice(0,3).map(r => normUrl(r["page"] || r["pagepath"] || r["url"] || ""));
-  for (const r of html) {
-    const url = normUrl(r["adresse"] || r["address"] || r["url"] || "");
-    const path = urlPath(r["adresse"] || r["address"] || r["url"] || "");
-    if (gscMap[url]) gscFull++; else if (gscPathMap[path]) gscPath++;
-    if (gaMap[url])  gaFull++;  else if (gaPathMap[path])  gaPath++;
-  }
-  return { total, gscFull, gscPath, gaFull, gaPath, sfSample, gscSample, gaSample };
-}
-
 function intraCorr(sfRows, gscRows, gaRows, bingRows, dimKey, kpiKey) {
   if (!sfRows.length) return null;
 
-  // Build URL maps — two keys per row: full URL and path-only (for cross-format matching)
-  const gscMap = {}; const gscPathMap = {};
-  for (const r of gscRows) {
-    const raw = r["page"] || r["adresse"] || r["address"] || r["url"] || "";
-    const full = normUrl(raw); const path = urlPath(raw);
-    if (full) { gscMap[full] = r; gscPathMap[path] = r; }
-  }
-  const gaMap = {}; const gaPathMap = {};
-  for (const r of gaRows) {
-    const raw = r["page"] || r["pagepath"] || r["page path"] || r["adresse"] || r["url"] || "";
-    const full = normUrl(raw); const path = urlPath(raw);
-    if (full) { gaMap[full] = r; gaPathMap[path] = r; }
-  }
-  const bingMap = {}; const bingPathMap = {};
-  for (const r of bingRows) {
-    const raw = r["url"] || r["page"] || r["adresse"] || r["address"] || "";
-    const full = normUrl(raw); const path = urlPath(raw);
-    if (full) { bingMap[full] = r; bingPathMap[path] = r; }
-  }
+  // Normalize: strip trailing slash, lowercase
+  // Primary key = path (handles SF absolute vs GSC relative mismatch)
+  // Secondary key = full URL for cases where all sources are absolute
+  const toPath = (raw) => {
+    const s = (raw || "").trim().toLowerCase();
+    try { return new URL(s).pathname.replace(/\/+$/, "") || "/"; } catch { return s.replace(/\/+$/, "") || "/"; }
+  };
+  const toFull = (raw) => (raw || "").trim().toLowerCase().replace(/\/+$/, "") || "/";
 
-  const sfVals  = [];
-  const resVals = [];
+  const buildMap = (rows, ...keys) => {
+    const pathMap = {}, fullMap = {};
+    for (const r of rows) {
+      const raw = keys.map(k => r[k]).find(v => v) || "";
+      const p = toPath(raw), f = toFull(raw);
+      pathMap[p] = r; fullMap[f] = r;
+    }
+    return { pathMap, fullMap };
+  };
+
+  const gsc  = buildMap(gscRows, "page", "adresse", "address", "url");
+  const ga   = buildMap(gaRows,  "page", "pagepath", "page path", "adresse", "url");
+  const bing = buildMap(bingRows, "url", "page", "adresse", "address");
+
+  const lookup = ({ pathMap, fullMap }, sfRaw) => {
+    const p = toPath(sfRaw), f = toFull(sfRaw);
+    return pathMap[p] || fullMap[f] || null;
+  };
+
+  const sfVals = [], resVals = [];
 
   for (const r of sfRows) {
-    const url = normUrl(r["adresse"] || r["address"] || r["url"] || "");
-    const ct  = (r["type de contenu"] || r["content type"] || "").toLowerCase();
-    const sc  = safeNum(r["code http"] || r["status code"] || 200);
+    const ct = (r["type de contenu"] || r["content type"] || "").toLowerCase();
+    const sc = safeNum(r["code http"] || r["status code"] || 200);
     if ((!ct.includes("html") && ct !== "") || sc >= 400) continue;
+
+    const sfRaw = r["adresse"] || r["address"] || r["url"] || "";
 
     // SF dim value for this page
     let sfVal = 0;
-    if (dimKey === "avgTitleLen") {
-      sfVal = safeNum(r["longueur du title 1"] || r["title 1 length"] || 0) || (r["title 1"] || "").length;
-    } else if (dimKey === "avgMetaLen") {
-      sfVal = safeNum(r["longueur de la meta description 1"] || r["meta description 1 length"] || 0) || (r["meta description 1"] || "").length;
-    } else if (dimKey === "avgH1Len") {
-      sfVal = (r["h1-1"] || r["h1"] || "").trim().length;
-    } else if (dimKey === "avgWords")      { sfVal = safeNum(r["nombre de mots"]   || r["word count"]  || 0); }
-    else if (dimKey === "avgPageSizeKB")   { sfVal = safeNum(r["taille (octets)"]  || r["size"]        || 0) / 1024; }
-    else if (dimKey === "avgInlinks")      { sfVal = safeNum(r["liens entrants"]   || r["inlinks"]     || 0); }
-    else if (dimKey === "avgOutlinks")     { sfVal = safeNum(r["liens sortants"]   || r["outlinks"]    || 0); }
-    else if (dimKey === "avgDepth")        { sfVal = safeNum(r["crawl profondeur"] || r["crawl depth"] || 0); }
-    else if (dimKey === "avgFlesch")       { sfVal = safeNum(r["score de lisibilité de flesch"] || r["flesch reading ease"] || 0); }
+    if      (dimKey === "avgTitleLen")   { sfVal = safeNum(r["longueur du title 1"] || r["title 1 length"] || 0) || (r["title 1"] || "").length; }
+    else if (dimKey === "avgMetaLen")    { sfVal = safeNum(r["longueur de la meta description 1"] || r["meta description 1 length"] || 0) || (r["meta description 1"] || "").length; }
+    else if (dimKey === "avgH1Len")      { sfVal = (r["h1-1"] || r["h1"] || "").trim().length; }
+    else if (dimKey === "avgWords")      { sfVal = safeNum(r["nombre de mots"]   || r["word count"]  || 0); }
+    else if (dimKey === "avgPageSizeKB") { sfVal = safeNum(r["taille (octets)"]  || r["size"]        || 0) / 1024; }
+    else if (dimKey === "avgInlinks")    { sfVal = safeNum(r["liens entrants"]   || r["inlinks"]     || 0); }
+    else if (dimKey === "avgOutlinks")   { sfVal = safeNum(r["liens sortants"]   || r["outlinks"]    || 0); }
+    else if (dimKey === "avgDepth")      { sfVal = safeNum(r["crawl profondeur"] || r["crawl depth"] || 0); }
+    else if (dimKey === "avgFlesch")     { sfVal = safeNum(r["score de lisibilité de flesch"] || r["flesch reading ease"] || 0); }
     else if (dimKey === "tableRate") {
       let has = false;
       for (let i = 1; i <= 18; i++) { const v = r[`présence table ${i}`] || r[`presence table ${i}`] || ""; if (v && v.trim() !== "" && v.trim() !== "0") { has = true; break; } }
@@ -230,21 +191,19 @@ function intraCorr(sfRows, gscRows, gaRows, bingRows, dimKey, kpiKey) {
       sfVal = jsons.length > 0 ? 1 : 0;
     } else { continue; }
 
-    // KPI value — match by full URL, fallback to path-only
-    const sfPath = urlPath(r["adresse"] || r["address"] || r["url"] || "");
-    const gscR  = gscMap[url]  || gscPathMap[sfPath];
-    const gaR   = gaMap[url]   || gaPathMap[sfPath];
-    const bingR = bingMap[url] || bingPathMap[sfPath];
+    // KPI value — match by path (primary) or full URL
+    const gscR  = lookup(gsc,  sfRaw);
+    const gaR   = lookup(ga,   sfRaw);
+    const bingR = lookup(bing, sfRaw);
 
-    // Only include pages that have a KPI match for this specific column
     let resVal = null;
-    if      (kpiKey === "clicks")      { if (gscR) resVal = safeNum(gscR["clics"]       || gscR["clicks"]      || 0); }
-    else if (kpiKey === "impressions") { if (gscR) resVal = safeNum(gscR["impressions"] || 0); }
-    else if (kpiKey === "ctr")         { if (gscR) resVal = safeNum(String(gscR["ctr"]  || "0").replace("%","")); }
-    else if (kpiKey === "position")    { if (gscR) resVal = safeNum(gscR["position"]    || 0); }
-    else if (kpiKey === "sessions")    { if (gaR)  resVal = safeNum(gaR["sessions"]     || gaR["ga4 sessions"] || 0); }
-    else if (kpiKey === "views")       { if (gaR)  resVal = safeNum(gaR["views"]        || gaR["ga4 views"]    || 0); }
-    else if (kpiKey === "geoMentions") { if (bingR) resVal = safeNum(bingR["citations"] || bingR["mentions"]   || 0); }
+    if      (kpiKey === "clicks")      { if (gscR)  resVal = safeNum(gscR["clics"]       || gscR["clicks"]      || 0); }
+    else if (kpiKey === "impressions") { if (gscR)  resVal = safeNum(gscR["impressions"] || 0); }
+    else if (kpiKey === "ctr")         { if (gscR)  resVal = safeNum(String(gscR["ctr"]  || "0").replace("%","")); }
+    else if (kpiKey === "position")    { if (gscR)  resVal = safeNum(gscR["position"]    || 0); }
+    else if (kpiKey === "sessions")    { if (gaR)   resVal = safeNum(gaR["sessions"]     || gaR["ga4 sessions"] || 0); }
+    else if (kpiKey === "views")       { if (gaR)   resVal = safeNum(gaR["views"]        || gaR["ga4 views"]    || 0); }
+    else if (kpiKey === "geoMentions") { if (bingR) resVal = safeNum(bingR["citations"]  || bingR["mentions"]   || 0); }
 
     if (resVal !== null) {
       sfVals.push(sfVal);
@@ -1466,25 +1425,6 @@ export default function App() {
               ))}
             </div>
 
-            {/* Debug URL match panel */}
-            {(() => {
-              const sfRows  = matrixSites.flatMap(id => sfData[id]  || []);
-              const gscRows = matrixSites.flatMap(id => gscData[id] || []);
-              const gaRows  = matrixSites.flatMap(id => gaData[id]  || []);
-              const d = debugUrlMatch(sfRows, gscRows, gaRows);
-              if (!d) return null;
-              return (
-                <div style={{ background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 10, padding: "12px 16px", marginBottom: 16, fontSize: 12, fontFamily: "monospace" }}>
-                  <div style={{ fontWeight: 700, marginBottom: 6 }}>🔍 Debug URL matching</div>
-                  <div>SF pages HTML : {d.total} | GSC rows : {gscRows.length} | GA rows : {gaRows.length}</div>
-                  <div>GSC match full URL : {d.gscFull} | path seul : {d.gscPath} | total : {d.gscFull+d.gscPath}/{d.total}</div>
-                  <div>GA  match full URL : {d.gaFull}  | path seul : {d.gaPath}  | total : {d.gaFull+d.gaPath}/{d.total}</div>
-                  <div style={{ marginTop: 6, color: "#92400E" }}>SF sample : {d.sfSample.join(" | ")}</div>
-                  <div style={{ color: "#92400E" }}>GSC sample : {d.gscSample.join(" | ")}</div>
-                  <div style={{ color: "#92400E" }}>GA  sample : {d.gaSample.join(" | ")}</div>
-                </div>
-              );
-            })()}
 
             <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "auto" }}>
               <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 900 }}>
