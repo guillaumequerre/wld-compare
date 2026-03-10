@@ -27,8 +27,9 @@ const SF_DIMS = [
   { key: "avgWords",        label: "Mots moyens / page",         higher: true  },
   { key: "avgPageSizeKB",   label: "Poids pages contenu (KB)",   higher: false },
   { key: "avgImgSizeKB",    label: "Poids moyen images (KB)",    higher: false },
-  { key: "avgInlinks",      label: "Liens entrants moy.",        higher: true  },
-  { key: "avgOutlinks",     label: "Liens sortants moy.",        higher: true  },
+  { key: "avgInlinksUniq",  label: "Liens entrants uniques moy.", higher: true  },
+  { key: "avgOutlinksUniq", label: "Liens sortants uniques moy.", higher: true  },
+  { key: "avgExtLinksUniq", label: "Liens ext. uniques moy.",        higher: false },
   { key: "avgDepth",        label: "Profondeur crawl moy.",      higher: false },
   { key: "avgFlesch",       label: "Score Flesch moy.",          higher: true  },
   { key: "tableRate",       label: "Pages avec tableau (%)",     higher: true  },
@@ -198,8 +199,11 @@ function intraCorr(sfRows, gscRows, gaRows, bingRows, dimKey, kpiKey) {
     else if (dimKey === "avgH1Len")      { sfVal = safeNum(r["longueur du h1-1"] || r["h1-1 length"] || 0) || (r["h1-1"] || r["h1"] || "").trim().length; }
     else if (dimKey === "avgWords")      { sfVal = safeNum(r["nombre de mots"]   || r["word count"]  || 0); }
     else if (dimKey === "avgPageSizeKB") { sfVal = safeNum(r["taille (octets)"]  || r["size"]        || 0) / 1024; }
-    else if (dimKey === "avgInlinks")    { sfVal = safeNum(r["liens entrants"]   || r["inlinks"]     || 0); }
-    else if (dimKey === "avgOutlinks")   { sfVal = safeNum(r["liens sortants"]   || r["outlinks"]    || 0); }
+    else if (dimKey === "avgInlinks")      { sfVal = safeNum(r["liens entrants"]   || r["inlinks"]   || 0); }
+    else if (dimKey === "avgOutlinks")     { sfVal = safeNum(r["liens sortants"]   || r["outlinks"]  || 0); }
+    else if (dimKey === "avgInlinksUniq")  { sfVal = safeNum(r["liens entrants uniques"] || 0); }
+    else if (dimKey === "avgOutlinksUniq") { sfVal = safeNum(r["liens sortants uniques"] || 0); }
+    else if (dimKey === "avgExtLinksUniq") { sfVal = safeNum(r["liens sortants externes uniques"] || 0); }
     else if (dimKey === "avgDepth")      { sfVal = safeNum(r["crawl profondeur"] || r["crawl depth"] || 0); }
     else if (dimKey === "avgFlesch")     { sfVal = safeNum(r["score de lisibilité de flesch"] || r["flesch reading ease"] || 0); }
     else if (dimKey === "tableRate") {
@@ -304,58 +308,37 @@ function pearson(xs, ys) {
 }
 
 // ── FILTER ROWS BY PAGE MODE ─────────────────────────────────────
+// Normalize to path for cross-format URL matching (SF absolute, GSC relative)
+function toUrlPath(raw) {
+  const s = (raw || "").trim().toLowerCase();
+  try { return new URL(s).pathname.replace(/\/+$/, "") || "/"; } catch { return s.replace(/\/+$/, "") || "/"; }
+}
+
 function filterByMode(rows, mode, bingRows, gscRows = []) {
   if (mode === "all") return rows;
 
   if (mode === "geo") {
-    // Pages présentes dans Bing avec au moins 1 citation
-    const bingUrls = new Set(
+    // Pages présentes dans Bing avec au moins 1 citation — match par path
+    const bingPaths = new Set(
       bingRows
         .filter(r => safeNum(r["citations"] || r["mentions"] || 0) >= 1)
-        .map(r => (r["page"] || r["url"] || r["adresse"] || "").toLowerCase().trim())
+        .map(r => toUrlPath(r["page"] || r["url"] || r["adresse"] || ""))
     );
-    if (bingUrls.size === 0) return rows; // fallback si pas de data Bing
-    return rows.filter(r => {
-      const url = (r["adresse"] || r["address"] || r["url"] || "").toLowerCase().trim();
-      return bingUrls.has(url);
-    });
+    if (bingPaths.size === 0) return rows; // fallback si pas de data Bing
+    return rows.filter(r => bingPaths.has(toUrlPath(r["adresse"] || r["address"] || r["url"] || "")));
   }
 
   if (mode === "seo") {
-    // Priorité : clics dans SF, sinon croiser avec fichier GSC séparé
-    const sfWithClics = rows.filter(r => safeNum(r["clics"] || r["clicks"] || 0) > 0);
-
-    if (sfWithClics.length > 0) {
-      // SF contient les clics GSC — top 30%
-      const sorted = [...sfWithClics].sort((a, b) =>
-        safeNum(b["clics"] || b["clicks"]) - safeNum(a["clics"] || a["clicks"])
-      );
-      const top = sorted.slice(0, Math.max(1, Math.ceil(sorted.length * 0.3)));
-      const topUrls = new Set(top.map(r => (r["adresse"] || r["address"] || r["url"] || "").toLowerCase().trim()));
-      return rows.filter(r => {
-        const url = (r["adresse"] || r["address"] || r["url"] || "").toLowerCase().trim();
-        return topUrls.has(url);
-      });
-    }
-
+    // GSC séparé — top 30% des URLs par clics, match par path
     if (gscRows.length > 0) {
-      // GSC séparé — on croise les URLs par top 30% de clics
+      const col = (r) => r["pages les plus populaires"] || r["page"] || r["adresse"] || r["url"] || "";
       const gscWithClics = gscRows.filter(r => safeNum(r["clics"] || r["clicks"] || 0) > 0);
-      if (gscWithClics.length === 0) return rows;
-      const sorted = [...gscWithClics].sort((a, b) =>
-        safeNum(b["clics"] || b["clicks"]) - safeNum(a["clics"] || a["clicks"])
-      );
+      const src = gscWithClics.length > 0 ? gscWithClics : gscRows;
+      const sorted = [...src].sort((a, b) => safeNum(b["clics"] || b["clicks"]) - safeNum(a["clics"] || a["clicks"]));
       const top = sorted.slice(0, Math.max(1, Math.ceil(sorted.length * 0.3)));
-      const topUrls = new Set(
-        top.map(r => (r["adresse"] || r["address"] || r["url"] || r["page"] || r["keys"] || "").toLowerCase().trim())
-      );
-      return rows.filter(r => {
-        const url = (r["adresse"] || r["address"] || r["url"] || "").toLowerCase().trim();
-        return topUrls.has(url);
-      });
+      const topPaths = new Set(top.map(r => toUrlPath(col(r))));
+      return rows.filter(r => topPaths.has(toUrlPath(r["adresse"] || r["address"] || r["url"] || "")));
     }
-
-    // Aucune donnée GSC disponible — retourne rien plutôt que tout
     return [];
   }
 
@@ -415,8 +398,11 @@ function extractSF(rows, mode = "all", bingRows = [], gscRows = []) {
   const words  = html.map(r => safeNum(r["nombre de mots"]   || r["word count"]  || 0)).filter(x => x > 0);
 
   // Inlinks / Outlinks — HTML uniquement
-  const inlk   = html.map(r => safeNum(r["liens entrants"]   || r["inlinks"]     || 0));
-  const outlk  = html.map(r => safeNum(r["liens sortants"]   || r["outlinks"]    || 0));
+  const inlk       = html.map(r => safeNum(r["liens entrants"]           || r["inlinks"]   || 0));
+  const outlk      = html.map(r => safeNum(r["liens sortants"]           || r["outlinks"]  || 0));
+  const inlkUniq   = html.map(r => safeNum(r["liens entrants uniques"]   || 0));
+  const outlkUniq  = html.map(r => safeNum(r["liens sortants uniques"]   || 0));
+  const extlkUniq  = html.map(r => safeNum(r["liens sortants externes uniques"] || 0));
 
   // Profondeur — HTML uniquement, exclure les pages à profondeur 0 (home)
   const depth  = html.map(r => safeNum(r["crawl profondeur"] || r["crawl depth"] || 0)).filter(x => x >= 0);
@@ -469,8 +455,11 @@ function extractSF(rows, mode = "all", bingRows = [], gscRows = []) {
     avgWords:      Math.round(words.reduce((a,b)=>a+b,0)     / (words.length     || 1)),
     avgPageSizeKB: Math.round(avg(pageSizes) / 1024),
     avgImgSizeKB:  imgSizes.length ? Math.round(avg(imgSizes) / 1024) : 0,
-    avgInlinks:    Math.round(avg(inlk) * 10) / 10,
-    avgOutlinks:   Math.round(avg(outlk) * 10) / 10,
+    avgInlinks:       Math.round(avg(inlk)      * 10) / 10,
+    avgOutlinks:      Math.round(avg(outlk)     * 10) / 10,
+    avgInlinksUniq:   Math.round(avg(inlkUniq)  * 10) / 10,
+    avgOutlinksUniq:  Math.round(avg(outlkUniq) * 10) / 10,
+    avgExtLinksUniq:  Math.round(avg(extlkUniq) * 10) / 10,
     avgDepth:      Math.round((depth.reduce((a,b)=>a+b,0) / (depth.length || 1)) * 10) / 10,
     avgFlesch:     Math.round((flesch.reduce((a,b)=>a+b,0) / (flesch.length || 1)) * 10) / 10,
     tableRate:     Math.round((withTable / total) * 100),
@@ -654,8 +643,9 @@ SITE: ${m.site.label}
   Mots moyens/page: ${sf.avgWords ?? "N/A"}
   Poids pages (KB): ${sf.avgPageSizeKB ?? "N/A"}
   Poids images (KB): ${sf.avgImgSizeKB ?? "N/A"}
-  Liens entrants moy.: ${sf.avgInlinks ?? "N/A"}
-  Liens sortants moy.: ${sf.avgOutlinks ?? "N/A"}
+  Liens entrants uniques moy.: ${sf.avgInlinksUniq ?? "N/A"}
+  Liens sortants uniques moy.: ${sf.avgOutlinksUniq ?? "N/A"}
+  Liens ext. uniques moy.: ${sf.avgExtLinksUniq ?? "N/A"}
   Profondeur crawl: ${sf.avgDepth ?? "N/A"}
   Score Flesch: ${sf.avgFlesch ?? "N/A"}
   Pages avec tableau: ${sf.tableRate ?? "N/A"}%
@@ -991,8 +981,11 @@ const SF_DIM_TOOLTIPS = {
   avgWords:      "Nombre moyen de mots par page HTML. Plus de contenu (500+ mots) favorise le positionnement et la compréhension GEO.",
   avgPageSizeKB: "Poids moyen des pages HTML en KB. Des pages légères améliorent le Core Web Vitals et l'expérience mobile.",
   avgImgSizeKB:  "Poids moyen des images en KB. Des images lourdes ralentissent le chargement — impact direct sur le classement.",
-  avgInlinks:    "Nombre moyen de liens internes pointant vers chaque page. Un bon maillage diffuse le PageRank et améliore l'indexation.",
-  avgOutlinks:   "Nombre moyen de liens sortants par page. Un excès peut diluer l'autorité et perturber le crawl.",
+  avgInlinks:       "Nombre moyen de liens internes pointant vers chaque page.",
+  avgOutlinks:      "Nombre moyen de liens sortants par page.",
+  avgInlinksUniq:   "Nombre moyen de liens entrants uniques (déduplication des sources). Indicateur clé du maillage interne réel.",
+  avgOutlinksUniq:  "Nombre moyen de liens sortants uniques par page. Un excès peut diluer l'autorité.",
+  avgExtLinksUniq:  "Nombre moyen de liens sortants externes uniques. Trop de liens externes peut diluer l'autorité de la page.",
   avgDepth:      "Profondeur de crawl moyenne depuis la home. Au-delà de 4 niveaux, les pages sont moins bien indexées.",
   avgFlesch:     "Score de lisibilité Flesch (0-100). Au-dessus de 60 = texte accessible. Important pour l'engagement et la compréhension GEO.",
   tableRate:     "% de pages avec un tableau HTML. Les tableaux structurent l'information et favorisent les rich snippets et réponses AI.",
@@ -1048,29 +1041,27 @@ function LlmsStatus({ sf }) {
 const RADAR_DIMS = [
   { key: "totalPages",    label: "Pages",         max: 5000  },
   { key: "totalImg",      label: "Images",        max: 2000  },
-  { key: "avgInlinks",    label: "Inlinks moy.",  max: 100   },
-  { key: "avgOutlinks",   label: "Outlinks moy.", max: 100   },
+  { key: "avgInlinksUniq",  label: "Inlinks uniq.",    max: 100 },
+  { key: "avgOutlinksUniq", label: "Outlinks uniq.",   max: 100 },
+  { key: "avgExtLinksUniq", label: "Liens ext. uniq.", max: 50  },
   { key: "indexableRate", label: "Indexables %",  max: 100   },
   { key: "avgWords",      label: "Mots moy.",     max: 1000  },
 ];
 
 // ── CORR CELL WITH TOOLTIP ───────────────────────────────────────
-function CorrCell({ kpi, value, n, dim }) {
+function corrInterpret(r) {
+  if (r === null) return null;
+  if (r >= 0.25)  return { label: "Corrélation positive forte",  color: "#86EFAC" };
+  if (r >= 0.05)  return { label: "Corrélation positive faible", color: "#BBF7D0" };
+  if (r > -0.05)  return { label: "Pas de corrélation nette",    color: "#CBD5E1" };
+  if (r > -0.25)  return { label: "Corrélation négative faible", color: "#FECACA" };
+  return               { label: "Corrélation négative forte",    color: "#FCA5A5" };
+}
+
+function CorrCell({ kpi, value, n, dim, base, delta, showDelta }) {
   const [show, setShow] = useState(false);
   const col = corrColor(value);
-  const lines = value !== null
-    ? [
-        `r = ${value > 0 ? "+" : ""}${value}`,
-        `${n} pages matchées`,
-        ``,
-        `${dim.label}`,
-        `× ${kpi.label}`,
-      ]
-    : [
-        `Données insuffisantes`,
-        `${n} pages matchées`,
-        `(min. 5 requis)`,
-      ];
+  const interp = corrInterpret(value);
   return (
     <td
       onMouseEnter={() => setShow(true)}
@@ -1080,20 +1071,72 @@ function CorrCell({ kpi, value, n, dim }) {
       <div style={{ background: col.bg, color: col.text, border: `1px solid ${col.border}`, borderRadius: 7, padding: "5px 6px", fontSize: 12, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>
         {value !== null ? (value > 0 ? "+" : "") + value : "—"}
       </div>
-      {n > 0 && <div style={{ fontSize: 9, color: C.textLight, marginTop: 2 }}>{n}p</div>}
+      {showDelta && delta !== null && (
+        <div style={{ fontSize: 10, fontWeight: 600, marginTop: 2, color: delta > 0 ? "#16A34A" : delta < 0 ? "#DC2626" : C.textLight, display: "flex", alignItems: "center", justifyContent: "center", gap: 1 }}>
+          {delta > 0 ? "▲" : delta < 0 ? "▼" : "="}{delta !== 0 ? (delta > 0 ? "+" : "") + delta : "="}
+        </div>
+      )}
+      {n > 0 && <div style={{ fontSize: 9, color: C.textLight, marginTop: 1 }}>{n}p</div>}
       {show && (
         <div style={{
-          position: "absolute", bottom: "calc(100% + 6px)", left: "50%", transform: "translateX(-50%)",
-          background: "#1E1E2E", color: "#fff", borderRadius: 8, padding: "10px 13px",
-          fontSize: 12, whiteSpace: "nowrap", zIndex: 50, pointerEvents: "none",
-          boxShadow: "0 4px 16px rgba(0,0,0,0.25)", minWidth: 160,
-          lineHeight: 1.6,
+          position: "absolute", bottom: "calc(100% + 8px)", left: "50%", transform: "translateX(-50%)",
+          background: "#1E1E2E", color: "#fff", borderRadius: 10, padding: "13px 15px",
+          fontSize: 12, zIndex: 50, pointerEvents: "none",
+          boxShadow: "0 6px 20px rgba(0,0,0,0.3)", width: 240,
+          lineHeight: 1.7,
         }}>
-          {lines.map((l, i) => (
-            <div key={i} style={{ opacity: l === "" ? 0.3 : 1, fontWeight: i === 0 ? 700 : 400, fontSize: i === 0 ? 13 : 11 }}>
-              {l === "" ? "─────────────" : l}
+          {value !== null ? (<>
+            {/* Score + interprétation */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <span style={{ fontSize: 16, fontWeight: 800 }}>{value > 0 ? "+" : ""}{value}</span>
+              <span style={{ fontSize: 10, fontWeight: 600, background: interp.color, color: "#1E1E2E", borderRadius: 4, padding: "2px 7px" }}>{interp.label}</span>
             </div>
-          ))}
+            <div style={{ borderTop: "1px solid #ffffff22", paddingTop: 8, marginBottom: 8 }}>
+              {/* What it measures */}
+              <div style={{ fontSize: 11, color: "#94A3B8", marginBottom: 4 }}>Ce que mesure ce coefficient :</div>
+              <div style={{ fontSize: 11 }}>
+                Quand <b style={{ color: "#E2E8F0" }}>{dim.label}</b> augmente d'une page à l'autre,
+                est-ce que <b style={{ color: "#E2E8F0" }}>{kpi.label}</b> a tendance à {value >= 0 ? "augmenter" : "diminuer"} aussi ?
+              </div>
+            </div>
+            <div style={{ borderTop: "1px solid #ffffff22", paddingTop: 8, marginBottom: 8 }}>
+              {/* How computed */}
+              <div style={{ fontSize: 11, color: "#94A3B8", marginBottom: 4 }}>Comment c'est calculé :</div>
+              <div style={{ fontSize: 11 }}>
+                Pour chaque page présente à la fois dans SF et dans {kpi.label.includes("Bing") ? "Bing" : kpi.label.includes("GSC") || ["Clics","Impressions","CTR","Position"].some(k => kpi.label.includes(k)) ? "GSC" : "GA4"},
+                on compare sa valeur <b style={{ color: "#E2E8F0" }}>{dim.label}</b> avec sa valeur <b style={{ color: "#E2E8F0" }}>{kpi.label}</b>.
+                Le coefficient de Pearson mesure si ces deux séries varient ensemble
+                (r = +1 parfaite covariation, r = 0 aucun lien, r = −1 relation inverse).
+              </div>
+            </div>
+            {showDelta && delta !== null && (
+              <div style={{ borderTop: "1px solid #ffffff22", paddingTop: 8, marginTop: 4 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11 }}>
+                  <span style={{ color: "#94A3B8" }}>Toutes les pages :</span>
+                  <span style={{ fontWeight: 600 }}>{base !== null ? (base > 0 ? "+" : "") + base : "—"}</span>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11 }}>
+                  <span style={{ color: "#94A3B8" }}>Ce filtre :</span>
+                  <span style={{ fontWeight: 600 }}>{value !== null ? (value > 0 ? "+" : "") + value : "—"}</span>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginTop: 2 }}>
+                  <span style={{ color: "#94A3B8" }}>Différence :</span>
+                  <span style={{ fontWeight: 700, color: delta > 0 ? "#86EFAC" : delta < 0 ? "#FCA5A5" : "#94A3B8" }}>
+                    {delta > 0 ? "▲ +" : delta < 0 ? "▼ " : "= "}{delta}
+                  </span>
+                </div>
+              </div>
+            )}
+            <div style={{ borderTop: "1px solid #ffffff22", paddingTop: 7, fontSize: 10, color: "#64748B" }}>
+              {n} pages avec données des deux sources · Pearson r
+            </div>
+          </>) : (<>
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>Données insuffisantes</div>
+            <div style={{ fontSize: 11, color: "#94A3B8" }}>
+              Seulement {n} page{n > 1 ? "s" : ""} avec URL présente dans les deux sources.
+              Minimum 5 requis pour calculer une corrélation fiable.
+            </div>
+          </>)}
           <div style={{ position: "absolute", bottom: -5, left: "50%", transform: "translateX(-50%)", width: 10, height: 10, background: "#1E1E2E", clipPath: "polygon(0 0, 100% 0, 50% 100%)" }} />
         </div>
       )}
@@ -1157,19 +1200,27 @@ export default function App() {
   }, []);
 
   // Computed metrics, mode-aware
+  const baseMetrics = useMemo(() => {
+    return SITES.map(s => ({
+      site: s,
+      sf: extractSF(sfData[s.id], "all", bingData[s.id], gscData[s.id]),
+    }));
+  }, [sfData, gscData, gaData, bingData]);
+
   const metrics = useMemo(() => {
-    return SITES.map(s => {
+    return SITES.map((s, si) => {
       const sfRows   = sfData[s.id];
       const bingRows = bingData[s.id];
       return {
         site: s,
         sf:   extractSF(sfRows, pageMode, bingRows, gscData[s.id]),
+        sfBase: baseMetrics[si]?.sf ?? null,
         gsc:  gscData[s.id].length > 0 ? extractGSC(gscData[s.id]) : null,
         ga:   gaData[s.id].length  > 0 ? extractGA(gaData[s.id])   : null,
         bing: extractBing(bingRows),
       };
     });
-  }, [sfData, gscData, gaData, bingData, pageMode]);
+  }, [sfData, gscData, gaData, bingData, pageMode, baseMetrics]);
 
   const resultVals = useMemo(() => metrics.map(m => ({
     clicks:          m.gsc?.clicks          ?? 0,
@@ -1192,20 +1243,40 @@ export default function App() {
     })),
   })), [metrics, resultVals]);
 
-  const filteredCorrMatrix = useMemo(() => {
-    // Always intra-site page-level Pearson — concat pages from all selected sites
-    const sfRows   = matrixSites.flatMap(id => sfData[id]   || []);
-    const gscRows  = matrixSites.flatMap(id => gscData[id]  || []);
-    const gaRows   = matrixSites.flatMap(id => gaData[id]   || []);
-    const bingRows = matrixSites.flatMap(id => bingData[id] || []);
+  // Base matrix always on "all" pages — used as comparison reference
+  const baseMatrix = useMemo(() => {
+    const sfRows  = matrixSites.flatMap(id => sfData[id]   || []);
+    const gscRows = matrixSites.flatMap(id => gscData[id]  || []);
+    const gaRows  = matrixSites.flatMap(id => gaData[id]   || []);
+    const bingRows= matrixSites.flatMap(id => bingData[id] || []);
     return SF_DIMS.map(dim => ({
       dim,
       corrs: RES_KPIS.map(kpi => {
         const res = intraCorr(sfRows, gscRows, gaRows, bingRows, dim.key, kpi.key);
-        return { kpi, value: res ? res.value : null, n: res ? res.n : 0 };
+        return { kpi, value: res ? res.value : null };
       }),
     }));
   }, [matrixSites, sfData, gscData, gaData, bingData]);
+
+  const filteredCorrMatrix = useMemo(() => {
+    // Always intra-site page-level Pearson — concat pages from all selected sites
+    const sfRowsAll = matrixSites.flatMap(id => sfData[id]   || []);
+    const gscRows   = matrixSites.flatMap(id => gscData[id]  || []);
+    const gaRows    = matrixSites.flatMap(id => gaData[id]   || []);
+    const bingRows  = matrixSites.flatMap(id => bingData[id] || []);
+    // Apply page mode filter to SF rows before computing correlations
+    const sfRows = filterByMode(sfRowsAll, pageMode, bingRows, gscRows);
+    return SF_DIMS.map((dim, di) => ({
+      dim,
+      corrs: RES_KPIS.map((kpi, ki) => {
+        const res = intraCorr(sfRows, gscRows, gaRows, bingRows, dim.key, kpi.key);
+        const base = baseMatrix[di]?.corrs[ki]?.value ?? null;
+        const val = res ? res.value : null;
+        const delta = (val !== null && base !== null) ? Math.round((val - base) * 100) / 100 : null;
+        return { kpi, value: val, n: res ? res.n : 0, base, delta };
+      }),
+    }));
+  }, [matrixSites, sfData, gscData, gaData, bingData, pageMode, baseMatrix]);
 
   // Trigger loading spinner when deps change
 
@@ -1355,7 +1426,7 @@ export default function App() {
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 20, marginBottom: 28 }}>
-              {metrics.map(({ site, sf, gsc, ga, bing }) => (
+              {metrics.map(({ site, sf, sfBase, gsc, ga, bing }) => (
                 <div key={site.id} style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden" }}>
                   <div style={{ background: site.bg, padding: "16px 20px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <div style={{ fontWeight: 700, fontSize: 16, color: site.color }}>{site.label}</div>
@@ -1367,22 +1438,40 @@ export default function App() {
                         <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, color: C.textLight, marginBottom: 10 }}>🕷️ Screaming Frog</div>
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5 }}>
                           {[
-                            ["Title moy.", `${sf.avgTitleLen} car.`],
-                            ["Meta moy.", `${sf.avgMetaLen} car.`],
-                            ["H1 moy.", `${sf.avgH1Len} car.`],
-                            ["Mots moy.", sf.avgWords],
-                            ["Poids pages", `${sf.avgPageSizeKB}KB`],
-                            ["Poids images", `${sf.avgImgSizeKB}KB`],
-                            ["Inlinks", sf.avgInlinks],
-                            ["Outlinks", sf.avgOutlinks],
-                            ["Profondeur", sf.avgDepth],
-                            ["Flesch", sf.avgFlesch],
-                            ["Tableaux", `${sf.tableRate}%`],
-                            ["Schemas", `${sf.schemaRate}%`],
-                            ["Indexables", `${sf.indexableRate}%`],
-                            ["Erreurs", `${sf.errorRate}%`],
-                            ["Redirects", `${sf.redirectRate}%`],
-                          ].map(([k, v]) => <MetricRow key={k} label={k} value={v} />)}
+                            ["Title moy.", sf.avgTitleLen,    sfBase?.avgTitleLen,    "car."],
+                            ["Meta moy.",  sf.avgMetaLen,     sfBase?.avgMetaLen,     "car."],
+                            ["H1 moy.",    sf.avgH1Len,       sfBase?.avgH1Len,       "car."],
+                            ["Mots moy.",  sf.avgWords,       sfBase?.avgWords,       ""],
+                            ["Poids pages",sf.avgPageSizeKB,  sfBase?.avgPageSizeKB,  "KB"],
+                            ["Poids img.", sf.avgImgSizeKB,   sfBase?.avgImgSizeKB,   "KB"],
+                            ["Inlinks uniq.", sf.avgInlinksUniq, sfBase?.avgInlinksUniq, ""],
+                            ["Outlinks uniq.", sf.avgOutlinksUniq, sfBase?.avgOutlinksUniq, ""],
+                            ["Liens ext. uniq.", sf.avgExtLinksUniq, sfBase?.avgExtLinksUniq, ""],
+                            ["Profondeur", sf.avgDepth,       sfBase?.avgDepth,       ""],
+                            ["Flesch",     sf.avgFlesch,      sfBase?.avgFlesch,      ""],
+                            ["Tableaux",   sf.tableRate,      sfBase?.tableRate,      "%"],
+                            ["Schemas",    sf.schemaRate,     sfBase?.schemaRate,     "%"],
+                            ["Indexables", sf.indexableRate,  sfBase?.indexableRate,  "%"],
+                            ["Erreurs",    sf.errorRate,      sfBase?.errorRate,      "%"],
+                            ["Redirects",  sf.redirectRate,   sfBase?.redirectRate,   "%"],
+                          ].map(([k, v, bv, unit]) => {
+                            const showD = pageMode !== "all" && bv !== null && bv !== undefined;
+                            const diff = showD ? Math.round((v - bv) * 10) / 10 : null;
+                            const up = diff > 0, down = diff < 0;
+                            return (
+                              <div key={k} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "3px 0", borderBottom: `1px solid ${C.borderLight}`, gap: 4 }}>
+                                <span style={{ fontSize: 11, color: C.textLight, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{k}</span>
+                                <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+                                  <span style={{ fontSize: 12, fontWeight: 600, color: C.text }}>{v}{unit}</span>
+                                  {showD && diff !== 0 && (
+                                    <span style={{ fontSize: 10, fontWeight: 700, color: up ? "#16A34A" : "#DC2626" }}>
+                                      {up ? "▲" : "▼"}{up ? "+" : ""}{diff}{unit}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
                         </div>
                       </div>
                     ) : <div style={{ color: C.textLight, fontSize: 12, padding: "10px 0 14px", borderBottom: `1px solid ${C.borderLight}` }}>Aucun CSV SF chargé</div>}
@@ -1536,8 +1625,8 @@ export default function App() {
                   ) : filteredCorrMatrix.map(({ dim, corrs }, ri) => (
                     <tr key={dim.key} style={{ background: ri % 2 === 0 ? C.white : "#FAFBFC" }}>
                       <SfDimCell dim={dim} rowBg={ri % 2 === 0 ? C.white : "#FAFBFC"} />
-                      {corrs.map(({ kpi, value, n }) => (
-                        <CorrCell key={kpi.key} kpi={kpi} value={value} n={n} dim={dim} />
+                      {corrs.map(({ kpi, value, n, base, delta }) => (
+                        <CorrCell key={kpi.key} kpi={kpi} value={value} n={n} dim={dim} base={base} delta={delta} showDelta={pageMode !== "all"} />
                       ))}
                     </tr>
                   ))}
@@ -1581,18 +1670,34 @@ export default function App() {
               {SITES.map(site => {
                 const sfRows   = sfData[site.id];
                 const bingRows = bingData[site.id];
-                const filtered = filterByMode(sfRows, pageMode, bingRows);
+                const gscRows  = gscData[site.id] || [];
+                const filtered = filterByMode(sfRows, pageMode, bingRows, gscRows);
                 const html     = filtered.filter(r => {
                   const ct = (r["type de contenu"] || r["content type"] || "").toLowerCase();
                   const sc = safeNum(r["code http"] || r["status code"] || 200);
-                  return (ct.includes("html") || ct === "") && sc < 400;
+                  const isHtml = ct.includes("html") || (ct === "" && (r["title 1"] || r["h1-1"] || "").trim() !== "");
+                  return isHtml && sc < 400;
                 });
 
+                // GEO pages: SF rows whose URL matches a Bing citation (path-based)
                 const geoPages = sfRows.filter(r => {
-                  const url = (r["adresse"] || r["url"] || "").toLowerCase();
-                  return bingRows.some(b => (b["page"] || b["url"] || "").toLowerCase() === url && safeNum(b["citations"] || 0) >= 1);
+                  const p = toUrlPath(r["adresse"] || r["url"] || "");
+                  return bingRows.some(b => toUrlPath(b["page"] || b["url"] || "") === p && safeNum(b["citations"] || 0) >= 1);
                 });
-                const seoPages = sfRows.filter(r => safeNum(r["clics"] || r["clicks"] || 0) > 0);
+
+                // SEO pages: cross-reference with GSC file (path-based), sorted by clicks
+                const gscWithClics = gscRows
+                  .filter(r => safeNum(r["clics"] || r["clicks"] || 0) > 0)
+                  .sort((a, b) => safeNum(b["clics"] || b["clicks"]) - safeNum(a["clics"] || a["clicks"]));
+                const gscPathMap = {};
+                gscWithClics.forEach(r => {
+                  const p = toUrlPath(r["pages les plus populaires"] || r["page"] || r["adresse"] || r["url"] || "");
+                  if (p) gscPathMap[p] = r;
+                });
+                const seoPages = sfRows
+                  .map(r => ({ r, gscR: gscPathMap[toUrlPath(r["adresse"] || r["url"] || "")] }))
+                  .filter(({ gscR }) => gscR)
+                  .sort((a, b) => safeNum(b.gscR["clics"] || b.gscR["clicks"]) - safeNum(a.gscR["clics"] || a.gscR["clicks"]));
 
                 return (
                   <div key={site.id} style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden" }}>
@@ -1603,7 +1708,7 @@ export default function App() {
                       {/* Page counts */}
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 20 }}>
                         {[
-                          ["📄 Total HTML", sfRows.filter(r => (r["type de contenu"]||r["content type"]||"").toLowerCase().includes("html")).length, C.text],
+                          ["📄 Total HTML", sfRows.filter(r => { const ct = (r["type de contenu"]||r["content type"]||"").toLowerCase(); const sc = safeNum(r["code http"]||r["status code"]||200); return (ct.includes("html") || (ct === "" && (r["title 1"]||r["h1-1"]||"").trim() !== "")) && sc < 400; }).length, C.text],
                           ["🤖 Pages GEO", geoPages.length, C.purple],
                           ["🔍 Pages SEO", seoPages.length, C.blue],
                         ].map(([label, count, color]) => (
@@ -1622,28 +1727,38 @@ export default function App() {
                       </div>
 
                       {/* Top pages by mode */}
-                      {pageMode !== "all" && html.length > 0 && (
+                      {pageMode !== "all" && (
                         <div>
                           <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, color: C.textLight, marginBottom: 10 }}>
                             Top pages {pageMode === "geo" ? "citées Bing" : "clics GSC"}
                           </div>
-                          {html.slice(0, 8).map((r, i) => {
+                          {pageMode === "geo" && html.slice(0, 8).map((r, i) => {
                             const url = r["adresse"] || r["url"] || "";
-                            const score = pageMode === "geo"
-                              ? safeNum(bingRows.find(b => (b["page"]||"").toLowerCase() === url.toLowerCase())?.["citations"] || 0)
-                              : safeNum(r["clics"] || r["clicks"] || 0);
-                            const label = url.replace(/https?:\/\/[^/]+/, "").slice(0, 45) || url.slice(0, 45);
+                            const p = toUrlPath(url);
+                            const bingR = bingRows.find(b => toUrlPath(b["page"] || b["url"] || "") === p);
+                            const score = safeNum(bingR?.["citations"] || 0);
+                            const label = url.replace(/https?:\/\/[^/]+/, "").slice(0, 50) || url.slice(0, 50);
                             return (
                               <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: `1px solid ${C.borderLight}`, gap: 8 }}>
-                                <div style={{ fontSize: 11, color: C.textMid, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={url}>
-                                  {label || url}
-                                </div>
-                                <Badge color={pageMode === "geo" ? C.purple : C.blue} bg={pageMode === "geo" ? C.purpleLight : C.blueLight}>
-                                  {score} {pageMode === "geo" ? "cit." : "clics"}
-                                </Badge>
+                                <div style={{ fontSize: 11, color: C.textMid, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={url}>{label || url}</div>
+                                <Badge color={C.purple} bg={C.purpleLight}>{score} cit.</Badge>
                               </div>
                             );
                           })}
+                          {pageMode === "seo" && seoPages.slice(0, 8).map(({ r, gscR }, i) => {
+                            const url = r["adresse"] || r["url"] || "";
+                            const score = safeNum(gscR["clics"] || gscR["clicks"] || 0);
+                            const label = url.replace(/https?:\/\/[^/]+/, "").slice(0, 50) || url.slice(0, 50);
+                            return (
+                              <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: `1px solid ${C.borderLight}`, gap: 8 }}>
+                                <div style={{ fontSize: 11, color: C.textMid, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={url}>{label || url}</div>
+                                <Badge color={C.blue} bg={C.blueLight}>{score} clics</Badge>
+                              </div>
+                            );
+                          })}
+                          {pageMode === "seo" && seoPages.length === 0 && (
+                            <div style={{ fontSize: 12, color: C.textLight, padding: "10px 0" }}>Aucune page GSC chargée pour ce site</div>
+                          )}
                         </div>
                       )}
 
