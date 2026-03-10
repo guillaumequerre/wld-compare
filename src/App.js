@@ -254,6 +254,19 @@ async function sbGetHistory(projectId, limit = 50) {
   return res.json();
 }
 
+async function sbGetLatest(projectId) {
+  const filter = projectId ? `&project_id=eq.${encodeURIComponent(projectId)}` : "";
+  const res = await fetch(`${PROXY}/rest/v1/imports?select=*&order=uploaded_at.desc&limit=200${filter}`);
+  if (!res.ok) return {};
+  const rows = await res.json();
+  const latest = {};
+  for (const row of rows) {
+    const key = `${row.site_id}_${row.source}`;
+    if (!latest[key]) latest[key] = row;
+  }
+  return latest;
+}
+
 async function sbDownload(storage_path) {
   const res = await fetch(`${PROXY}/storage/v1/object/csv-imports/${storage_path}`);
   if (!res.ok) throw new Error(`Download failed: ${res.status}`);
@@ -1266,8 +1279,19 @@ export default function App() {
           }));
           setProjects(restored);
           setCurrentProjectId(restored[0].id);
-          const history = await sbGetHistory(restored[0].id);
+          const [latest, history] = await Promise.all([sbGetLatest(restored[0].id), sbGetHistory(restored[0].id)]);
           setDbHistory(history);
+          for (const row of Object.values(latest)) {
+            try {
+              const text = await sbDownload(row.storage_path);
+              const rows = parseCSV(text);
+              const sid = row.site_id, src = row.source;
+              if (src === "sf")   setProjects(prev => prev.map(p => p.id === restored[0].id ? {...p, sfData:   {...p.sfData,   [sid]: rows}} : p));
+              if (src === "gsc")  setProjects(prev => prev.map(p => p.id === restored[0].id ? {...p, gscData:  {...p.gscData,  [sid]: rows}} : p));
+              if (src === "ga")   setProjects(prev => prev.map(p => p.id === restored[0].id ? {...p, gaData:   {...p.gaData,   [sid]: rows}} : p));
+              if (src === "bing") setProjects(prev => prev.map(p => p.id === restored[0].id ? {...p, bingData: {...p.bingData, [sid]: rows}} : p));
+            } catch(e) { console.warn("Auto-load row failed:", e); }
+          }
         } else {
           await sbSaveProject(INITIAL_PROJECT);
           const history = await sbGetHistory(INITIAL_PROJECT.id);
@@ -1278,13 +1302,27 @@ export default function App() {
     })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // When switching project: refresh history
+  // When switching project: refresh history + auto-load latest CSVs
+  const loadedProjectsRef = useRef(new Set());
   useEffect(() => {
+    if (loadedProjectsRef.current.has(currentProjectId)) return;
+    loadedProjectsRef.current.add(currentProjectId);
     (async () => {
       setDbLoading(true);
       try {
-        const history = await sbGetHistory(currentProjectId);
+        const [latest, history] = await Promise.all([sbGetLatest(currentProjectId), sbGetHistory(currentProjectId)]);
         setDbHistory(history);
+        for (const row of Object.values(latest)) {
+          try {
+            const text = await sbDownload(row.storage_path);
+            const rows = parseCSV(text);
+            const sid = row.site_id, src = row.source, pid = currentProjectId;
+            if (src === "sf")   setProjects(prev => prev.map(p => p.id === pid ? {...p, sfData:   {...p.sfData,   [sid]: rows}} : p));
+            if (src === "gsc")  setProjects(prev => prev.map(p => p.id === pid ? {...p, gscData:  {...p.gscData,  [sid]: rows}} : p));
+            if (src === "ga")   setProjects(prev => prev.map(p => p.id === pid ? {...p, gaData:   {...p.gaData,   [sid]: rows}} : p));
+            if (src === "bing") setProjects(prev => prev.map(p => p.id === pid ? {...p, bingData: {...p.bingData, [sid]: rows}} : p));
+          } catch(e) { console.warn("Auto-load row failed:", e); }
+        }
       } catch(e) { console.warn("Supabase project switch error", e); }
       finally { setDbLoading(false); }
     })();
@@ -2052,19 +2090,24 @@ export default function App() {
                           <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, color: C.textLight, marginBottom: 10 }}>
                             Top pages {pageMode === "geo" ? "citées Bing" : "clics GSC"}
                           </div>
-                          {pageMode === "geo" && html.slice(0, 8).map((r, i) => {
-                            const url = r["adresse"] || r["url"] || "";
-                            const p = toUrlPath(url);
-                            const bingR = bingRows.find(b => toUrlPath(b["page"] || b["url"] || "") === p);
-                            const score = safeNum(bingR?.["citations"] || 0);
-                            const label = url.replace(/https?:\/\/[^/]+/, "").slice(0, 50) || url.slice(0, 50);
-                            return (
-                              <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: `1px solid ${C.borderLight}`, gap: 8 }}>
-                                <div style={{ fontSize: 11, color: C.textMid, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={url}>{label || url}</div>
-                                <Badge color={C.purple} bg={C.purpleLight}>{score} cit.</Badge>
-                              </div>
-                            );
-                          })}
+                          {pageMode === "geo" && (() => {
+                            const bingPathMap = {};
+                            bingRows.forEach(b => { const p = toUrlPath(b["page"] || b["url"] || ""); if (p) bingPathMap[p] = b; });
+                            return html
+                              .map(r => { const p = toUrlPath(r["adresse"] || r["url"] || ""); return { r, bingR: bingPathMap[p], citations: safeNum(bingPathMap[p]?.["citations"] || 0) }; })
+                              .sort((a, b) => b.citations - a.citations)
+                              .slice(0, 8)
+                              .map(({ r, citations }, i) => {
+                                const url = r["adresse"] || r["url"] || "";
+                                const label = url.replace(/https?:\/\/[^/]+/, "").slice(0, 50) || url.slice(0, 50);
+                                return (
+                                  <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: `1px solid ${C.borderLight}`, gap: 8 }}>
+                                    <div style={{ fontSize: 11, color: C.textMid, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={url}>{label || url}</div>
+                                    <Badge color={C.purple} bg={C.purpleLight}>{citations} cit.</Badge>
+                                  </div>
+                                );
+                              });
+                          })()}
                           {pageMode === "seo" && seoPages.slice(0, 8).map(({ r, gscR }, i) => {
                             const url = r["adresse"] || r["url"] || "";
                             const score = safeNum(gscR["clics"] || gscR["clicks"] || 0);
@@ -2112,69 +2155,222 @@ export default function App() {
         {/* ── SITES ── */}
         {tab === "sites" && (
           <div>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
-              <SectionHeader title="Détail par site" sub="Toutes les métriques brutes extraites des CSV" />
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24 }}>
+              <SectionHeader title="Comparatif par outil" sub="Tous les sites côte à côte pour chaque source de données" />
               <PageModeSelector value={pageMode} onChange={setPageMode} />
             </div>
-            {metrics.map(({ site, sf, gsc, ga, bing }) => (
-              <div key={site.id} style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, marginBottom: 20, overflow: "hidden" }}>
-                <div style={{ background: site.bg, padding: "16px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 12 }}>
-                  <div style={{ width: 10, height: 10, borderRadius: "50%", background: site.color }} />
-                  <span style={{ fontWeight: 700, fontSize: 16, color: site.color }}>{site.label}</span>
+
+            {/* Site legend */}
+            <div style={{ display: "flex", gap: 10, marginBottom: 24, flexWrap: "wrap" }}>
+              {metrics.map(({ site }) => (
+                <div key={site.id} style={{ display: "flex", alignItems: "center", gap: 7, padding: "5px 14px", background: site.bg, border: `1.5px solid ${site.color}33`, borderRadius: 20 }}>
+                  <div style={{ width: 8, height: 8, borderRadius: "50%", background: site.color }} />
+                  <span style={{ fontSize: 12, fontWeight: 600, color: site.color }}>{site.label}</span>
                 </div>
-                <div style={{ padding: 24 }}>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 20 }}>
-                    <div>
-                      <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, color: C.textLight, marginBottom: 12, fontWeight: 600 }}>🕷️ Screaming Frog</div>
-                      {sf ? SF_DIMS.map(d => (
-                        <div key={d.key} style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", borderBottom: `1px solid ${C.borderLight}`, fontSize: 12 }}>
-                          <span style={{ color: C.textMid }}>{d.label}</span>
-                          <span style={{ fontWeight: 600 }}>{sf[d.key] ?? "—"}</span>
-                        </div>
-                      )) : <div style={{ color: C.textLight, fontSize: 12 }}>Aucun fichier chargé</div>}
-                      {sf && Object.keys(sf.schemaTypes || {}).length > 0 && (
-                        <div style={{ marginTop: 14 }}>
-                          <div style={{ fontSize: 11, color: C.textLight, marginBottom: 8 }}>Types de Schema :</div>
-                          <SchemaBreakdown schemaTypes={sf.schemaTypes} color={site.color} />
-                        </div>
-                      )}
-                      {sf && <LlmsStatus sf={sf} />}
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, color: C.textLight, marginBottom: 12, fontWeight: 600 }}>🔍 Google Search Console</div>
-                      {gsc ? Object.entries(gsc).map(([k,v]) => (
-                        <div key={k} style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", borderBottom: `1px solid ${C.borderLight}`, fontSize: 12 }}>
-                          <span style={{ color: C.textMid }}>{k}</span>
-                          <span style={{ fontWeight: 600 }}>{typeof v === "number" ? v.toLocaleString() : v}</span>
-                        </div>
-                      )) : <div style={{ color: C.textLight, fontSize: 12 }}>Aucun fichier chargé</div>}
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, color: C.textLight, marginBottom: 12, fontWeight: 600 }}>📊 Google Analytics 4</div>
-                      {ga ? Object.entries(ga).map(([k,v]) => (
-                        <div key={k} style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", borderBottom: `1px solid ${C.borderLight}`, fontSize: 12 }}>
-                          <span style={{ color: C.textMid }}>{k}</span>
-                          <span style={{ fontWeight: 600 }}>{typeof v === "number" ? v.toLocaleString() : v}</span>
-                        </div>
-                      )) : <div style={{ color: C.textLight, fontSize: 12 }}>Aucun fichier chargé</div>}
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, color: C.textLight, marginBottom: 12, fontWeight: 600 }}>🤖 Bing AI Performance</div>
-                      {bing ? (
-                        <div>
-                          {[["Citations totales", bing.geoMentions.toLocaleString()], ["Pages citées (≥1)", bing.pageCount]].map(([k,v]) => (
-                            <div key={k} style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", borderBottom: `1px solid ${C.borderLight}`, fontSize: 12 }}>
-                              <span style={{ color: C.textMid }}>{k}</span>
-                              <span style={{ fontWeight: 600 }}>{v}</span>
-                            </div>
-                          ))}
-                        </div>
-                      ) : <div style={{ color: C.textLight, fontSize: 12 }}>Aucun fichier chargé</div>}
-                    </div>
-                  </div>
+              ))}
+            </div>
+
+            {/* ── Card SF ── */}
+            <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, marginBottom: 20, overflow: "hidden" }}>
+              <div style={{ padding: "16px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 18 }}>🕷️</span>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 15, color: C.text }}>Screaming Frog</div>
+                  <div style={{ fontSize: 12, color: C.textLight, marginTop: 2 }}>Métriques techniques · crawl</div>
                 </div>
               </div>
-            ))}
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                  <thead>
+                    <tr style={{ background: C.bg }}>
+                      <th style={{ padding: "10px 20px", textAlign: "left", fontWeight: 600, fontSize: 11, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.8, borderBottom: `1px solid ${C.border}`, minWidth: 160 }}>Métrique</th>
+                      {metrics.map(({ site }) => (
+                        <th key={site.id} style={{ padding: "10px 20px", textAlign: "right", fontWeight: 700, fontSize: 12, color: site.color, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>{site.label}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {SF_DIMS.map((d, di) => (
+                      <tr key={d.key} style={{ borderBottom: `1px solid ${C.borderLight}`, background: di % 2 === 0 ? C.white : C.bg }}>
+                        <td style={{ padding: "8px 20px", color: C.textMid, fontWeight: 500 }}>{d.label}</td>
+                        {metrics.map(({ site, sf }) => {
+                          const val = sf?.[d.key] ?? null;
+                          const vals = metrics.map(m => m.sf?.[d.key]).filter(v => v !== null && v !== undefined);
+                          const best = vals.length > 1 ? Math.max(...vals) : null;
+                          const isBest = val !== null && best !== null && val === best;
+                          return (
+                            <td key={site.id} style={{ padding: "8px 20px", textAlign: "right", fontWeight: 600, color: val === null ? C.textLight : isBest ? site.color : C.text }}>
+                              {val !== null ? val : "—"}
+                              {isBest && vals.length > 1 && <span style={{ marginLeft: 4, fontSize: 10 }}>★</span>}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {/* Schema types row */}
+              {metrics.some(({ sf }) => sf && Object.keys(sf.schemaTypes || {}).length > 0) && (
+                <div style={{ padding: "16px 24px", borderTop: `1px solid ${C.borderLight}`, display: "grid", gridTemplateColumns: `160px repeat(${metrics.length}, 1fr)`, gap: 16, alignItems: "start" }}>
+                  <div style={{ fontSize: 11, color: C.textLight, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.8, paddingTop: 4 }}>🏷️ Schemas</div>
+                  {metrics.map(({ site, sf }) => (
+                    <div key={site.id}>
+                      {sf && Object.keys(sf.schemaTypes || {}).length > 0
+                        ? <SchemaBreakdown schemaTypes={sf.schemaTypes} color={site.color} />
+                        : <span style={{ fontSize: 12, color: C.textLight }}>—</span>}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {/* llms.txt row */}
+              {metrics.some(({ sf }) => sf) && (
+                <div style={{ padding: "0 24px 16px", display: "grid", gridTemplateColumns: `160px repeat(${metrics.length}, 1fr)`, gap: 16, alignItems: "start" }}>
+                  <div style={{ fontSize: 11, color: C.textLight, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.8, paddingTop: 4 }}>🤖 llms.txt</div>
+                  {metrics.map(({ site, sf }) => (
+                    <div key={site.id}>{sf ? <LlmsStatus sf={sf} /> : <span style={{ fontSize: 12, color: C.textLight }}>—</span>}</div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* ── Card GSC ── */}
+            <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, marginBottom: 20, overflow: "hidden" }}>
+              <div style={{ padding: "16px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 18 }}>🔍</span>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 15, color: C.text }}>Google Search Console</div>
+                  <div style={{ fontSize: 12, color: C.textLight, marginTop: 2 }}>Visibilité organique SEO</div>
+                </div>
+              </div>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                  <thead>
+                    <tr style={{ background: C.bg }}>
+                      <th style={{ padding: "10px 20px", textAlign: "left", fontWeight: 600, fontSize: 11, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.8, borderBottom: `1px solid ${C.border}`, minWidth: 160 }}>Métrique</th>
+                      {metrics.map(({ site }) => (
+                        <th key={site.id} style={{ padding: "10px 20px", textAlign: "right", fontWeight: 700, fontSize: 12, color: site.color, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>{site.label}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[
+                      { key: "clicks",      label: "Clics",       fmt: v => v.toLocaleString() },
+                      { key: "impressions", label: "Impressions",  fmt: v => v.toLocaleString() },
+                      { key: "ctr",         label: "CTR",          fmt: v => `${v}%` },
+                      { key: "position",    label: "Position moy.",fmt: v => v },
+                    ].map((row, di) => (
+                      <tr key={row.key} style={{ borderBottom: `1px solid ${C.borderLight}`, background: di % 2 === 0 ? C.white : C.bg }}>
+                        <td style={{ padding: "8px 20px", color: C.textMid, fontWeight: 500 }}>{row.label}</td>
+                        {metrics.map(({ site, gsc }) => {
+                          const val = gsc?.[row.key] ?? null;
+                          const vals = metrics.map(m => m.gsc?.[row.key]).filter(v => v !== null && v !== undefined);
+                          // For position: lower is better
+                          const best = vals.length > 1 ? (row.key === "position" ? Math.min(...vals) : Math.max(...vals)) : null;
+                          const isBest = val !== null && best !== null && val === best;
+                          return (
+                            <td key={site.id} style={{ padding: "8px 20px", textAlign: "right", fontWeight: 600, color: val === null ? C.textLight : isBest ? site.color : C.text }}>
+                              {val !== null ? row.fmt(val) : "—"}
+                              {isBest && vals.length > 1 && <span style={{ marginLeft: 4, fontSize: 10 }}>★</span>}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* ── Card GA4 ── */}
+            <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, marginBottom: 20, overflow: "hidden" }}>
+              <div style={{ padding: "16px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 18 }}>📊</span>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 15, color: C.text }}>Google Analytics 4</div>
+                  <div style={{ fontSize: 12, color: C.textLight, marginTop: 2 }}>Comportement & trafic</div>
+                </div>
+              </div>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                  <thead>
+                    <tr style={{ background: C.bg }}>
+                      <th style={{ padding: "10px 20px", textAlign: "left", fontWeight: 600, fontSize: 11, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.8, borderBottom: `1px solid ${C.border}`, minWidth: 160 }}>Métrique</th>
+                      {metrics.map(({ site }) => (
+                        <th key={site.id} style={{ padding: "10px 20px", textAlign: "right", fontWeight: 700, fontSize: 12, color: site.color, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>{site.label}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[
+                      { key: "sessions", label: "Sessions",   fmt: v => v.toLocaleString() },
+                      { key: "views",    label: "Pages vues", fmt: v => v.toLocaleString() },
+                    ].map((row, di) => (
+                      <tr key={row.key} style={{ borderBottom: `1px solid ${C.borderLight}`, background: di % 2 === 0 ? C.white : C.bg }}>
+                        <td style={{ padding: "8px 20px", color: C.textMid, fontWeight: 500 }}>{row.label}</td>
+                        {metrics.map(({ site, ga }) => {
+                          const val = ga?.[row.key] ?? null;
+                          const vals = metrics.map(m => m.ga?.[row.key]).filter(v => v !== null && v !== undefined);
+                          const best = vals.length > 1 ? Math.max(...vals) : null;
+                          const isBest = val !== null && best !== null && val === best;
+                          return (
+                            <td key={site.id} style={{ padding: "8px 20px", textAlign: "right", fontWeight: 600, color: val === null ? C.textLight : isBest ? site.color : C.text }}>
+                              {val !== null ? row.fmt(val) : "—"}
+                              {isBest && vals.length > 1 && <span style={{ marginLeft: 4, fontSize: 10 }}>★</span>}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* ── Card Bing AI ── */}
+            <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, marginBottom: 20, overflow: "hidden" }}>
+              <div style={{ padding: "16px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 18 }}>🤖</span>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 15, color: C.text }}>Bing AI Performance</div>
+                  <div style={{ fontSize: 12, color: C.textLight, marginTop: 2 }}>Citations & visibilité GEO</div>
+                </div>
+              </div>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                  <thead>
+                    <tr style={{ background: C.bg }}>
+                      <th style={{ padding: "10px 20px", textAlign: "left", fontWeight: 600, fontSize: 11, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.8, borderBottom: `1px solid ${C.border}`, minWidth: 160 }}>Métrique</th>
+                      {metrics.map(({ site }) => (
+                        <th key={site.id} style={{ padding: "10px 20px", textAlign: "right", fontWeight: 700, fontSize: 12, color: site.color, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>{site.label}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[
+                      { key: "geoMentions", label: "Citations totales", fmt: v => v.toLocaleString() },
+                      { key: "pageCount",   label: "Pages citées (≥1)", fmt: v => v },
+                    ].map((row, di) => (
+                      <tr key={row.key} style={{ borderBottom: `1px solid ${C.borderLight}`, background: di % 2 === 0 ? C.white : C.bg }}>
+                        <td style={{ padding: "8px 20px", color: C.textMid, fontWeight: 500 }}>{row.label}</td>
+                        {metrics.map(({ site, bing }) => {
+                          const val = bing?.[row.key] ?? null;
+                          const vals = metrics.map(m => m.bing?.[row.key]).filter(v => v !== null && v !== undefined);
+                          const best = vals.length > 1 ? Math.max(...vals) : null;
+                          const isBest = val !== null && best !== null && val === best;
+                          return (
+                            <td key={site.id} style={{ padding: "8px 20px", textAlign: "right", fontWeight: 600, color: val === null ? C.textLight : isBest ? site.color : C.text }}>
+                              {val !== null ? row.fmt(val) : "—"}
+                              {isBest && vals.length > 1 && <span style={{ marginLeft: 4, fontSize: 10 }}>★</span>}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
         )}
 
