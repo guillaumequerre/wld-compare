@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useRef } from "react";
+import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import { RadarChart, Radar, PolarGrid, PolarAngleAxis, ResponsiveContainer, Legend } from "recharts";
 
 // ── PALETTE ─────────────────────────────────────────────────────
@@ -128,6 +128,55 @@ function parseCSV(text) {
     return obj;
   });
 }
+
+// ── SUPABASE CONFIG ──────────────────────────────────────────────
+const PROXY = "/api/supabase";
+
+async function sbUpload(path, csvText) {
+  const res = await fetch(`${PROXY}/storage/v1/object/csv-imports/${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "text/csv", "x-upsert": "true" },
+    body: csvText,
+  });
+  if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
+  return path;
+}
+
+async function sbInsertImport({ site_id, source, filename, storage_path, row_count }) {
+  const res = await fetch(`${PROXY}/rest/v1/imports`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Prefer": "return=representation" },
+    body: JSON.stringify({ site_id, source, filename, storage_path, row_count }),
+  });
+  if (!res.ok) throw new Error(`Insert failed: ${res.status}`);
+  return res.json();
+}
+
+async function sbGetHistory(limit = 50) {
+  const res = await fetch(`${PROXY}/rest/v1/imports?select=*&order=uploaded_at.desc&limit=${limit}`);
+  if (!res.ok) throw new Error(`Fetch history failed: ${res.status}`);
+  return res.json();
+}
+
+async function sbGetLatest() {
+  // Get latest import per site+source
+  const res = await fetch(`${PROXY}/rest/v1/imports?select=*&order=uploaded_at.desc&limit=200`);
+  if (!res.ok) return {};
+  const rows = await res.json();
+  const latest = {};
+  for (const row of rows) {
+    const key = `${row.site_id}_${row.source}`;
+    if (!latest[key]) latest[key] = row;
+  }
+  return latest;
+}
+
+async function sbDownload(storage_path) {
+  const res = await fetch(`${PROXY}/storage/v1/object/csv-imports/${storage_path}`);
+  if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+  return res.text();
+}
+
 function safeNum(v) {
   if (v === undefined || v === null || v === "") return 0;
   const n = parseFloat(String(v).replace(/[^0-9.-]/g, ""));
@@ -378,15 +427,39 @@ function SectionHeader({ title, sub }) {
   );
 }
 
-function UploadCard({ label, icon, hint, onData, loaded, color }) {
-  const [drag, setDrag] = useState(false);
+function UploadCard({ label, icon, hint, onData, loaded, color, siteId, source }) {
+  const [drag, setDrag]       = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadErr, setUploadErr] = useState(null);
   const ref = useRef();
-  const handle = useCallback((file) => {
+
+  const handle = useCallback(async (file) => {
     if (!file) return;
+    setUploadErr(null);
     const reader = new FileReader();
-    reader.onload = e => { onData(parseCSV(e.target.result)); };
+    reader.onload = async (e) => {
+      const text = e.target.result;
+      const rows = parseCSV(text);
+      onData(rows);
+      // Upload to Supabase in background
+      if (siteId && source) {
+        setUploading(true);
+        try {
+          const ts   = new Date().toISOString().replace(/[:.]/g, "-");
+          const path = `${siteId}/${source}/${ts}_${file.name}`;
+          await sbUpload(path, text);
+          await sbInsertImport({ site_id: siteId, source, filename: file.name, storage_path: path, row_count: rows.length });
+        } catch(err) {
+          setUploadErr("Sauvegarde échouée");
+          console.warn("Supabase upload error:", err);
+        } finally {
+          setUploading(false);
+        }
+      }
+    };
     reader.readAsText(file);
-  }, [onData]);
+  }, [onData, siteId, source]);
+
   return (
     <div
       onClick={() => ref.current.click()}
@@ -396,10 +469,12 @@ function UploadCard({ label, icon, hint, onData, loaded, color }) {
       style={{ border: `1.5px dashed ${drag ? color : loaded ? color : "#D1D5DB"}`, borderRadius: 10, padding: "14px 16px", cursor: "pointer", background: loaded ? `${color}0D` : drag ? `${color}08` : "#FAFAFA", transition: "all 0.18s", display: "flex", alignItems: "center", gap: 12 }}
     >
       <input ref={ref} type="file" accept=".csv" style={{ display: "none" }} onChange={e => handle(e.target.files[0])} />
-      <div style={{ fontSize: 22 }}>{loaded ? "✅" : icon}</div>
+      <div style={{ fontSize: 22 }}>{uploading ? "⏳" : loaded ? "✅" : icon}</div>
       <div>
         <div style={{ fontSize: 13, fontWeight: 600, color: loaded ? color : C.textMid }}>{label}</div>
-        <div style={{ fontSize: 11, color: C.textLight, marginTop: 2 }}>{loaded ? "Fichier chargé" : hint}</div>
+        <div style={{ fontSize: 11, color: uploadErr ? C.red : C.textLight, marginTop: 2 }}>
+          {uploading ? "Sauvegarde en cours…" : uploadErr ? uploadErr : loaded ? "Fichier chargé · sauvegardé" : hint}
+        </div>
       </div>
     </div>
   );
@@ -867,6 +942,43 @@ export default function App() {
   const m3ago = new Date(Date.now() - 90*86400000).toISOString().slice(0,10);
   const [dates, setDates] = useState({ from: m3ago, to: today });
 
+  // Supabase state
+  const [dbHistory,    setDbHistory]    = useState([]);
+  const [dbLoading,    setDbLoading]    = useState(true);
+  const [dbAutoLoaded, setDbAutoLoaded] = useState(false);
+  const [showHistory,  setShowHistory]  = useState(false);
+
+  const setterMap = { sf: setSfData, gsc: setGscData, ga: setGaData, bing: setBingData };
+
+  const loadCsv = useCallback(async (row) => {
+    try {
+      const text = await sbDownload(row.storage_path);
+      const rows = parseCSV(text);
+      setterMap[row.source](p => ({ ...p, [row.site_id]: rows }));
+    } catch(e) { console.warn("Load error", e); }
+  }, []);
+
+  // Auto-load latest imports on mount
+  useEffect(() => {
+    (async () => {
+      setDbLoading(true);
+      try {
+        const [latest, history] = await Promise.all([sbGetLatest(), sbGetHistory()]);
+        setDbHistory(history);
+        if (Object.keys(latest).length > 0) {
+          await Promise.all(Object.values(latest).map(row => loadCsv(row)));
+          setDbAutoLoaded(true);
+        }
+      } catch(e) { console.warn("Supabase init error", e); }
+      finally { setDbLoading(false); }
+    })();
+  }, []);
+
+  const refreshHistory = useCallback(async () => {
+    const history = await sbGetHistory();
+    setDbHistory(history);
+  }, []);
+
   // Computed metrics, mode-aware
   const metrics = useMemo(() => {
     return SITES.map(s => {
@@ -962,6 +1074,50 @@ export default function App() {
         {tab === "import" && (
           <div>
             <SectionHeader title="Import des données" sub="Chargez les exports CSV pour chaque site" />
+
+            {/* DB status banner */}
+            <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 20px", marginBottom: 16, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ width: 8, height: 8, borderRadius: "50%", background: dbLoading ? C.amber : dbAutoLoaded ? C.green : C.textLight }} />
+                <span style={{ fontSize: 13, color: C.textMid }}>
+                  {dbLoading ? "Chargement des derniers imports…" : dbAutoLoaded ? `Données auto-chargées depuis Supabase (${dbHistory.length} imports en base)` : "Aucun import en base — chargez vos CSV ci-dessous"}
+                </span>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={() => { setShowHistory(h => !h); refreshHistory(); }} style={{ padding: "5px 14px", background: showHistory ? C.blue : C.white, color: showHistory ? "#fff" : C.textMid, border: `1px solid ${showHistory ? C.blue : C.border}`, borderRadius: 7, cursor: "pointer", fontSize: 12, fontWeight: 500 }}>
+                  📋 Historique {dbHistory.length > 0 ? `(${dbHistory.length})` : ""}
+                </button>
+              </div>
+            </div>
+
+            {/* History panel */}
+            {showHistory && (
+              <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20, marginBottom: 20 }}>
+                <div style={{ fontWeight: 600, fontSize: 14, color: C.text, marginBottom: 14 }}>Historique des imports</div>
+                {dbHistory.length === 0 ? (
+                  <div style={{ fontSize: 12, color: C.textLight }}>Aucun import enregistré</div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 320, overflowY: "auto" }}>
+                    {dbHistory.map(row => {
+                      const site = SITES.find(s => s.id === row.site_id);
+                      const srcLabel = { sf: "🕷️ SF", gsc: "🔍 GSC", ga: "📊 GA4", bing: "🤖 Bing" }[row.source] || row.source;
+                      return (
+                        <div key={row.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: C.bg, borderRadius: 8, fontSize: 12 }}>
+                          <span style={{ fontWeight: 600, color: site?.color || C.text, minWidth: 90 }}>{site?.label || row.site_id}</span>
+                          <span style={{ color: C.textMid, minWidth: 60 }}>{srcLabel}</span>
+                          <span style={{ color: C.textLight, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.filename}</span>
+                          <span style={{ color: C.textLight, minWidth: 70 }}>{row.row_count} lignes</span>
+                          <span style={{ color: C.textLight, minWidth: 140 }}>{new Date(row.uploaded_at).toLocaleString("fr-FR")}</span>
+                          <button onClick={() => loadCsv(row)} style={{ padding: "3px 10px", background: C.blueLight, color: C.blue, border: `1px solid ${C.blue}22`, borderRadius: 6, cursor: "pointer", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>
+                            ↺ Charger
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
             <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "20px 24px", marginBottom: 24, display: "flex", alignItems: "center", gap: 24, flexWrap: "wrap" }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: C.textMid }}>📅 Période GSC / GA4</div>
               <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -1000,7 +1156,7 @@ export default function App() {
                     return (
                       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                         <UploadCard label="Screaming Frog Internal" icon="🕷️" hint="Export interne SF (inclut GA4 + GSC si connectés)" color={site.color}
-                          loaded={sfRows.length > 0} onData={rows => setSfData(p => ({...p, [site.id]: rows}))} />
+                          loaded={sfRows.length > 0} onData={rows => setSfData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="sf" />
                         {sfRows.length > 0 && (hasSFGa || hasSFGsc) && (
                           <div style={{ fontSize: 11, color: C.green, background: C.greenLight, borderRadius: 8, padding: "8px 12px", display: "flex", gap: 6 }}>
                             ✅ Données {[hasSFGsc && "GSC", hasSFGa && "GA4"].filter(Boolean).join(" + ")} détectées dans le fichier SF
@@ -1013,7 +1169,7 @@ export default function App() {
                         )}
                         {!hasSFGsc && (
                           <UploadCard label="Google Search Console" icon="🔍" hint="Export séparé GSC · clics, impressions, CTR" color={site.color}
-                            loaded={hasGscFile} onData={rows => setGscData(p => ({...p, [site.id]: rows}))} />
+                            loaded={hasGscFile} onData={rows => setGscData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="gsc" />
                         )}
                         {!hasSFGa && !hasGaFile && sfRows.length > 0 && (
                           <div style={{ fontSize: 11, color: C.textLight, background: C.bg, borderRadius: 8, padding: "8px 12px", border: `1px dashed ${C.border}` }}>
@@ -1022,10 +1178,10 @@ export default function App() {
                         )}
                         {!hasSFGa && (
                           <UploadCard label="Google Analytics 4" icon="📊" hint="Export séparé GA4 · sessions, engagement" color={site.color}
-                            loaded={hasGaFile} onData={rows => setGaData(p => ({...p, [site.id]: rows}))} />
+                            loaded={hasGaFile} onData={rows => setGaData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="ga" />
                         )}
                         <UploadCard label="Bing AI Performance" icon="🤖" hint="Export Bing Webmaster · colonne Citations" color={site.color}
-                          loaded={bingData[site.id].length > 0} onData={rows => setBingData(p => ({...p, [site.id]: rows}))} />
+                          loaded={bingData[site.id].length > 0} onData={rows => setBingData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="bing" />
                       </div>
                     );
                   })()}
