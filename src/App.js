@@ -131,31 +131,78 @@ function parseCSV(text) {
 
 
 // ── INTRA-SITE CORRELATION (page-level) ─────────────────────────
+// Normalize URL → always keep full URL lowercase, no trailing slash
+// SF has absolute URLs, GSC may have absolute or relative — we normalize both to full URL when possible
+function normUrl(raw) {
+  const s = (raw || "").trim().toLowerCase().replace(/\/+$/, "") || "/";
+  return s;
+}
+// Extract just the path from a URL for fallback matching
+function urlPath(raw) {
+  const s = (raw || "").trim().toLowerCase();
+  try { return new URL(s).pathname.replace(/\/+$/, "") || "/"; } catch { return s.replace(/\/+$/, "") || "/"; }
+}
+
+function debugUrlMatch(sfRows, gscRows, gaRows) {
+  if (!sfRows.length || (!gscRows.length && !gaRows.length)) return null;
+  const gscMap = {}; const gscPathMap = {};
+  for (const r of gscRows) {
+    const raw = r["page"] || r["adresse"] || r["address"] || r["url"] || "";
+    const full = normUrl(raw); const path = urlPath(raw);
+    if (full) { gscMap[full] = true; gscPathMap[path] = true; }
+  }
+  const gaMap = {}; const gaPathMap = {};
+  for (const r of gaRows) {
+    const raw = r["page"] || r["pagepath"] || r["page path"] || r["adresse"] || r["url"] || "";
+    const full = normUrl(raw); const path = urlPath(raw);
+    if (full) { gaMap[full] = true; gaPathMap[path] = true; }
+  }
+  const html = sfRows.filter(r => {
+    const ct = (r["type de contenu"] || r["content type"] || "").toLowerCase();
+    const sc = safeNum(r["code http"] || r["status code"] || 200);
+    return (ct.includes("html") || ct === "") && sc < 400;
+  });
+  let gscFull=0, gscPath=0, gaFull=0, gaPath=0, total=html.length;
+  const sfSample = html.slice(0,3).map(r => normUrl(r["adresse"] || r["address"] || r["url"] || ""));
+  const gscSample = gscRows.slice(0,3).map(r => normUrl(r["page"] || r["adresse"] || r["url"] || ""));
+  const gaSample  = gaRows.slice(0,3).map(r => normUrl(r["page"] || r["pagepath"] || r["url"] || ""));
+  for (const r of html) {
+    const url = normUrl(r["adresse"] || r["address"] || r["url"] || "");
+    const path = urlPath(r["adresse"] || r["address"] || r["url"] || "");
+    if (gscMap[url]) gscFull++; else if (gscPathMap[path]) gscPath++;
+    if (gaMap[url])  gaFull++;  else if (gaPathMap[path])  gaPath++;
+  }
+  return { total, gscFull, gscPath, gaFull, gaPath, sfSample, gscSample, gaSample };
+}
+
 function intraCorr(sfRows, gscRows, gaRows, bingRows, dimKey, kpiKey) {
   if (!sfRows.length) return null;
 
-  // Build URL-keyed map from GSC / GA4 / Bing
-  const gscMap = {};
+  // Build URL maps — two keys per row: full URL and path-only (for cross-format matching)
+  const gscMap = {}; const gscPathMap = {};
   for (const r of gscRows) {
-    const url = (r["page"] || r["adresse"] || r["address"] || r["url"] || "").trim().toLowerCase();
-    if (url) gscMap[url] = r;
+    const raw = r["page"] || r["adresse"] || r["address"] || r["url"] || "";
+    const full = normUrl(raw); const path = urlPath(raw);
+    if (full) { gscMap[full] = r; gscPathMap[path] = r; }
   }
-  const gaMap = {};
+  const gaMap = {}; const gaPathMap = {};
   for (const r of gaRows) {
-    const url = (r["page"] || r["pagepath"] || r["page path"] || r["adresse"] || r["url"] || "").trim().toLowerCase();
-    if (url) gaMap[url] = r;
+    const raw = r["page"] || r["pagepath"] || r["page path"] || r["adresse"] || r["url"] || "";
+    const full = normUrl(raw); const path = urlPath(raw);
+    if (full) { gaMap[full] = r; gaPathMap[path] = r; }
   }
-  const bingMap = {};
+  const bingMap = {}; const bingPathMap = {};
   for (const r of bingRows) {
-    const url = (r["url"] || r["page"] || r["adresse"] || r["address"] || "").trim().toLowerCase();
-    if (url) bingMap[url] = r;
+    const raw = r["url"] || r["page"] || r["adresse"] || r["address"] || "";
+    const full = normUrl(raw); const path = urlPath(raw);
+    if (full) { bingMap[full] = r; bingPathMap[path] = r; }
   }
 
   const sfVals  = [];
   const resVals = [];
 
   for (const r of sfRows) {
-    const url = (r["adresse"] || r["address"] || r["url"] || "").trim().toLowerCase();
+    const url = normUrl(r["adresse"] || r["address"] || r["url"] || "");
     const ct  = (r["type de contenu"] || r["content type"] || "").toLowerCase();
     const sc  = safeNum(r["code http"] || r["status code"] || 200);
     if ((!ct.includes("html") && ct !== "") || sc >= 400) continue;
@@ -183,21 +230,21 @@ function intraCorr(sfRows, gscRows, gaRows, bingRows, dimKey, kpiKey) {
       sfVal = jsons.length > 0 ? 1 : 0;
     } else { continue; }
 
-    // KPI value for this page
+    // KPI value — match by full URL, fallback to path-only
+    const sfPath = urlPath(r["adresse"] || r["address"] || r["url"] || "");
+    const gscR  = gscMap[url]  || gscPathMap[sfPath];
+    const gaR   = gaMap[url]   || gaPathMap[sfPath];
+    const bingR = bingMap[url] || bingPathMap[sfPath];
+
+    // Only include pages that have a KPI match for this specific column
     let resVal = null;
-    const gscR = gscMap[url];
-    const gaR  = gaMap[url];
-    if (kpiKey === "clicks")      resVal = gscR ? safeNum(gscR["clics"]         || gscR["clicks"]      || 0) : null;
-    else if (kpiKey === "impressions") resVal = gscR ? safeNum(gscR["impressions"] || 0) : null;
-    else if (kpiKey === "ctr")    resVal = gscR ? safeNum(gscR["ctr"]            || 0) : null;
-    else if (kpiKey === "position") resVal = gscR ? safeNum(gscR["position"]     || 0) : null;
-    else if (kpiKey === "sessions") resVal = gaR  ? safeNum(gaR["sessions"]      || gaR["ga4 sessions"] || 0) : null;
-    else if (kpiKey === "views")  resVal = gaR  ? safeNum(gaR["views"]           || gaR["ga4 views"]    || 0) : null;
-    else if (kpiKey === "geoMentions") {
-      const bingR = bingMap[url];
-      resVal = bingR ? safeNum(bingR["citations"] || bingR["mentions"] || 0) : null;
-    }
-    else resVal = null;
+    if      (kpiKey === "clicks")      { if (gscR) resVal = safeNum(gscR["clics"]       || gscR["clicks"]      || 0); }
+    else if (kpiKey === "impressions") { if (gscR) resVal = safeNum(gscR["impressions"] || 0); }
+    else if (kpiKey === "ctr")         { if (gscR) resVal = safeNum(String(gscR["ctr"]  || "0").replace("%","")); }
+    else if (kpiKey === "position")    { if (gscR) resVal = safeNum(gscR["position"]    || 0); }
+    else if (kpiKey === "sessions")    { if (gaR)  resVal = safeNum(gaR["sessions"]     || gaR["ga4 sessions"] || 0); }
+    else if (kpiKey === "views")       { if (gaR)  resVal = safeNum(gaR["views"]        || gaR["ga4 views"]    || 0); }
+    else if (kpiKey === "geoMentions") { if (bingR) resVal = safeNum(bingR["citations"] || bingR["mentions"]   || 0); }
 
     if (resVal !== null) {
       sfVals.push(sfVal);
@@ -205,7 +252,8 @@ function intraCorr(sfRows, gscRows, gaRows, bingRows, dimKey, kpiKey) {
     }
   }
 
-  return sfVals.length >= 5 ? pearson(sfVals, resVals) : null;
+  if (sfVals.length < 5) return null;
+  return { value: pearson(sfVals, resVals), n: sfVals.length };
 }
 
 // ── SUPABASE CONFIG ──────────────────────────────────────────────
@@ -1030,6 +1078,7 @@ export default function App() {
   const [analysis, setAnalysis] = useState(null);
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [analysisError, setAnalysisError] = useState(null);
+  const [corrLoading, setCorrLoading] = useState(false);
 
   const [sfData,   setSfData]   = useState({ wedig: [], deux: [], lets: [] });
   const [gscData,  setGscData]  = useState({ wedig: [], deux: [], lets: [] });
@@ -1118,14 +1167,18 @@ export default function App() {
     const gscRows  = matrixSites.flatMap(id => gscData[id]  || []);
     const gaRows   = matrixSites.flatMap(id => gaData[id]   || []);
     const bingRows = matrixSites.flatMap(id => bingData[id] || []);
+    setCorrLoading(false);
     return SF_DIMS.map(dim => ({
       dim,
-      corrs: RES_KPIS.map(kpi => ({
-        kpi,
-        value: intraCorr(sfRows, gscRows, gaRows, bingRows, dim.key, kpi.key),
-      })),
+      corrs: RES_KPIS.map(kpi => {
+        const res = intraCorr(sfRows, gscRows, gaRows, bingRows, dim.key, kpi.key);
+        return { kpi, value: res ? res.value : null, n: res ? res.n : 0 };
+      }),
     }));
   }, [matrixSites, sfData, gscData, gaData, bingData]);
+
+  // Trigger loading spinner when deps change
+  useEffect(() => { setCorrLoading(true); }, [matrixSites, sfData, gscData, gaData, bingData]);
 
   const radarData = useMemo(() => RADAR_DIMS.map(d => {
     const row = { dim: d.label };
@@ -1136,7 +1189,9 @@ export default function App() {
   const TABS = ["import","overview","matrix","pages","analyse","sites"];
 
   return (
-    <div style={{ fontFamily: "'DM Sans', 'Segoe UI', sans-serif", background: C.bg, minHeight: "100vh", color: C.text }}>
+    <>
+    <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      <div style={{ fontFamily: "'DM Sans', 'Segoe UI', sans-serif", background: C.bg, minHeight: "100vh", color: C.text }}>
       {/* NAV */}
       <div style={{ background: C.white, borderBottom: `1px solid ${C.border}`, position: "sticky", top: 0, zIndex: 100 }}>
         <div style={{ maxWidth: 1400, margin: "0 auto", padding: "0 28px", display: "flex", alignItems: "center", justifyContent: "space-between", height: 56 }}>
@@ -1411,6 +1466,26 @@ export default function App() {
               ))}
             </div>
 
+            {/* Debug URL match panel */}
+            {(() => {
+              const sfRows  = matrixSites.flatMap(id => sfData[id]  || []);
+              const gscRows = matrixSites.flatMap(id => gscData[id] || []);
+              const gaRows  = matrixSites.flatMap(id => gaData[id]  || []);
+              const d = debugUrlMatch(sfRows, gscRows, gaRows);
+              if (!d) return null;
+              return (
+                <div style={{ background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 10, padding: "12px 16px", marginBottom: 16, fontSize: 12, fontFamily: "monospace" }}>
+                  <div style={{ fontWeight: 700, marginBottom: 6 }}>🔍 Debug URL matching</div>
+                  <div>SF pages HTML : {d.total} | GSC rows : {gscRows.length} | GA rows : {gaRows.length}</div>
+                  <div>GSC match full URL : {d.gscFull} | path seul : {d.gscPath} | total : {d.gscFull+d.gscPath}/{d.total}</div>
+                  <div>GA  match full URL : {d.gaFull}  | path seul : {d.gaPath}  | total : {d.gaFull+d.gaPath}/{d.total}</div>
+                  <div style={{ marginTop: 6, color: "#92400E" }}>SF sample : {d.sfSample.join(" | ")}</div>
+                  <div style={{ color: "#92400E" }}>GSC sample : {d.gscSample.join(" | ")}</div>
+                  <div style={{ color: "#92400E" }}>GA  sample : {d.gaSample.join(" | ")}</div>
+                </div>
+              );
+            })()}
+
             <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "auto" }}>
               <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 900 }}>
                 <thead>
@@ -1426,16 +1501,27 @@ export default function App() {
                 <tbody>
                   {matrixSites.length === 0 ? (
                     <tr><td colSpan={RES_KPIS.length + 1} style={{ padding: 40, textAlign: "center", color: C.textLight, fontSize: 13 }}>Sélectionnez au moins un site pour afficher la matrice</td></tr>
+                  ) : corrLoading ? (
+                    <tr><td colSpan={RES_KPIS.length + 1} style={{ padding: 48, textAlign: "center" }}>
+                      <div style={{ display: "inline-flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
+                        <div style={{ width: 32, height: 32, border: `3px solid ${C.blueLight}`, borderTop: `3px solid ${C.blue}`, borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
+                        <span style={{ fontSize: 13, color: C.textLight }}>Calcul des corrélations en cours…</span>
+                      </div>
+                    </td></tr>
                   ) : filteredCorrMatrix.map(({ dim, corrs }, ri) => (
                     <tr key={dim.key} style={{ background: ri % 2 === 0 ? C.white : "#FAFBFC" }}>
                       <SfDimCell dim={dim} rowBg={ri % 2 === 0 ? C.white : "#FAFBFC"} />
-                      {corrs.map(({ kpi, value }) => {
+                      {corrs.map(({ kpi, value, n }) => {
                         const col = corrColor(value);
+                        const tip = value !== null
+                          ? `Pearson r = ${value > 0 ? "+" : ""}${value}\n${n} pages avec données ${kpi.label}\n\nCalculé page par page :\n• ${dim.label} (valeur SF de la page)\n• ${kpi.label} (valeur importée pour la même URL)`
+                          : `Données insuffisantes\n${n} pages matchées — minimum 5 requis`;
                         return (
-                          <td key={kpi.key} style={{ padding: "8px 6px", textAlign: "center", borderRight: `1px solid ${C.borderLight}`, borderBottom: `1px solid ${C.borderLight}` }}>
+                          <td key={kpi.key} title={tip} style={{ padding: "8px 6px", textAlign: "center", borderRight: `1px solid ${C.borderLight}`, borderBottom: `1px solid ${C.borderLight}`, cursor: "help" }}>
                             <div style={{ background: col.bg, color: col.text, border: `1px solid ${col.border}`, borderRadius: 7, padding: "5px 6px", fontSize: 12, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>
                               {value !== null ? (value > 0 ? "+" : "") + value : "—"}
                             </div>
+                            {n > 0 && <div style={{ fontSize: 9, color: C.textLight, marginTop: 2 }}>{n}p</div>}
                           </td>
                         );
                       })}
@@ -1645,5 +1731,6 @@ export default function App() {
 
       </div>
     </div>
+    </>
   );
 }
