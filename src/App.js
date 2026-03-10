@@ -153,7 +153,7 @@ function intraCorr(sfRows, gscRows, gaRows, bingRows, dimKey, kpiKey) {
     return { pathMap, fullMap };
   };
 
-  const gsc  = buildMap(gscRows, "page", "adresse", "address", "url");
+  const gsc  = buildMap(gscRows, "pages les plus populaires", "page", "adresse", "address", "url");
   const ga   = buildMap(gaRows,  "page", "pagepath", "page path", "adresse", "url");
   const bing = buildMap(bingRows, "url", "page", "adresse", "address");
 
@@ -197,10 +197,10 @@ function intraCorr(sfRows, gscRows, gaRows, bingRows, dimKey, kpiKey) {
     const bingR = lookup(bing, sfRaw);
 
     let resVal = null;
-    if      (kpiKey === "clicks")      { if (gscR)  resVal = safeNum(gscR["clics"]       || gscR["clicks"]      || 0); }
-    else if (kpiKey === "impressions") { if (gscR)  resVal = safeNum(gscR["impressions"] || 0); }
-    else if (kpiKey === "ctr")         { if (gscR)  resVal = safeNum(String(gscR["ctr"]  || "0").replace("%","")); }
-    else if (kpiKey === "position")    { if (gscR)  resVal = safeNum(gscR["position"]    || 0); }
+    if      (kpiKey === "clicks")      { if (gscR)  resVal = safeNum(gscVal(gscR,"clics","clicks") || 0); }
+    else if (kpiKey === "impressions") { if (gscR)  resVal = safeNum(gscVal(gscR,"impressions") || 0); }
+    else if (kpiKey === "ctr")         { if (gscR)  resVal = safeNum(String(gscVal(gscR,"ctr") || "0").replace("%","")); }
+    else if (kpiKey === "position")    { if (gscR)  resVal = safeNum(gscVal(gscR,"position") || 0); }
     else if (kpiKey === "sessions")    { if (gaR)   resVal = safeNum(gaR["sessions"]     || gaR["ga4 sessions"] || 0); }
     else if (kpiKey === "views")       { if (gaR)   resVal = safeNum(gaR["views"]        || gaR["ga4 views"]    || 0); }
     else if (kpiKey === "geoMentions") { if (bingR) resVal = safeNum(bingR["citations"]  || bingR["mentions"]   || 0); }
@@ -461,15 +461,16 @@ function extractSF(rows, mode = "all", bingRows = [], gscRows = []) {
 }
 
 // ── EXTRACT GSC ─────────────────────────────────────────────────
+function gscVal(r, ...keys) { return keys.map(k => r[k]).find(v => v !== undefined && v !== null && v !== "") ?? null; }
 function extractGSC(rows) {
   if (!rows.length) return null;
-  const validRows = rows.filter(r => safeNum(r["clics"] || r["clicks"] || 0) > 0 || safeNum(r["impressions"] || 0) > 0);
+  const validRows = rows.filter(r => safeNum(gscVal(r,"clics","clicks") || 0) > 0 || safeNum(gscVal(r,"impressions") || 0) > 0);
   const src = validRows.length > 0 ? validRows : rows;
   return {
-    clicks:      src.map(r => safeNum(r["clics"] || r["clicks"] || 0)).reduce((a,b)=>a+b,0),
-    impressions: src.map(r => safeNum(r["impressions"] || 0)).reduce((a,b)=>a+b,0),
-    ctr:         Math.round(avg(src.map(r => safeNum(String(r["ctr"] || "0").replace("%",""))).filter(x=>x>0)) * 100) / 100,
-    position:    Math.round(avg(src.map(r => safeNum(r["position"] || 0)).filter(x=>x>0)) * 10) / 10,
+    clicks:      src.map(r => safeNum(gscVal(r,"clics","clicks") || 0)).reduce((a,b)=>a+b,0),
+    impressions: src.map(r => safeNum(gscVal(r,"impressions") || 0)).reduce((a,b)=>a+b,0),
+    ctr:         Math.round(avg(src.map(r => safeNum(String(gscVal(r,"ctr") || "0").replace("%",""))).filter(x=>x>0)) * 100) / 100,
+    position:    Math.round(avg(src.map(r => safeNum(gscVal(r,"position") || 0)).filter(x=>x>0)) * 10) / 10,
   };
 }
 
