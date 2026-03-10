@@ -286,7 +286,13 @@ function filterByMode(rows, mode, bingRows, gscRows = []) {
       const col = (r) => r["pages les plus populaires"] || r["page"] || r["adresse"] || r["url"] || "";
       const gscWithClics = gscRows.filter(r => safeNum(r["clics"] || r["clicks"] || 0) > 0);
       const src = gscWithClics.length > 0 ? gscWithClics : gscRows;
-      const sorted = [...src].sort((a, b) => safeNum(b["clics"] || b["clicks"]) - safeNum(a["clics"] || a["clicks"]));
+      // Deduplicate by path before sorting — keep highest clicks per URL
+      const pathDedup = {};
+      src.forEach(r => {
+        const p = toUrlPath(col(r));
+        if (!pathDedup[p] || safeNum(r["clics"]||r["clicks"]) > safeNum(pathDedup[p]["clics"]||pathDedup[p]["clicks"])) pathDedup[p] = r;
+      });
+      const sorted = Object.values(pathDedup).sort((a, b) => safeNum(b["clics"] || b["clicks"]) - safeNum(a["clics"] || a["clicks"]));
       const top = sorted.slice(0, Math.max(1, Math.ceil(sorted.length * 0.3)));
       const topPaths = new Set(top.map(r => toUrlPath(col(r))));
       return rows.filter(r => topPaths.has(toUrlPath(r["adresse"] || r["address"] || r["url"] || "")));
@@ -679,11 +685,14 @@ function AnalyseTab({ metrics, corrMatrix, resultVals, analysis, setAnalysis, an
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: "claude-sonnet-4-20250514",
-          max_tokens: 4000,
+          max_tokens: 2000,
           messages: [{ role: "user", content: prompt }],
         }),
       });
-      const data = await res.json();
+      const text = await res.text();
+      if (!res.ok) throw new Error(`Proxy error ${res.status}: ${text.slice(0, 120)}`);
+      const data = JSON.parse(text);
+      if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
       const raw = data.content?.map(b => b.text || "").join("") || "";
       const clean = raw.replace(/```json|```/g, "").trim();
       const start = clean.indexOf("{");
@@ -1377,98 +1386,117 @@ export default function App() {
               <PageModeSelector value={pageMode} onChange={setPageMode} />
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 20, marginBottom: 28 }}>
-              {metrics.map(({ site, sf, sfBase, gsc, ga, bing }) => (
-                <div key={site.id} style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden" }}>
-                  <div style={{ background: site.bg, padding: "16px 20px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <div style={{ fontWeight: 700, fontSize: 16, color: site.color }}>{site.label}</div>
-                    {sf && <Badge color={site.color} bg={site.bg}>{sf.totalPages} pages</Badge>}
-                  </div>
-                  <div style={{ padding: 20 }}>
-                    {sf ? (
-                      <div style={{ marginBottom: 16 }}>
-                        <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, color: C.textLight, marginBottom: 10 }}>🕷️ Screaming Frog</div>
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5 }}>
-                          {[
-                            ["Title moy.", sf.avgTitleLen,    sfBase?.avgTitleLen,    "car."],
-                            ["Meta moy.",  sf.avgMetaLen,     sfBase?.avgMetaLen,     "car."],
-                            ["H1 moy.",    sf.avgH1Len,       sfBase?.avgH1Len,       "car."],
-                            ["Mots moy.",  sf.avgWords,       sfBase?.avgWords,       ""],
-                            ["Poids pages",sf.avgPageSizeKB,  sfBase?.avgPageSizeKB,  "KB"],
-                            ["Poids img.", sf.avgImgSizeKB,   sfBase?.avgImgSizeKB,   "KB"],
-                            ["Inlinks uniq.", sf.avgInlinksUniq, sfBase?.avgInlinksUniq, ""],
-                            ["Outlinks uniq.", sf.avgOutlinksUniq, sfBase?.avgOutlinksUniq, ""],
-                            ["Liens ext. uniq.", sf.avgExtLinksUniq, sfBase?.avgExtLinksUniq, ""],
-                            ["Profondeur", sf.avgDepth,       sfBase?.avgDepth,       ""],
-                            ["Flesch",     sf.avgFlesch,      sfBase?.avgFlesch,      ""],
-                            ["Tableaux",   sf.tableRate,      sfBase?.tableRate,      "%"],
-                            ["Schemas",    sf.schemaRate,     sfBase?.schemaRate,     "%"],
-                            ["Indexables", sf.indexableRate,  sfBase?.indexableRate,  "%"],
-                            ["Erreurs",    sf.errorRate,      sfBase?.errorRate,      "%"],
-                            ["Redirects",  sf.redirectRate,   sfBase?.redirectRate,   "%"],
-                          ].map(([k, v, bv, unit]) => {
-                            const showD = pageMode !== "all" && bv !== null && bv !== undefined;
-                            const diff = showD ? Math.round((v - bv) * 10) / 10 : null;
-                            const up = diff > 0;
-                            return (
-                              <div key={k} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "3px 0", borderBottom: `1px solid ${C.borderLight}`, gap: 4 }}>
-                                <span style={{ fontSize: 11, color: C.textLight, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{k}</span>
-                                <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
-                                  <span style={{ fontSize: 12, fontWeight: 600, color: C.text }}>{v}{unit}</span>
-                                  {showD && diff !== 0 && (
-                                    <span style={{ fontSize: 10, fontWeight: 700, color: up ? "#16A34A" : "#DC2626" }}>
-                                      {up ? "▲" : "▼"}{up ? "+" : ""}{diff}{unit}
-                                    </span>
-                                  )}
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    ) : <div style={{ color: C.textLight, fontSize: 12, padding: "10px 0 14px", borderBottom: `1px solid ${C.borderLight}` }}>Aucun CSV SF chargé</div>}
+            {/* Row-based grid: each section spans all 3 sites */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "0 20px", marginBottom: 28 }}>
 
-                    {/* Schema types breakdown */}
-                    {sf && Object.keys(sf.schemaTypes || {}).length > 0 && (
-                      <div style={{ marginBottom: 14 }}>
-                        <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, color: C.textLight, marginBottom: 8 }}>🏷️ Types de Schema</div>
-                        <SchemaBreakdown schemaTypes={sf.schemaTypes} color={site.color} />
-                      </div>
-                    )}
-                    {sf && <LlmsStatus sf={sf} />}
-
-                    {gsc && (
-                      <div style={{ marginBottom: 12 }}>
-                        <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, color: C.textLight, marginBottom: 8 }}>🔍 GSC</div>
-                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                          <StatPill label="Clics" value={gsc.clicks.toLocaleString()} color={C.blue} />
-                          <StatPill label="Impressions" value={gsc.impressions.toLocaleString()} />
-                          <StatPill label="CTR" value={`${gsc.ctr}%`} color={C.green} />
-                          <StatPill label="Position" value={gsc.position} color={C.amber} />
-                        </div>
-                      </div>
-                    )}
-                    {ga && (
-                      <div style={{ marginBottom: 12 }}>
-                        <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, color: C.textLight, marginBottom: 8 }}>📊 GA4</div>
-                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                          <StatPill label="Sessions" value={ga.sessions.toLocaleString()} color={C.blue} />
-                          <StatPill label="Vues" value={ga.views.toLocaleString()} />
-                        </div>
-                      </div>
-                    )}
-                    {bing && (
-                      <div>
-                        <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, color: C.textLight, marginBottom: 8 }}>🤖 Bing AI</div>
-                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                          <StatPill label="Citations" value={bing.geoMentions.toLocaleString()} color={C.purple} />
-                          <StatPill label="Pages citées" value={bing.pageCount} color={C.teal} />
-                        </div>
-                      </div>
-                    )}
-                  </div>
+              {/* ── ROW: Headers ── */}
+              {metrics.map(({ site, sf }) => (
+                <div key={site.id} style={{ background: site.bg, padding: "16px 20px", borderRadius: "14px 14px 0 0", border: `1px solid ${C.border}`, borderBottom: "none", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div style={{ fontWeight: 700, fontSize: 16, color: site.color }}>{site.label}</div>
+                  {sf && <Badge color={site.color} bg={site.bg}>{sf.totalPages} pages</Badge>}
                 </div>
               ))}
+
+              {/* ── ROW: SF metrics ── */}
+              {metrics.map(({ site, sf, sfBase }) => (
+                <div key={site.id} style={{ background: C.white, border: `1px solid ${C.border}`, borderTop: "none", borderBottom: "none", padding: "16px 20px" }}>
+                  <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, color: C.textLight, marginBottom: 10 }}>🕷️ Screaming Frog</div>
+                  {sf ? (
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5 }}>
+                      {[
+                        ["Title moy.", sf.avgTitleLen,    sfBase?.avgTitleLen,    "car."],
+                        ["Meta moy.",  sf.avgMetaLen,     sfBase?.avgMetaLen,     "car."],
+                        ["H1 moy.",    sf.avgH1Len,       sfBase?.avgH1Len,       "car."],
+                        ["Mots moy.",  sf.avgWords,       sfBase?.avgWords,       ""],
+                        ["Poids pages",sf.avgPageSizeKB,  sfBase?.avgPageSizeKB,  "KB"],
+                        ["Poids img.", sf.avgImgSizeKB,   sfBase?.avgImgSizeKB,   "KB"],
+                        ["Inlinks uniq.", sf.avgInlinksUniq, sfBase?.avgInlinksUniq, ""],
+                        ["Outlinks uniq.", sf.avgOutlinksUniq, sfBase?.avgOutlinksUniq, ""],
+                        ["Liens ext. uniq.", sf.avgExtLinksUniq, sfBase?.avgExtLinksUniq, ""],
+                        ["Profondeur", sf.avgDepth,       sfBase?.avgDepth,       ""],
+                        ["Flesch",     sf.avgFlesch,      sfBase?.avgFlesch,      ""],
+                        ["Tableaux",   sf.tableRate,      sfBase?.tableRate,      "%"],
+                        ["Schemas",    sf.schemaRate,     sfBase?.schemaRate,     "%"],
+                        ["Indexables", sf.indexableRate,  sfBase?.indexableRate,  "%"],
+                        ["Erreurs",    sf.errorRate,      sfBase?.errorRate,      "%"],
+                        ["Redirects",  sf.redirectRate,   sfBase?.redirectRate,   "%"],
+                      ].map(([k, v, bv, unit]) => {
+                        const showD = pageMode !== "all" && bv !== null && bv !== undefined;
+                        const diff = showD ? Math.round((v - bv) * 10) / 10 : null;
+                        const up = diff > 0;
+                        return (
+                          <div key={k} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "3px 0", borderBottom: `1px solid ${C.borderLight}`, gap: 4 }}>
+                            <span style={{ fontSize: 11, color: C.textLight, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{k}</span>
+                            <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+                              <span style={{ fontSize: 12, fontWeight: 600, color: C.text }}>{v}{unit}</span>
+                              {showD && diff !== 0 && (
+                                <span style={{ fontSize: 10, fontWeight: 700, color: up ? "#16A34A" : "#DC2626" }}>
+                                  {up ? "▲" : "▼"}{up ? "+" : ""}{diff}{unit}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : <div style={{ color: C.textLight, fontSize: 12 }}>Aucun CSV SF chargé</div>}
+                </div>
+              ))}
+
+              {/* ── ROW: Schema types ── */}
+              {metrics.map(({ site, sf }) => (
+                <div key={site.id} style={{ background: C.white, border: `1px solid ${C.border}`, borderTop: "none", borderBottom: "none", padding: "0 20px 16px" }}>
+                  {sf && Object.keys(sf.schemaTypes || {}).length > 0 && (
+                    <>
+                      <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, color: C.textLight, marginBottom: 8 }}>🏷️ Types de Schema</div>
+                      <SchemaBreakdown schemaTypes={sf.schemaTypes} color={site.color} />
+                    </>
+                  )}
+                  {sf && <LlmsStatus sf={sf} />}
+                </div>
+              ))}
+
+              {/* ── ROW: GSC ── */}
+              {metrics.map(({ site, gsc }) => (
+                <div key={site.id} style={{ background: C.white, border: `1px solid ${C.border}`, borderTop: "none", borderBottom: "none", padding: "16px 20px" }}>
+                  <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, color: C.textLight, marginBottom: 8 }}>🔍 GSC</div>
+                  {gsc ? (
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      <StatPill label="Clics" value={gsc.clicks.toLocaleString()} color={C.blue} />
+                      <StatPill label="Impressions" value={gsc.impressions.toLocaleString()} />
+                      <StatPill label="CTR" value={`${gsc.ctr}%`} color={C.green} />
+                      <StatPill label="Position" value={gsc.position} color={C.amber} />
+                    </div>
+                  ) : <div style={{ fontSize: 12, color: C.textLight }}>—</div>}
+                </div>
+              ))}
+
+              {/* ── ROW: GA4 ── */}
+              {metrics.map(({ site, ga }) => (
+                <div key={site.id} style={{ background: C.white, border: `1px solid ${C.border}`, borderTop: "none", borderBottom: "none", padding: "16px 20px" }}>
+                  <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, color: C.textLight, marginBottom: 8 }}>📊 GA4</div>
+                  {ga ? (
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      <StatPill label="Sessions" value={ga.sessions.toLocaleString()} color={C.blue} />
+                      <StatPill label="Vues" value={ga.views.toLocaleString()} />
+                    </div>
+                  ) : <div style={{ fontSize: 12, color: C.textLight }}>—</div>}
+                </div>
+              ))}
+
+              {/* ── ROW: Bing AI (last — rounded bottom) ── */}
+              {metrics.map(({ site, bing }) => (
+                <div key={site.id} style={{ background: C.white, border: `1px solid ${C.border}`, borderTop: "none", borderRadius: "0 0 14px 14px", padding: "16px 20px" }}>
+                  <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, color: C.textLight, marginBottom: 8 }}>🤖 Bing AI</div>
+                  {bing ? (
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      <StatPill label="Citations" value={bing.geoMentions.toLocaleString()} color={C.purple} />
+                      <StatPill label="Pages citées" value={bing.pageCount} color={C.teal} />
+                    </div>
+                  ) : <div style={{ fontSize: 12, color: C.textLight }}>—</div>}
+                </div>
+              ))}
+
             </div>
 
             <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: 24 }}>
@@ -1644,7 +1672,11 @@ export default function App() {
                 const gscPathMap = {};
                 gscWithClics.forEach(r => {
                   const p = toUrlPath(r["pages les plus populaires"] || r["page"] || r["adresse"] || r["url"] || "");
-                  if (p) gscPathMap[p] = r;
+                  if (!p) return;
+                  const existing = gscPathMap[p];
+                  const clicks = safeNum(r["clics"] || r["clicks"] || 0);
+                  const existingClicks = existing ? safeNum(existing["clics"] || existing["clicks"] || 0) : -1;
+                  if (!existing || clicks > existingClicks) gscPathMap[p] = r;
                 });
                 const seoPages = sfRows
                   .map(r => ({ r, gscR: gscPathMap[toUrlPath(r["adresse"] || r["url"] || "")] }))
