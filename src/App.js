@@ -1013,6 +1013,15 @@ function LlmsStatus({ sf }) {
   );
 }
 
+const RADAR_DIMS = [
+  { key: "totalPages",    label: "Pages",         max: 5000  },
+  { key: "totalImg",      label: "Images",        max: 2000  },
+  { key: "avgInlinks",    label: "Inlinks moy.",  max: 100   },
+  { key: "avgOutlinks",   label: "Outlinks moy.", max: 100   },
+  { key: "indexableRate", label: "Indexables %",  max: 100   },
+  { key: "avgWords",      label: "Mots moy.",     max: 1000  },
+];
+
 // ── MAIN APP ────────────────────────────────────────────────────
 export default function App() {
   const [tab, setTab] = useState("import");
@@ -1118,14 +1127,6 @@ export default function App() {
     }));
   }, [matrixSites, sfData, gscData, gaData, bingData]);
 
-  const RADAR_DIMS = [
-    { key: "totalPages",    label: "Pages",         max: 5000  },
-    { key: "totalImg",      label: "Images",        max: 2000  },
-    { key: "avgInlinks",    label: "Inlinks moy.",  max: 100   },
-    { key: "avgOutlinks",   label: "Outlinks moy.", max: 100   },
-    { key: "indexableRate", label: "Indexables %",  max: 100   },
-    { key: "avgWords",      label: "Mots moy.",     max: 1000  },
-  ];
   const radarData = useMemo(() => RADAR_DIMS.map(d => {
     const row = { dim: d.label };
     metrics.forEach(m => { row[m.site.id] = m.sf ? Math.min(((m.sf[d.key] ?? 0) / d.max) * 100, 100) : 0; });
