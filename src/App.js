@@ -38,16 +38,65 @@ const SF_DIMS = [
   { key: "totalPages",      label: "Nb pages crawlées",         higher: true  },
 ];
 
+
+// ── SF TOOLTIPS ──────────────────────────────────────────────────
+const SF_TOOLTIPS = {
+  "Title OK":      "% de pages dont le title est entre 30 et 65 caractères. En dessous : trop court, peu descriptif. Au-dessus : tronqué par Google.",
+  "Meta OK":       "% de pages dont la meta description est entre 100 et 160 caractères. Hors de cette plage, Google peut réécrire ou ignorer la meta.",
+  "H1 OK":         "% de pages avec un H1 renseigné. Le H1 est le titre principal de la page, il doit être unique et présent sur chaque page.",
+  "Mots moy.":     "Nombre moyen de mots par page HTML. Un contenu plus riche (500+ mots) favorise généralement le positionnement SEO et la compréhension par les LLMs.",
+  "Poids pages":   "Poids moyen des pages HTML en Ko (HTML + CSS + JS). Des pages légères (<500KB) améliorent le Core Web Vitals et l'expérience mobile.",
+  "Poids images":  "Poids moyen des ressources images en Ko. Les images lourdes ralentissent le chargement. Idéalement < 100KB par image en moyenne.",
+  "Inlinks":       "Nombre moyen de liens internes entrants par page. Un maillage interne dense améliore la diffusion du PageRank et la découverte des pages.",
+  "Outlinks":      "Nombre moyen de liens sortants par page (internes + externes). Un trop grand nombre peut diluer l'autorité de la page.",
+  "Profondeur":    "Profondeur de crawl moyenne. Les pages trop profondes (> 4 clics depuis la home) sont moins bien indexées et moins visitées.",
+  "Flesch":        "Score de lisibilité Flesch-Kincaid (0-100). Plus le score est élevé, plus le texte est facile à lire. Idéalement > 60 pour du contenu grand public.",
+  "Tableaux":      "% de pages contenant au moins un tableau HTML. Les tableaux structurent les données et favorisent l'apparition en rich snippets et réponses GEO.",
+  "Schemas":       "% de pages avec au moins un schema JSON-LD. Les schemas aident Google et les LLMs à comprendre le type et le contenu de la page.",
+  "Erreurs":       "% de pages retournant un code HTTP 4xx (404, 403…). Ces erreurs nuisent à l'expérience utilisateur et au crawl budget.",
+  "Redirects":     "% d'URLs retournant un code 3xx (301, 302…). Les redirections consomment du crawl budget et peuvent diluer le PageRank.",
+};
+
+// ── TOOLTIP COMPONENT ────────────────────────────────────────────
+function MetricRow({ label, value }) {
+  const [show, setShow] = useState(false);
+  const tip = SF_TOOLTIPS[label];
+  return (
+    <div
+      key={label}
+      onMouseEnter={() => setShow(true)}
+      onMouseLeave={() => setShow(false)}
+      style={{ position: "relative", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 8px", background: show && tip ? "#F0F4FF" : C.bg, borderRadius: 5, cursor: tip ? "help" : "default", transition: "background 0.15s" }}
+    >
+      <span style={{ fontSize: 11, color: C.textMid, display: "flex", alignItems: "center", gap: 4 }}>
+        {label}
+        {tip && <span style={{ fontSize: 9, color: C.textLight, border: `1px solid ${C.border}`, borderRadius: "50%", width: 13, height: 13, display: "inline-flex", alignItems: "center", justifyContent: "center", fontStyle: "normal" }}>?</span>}
+      </span>
+      <span style={{ fontSize: 11, fontWeight: 600, color: C.text }}>{value}</span>
+      {show && tip && (
+        <div style={{
+          position: "absolute", bottom: "calc(100% + 6px)", left: 0, zIndex: 200,
+          background: C.text, color: "#fff", fontSize: 11, lineHeight: 1.5,
+          padding: "8px 12px", borderRadius: 8, width: 240,
+          boxShadow: "0 4px 16px rgba(0,0,0,0.18)",
+          pointerEvents: "none",
+        }}>
+          {tip}
+          <div style={{ position: "absolute", bottom: -5, left: 16, width: 10, height: 10, background: C.text, transform: "rotate(45deg)", borderRadius: 2 }} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── RESULT KPIs ─────────────────────────────────────────────────
 const RES_KPIS = [
   { key: "clicks",          label: "Clics GSC",             src: "gsc"  },
   { key: "impressions",     label: "Impressions GSC",       src: "gsc"  },
   { key: "ctr",             label: "CTR (%)",               src: "gsc"  },
   { key: "position",        label: "Position moy.",         src: "gsc"  },
-  { key: "sessions",        label: "Sessions GA4",          src: "ga"   },
-  { key: "engagedSessions", label: "Sessions engagées GA4", src: "ga"   },
-  { key: "engagementRate",  label: "Taux engagement GA4",   src: "ga"   },
-  { key: "keyEvents",       label: "Key Events GA4",        src: "ga"   },
+  { key: "sessions",  label: "Sessions GA4",  src: "ga" },
+  { key: "views",     label: "Vues GA4",      src: "ga" },
   { key: "geoMentions",     label: "Citations Bing AI",     src: "bing" },
 ];
 
@@ -100,7 +149,7 @@ function pearson(xs, ys) {
 }
 
 // ── FILTER ROWS BY PAGE MODE ─────────────────────────────────────
-function filterByMode(rows, mode, bingRows) {
+function filterByMode(rows, mode, bingRows, gscRows = []) {
   if (mode === "all") return rows;
 
   if (mode === "geo") {
@@ -118,19 +167,41 @@ function filterByMode(rows, mode, bingRows) {
   }
 
   if (mode === "seo") {
-    // Pages avec clics GSC > 0
-    const withClics = rows.filter(r => safeNum(r["clics"] || r["clicks"] || 0) > 0);
-    if (withClics.length === 0) return rows;
-    // Top 30% par clics
-    const sorted = [...withClics].sort((a, b) =>
-      safeNum(b["clics"] || b["clicks"]) - safeNum(a["clics"] || a["clicks"])
-    );
-    const top = sorted.slice(0, Math.max(1, Math.ceil(sorted.length * 0.3)));
-    const topUrls = new Set(top.map(r => (r["adresse"] || r["address"] || r["url"] || "").toLowerCase().trim()));
-    return rows.filter(r => {
-      const url = (r["adresse"] || r["address"] || r["url"] || "").toLowerCase().trim();
-      return topUrls.has(url);
-    });
+    // Priorité : clics dans SF, sinon croiser avec fichier GSC séparé
+    const sfWithClics = rows.filter(r => safeNum(r["clics"] || r["clicks"] || 0) > 0);
+
+    if (sfWithClics.length > 0) {
+      // SF contient les clics GSC — top 30%
+      const sorted = [...sfWithClics].sort((a, b) =>
+        safeNum(b["clics"] || b["clicks"]) - safeNum(a["clics"] || a["clicks"])
+      );
+      const top = sorted.slice(0, Math.max(1, Math.ceil(sorted.length * 0.3)));
+      const topUrls = new Set(top.map(r => (r["adresse"] || r["address"] || r["url"] || "").toLowerCase().trim()));
+      return rows.filter(r => {
+        const url = (r["adresse"] || r["address"] || r["url"] || "").toLowerCase().trim();
+        return topUrls.has(url);
+      });
+    }
+
+    if (gscRows.length > 0) {
+      // GSC séparé — on croise les URLs par top 30% de clics
+      const gscWithClics = gscRows.filter(r => safeNum(r["clics"] || r["clicks"] || 0) > 0);
+      if (gscWithClics.length === 0) return rows;
+      const sorted = [...gscWithClics].sort((a, b) =>
+        safeNum(b["clics"] || b["clicks"]) - safeNum(a["clics"] || a["clicks"])
+      );
+      const top = sorted.slice(0, Math.max(1, Math.ceil(sorted.length * 0.3)));
+      const topUrls = new Set(
+        top.map(r => (r["adresse"] || r["address"] || r["url"] || r["page"] || r["keys"] || "").toLowerCase().trim())
+      );
+      return rows.filter(r => {
+        const url = (r["adresse"] || r["address"] || r["url"] || "").toLowerCase().trim();
+        return topUrls.has(url);
+      });
+    }
+
+    // Aucune donnée GSC disponible — retourne rien plutôt que tout
+    return [];
   }
 
   return rows;
@@ -150,10 +221,10 @@ function detectSchemas(jsonStr) {
 }
 
 // ── EXTRACT SF ──────────────────────────────────────────────────
-function extractSF(rows, mode = "all", bingRows = []) {
+function extractSF(rows, mode = "all", bingRows = [], gscRows = []) {
   if (!rows.length) return null;
 
-  const filtered = filterByMode(rows, mode, bingRows);
+  const filtered = filterByMode(rows, mode, bingRows, gscRows);
 
   const html = filtered.filter(r => {
     const ct = (r["type de contenu"] || r["content type"] || r["type"] || "").toLowerCase();
@@ -216,6 +287,12 @@ function extractSF(rows, mode = "all", bingRows = []) {
   const redirects = filtered.filter(r => { const sc = safeNum(r["code http"] || r["status code"] || 200); return sc >= 300 && sc < 400; }).length;
   const errors    = filtered.filter(r => { const sc = safeNum(r["code http"] || r["status code"] || 200); return sc >= 400; }).length;
 
+  // llms.txt detection — cherche dans toutes les lignes du crawl (pas seulement HTML filtrées)
+  const llmsRow     = rows.find(r => /\/llms\.txt$/i.test((r["adresse"] || r["address"] || r["url"] || "").trim()));
+  const llmsFullRow = rows.find(r => /\/llms-full\.txt$/i.test((r["adresse"] || r["address"] || r["url"] || "").trim()));
+  const llmsStatus     = llmsRow     ? safeNum(llmsRow["code http"]     || llmsRow["status code"]     || 0) : null;
+  const llmsFullStatus = llmsFullRow ? safeNum(llmsFullRow["code http"] || llmsFullRow["status code"] || 0) : null;
+
   return {
     totalPages:    total,
     titleOptRate:  Math.round((titlesOk / total) * 100),
@@ -233,6 +310,8 @@ function extractSF(rows, mode = "all", bingRows = []) {
     schemaTypes,
     errorRate:     Math.round((errors / allTotal) * 100),
     redirectRate:  Math.round((redirects / allTotal) * 100),
+    llms:     llmsRow     ? { present: true,  status: llmsStatus,     url: llmsRow["adresse"]     || llmsRow["url"]     || "" } : { present: false },
+    llmsFull: llmsFullRow ? { present: true,  status: llmsFullStatus, url: llmsFullRow["adresse"] || llmsFullRow["url"] || "" } : { present: false },
   };
 }
 
@@ -253,10 +332,8 @@ function extractGSC(rows) {
 function extractGA(rows) {
   if (!rows.length) return null;
   return {
-    sessions:        rows.map(r => safeNum(r["ga4 sessions"] || r["sessions"] || r["séances"] || 0)).reduce((a,b)=>a+b,0),
-    engagedSessions: rows.map(r => safeNum(r["ga4 engaged sessions"] || r["engaged sessions"] || 0)).reduce((a,b)=>a+b,0),
-    engagementRate:  Math.round(avg(rows.map(r => safeNum(String(r["ga4 engagement rate"] || r["engagement rate"] || "0").replace("%",""))).filter(x=>x>0)) * 10) / 10,
-    keyEvents:       rows.map(r => safeNum(r["ga4 key events"] || r["key events"] || 0)).reduce((a,b)=>a+b,0),
+    sessions: rows.map(r => safeNum(r["ga4 sessions"] || r["sessions"] || r["séances"] || 0)).reduce((a,b)=>a+b,0),
+    views:    rows.map(r => safeNum(r["ga4 views"]    || r["views"]    || r["pages vues"] || 0)).reduce((a,b)=>a+b,0),
   };
 }
 
@@ -397,9 +474,7 @@ SITE: ${m.site.label}
   CTR: ${rv.ctr ?? 0}%
   Position moy.: ${rv.position ?? 0}
   Sessions GA4: ${rv.sessions ?? 0}
-  Sessions engagées: ${rv.engagedSessions ?? 0}
-  Taux engagement: ${rv.engagementRate ?? 0}%
-  Key Events: ${rv.keyEvents ?? 0}
+  Vues GA4: ${rv.views ?? 0}
   Citations Bing AI: ${rv.geoMentions ?? 0}`;
   }).join("\n\n");
 
@@ -647,10 +722,138 @@ function AnalyseTab({ metrics, corrMatrix, resultVals, analysis, setAnalysis, an
   );
 }
 
+
+// ── KPI HEADER CELL WITH TOOLTIP ─────────────────────────────────
+function KpiHeaderCell({ kpi }) {
+  const [show, setShow] = useState(false);
+  const tip = KPI_TOOLTIPS[kpi.label];
+  return (
+    <th
+      onMouseEnter={() => setShow(true)}
+      onMouseLeave={() => setShow(false)}
+      style={{ position: "relative", padding: "14px 10px", textAlign: "center", fontSize: 11, fontWeight: 600, color: C.textMid, background: C.bg, borderBottom: `1px solid ${C.border}`, borderRight: `1px solid ${C.borderLight}`, minWidth: 105, lineHeight: 1.3, cursor: tip ? "help" : "default" }}
+    >
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 3 }}>
+        {kpi.label}
+        {tip && <span style={{ fontSize: 9, color: C.textLight, border: `1px solid ${C.border}`, borderRadius: "50%", width: 13, height: 13, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>?</span>}
+      </div>
+      <div style={{ fontSize: 10, fontWeight: 400, color: C.textLight, marginTop: 2 }}>
+        {kpi.src === "gsc" ? "🔍 GSC" : kpi.src === "ga" ? "📊 GA4" : "🤖 Bing"}
+      </div>
+      {show && tip && (
+        <div style={{
+          position: "absolute", top: "calc(100% + 6px)", left: "50%", transform: "translateX(-50%)", zIndex: 300,
+          background: C.text, color: "#fff", fontSize: 11, lineHeight: 1.5,
+          padding: "8px 12px", borderRadius: 8, width: 220, fontWeight: 400, textAlign: "left",
+          boxShadow: "0 4px 16px rgba(0,0,0,0.18)", pointerEvents: "none",
+        }}>
+          <div style={{ position: "absolute", top: -5, left: "50%", transform: "translateX(-50%)", width: 10, height: 10, background: C.text, rotate: "45deg", borderRadius: 2 }} />
+          {tip}
+        </div>
+      )}
+    </th>
+  );
+}
+
+
+// ── SF DIM ROW LABEL WITH TOOLTIP ────────────────────────────────
+function SfDimCell({ dim, rowBg }) {
+  const [show, setShow] = useState(false);
+  const tip = SF_DIM_TOOLTIPS[dim.key];
+  return (
+    <td
+      onMouseEnter={() => setShow(true)}
+      onMouseLeave={() => setShow(false)}
+      style={{ position: "relative", padding: "11px 18px", fontSize: 12, fontWeight: 500, color: C.text, borderRight: `1px solid ${C.border}`, borderBottom: `1px solid ${C.borderLight}`, position: "sticky", left: 0, background: rowBg, zIndex: 1, cursor: tip ? "help" : "default" }}
+    >
+      <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+        {dim.label}
+        <span style={{ fontSize: 10, color: C.textLight }}>{dim.higher ? "↑" : "↓"}</span>
+        {tip && <span style={{ fontSize: 9, color: C.textLight, border: `1px solid ${C.border}`, borderRadius: "50%", width: 13, height: 13, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>?</span>}
+      </span>
+      {show && tip && (
+        <div style={{
+          position: "absolute", top: "50%", left: "calc(100% + 8px)", transform: "translateY(-50%)", zIndex: 400,
+          background: C.text, color: "#fff", fontSize: 11, lineHeight: 1.5,
+          padding: "8px 12px", borderRadius: 8, width: 230, fontWeight: 400,
+          boxShadow: "0 4px 16px rgba(0,0,0,0.18)", pointerEvents: "none",
+        }}>
+          <div style={{ position: "absolute", top: "50%", left: -5, transform: "translateY(-50%)", width: 10, height: 10, background: C.text, rotate: "45deg", borderRadius: 2 }} />
+          {tip}
+        </div>
+      )}
+    </td>
+  );
+}
+
+
+// ── SF DIM TOOLTIPS BY KEY ────────────────────────────────────────
+const SF_DIM_TOOLTIPS = {
+  titleOptRate:  "% de pages avec un title entre 30 et 65 caractères. Hors plage = tronqué ou trop vague pour Google.",
+  metaOptRate:   "% de pages avec une meta description entre 100 et 160 caractères. Hors plage = réécriture probable par Google.",
+  h1Rate:        "% de pages avec un H1 renseigné. Le H1 est le signal de titre principal pour les moteurs et les LLMs.",
+  avgWords:      "Nombre moyen de mots par page HTML. Plus de contenu (500+ mots) favorise le positionnement et la compréhension GEO.",
+  avgPageSizeKB: "Poids moyen des pages HTML en KB. Des pages légères améliorent le Core Web Vitals et l'expérience mobile.",
+  avgImgSizeKB:  "Poids moyen des images en KB. Des images lourdes ralentissent le chargement — impact direct sur le classement.",
+  avgInlinks:    "Nombre moyen de liens internes pointant vers chaque page. Un bon maillage diffuse le PageRank et améliore l'indexation.",
+  avgOutlinks:   "Nombre moyen de liens sortants par page. Un excès peut diluer l'autorité et perturber le crawl.",
+  avgDepth:      "Profondeur de crawl moyenne depuis la home. Au-delà de 4 niveaux, les pages sont moins bien indexées.",
+  avgFlesch:     "Score de lisibilité Flesch (0-100). Au-dessus de 60 = texte accessible. Important pour l'engagement et la compréhension GEO.",
+  tableRate:     "% de pages avec un tableau HTML. Les tableaux structurent l'information et favorisent les rich snippets et réponses AI.",
+  schemaRate:    "% de pages avec un schema JSON-LD. Aide Google et les LLMs à comprendre le type et le contenu de la page.",
+  errorRate:     "% de pages en erreur HTTP 4xx. Ces pages nuisent au crawl budget et à l'expérience utilisateur.",
+  redirectRate:  "% d'URLs en redirection 3xx. Consomment du crawl budget et peuvent diluer le PageRank si en chaîne.",
+  totalPages:    "Nombre total de pages HTML crawlées. Donne la taille du site indexable.",
+};
+
+// ── KPI TOOLTIPS ─────────────────────────────────────────────────
+const KPI_TOOLTIPS = {
+  "Clics GSC":             "Nombre total de clics organiques reçus depuis Google Search. Mesure directe de la performance SEO en trafic réel.",
+  "Impressions GSC":       "Nombre de fois où vos pages sont apparues dans les résultats Google. Élevé avec peu de clics = problème de CTR ou de pertinence.",
+  "CTR (%)":               "Taux de clic (Clics ÷ Impressions). Un CTR faible peut indiquer un title/meta peu attractif ou un mauvais positionnement.",
+  "Position moy.":         "Position moyenne dans Google Search. En dessous de 10 = première page. Chaque point gagné peut multiplier le trafic.",
+  "Sessions GA4":          "Nombre de sessions initiées sur le site. Reflète le volume de visites réel, toutes sources confondues.",
+  "Vues GA4":              "Nombre total de pages vues (GA4 Views). Inclut les visites multiples d'une même page dans une session.",
+  "Citations Bing AI":     "Nombre de fois où vos pages sont citées dans les réponses générées par Bing AI (Copilot). Métrique clé du GEO.",
+};
+
+// ── LLMS STATUS BADGE ─────────────────────────────────────────────
+function LlmsStatus({ sf }) {
+  if (!sf) return null;
+  const files = [
+    { key: "llms",     label: "llms.txt",      data: sf.llms },
+    { key: "llmsFull", label: "llms-full.txt",  data: sf.llmsFull },
+  ];
+  return (
+    <div style={{ marginTop: 12, padding: "12px 14px", background: C.bg, borderRadius: 10, border: `1px solid ${C.border}` }}>
+      <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, color: C.textLight, marginBottom: 8, fontWeight: 600 }}>
+        🤖 Fichiers LLMs
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {files.map(({ key, label, data }) => {
+          const ok  = data?.present && data?.status >= 200 && data?.status < 300;
+          const err = data?.present && (data?.status >= 400 || data?.status === 0);
+          const rdr = data?.present && data?.status >= 300 && data?.status < 400;
+          return (
+            <div key={key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+              <span style={{ fontSize: 12, color: C.textMid, fontFamily: "monospace" }}>{label}</span>
+              {ok  && <span style={{ fontSize: 11, fontWeight: 700, color: C.green,     background: C.greenLight,  padding: "2px 10px", borderRadius: 20 }}>✓ {data.status} OK</span>}
+              {rdr && <span style={{ fontSize: 11, fontWeight: 700, color: C.amber,     background: C.amberLight,  padding: "2px 10px", borderRadius: 20 }}>↪ {data.status} Redirect</span>}
+              {err && <span style={{ fontSize: 11, fontWeight: 700, color: C.red,       background: C.redLight,    padding: "2px 10px", borderRadius: 20 }}>✗ {data.status} Erreur</span>}
+              {!data?.present && <span style={{ fontSize: 11, fontWeight: 600, color: C.textLight, background: C.borderLight, padding: "2px 10px", borderRadius: 20 }}>Absent</span>}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ── MAIN APP ────────────────────────────────────────────────────
 export default function App() {
   const [tab, setTab] = useState("import");
   const [pageMode, setPageMode] = useState("all");
+  const [matrixSites, setMatrixSites] = useState(["wedig", "deux", "lets"]);
   const [analysis, setAnalysis] = useState(null);
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [analysisError, setAnalysisError] = useState(null);
@@ -673,7 +876,7 @@ export default function App() {
       const hasSFGa  = sfRows.some(r => safeNum(r["ga4 sessions"] || r["sessions"] || 0) > 0);
       return {
         site: s,
-        sf:   extractSF(sfRows, pageMode, bingRows),
+        sf:   extractSF(sfRows, pageMode, bingRows, gscData[s.id]),
         gsc:  gscData[s.id].length > 0 ? extractGSC(gscData[s.id]) : hasSFGsc ? extractGSC(sfRows) : null,
         ga:   gaData[s.id].length  > 0 ? extractGA(gaData[s.id])   : hasSFGa  ? extractGA(sfRows)  : null,
         bing: extractBing(bingRows),
@@ -686,10 +889,8 @@ export default function App() {
     impressions:     m.gsc?.impressions      ?? 0,
     ctr:             m.gsc?.ctr              ?? 0,
     position:        m.gsc?.position         ?? 0,
-    sessions:        m.ga?.sessions          ?? 0,
-    engagedSessions: m.ga?.engagedSessions   ?? 0,
-    engagementRate:  m.ga?.engagementRate    ?? 0,
-    keyEvents:       m.ga?.keyEvents         ?? 0,
+    sessions: m.ga?.sessions ?? 0,
+    views:    m.ga?.views    ?? 0,
     geoMentions:     m.bing?.geoMentions     ?? 0,
   })), [metrics]);
 
@@ -703,6 +904,24 @@ export default function App() {
       ),
     })),
   })), [metrics, resultVals]);
+
+  // Matrice filtrée selon les sites sélectionnés
+  const filteredMetrics    = useMemo(() => metrics.filter(m => matrixSites.includes(m.site.id)), [metrics, matrixSites]);
+  const filteredResultVals = useMemo(() => {
+    const idxs = SITES.map((s,i) => matrixSites.includes(s.id) ? i : -1).filter(i => i >= 0);
+    return idxs.map(i => resultVals[i]);
+  }, [resultVals, matrixSites]);
+
+  const filteredCorrMatrix = useMemo(() => SF_DIMS.map(dim => ({
+    dim,
+    corrs: RES_KPIS.map(kpi => ({
+      kpi,
+      value: pearson(
+        filteredMetrics.map(m => m.sf ? (m.sf[dim.key] ?? 0) : 0),
+        filteredResultVals.map(r => r[kpi.key] ?? 0)
+      ),
+    })),
+  })), [filteredMetrics, filteredResultVals]);
 
   const radarData = useMemo(() => SF_DIMS.slice(0,8).map(d => {
     const row = { dim: d.label.split(" ")[0] };
@@ -772,26 +991,64 @@ export default function App() {
                       <div style={{ fontSize: 11, color: C.textLight }}>4 sources</div>
                     </div>
                   </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                    <UploadCard label="Screaming Frog Internal" icon="🕷️" hint="Export interne SF (inclut GA4 + GSC si connectés)" color={site.color}
-                      loaded={sfData[site.id].length > 0} onData={rows => setSfData(p => ({...p, [site.id]: rows}))} />
-                    <div style={{ fontSize: 11, color: C.blue, background: C.blueLight, borderRadius: 8, padding: "8px 12px" }}>
-                      💡 Si votre export SF contient GA4 &amp; GSC, les fichiers ci-dessous sont optionnels.
-                    </div>
-                    <UploadCard label="Google Search Console" icon="🔍" hint="Export séparé GSC (optionnel)" color={site.color}
-                      loaded={gscData[site.id].length > 0} onData={rows => setGscData(p => ({...p, [site.id]: rows}))} />
-                    <UploadCard label="Google Analytics 4" icon="📊" hint="Export séparé GA4 (optionnel)" color={site.color}
-                      loaded={gaData[site.id].length > 0} onData={rows => setGaData(p => ({...p, [site.id]: rows}))} />
-                    <UploadCard label="Bing AI Performance" icon="🤖" hint="Export Bing Webmaster · colonne Citations" color={site.color}
-                      loaded={bingData[site.id].length > 0} onData={rows => setBingData(p => ({...p, [site.id]: rows}))} />
-                  </div>
-                  <div style={{ marginTop: 16, display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    {[["SF", sfData[site.id].length],["GSC", gscData[site.id].length],["GA4", gaData[site.id].length],["Bing", bingData[site.id].length]].map(([src, n]) => (
-                      <div key={src} style={{ fontSize: 11, padding: "3px 9px", borderRadius: 20, fontWeight: 600, background: n > 0 ? site.bg : C.borderLight, color: n > 0 ? site.color : C.textLight }}>
-                        {src} {n > 0 ? `· ${n} lignes` : "· vide"}
+                  {(() => {
+                    const sfRows = sfData[site.id];
+                    const hasSFGa  = sfRows.some(r => parseFloat(r["ga4 sessions"] || r["sessions"] || 0) > 0);
+                    const hasSFGsc = sfRows.some(r => parseFloat(r["clics"] || r["clicks"] || 0) > 0 || parseFloat(r["impressions"] || 0) > 0);
+                    const hasGaFile = gaData[site.id].length > 0;
+                    const hasGscFile = gscData[site.id].length > 0;
+                    return (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                        <UploadCard label="Screaming Frog Internal" icon="🕷️" hint="Export interne SF (inclut GA4 + GSC si connectés)" color={site.color}
+                          loaded={sfRows.length > 0} onData={rows => setSfData(p => ({...p, [site.id]: rows}))} />
+                        {sfRows.length > 0 && (hasSFGa || hasSFGsc) && (
+                          <div style={{ fontSize: 11, color: C.green, background: C.greenLight, borderRadius: 8, padding: "8px 12px", display: "flex", gap: 6 }}>
+                            ✅ Données {[hasSFGsc && "GSC", hasSFGa && "GA4"].filter(Boolean).join(" + ")} détectées dans le fichier SF
+                          </div>
+                        )}
+                        {sfRows.length > 0 && !hasSFGsc && (
+                          <div style={{ fontSize: 11, color: C.blue, background: C.blueLight, borderRadius: 8, padding: "8px 12px" }}>
+                            💡 Aucune donnée GSC dans ce fichier SF — import séparé disponible ci-dessous.
+                          </div>
+                        )}
+                        {!hasSFGsc && (
+                          <UploadCard label="Google Search Console" icon="🔍" hint="Export séparé GSC · clics, impressions, CTR" color={site.color}
+                            loaded={hasGscFile} onData={rows => setGscData(p => ({...p, [site.id]: rows}))} />
+                        )}
+                        {!hasSFGa && !hasGaFile && sfRows.length > 0 && (
+                          <div style={{ fontSize: 11, color: C.textLight, background: C.bg, borderRadius: 8, padding: "8px 12px", border: `1px dashed ${C.border}` }}>
+                            ℹ️ Aucune donnée GA4 dans ce fichier SF — pas d'import GA4 nécessaire.
+                          </div>
+                        )}
+                        {!hasSFGa && (
+                          <UploadCard label="Google Analytics 4" icon="📊" hint="Export séparé GA4 · sessions, engagement" color={site.color}
+                            loaded={hasGaFile} onData={rows => setGaData(p => ({...p, [site.id]: rows}))} />
+                        )}
+                        <UploadCard label="Bing AI Performance" icon="🤖" hint="Export Bing Webmaster · colonne Citations" color={site.color}
+                          loaded={bingData[site.id].length > 0} onData={rows => setBingData(p => ({...p, [site.id]: rows}))} />
                       </div>
-                    ))}
-                  </div>
+                    );
+                  })()}
+                  {(() => {
+                    const sfRows = sfData[site.id];
+                    const hasSFGa  = sfRows.some(r => parseFloat(r["ga4 sessions"] || r["sessions"] || 0) > 0);
+                    const hasSFGsc = sfRows.some(r => parseFloat(r["clics"] || r["clicks"] || 0) > 0 || parseFloat(r["impressions"] || 0) > 0);
+                    const sources = [
+                      ["SF", sfRows.length],
+                      ...(!hasSFGsc ? [["GSC", gscData[site.id].length]] : [["GSC ✓SF", sfRows.length]]),
+                      ...(!hasSFGa  ? [["GA4", gaData[site.id].length]]  : [["GA4 ✓SF", sfRows.length]]),
+                      ["Bing", bingData[site.id].length],
+                    ];
+                    return (
+                      <div style={{ marginTop: 16, display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        {sources.map(([src, n]) => (
+                          <div key={src} style={{ fontSize: 11, padding: "3px 9px", borderRadius: 20, fontWeight: 600, background: n > 0 ? site.bg : C.borderLight, color: n > 0 ? site.color : C.textLight }}>
+                            {src} {n > 0 ? `· ${n}` : "· vide"}
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
                 </div>
               ))}
             </div>
@@ -833,12 +1090,7 @@ export default function App() {
                             ["Schemas", `${sf.schemaRate}%`],
                             ["Erreurs", `${sf.errorRate}%`],
                             ["Redirects", `${sf.redirectRate}%`],
-                          ].map(([k,v]) => (
-                            <div key={k} style={{ display: "flex", justifyContent: "space-between", padding: "4px 8px", background: C.bg, borderRadius: 5 }}>
-                              <span style={{ fontSize: 11, color: C.textMid }}>{k}</span>
-                              <span style={{ fontSize: 11, fontWeight: 600, color: C.text }}>{v}</span>
-                            </div>
-                          ))}
+                          ].map(([k, v]) => <MetricRow key={k} label={k} value={v} />)}
                         </div>
                       </div>
                     ) : <div style={{ color: C.textLight, fontSize: 12, padding: "10px 0 14px", borderBottom: `1px solid ${C.borderLight}` }}>Aucun CSV SF chargé</div>}
@@ -850,6 +1102,7 @@ export default function App() {
                         <SchemaBreakdown schemaTypes={sf.schemaTypes} color={site.color} />
                       </div>
                     )}
+                    {sf && <LlmsStatus sf={sf} />}
 
                     {gsc && (
                       <div style={{ marginBottom: 12 }}>
@@ -867,9 +1120,7 @@ export default function App() {
                         <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, color: C.textLight, marginBottom: 8 }}>📊 GA4</div>
                         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                           <StatPill label="Sessions" value={ga.sessions.toLocaleString()} color={C.blue} />
-                          <StatPill label="Engagées" value={ga.engagedSessions.toLocaleString()} />
-                          <StatPill label="Engagement" value={`${ga.engagementRate}%`} color={ga.engagementRate > 50 ? C.green : C.amber} />
-                          <StatPill label="Key Events" value={ga.keyEvents.toLocaleString()} color={C.purple} />
+                          <StatPill label="Vues" value={ga.views.toLocaleString()} />
                         </div>
                       </div>
                     )}
@@ -906,8 +1157,39 @@ export default function App() {
         {tab === "matrix" && (
           <div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
-              <SectionHeader title="Matrice de corrélation" sub="Pearson sur les 3 sites · SF (ordonnées) × KPIs résultats (abscisses)" />
+              <SectionHeader title="Matrice de corrélation" sub="Pearson · SF (ordonnées) × KPIs résultats (abscisses)" />
               <PageModeSelector value={pageMode} onChange={setPageMode} />
+            </div>
+
+            {/* Site toggles */}
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 12, color: C.textLight, fontWeight: 500 }}>Sites inclus dans le calcul :</span>
+              {SITES.map(s => {
+                const active = matrixSites.includes(s.id);
+                return (
+                  <button key={s.id} onClick={() => setMatrixSites(prev =>
+                    active
+                      ? prev.filter(id => id !== s.id)
+                      : [...prev, s.id]
+                  )} style={{
+                    padding: "5px 14px", border: `1.5px solid ${active ? s.color : C.border}`,
+                    borderRadius: 20, cursor: "pointer", fontSize: 12, fontWeight: 600,
+                    background: active ? s.bg : C.white, color: active ? s.color : C.textLight,
+                    transition: "all 0.15s", display: "flex", alignItems: "center", gap: 6,
+                  }}>
+                    <span style={{ width: 8, height: 8, borderRadius: "50%", background: active ? s.color : C.border, display: "inline-block" }} />
+                    {s.label}
+                  </button>
+                );
+              })}
+              {matrixSites.length === 0 && (
+                <span style={{ fontSize: 12, color: C.red, fontStyle: "italic" }}>Aucun site sélectionné — matrice vide</span>
+              )}
+              {matrixSites.length < SITES.length && matrixSites.length > 0 && (
+                <span style={{ fontSize: 11, color: C.amber, background: C.amberLight, padding: "3px 10px", borderRadius: 20 }}>
+                  Pearson calculé sur {matrixSites.length} site{matrixSites.length > 1 ? "s" : ""}
+                </span>
+              )}
             </div>
 
             <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
@@ -927,22 +1209,16 @@ export default function App() {
                       SF \ Résultats
                     </th>
                     {RES_KPIS.map(kpi => (
-                      <th key={kpi.key} style={{ padding: "14px 10px", textAlign: "center", fontSize: 11, fontWeight: 600, color: C.textMid, background: C.bg, borderBottom: `1px solid ${C.border}`, borderRight: `1px solid ${C.borderLight}`, minWidth: 105, lineHeight: 1.3 }}>
-                        <div>{kpi.label}</div>
-                        <div style={{ fontSize: 10, fontWeight: 400, color: C.textLight, marginTop: 2 }}>
-                          {kpi.src === "gsc" ? "🔍 GSC" : kpi.src === "ga" ? "📊 GA4" : "🤖 Bing"}
-                        </div>
-                      </th>
+                      <KpiHeaderCell key={kpi.key} kpi={kpi} />
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {corrMatrix.map(({ dim, corrs }, ri) => (
+                  {matrixSites.length === 0 ? (
+                    <tr><td colSpan={RES_KPIS.length + 1} style={{ padding: 40, textAlign: "center", color: C.textLight, fontSize: 13 }}>Sélectionnez au moins un site pour afficher la matrice</td></tr>
+                  ) : filteredCorrMatrix.map(({ dim, corrs }, ri) => (
                     <tr key={dim.key} style={{ background: ri % 2 === 0 ? C.white : "#FAFBFC" }}>
-                      <td style={{ padding: "11px 18px", fontSize: 12, fontWeight: 500, color: C.text, borderRight: `1px solid ${C.border}`, borderBottom: `1px solid ${C.borderLight}`, position: "sticky", left: 0, background: ri % 2 === 0 ? C.white : "#FAFBFC", zIndex: 1 }}>
-                        {dim.label}
-                        <span style={{ marginLeft: 6, fontSize: 10, color: C.textLight }}>{dim.higher ? "↑" : "↓"}</span>
-                      </td>
+                      <SfDimCell dim={dim} rowBg={ri % 2 === 0 ? C.white : "#FAFBFC"} />
                       {corrs.map(({ kpi, value }) => {
                         const col = corrColor(value);
                         return (
@@ -965,7 +1241,7 @@ export default function App() {
               ].map(([title, sort, filter, color, bg]) => (
                 <div key={title} style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: 20 }}>
                   <div style={{ fontWeight: 600, fontSize: 14, color: C.text, marginBottom: 12 }}>{title}</div>
-                  {corrMatrix.flatMap(({ dim, corrs }) => corrs.filter(c => c.value !== null && filter(c.value)).map(c => ({ dim, kpi: c.kpi, value: c.value })))
+                  {filteredCorrMatrix.flatMap(({ dim, corrs }) => corrs.filter(c => c.value !== null && filter(c.value)).map(c => ({ dim, kpi: c.kpi, value: c.value })))
                     .sort(sort).slice(0,5).map((item, i) => (
                     <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: `1px solid ${C.borderLight}` }}>
                       <div>
@@ -975,7 +1251,7 @@ export default function App() {
                       <Badge color={color} bg={bg}>{item.value > 0 ? "+" : ""}{item.value}</Badge>
                     </div>
                   ))}
-                  {corrMatrix.flatMap(({ dim, corrs }) => corrs.filter(c => c.value !== null && filter(c.value))).length === 0 &&
+                  {filteredCorrMatrix.flatMap(({ dim, corrs }) => corrs.filter(c => c.value !== null && filter(c.value))).length === 0 &&
                     <div style={{ fontSize: 12, color: C.textLight }}>Pas encore de données suffisantes</div>}
                 </div>
               ))}
@@ -1117,6 +1393,7 @@ export default function App() {
                           <SchemaBreakdown schemaTypes={sf.schemaTypes} color={site.color} />
                         </div>
                       )}
+                      {sf && <LlmsStatus sf={sf} />}
                     </div>
                     <div>
                       <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, color: C.textLight, marginBottom: 12, fontWeight: 600 }}>🔍 Google Search Console</div>
