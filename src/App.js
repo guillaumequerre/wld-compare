@@ -1106,6 +1106,7 @@ export default function App() {
   const [tab, setTab] = useState("import");
   const [pageMode, setPageMode] = useState("all");
   const [matrixSites, setMatrixSites] = useState(["wedig", "deux", "lets"]);
+  const [radarSites,  setRadarSites]  = useState(["wedig", "deux", "lets"]);
   const [analysis, setAnalysis] = useState(null);
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [analysisError, setAnalysisError] = useState(null);
@@ -1430,13 +1431,33 @@ export default function App() {
             </div>
 
             <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: 24 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: C.textMid, marginBottom: 4 }}>Profil technique SF — radar</div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: C.textMid }}>Profil technique SF — radar</div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  {SITES.map(s => {
+                    const active = radarSites.includes(s.id);
+                    return (
+                      <button key={s.id} onClick={() => setRadarSites(prev =>
+                        prev.includes(s.id) ? prev.filter(x => x !== s.id) : [...prev, s.id]
+                      )} style={{
+                        padding: "4px 12px", borderRadius: 20, fontSize: 12, fontWeight: 600, cursor: "pointer",
+                        border: `2px solid ${s.color}`,
+                        background: active ? s.color : "transparent",
+                        color: active ? "#fff" : s.color,
+                        transition: "all 0.15s",
+                      }}>
+                        {s.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
               <div style={{ fontSize: 12, color: C.textLight, marginBottom: 16 }}>Scores normalisés 0–100</div>
               <ResponsiveContainer width="100%" height={300}>
                 <RadarChart data={radarData}>
                   <PolarGrid stroke={C.border} />
                   <PolarAngleAxis dataKey="dim" tick={{ fill: C.textLight, fontSize: 11 }} />
-                  {SITES.map(s => <Radar key={s.id} name={s.label} dataKey={s.id} stroke={s.color} fill={s.color} fillOpacity={0.08} strokeWidth={2} dot={{ r: 3 }} />)}
+                  {SITES.filter(s => radarSites.includes(s.id)).map(s => <Radar key={s.id} name={s.label} dataKey={s.id} stroke={s.color} fill={s.color} fillOpacity={0.08} strokeWidth={2} dot={{ r: 3 }} />)}
                   <Legend wrapperStyle={{ fontSize: 12 }} />
                 </RadarChart>
               </ResponsiveContainer>
