@@ -223,13 +223,6 @@ function intraCorrFast(sfPages, urlMaps, dimKey, kpiKey) {
   return { value: pearson(sfVals, resVals), n: sfVals.length };
 }
 
-// Legacy wrapper — kept for any remaining direct calls
-function intraCorr(sfRows, gscRows, gaRows, bingRows, dimKey, kpiKey) {
-  if (!sfRows.length) return null;
-  const pages = buildSfPageVectors(sfRows);
-  const maps  = buildUrlMaps(gscRows, gaRows, bingRows);
-  return intraCorrFast(pages, maps, dimKey, kpiKey);
-}
 
 // ── SUPABASE CONFIG ──────────────────────────────────────────────
 const PROXY = "/api/supabase";
