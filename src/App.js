@@ -575,7 +575,7 @@ function UploadCard({ label, icon, hint, onData, loaded, color, siteId, source, 
       }
     };
     reader.readAsText(file);
-  }, [onData, siteId, source]);
+  }, [onData, siteId, source, projectId]);
 
   return (
     <div
@@ -725,7 +725,7 @@ function AnalyseTab({ metrics, corrMatrix, resultVals, analysis, setAnalysis, an
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: "claude-sonnet-4-20250514",
-          max_tokens: 3500,
+          max_tokens: 50000,
           messages: [{ role: "user", content: prompt }],
         }),
       });
@@ -1181,7 +1181,7 @@ export default function App() {
   const currentProject = projects.find(p => p.id === currentProjectId) || projects[0];
 
   // Helpers to mutate current project's data
-  const updateProject = (updater) => setProjects(prev => prev.map(p => p.id === currentProjectId ? {...p, ...updater(p)} : p));
+  const updateProject = useCallback((updater) => setProjects(prev => prev.map(p => p.id === currentProjectId ? {...p, ...updater(p)} : p)), [currentProjectId]);
 
   // Derived from current project
   const sites    = currentProject.sites;
@@ -1190,11 +1190,11 @@ export default function App() {
   const gaData   = currentProject.gaData;
   const bingData = currentProject.bingData;
 
-  const setSites   = (fn) => updateProject(p => ({ sites:   typeof fn === "function" ? fn(p.sites)   : fn }));
-  const setSfData  = (fn) => updateProject(p => ({ sfData:  typeof fn === "function" ? fn(p.sfData)  : fn }));
-  const setGscData = (fn) => updateProject(p => ({ gscData: typeof fn === "function" ? fn(p.gscData) : fn }));
-  const setGaData  = (fn) => updateProject(p => ({ gaData:  typeof fn === "function" ? fn(p.gaData)  : fn }));
-  const setBingData= (fn) => updateProject(p => ({ bingData:typeof fn === "function" ? fn(p.bingData): fn }));
+  const setSites   = useCallback((fn) => updateProject(p => ({ sites:   typeof fn === "function" ? fn(p.sites)   : fn })), [updateProject]);
+  const setSfData  = useCallback((fn) => updateProject(p => ({ sfData:  typeof fn === "function" ? fn(p.sfData)  : fn })), [updateProject]);
+  const setGscData = useCallback((fn) => updateProject(p => ({ gscData: typeof fn === "function" ? fn(p.gscData) : fn })), [updateProject]);
+  const setGaData  = useCallback((fn) => updateProject(p => ({ gaData:  typeof fn === "function" ? fn(p.gaData)  : fn })), [updateProject]);
+  const setBingData= useCallback((fn) => updateProject(p => ({ bingData:typeof fn === "function" ? fn(p.bingData): fn })), [updateProject]);
 
   const [confirmModal, setConfirmModal] = useState(null); // {message, onConfirm}
   const [tab, setTab] = useState("import");
