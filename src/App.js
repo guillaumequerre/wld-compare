@@ -1739,33 +1739,34 @@ export default function App() {
                   {sf ? (
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5 }}>
                       {[
-                        ["Title moy.", sf.avgTitleLen,    sfBase?.avgTitleLen,    "car."],
-                        ["Meta moy.",  sf.avgMetaLen,     sfBase?.avgMetaLen,     "car."],
-                        ["H1 moy.",    sf.avgH1Len,       sfBase?.avgH1Len,       "car."],
-                        ["Mots moy.",  sf.avgWords,       sfBase?.avgWords,       ""],
-                        ["Poids pages",sf.avgPageSizeKB,  sfBase?.avgPageSizeKB,  "KB"],
-                        ["Poids img.", sf.avgImgSizeKB,   sfBase?.avgImgSizeKB,   "KB"],
-                        ["Inlinks uniq.", sf.avgInlinksUniq, sfBase?.avgInlinksUniq, ""],
-                        ["Outlinks uniq.", sf.avgOutlinksUniq, sfBase?.avgOutlinksUniq, ""],
-                        ["Liens ext. uniq.", sf.avgExtLinksUniq, sfBase?.avgExtLinksUniq, ""],
-                        ["Profondeur", sf.avgDepth,       sfBase?.avgDepth,       ""],
-                        ["Flesch",     sf.avgFlesch,      sfBase?.avgFlesch,      ""],
-                        ["Tableaux",   sf.tableRate,      sfBase?.tableRate,      "%"],
-                        ["Schemas",    sf.schemaRate,     sfBase?.schemaRate,     "%"],
-                        ["Indexables", sf.indexableRate,  sfBase?.indexableRate,  "%"],
-                        ["Erreurs",    sf.errorRate,      sfBase?.errorRate,      "%"],
-                        ["Redirects",  sf.redirectRate,   sfBase?.redirectRate,   "%"],
-                      ].map(([k, v, bv, unit]) => {
+                        ["Title moy.", sf.avgTitleLen,    sfBase?.avgTitleLen,    "car.", false],
+                        ["Meta moy.",  sf.avgMetaLen,     sfBase?.avgMetaLen,     "car.", false],
+                        ["H1 moy.",    sf.avgH1Len,       sfBase?.avgH1Len,       "car.", false],
+                        ["Mots moy.",  sf.avgWords,       sfBase?.avgWords,       "",     false],
+                        ["Poids pages",sf.avgPageSizeKB,  sfBase?.avgPageSizeKB,  "KB",   true],
+                        ["Poids img.", sf.avgImgSizeKB,   sfBase?.avgImgSizeKB,   "KB",   true],
+                        ["Inlinks uniq.", sf.avgInlinksUniq, sfBase?.avgInlinksUniq, "", false],
+                        ["Outlinks uniq.", sf.avgOutlinksUniq, sfBase?.avgOutlinksUniq, "", false],
+                        ["Liens ext. uniq.", sf.avgExtLinksUniq, sfBase?.avgExtLinksUniq, "", false],
+                        ["Profondeur", sf.avgDepth,       sfBase?.avgDepth,       "",     true],
+                        ["Flesch",     sf.avgFlesch,      sfBase?.avgFlesch,      "",     false],
+                        ["Tableaux",   sf.tableRate,      sfBase?.tableRate,      "%",    false],
+                        ["Schemas",    sf.schemaRate,     sfBase?.schemaRate,     "%",    false],
+                        ["Indexables", sf.indexableRate,  sfBase?.indexableRate,  "%",    false],
+                        ["Erreurs",    sf.errorRate,      sfBase?.errorRate,      "%",    true],
+                        ["Redirects",  sf.redirectRate,   sfBase?.redirectRate,   "%",    true],
+                      ].map(([k, v, bv, unit, lowerIsBetter]) => {
                         const showD = pageMode !== "all" && bv !== null && bv !== undefined;
                         const diff = showD ? Math.round((v - bv) * 10) / 10 : null;
                         const up = diff > 0;
+                        const isGood = lowerIsBetter ? !up : up;
                         return (
                           <div key={k} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "3px 0", borderBottom: `1px solid ${C.borderLight}`, gap: 4 }}>
                             <span style={{ fontSize: 11, color: C.textLight, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{k}</span>
                             <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
                               <span style={{ fontSize: 12, fontWeight: 600, color: C.text }}>{v}{unit}</span>
                               {showD && diff !== 0 && (
-                                <span style={{ fontSize: 10, fontWeight: 700, color: up ? "#16A34A" : "#DC2626" }}>
+                                <span style={{ fontSize: 10, fontWeight: 700, color: isGood ? "#16A34A" : "#DC2626" }}>
                                   {up ? "▲" : "▼"}{up ? "+" : ""}{diff}{unit}
                                 </span>
                               )}
@@ -1780,7 +1781,7 @@ export default function App() {
 
               {/* ── ROW: Schema types ── */}
               {metrics.map(({ site, sf }) => (
-                <div key={site.id} style={{ background: C.white, border: `1px solid ${C.border}`, borderTop: "none", borderBottom: "none", padding: "0 20px 16px" }}>
+                <div key={site.id} style={{ background: C.white, border: `1px solid ${C.border}`, borderTop: "none", borderBottom: "none", padding: "0 20px 16px", display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
                   {sf && Object.keys(sf.schemaTypes || {}).length > 0 && (
                     <>
                       <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, color: C.textLight, marginBottom: 8 }}>🏷️ Types de Schema</div>
