@@ -839,7 +839,7 @@ function SfDimCell({ dim, rowBg }) {
     <td
       onMouseEnter={() => setShow(true)}
       onMouseLeave={() => setShow(false)}
-      style={{ position: "relative", padding: "11px 18px", fontSize: 12, fontWeight: 500, color: C.text, borderRight: `1px solid ${C.border}`, borderBottom: `1px solid ${C.borderLight}`, position: "sticky", left: 0, background: rowBg, zIndex: 1, cursor: tip ? "help" : "default" }}
+      style={{ position: "sticky", padding: "11px 18px", fontSize: 12, fontWeight: 500, color: C.text, borderRight: `1px solid ${C.border}`, borderBottom: `1px solid ${C.borderLight}`, left: 0, background: rowBg, zIndex: 1, cursor: tip ? "help" : "default" }}
     >
       <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
         {dim.label}
@@ -948,15 +948,14 @@ export default function App() {
   const [dbAutoLoaded, setDbAutoLoaded] = useState(false);
   const [showHistory,  setShowHistory]  = useState(false);
 
-  const setterMap = { sf: setSfData, gsc: setGscData, ga: setGaData, bing: setBingData };
-
   const loadCsv = useCallback(async (row) => {
+    const setterMap = { sf: setSfData, gsc: setGscData, ga: setGaData, bing: setBingData };
     try {
       const text = await sbDownload(row.storage_path);
       const rows = parseCSV(text);
       setterMap[row.source](p => ({ ...p, [row.site_id]: rows }));
     } catch(e) { console.warn("Load error", e); }
-  }, []);
+  }, [setSfData, setGscData, setGaData, setBingData]);
 
   // Auto-load latest imports on mount
   useEffect(() => {
@@ -972,7 +971,7 @@ export default function App() {
       } catch(e) { console.warn("Supabase init error", e); }
       finally { setDbLoading(false); }
     })();
-  }, []);
+  }, [loadCsv]);
 
   const refreshHistory = useCallback(async () => {
     const history = await sbGetHistory();
