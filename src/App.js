@@ -130,75 +130,85 @@ function parseCSV(text) {
 
 
 // ── INTRA-SITE CORRELATION (page-level) ─────────────────────────
-function intraCorr(sfRows, gscRows, gaRows, bingRows, dimKey, kpiKey) {
-  if (!sfRows.length) return null;
-
-  // Normalize: strip trailing slash, lowercase
-  // Primary key = path (handles SF absolute vs GSC relative mismatch)
-  // Secondary key = full URL for cases where all sources are absolute
+// ── URL map builder — call ONCE per matrix computation, pass to intraCorrFromMaps ──
+function buildUrlMaps(gscRows, gaRows, bingRows) {
   const toPath = (raw) => {
     const s = (raw || "").trim().toLowerCase();
     try { return new URL(s).pathname.replace(/\/+$/, "") || "/"; } catch { return s.replace(/\/+$/, "") || "/"; }
   };
   const toFull = (raw) => (raw || "").trim().toLowerCase().replace(/\/+$/, "") || "/";
-
   const buildMap = (rows, ...keys) => {
     const pathMap = {}, fullMap = {};
     for (const r of rows) {
       const raw = keys.map(k => r[k]).find(v => v) || "";
       const p = toPath(raw), f = toFull(raw);
-      pathMap[p] = r; fullMap[f] = r;
+      if (!pathMap[p]) pathMap[p] = r;
+      if (!fullMap[f])  fullMap[f] = r;
     }
-    return { pathMap, fullMap };
+    return { pathMap, fullMap, toPath, toFull };
   };
-
-  const gsc  = buildMap(gscRows, "pages les plus populaires", "page", "adresse", "address", "url");
-  const ga   = buildMap(gaRows,  "page", "pagepath", "page path", "adresse", "url");
-  const bing = buildMap(bingRows, "url", "page", "adresse", "address");
-
-  const lookup = ({ pathMap, fullMap }, sfRaw) => {
-    const p = toPath(sfRaw), f = toFull(sfRaw);
-    return pathMap[p] || fullMap[f] || null;
+  return {
+    gsc:  buildMap(gscRows,  "pages les plus populaires", "page", "adresse", "address", "url"),
+    ga:   buildMap(gaRows,   "page", "pagepath", "page path", "adresse", "url"),
+    bing: buildMap(bingRows, "url", "page", "adresse", "address"),
+    toPath, toFull,
   };
+}
 
-  const sfVals = [], resVals = [];
-
+// ── Pre-extract per-page SF values for ALL dims at once — call ONCE per matrix ──
+function buildSfPageVectors(sfRows) {
+  const toPath = (raw) => {
+    const s = (raw || "").trim().toLowerCase();
+    try { return new URL(s).pathname.replace(/\/+$/, "") || "/"; } catch { return s.replace(/\/+$/, "") || "/"; }
+  };
+  const pages = [];
   for (const r of sfRows) {
     const ct = (r["type de contenu"] || r["content type"] || "").toLowerCase();
     const sc = safeNum(r["code http"] || r["status code"] || 200);
     const isHtml = ct.includes("html") || (ct === "" && (r["title 1"] || r["h1-1"] || r["h1"] || "").trim() !== "");
     if (!isHtml || sc >= 400) continue;
-
     const sfRaw = r["adresse"] || r["address"] || r["url"] || "";
+    let hasTable = false;
+    for (let i = 1; i <= 18; i++) {
+      const v = r[`présence table ${i}`] || r[`presence table ${i}`] || "";
+      if (v && v.trim() !== "" && v.trim() !== "0") { hasTable = true; break; }
+    }
+    const jsons = [r["json 1"],r["json 2"],r["json 3"],r["json 4"],r["json 5"]].filter(Boolean).join(" ");
+    pages.push({
+      path: toPath(sfRaw),
+      full: (sfRaw || "").trim().toLowerCase().replace(/\/+$/, "") || "/",
+      avgTitleLen:     safeNum(r["longueur du title 1"] || r["title 1 length"] || 0) || (r["title 1"] || "").length,
+      avgMetaLen:      safeNum(r["longueur de la meta description 1"] || r["meta description 1 length"] || 0) || (r["meta description 1"] || "").length,
+      avgH1Len:        safeNum(r["longueur du h1-1"] || r["h1-1 length"] || 0) || (r["h1-1"] || r["h1"] || "").trim().length,
+      avgWords:        safeNum(r["nombre de mots"]   || r["word count"]  || 0),
+      avgPageSizeKB:   safeNum(r["taille (octets)"]  || r["size"]        || 0) / 1024,
+      avgInlinks:      safeNum(r["liens entrants"]   || r["inlinks"]   || 0),
+      avgOutlinks:     safeNum(r["liens sortants"]   || r["outlinks"]  || 0),
+      avgInlinksUniq:  safeNum(r["liens entrants uniques"] || 0),
+      avgOutlinksUniq: safeNum(r["liens sortants uniques"] || 0),
+      avgExtLinksUniq: safeNum(r["liens sortants externes uniques"] || 0),
+      avgDepth:        safeNum(r["crawl profondeur"] || r["crawl depth"] || 0),
+      avgFlesch:       safeNum(r["score de lisibilité de flesch"] || r["flesch reading ease"] || 0),
+      tableRate:       hasTable ? 1 : 0,
+      schemaRate:      jsons.length > 0 ? 1 : 0,
+      errorRate:       0, redirectRate: 0, totalPages: 0, avgImgSizeKB: 0,
+    });
+  }
+  return pages;
+}
 
-    // SF dim value for this page
-    let sfVal = 0;
-    if      (dimKey === "avgTitleLen")   { sfVal = safeNum(r["longueur du title 1"] || r["title 1 length"] || 0) || (r["title 1"] || "").length; }
-    else if (dimKey === "avgMetaLen")    { sfVal = safeNum(r["longueur de la meta description 1"] || r["meta description 1 length"] || 0) || (r["meta description 1"] || "").length; }
-    else if (dimKey === "avgH1Len")      { sfVal = safeNum(r["longueur du h1-1"] || r["h1-1 length"] || 0) || (r["h1-1"] || r["h1"] || "").trim().length; }
-    else if (dimKey === "avgWords")      { sfVal = safeNum(r["nombre de mots"]   || r["word count"]  || 0); }
-    else if (dimKey === "avgPageSizeKB") { sfVal = safeNum(r["taille (octets)"]  || r["size"]        || 0) / 1024; }
-    else if (dimKey === "avgInlinks")      { sfVal = safeNum(r["liens entrants"]   || r["inlinks"]   || 0); }
-    else if (dimKey === "avgOutlinks")     { sfVal = safeNum(r["liens sortants"]   || r["outlinks"]  || 0); }
-    else if (dimKey === "avgInlinksUniq")  { sfVal = safeNum(r["liens entrants uniques"] || 0); }
-    else if (dimKey === "avgOutlinksUniq") { sfVal = safeNum(r["liens sortants uniques"] || 0); }
-    else if (dimKey === "avgExtLinksUniq") { sfVal = safeNum(r["liens sortants externes uniques"] || 0); }
-    else if (dimKey === "avgDepth")      { sfVal = safeNum(r["crawl profondeur"] || r["crawl depth"] || 0); }
-    else if (dimKey === "avgFlesch")     { sfVal = safeNum(r["score de lisibilité de flesch"] || r["flesch reading ease"] || 0); }
-    else if (dimKey === "tableRate") {
-      let has = false;
-      for (let i = 1; i <= 18; i++) { const v = r[`présence table ${i}`] || r[`presence table ${i}`] || ""; if (v && v.trim() !== "" && v.trim() !== "0") { has = true; break; } }
-      sfVal = has ? 1 : 0;
-    } else if (dimKey === "schemaRate") {
-      const jsons = [r["json 1"],r["json 2"],r["json 3"],r["json 4"],r["json 5"]].filter(Boolean).join(" ");
-      sfVal = jsons.length > 0 ? 1 : 0;
-    } else { continue; }
-
-    // KPI value — match by path (primary) or full URL
-    const gscR  = lookup(gsc,  sfRaw);
-    const gaR   = lookup(ga,   sfRaw);
-    const bingR = lookup(bing, sfRaw);
-
+// ── Compute one Pearson correlation from pre-built vectors+maps ──
+function intraCorrFast(sfPages, urlMaps, dimKey, kpiKey) {
+  if (!sfPages.length) return null;
+  const { gsc, ga, bing } = urlMaps;
+  const lookup = ({ pathMap, fullMap }, path, full) => pathMap[path] || fullMap[full] || null;
+  const sfVals = [], resVals = [];
+  for (const p of sfPages) {
+    const sfVal = p[dimKey];
+    if (sfVal === undefined) continue;
+    const gscR  = lookup(gsc,  p.path, p.full);
+    const gaR   = lookup(ga,   p.path, p.full);
+    const bingR = lookup(bing, p.path, p.full);
     let resVal = null;
     if      (kpiKey === "clicks")      { if (gscR)  resVal = safeNum(gscVal(gscR,"clics","clicks") || 0); }
     else if (kpiKey === "impressions") { if (gscR)  resVal = safeNum(gscVal(gscR,"impressions") || 0); }
@@ -207,15 +217,18 @@ function intraCorr(sfRows, gscRows, gaRows, bingRows, dimKey, kpiKey) {
     else if (kpiKey === "sessions")    { if (gaR)   resVal = safeNum(gaR["sessions"]     || gaR["ga4 sessions"] || 0); }
     else if (kpiKey === "views")       { if (gaR)   resVal = safeNum(gaR["views"]        || gaR["ga4 views"]    || 0); }
     else if (kpiKey === "geoMentions") { if (bingR) resVal = safeNum(bingR["citations"]  || bingR["mentions"]   || 0); }
-
-    if (resVal !== null) {
-      sfVals.push(sfVal);
-      resVals.push(resVal);
-    }
+    if (resVal !== null) { sfVals.push(sfVal); resVals.push(resVal); }
   }
-
   if (sfVals.length < 5) return null;
   return { value: pearson(sfVals, resVals), n: sfVals.length };
+}
+
+// Legacy wrapper — kept for any remaining direct calls
+function intraCorr(sfRows, gscRows, gaRows, bingRows, dimKey, kpiKey) {
+  if (!sfRows.length) return null;
+  const pages = buildSfPageVectors(sfRows);
+  const maps  = buildUrlMaps(gscRows, gaRows, bingRows);
+  return intraCorrFast(pages, maps, dimKey, kpiKey);
 }
 
 // ── SUPABASE CONFIG ──────────────────────────────────────────────
@@ -1175,13 +1188,14 @@ export default function App() {
   // ── Projects ──
   const [projects, setProjects] = useState([INITIAL_PROJECT]);
   const [currentProjectId, setCurrentProjectId] = useState(INITIAL_PROJECT.id);
-  const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [editingProjectName, setEditingProjectName] = useState(null); // project id being renamed
 
   const currentProject = projects.find(p => p.id === currentProjectId) || projects[0];
 
   // Helpers to mutate current project's data
-  const updateProject = useCallback((updater) => setProjects(prev => prev.map(p => p.id === currentProjectId ? {...p, ...updater(p)} : p)), [currentProjectId]);
+  const currentProjectIdRef = useRef(currentProjectId);
+  useEffect(() => { currentProjectIdRef.current = currentProjectId; }, [currentProjectId]);
+  const updateProject = useCallback((updater) => setProjects(prev => prev.map(p => p.id === currentProjectIdRef.current ? {...p, ...updater(p)} : p)), []);
 
   // Derived from current project
   const sites    = currentProject.sites;
@@ -1219,10 +1233,6 @@ export default function App() {
     setMatrixSites(prev => { const kept = prev.filter(id => ids.includes(id)); return kept.length ? kept : ids; });
     setRadarSites(prev => { const kept = prev.filter(id => ids.includes(id)); return kept.length ? kept : ids; });
   }, [sites]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const today = new Date().toISOString().slice(0,10);
-  const m3ago = new Date(Date.now() - 90*86400000).toISOString().slice(0,10);
-  const [dates, setDates] = useState({ from: m3ago, to: today });
 
   // Supabase state
   const [dbHistory,    setDbHistory]    = useState([]);
@@ -1327,15 +1337,15 @@ export default function App() {
 
   const metrics = useMemo(() => {
     return sites.map((s, si) => {
-      const sfRows   = sfData[s.id];
-      const bingRows = bingData[s.id];
+      const base = baseMetrics[si];
       return {
         site: s,
-        sf:   extractSF(sfRows, pageMode, bingRows, gscData[s.id]),
-        sfBase: baseMetrics[si]?.sf ?? null,
-        gsc:  gscData[s.id].length > 0 ? extractGSC(gscData[s.id]) : null,
-        ga:   gaData[s.id].length  > 0 ? extractGA(gaData[s.id])   : null,
-        bing: extractBing(bingRows),
+        // Reuse baseMetrics.sf when pageMode === "all" — avoids double extractSF
+        sf:     pageMode === "all" ? (base?.sf ?? null) : extractSF(sfData[s.id] || [], pageMode, bingData[s.id] || [], gscData[s.id] || []),
+        sfBase: base?.sf ?? null,
+        gsc:  (gscData[s.id]?.length  > 0) ? extractGSC(gscData[s.id])        : null,
+        ga:   (gaData[s.id]?.length   > 0) ? extractGA(gaData[s.id])           : null,
+        bing: (bingData[s.id]?.length > 0) ? extractBing(bingData[s.id])       : null,
       };
     });
   }, [sites, sfData, gscData, gaData, bingData, pageMode, baseMetrics]);
@@ -1350,44 +1360,53 @@ export default function App() {
     geoMentions:     m.bing?.geoMentions     ?? 0,
   })), [metrics]);
 
-  const corrMatrix = useMemo(() => SF_DIMS.map(dim => ({
-    dim,
-    corrs: RES_KPIS.map(kpi => ({
-      kpi,
-      value: pearson(
-        metrics.map(m => m.sf ? (m.sf[dim.key] ?? 0) : 0),
-        resultVals.map(r => r[kpi.key] ?? 0)
-      ),
-    })),
-  })), [metrics, resultVals]);
+  const corrMatrix = useMemo(() => {
+    const hasAny = metrics.some(m => m.sf !== null);
+    return SF_DIMS.map(dim => ({
+      dim,
+      corrs: RES_KPIS.map(kpi => ({
+        kpi,
+        value: hasAny ? pearson(
+          metrics.map(m => m.sf ? (m.sf[dim.key] ?? 0) : 0),
+          resultVals.map(r => r[kpi.key] ?? 0)
+        ) : null,
+      })),
+    }));
+  }, [metrics, resultVals]);
 
   // Base matrix always on "all" pages — used as comparison reference
   const baseMatrix = useMemo(() => {
-    const sfRows  = matrixSites.flatMap(id => sfData[id]   || []);
-    const gscRows = matrixSites.flatMap(id => gscData[id]  || []);
-    const gaRows  = matrixSites.flatMap(id => gaData[id]   || []);
-    const bingRows= matrixSites.flatMap(id => bingData[id] || []);
+    const sfRows = matrixSites.flatMap(id => sfData[id] || []);
+    if (!sfRows.length) return SF_DIMS.map(dim => ({ dim, corrs: RES_KPIS.map(kpi => ({ kpi, value: null })) }));
+    const gscRows  = matrixSites.flatMap(id => gscData[id]  || []);
+    const gaRows   = matrixSites.flatMap(id => gaData[id]   || []);
+    const bingRows = matrixSites.flatMap(id => bingData[id] || []);
+    // Build maps + vectors ONCE for all 119 correlations
+    const sfPages = buildSfPageVectors(sfRows);
+    const urlMaps = buildUrlMaps(gscRows, gaRows, bingRows);
     return SF_DIMS.map(dim => ({
       dim,
       corrs: RES_KPIS.map(kpi => {
-        const res = intraCorr(sfRows, gscRows, gaRows, bingRows, dim.key, kpi.key);
+        const res = intraCorrFast(sfPages, urlMaps, dim.key, kpi.key);
         return { kpi, value: res ? res.value : null };
       }),
     }));
   }, [matrixSites, sfData, gscData, gaData, bingData]);
 
   const filteredCorrMatrix = useMemo(() => {
-    // Always intra-site page-level Pearson — concat pages from all selected sites
-    const sfRowsAll = matrixSites.flatMap(id => sfData[id]   || []);
-    const gscRows   = matrixSites.flatMap(id => gscData[id]  || []);
-    const gaRows    = matrixSites.flatMap(id => gaData[id]   || []);
-    const bingRows  = matrixSites.flatMap(id => bingData[id] || []);
-    // Apply page mode filter to SF rows before computing correlations
-    const sfRows = filterByMode(sfRowsAll, pageMode, bingRows, gscRows);
+    const sfRowsAll = matrixSites.flatMap(id => sfData[id] || []);
+    if (!sfRowsAll.length) return SF_DIMS.map((dim, di) => ({ dim, corrs: RES_KPIS.map((kpi, ki) => ({ kpi, value: null, n: 0, base: baseMatrix[di]?.corrs[ki]?.value ?? null, delta: null })) }));
+    const gscRows  = matrixSites.flatMap(id => gscData[id]  || []);
+    const gaRows   = matrixSites.flatMap(id => gaData[id]   || []);
+    const bingRows = matrixSites.flatMap(id => bingData[id] || []);
+    // filterByMode ONCE, then build vectors+maps ONCE for 119 correlations
+    const sfFiltered = filterByMode(sfRowsAll, pageMode, bingRows, gscRows);
+    const sfPages    = buildSfPageVectors(sfFiltered);
+    const urlMaps    = buildUrlMaps(gscRows, gaRows, bingRows);
     return SF_DIMS.map((dim, di) => ({
       dim,
       corrs: RES_KPIS.map((kpi, ki) => {
-        const res = intraCorr(sfRows, gscRows, gaRows, bingRows, dim.key, kpi.key);
+        const res = intraCorrFast(sfPages, urlMaps, dim.key, kpi.key);
         const base = baseMatrix[di]?.corrs[ki]?.value ?? null;
         const val = res ? res.value : null;
         const delta = (val !== null && base !== null) ? Math.round((val - base) * 100) / 100 : null;
@@ -1406,30 +1425,38 @@ export default function App() {
 
   // ── ALL PROJECTS: concat all projects data for global matrix + radar ──
   const allProjectsMatrix = useMemo(() => {
-    const allSf   = projects.flatMap(p => Object.values(p.sfData   || {}).flat());
+    const allSf = projects.flatMap(p => Object.values(p.sfData || {}).flat());
+    if (!allSf.length) return SF_DIMS.map(dim => ({ dim, corrs: RES_KPIS.map(kpi => ({ kpi, value: null, n: 0 })) }));
     const allGsc  = projects.flatMap(p => Object.values(p.gscData  || {}).flat());
     const allGa   = projects.flatMap(p => Object.values(p.gaData   || {}).flat());
     const allBing = projects.flatMap(p => Object.values(p.bingData || {}).flat());
+    // Build once for all 119 correlations
+    const sfPages = buildSfPageVectors(allSf);
+    const urlMaps = buildUrlMaps(allGsc, allGa, allBing);
     return SF_DIMS.map(dim => ({
       dim,
       corrs: RES_KPIS.map(kpi => {
-        const res = intraCorr(allSf, allGsc, allGa, allBing, dim.key, kpi.key);
+        const res = intraCorrFast(sfPages, urlMaps, dim.key, kpi.key);
         return { kpi, value: res ? res.value : null, n: res ? res.n : 0 };
       }),
     }));
   }, [projects]);
 
   // One radar entry per project (avg across its sites)
-  const allProjectsRadar = useMemo(() => RADAR_DIMS.map(d => {
-    const row = { dim: d.label };
-    projects.forEach(p => {
-      const allSfRows = Object.values(p.sfData || {}).flat();
-      if (!allSfRows.length) { row[p.id] = 0; return; }
-      const sfAgg = extractSF(allSfRows, "all", Object.values(p.bingData || {}).flat(), Object.values(p.gscData || {}).flat());
-      row[p.id] = sfAgg ? Math.min(((sfAgg[d.key] ?? 0) / d.max) * 100, 100) : 0;
+  const allProjectsRadar = useMemo(() => {
+    const anyData = projects.some(p => Object.values(p.sfData || {}).flat().length > 0);
+    if (!anyData) return RADAR_DIMS.map(d => ({ dim: d.label }));
+    return RADAR_DIMS.map(d => {
+      const row = { dim: d.label };
+      projects.forEach(p => {
+        const allSfRows = Object.values(p.sfData || {}).flat();
+        if (!allSfRows.length) { row[p.id] = 0; return; }
+        const sfAgg = extractSF(allSfRows, "all", Object.values(p.bingData || {}).flat(), Object.values(p.gscData || {}).flat());
+        row[p.id] = sfAgg ? Math.min(((sfAgg[d.key] ?? 0) / d.max) * 100, 100) : 0;
+      });
+      return row;
     });
-    return row;
-  }), [projects]);
+  }, [projects]);
 
   const TABS = ["import","overview","matrix","pages","analyse","sites","allprojects"];
 
@@ -1445,74 +1472,7 @@ export default function App() {
               <span style={{ color: "#fff", fontSize: 14, fontWeight: 800 }}>C</span>
             </div>
             <span style={{ fontWeight: 700, fontSize: 15, letterSpacing: -0.3 }}>CorrelDash</span>
-            {/* Project dropdown */}
-            <div style={{ position: "relative", marginLeft: 8 }}>
-              <button
-                onClick={() => setProjectMenuOpen(o => !o)}
-                style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 12px", border: `1px solid ${C.border}`, borderRadius: 8, background: C.bg, cursor: "pointer", fontSize: 13, fontWeight: 600, color: C.text }}
-              >
-                <span style={{ color: C.blue }}>◈</span>
-                {editingProjectName === currentProjectId ? (
-                  <input
-                    autoFocus
-                    value={currentProject.name}
-                    onClick={e => e.stopPropagation()}
-                    onChange={e => setProjects(prev => prev.map(p => p.id === currentProjectId ? {...p, name: e.target.value} : p))}
-                    onBlur={() => setEditingProjectName(null)}
-                    onKeyDown={e => e.key === "Enter" && setEditingProjectName(null)}
-                    style={{ border: "none", outline: "none", background: "transparent", fontSize: 13, fontWeight: 600, color: C.text, width: 120 }}
-                  />
-                ) : (
-                  <span>{currentProject.name}</span>
-                )}
-                <span style={{ fontSize: 10, color: C.textLight }}>▾</span>
-              </button>
-              {projectMenuOpen && (
-                <div style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, background: C.white, border: `1px solid ${C.border}`, borderRadius: 10, boxShadow: "0 8px 32px rgba(0,0,0,0.12)", minWidth: 220, zIndex: 200, overflow: "hidden" }}
-                  onMouseLeave={() => setProjectMenuOpen(false)}>
-                  <div style={{ padding: "8px 0" }}>
-                    {projects.map(p => (
-                      <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", background: p.id === currentProjectId ? C.blueLight : "transparent", cursor: "pointer" }}
-                        onClick={() => { setCurrentProjectId(p.id); setProjectMenuOpen(false); }}>
-                        <span style={{ flex: 1, fontSize: 13, fontWeight: p.id === currentProjectId ? 700 : 400, color: p.id === currentProjectId ? C.blue : C.text }}>{p.name}</span>
-                        <span style={{ fontSize: 11, color: C.textLight }}>{p.sites.length} site{p.sites.length > 1 ? "s" : ""}</span>
-                        <button
-                          title="Renommer"
-                          onClick={e => { e.stopPropagation(); setCurrentProjectId(p.id); setEditingProjectName(p.id); setProjectMenuOpen(false); }}
-                          style={{ padding: "2px 6px", border: "none", background: "transparent", cursor: "pointer", fontSize: 13, color: C.textLight }}
-                        >✏️</button>
-                        {projects.length > 1 && (
-                          <button
-                            title="Supprimer ce projet"
-                            onClick={e => { e.stopPropagation(); setProjectMenuOpen(false); setConfirmModal({ message: `Supprimer le projet "${p.name}" ?`, onConfirm: () => {
-                              sbDeleteProject(p.id).catch(e => console.warn("Delete project error:", e));
-                              setProjects(prev => { const next = prev.filter(x => x.id !== p.id); if (currentProjectId === p.id) setCurrentProjectId(next[0].id); return next; });
-                            }}); }}
-                            style={{ padding: "2px 6px", border: "none", background: "transparent", cursor: "pointer", fontSize: 13, color: "#DC2626" }}
-                          >✕</button>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                  <div style={{ borderTop: `1px solid ${C.border}`, padding: "8px 14px" }}>
-                    {projects.length < 5 ? (
-                      <button
-                        onClick={() => {
-                          const p = newProject(`Projet ${projects.length + 1}`, [{ id: `site-${Date.now()}`, label: "Nouveau site", ...SITE_PALETTE[0] }]);
-                          setProjects(prev => [...prev, p]);
-                          setCurrentProjectId(p.id);
-                          setProjectMenuOpen(false);
-                          sbSaveProject(p).catch(e => console.warn("Save new project error:", e));
-                        }}
-                        style={{ width: "100%", padding: "7px 0", border: `1px dashed ${C.blue}`, borderRadius: 7, background: C.blueLight, color: C.blue, cursor: "pointer", fontSize: 13, fontWeight: 600 }}
-                      >+ Nouveau projet</button>
-                    ) : (
-                      <div style={{ fontSize: 12, color: C.textLight, textAlign: "center" }}>Maximum 5 projets atteint</div>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
+            <span style={{ color: C.textLight, fontSize: 13 }}>· SEO × GEO</span>
           </div>
           <div style={{ display: "flex", gap: 2 }}>
             {TABS.map(t => (
@@ -1532,6 +1492,67 @@ export default function App() {
         {/* ── IMPORT ── */}
         {tab === "import" && (
           <div>
+            {/* ── Project selector ── */}
+            <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: "20px 24px", marginBottom: 20 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 16 }}>
+                <div>
+                  <div style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: 0.8, color: C.textLight, fontWeight: 600, marginBottom: 8 }}>Projet actif</div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {projects.map(p => (
+                      <button
+                        key={p.id}
+                        onClick={() => setCurrentProjectId(p.id)}
+                        style={{
+                          display: "flex", alignItems: "center", gap: 8,
+                          padding: "8px 16px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 600,
+                          border: `2px solid ${p.id === currentProjectId ? C.blue : C.border}`,
+                          background: p.id === currentProjectId ? C.blueLight : C.white,
+                          color: p.id === currentProjectId ? C.blue : C.textMid,
+                          transition: "all 0.15s",
+                        }}
+                      >
+                        <span style={{ width: 8, height: 8, borderRadius: "50%", background: p.id === currentProjectId ? C.blue : C.textLight, display: "inline-block", flexShrink: 0 }} />
+                        {editingProjectName === p.id ? (
+                          <input
+                            autoFocus
+                            value={p.name}
+                            onClick={e => e.stopPropagation()}
+                            onChange={e => setProjects(prev => prev.map(x => x.id === p.id ? {...x, name: e.target.value} : x))}
+                            onBlur={() => setEditingProjectName(null)}
+                            onKeyDown={e => e.key === "Enter" && setEditingProjectName(null)}
+                            style={{ border: "none", outline: "none", background: "transparent", fontSize: 13, fontWeight: 600, color: C.blue, width: 100 }}
+                          />
+                        ) : (
+                          <span>{p.name}</span>
+                        )}
+                        <span style={{ fontSize: 11, color: C.textLight, fontWeight: 400 }}>{p.sites.length} site{p.sites.length > 1 ? "s" : ""}</span>
+                        <button title="Renommer" onClick={e => { e.stopPropagation(); setEditingProjectName(p.id); }}
+                          style={{ padding: "1px 4px", border: "none", background: "transparent", cursor: "pointer", fontSize: 11, color: C.textLight, lineHeight: 1 }}>✏️</button>
+                        {projects.length > 1 && (
+                          <button title="Supprimer" onClick={e => { e.stopPropagation(); setConfirmModal({ message: `Supprimer le projet "${p.name}" ?`, onConfirm: () => {
+                            sbDeleteProject(p.id).catch(() => {});
+                            setProjects(prev => { const next = prev.filter(x => x.id !== p.id); if (currentProjectId === p.id) setCurrentProjectId(next[0].id); return next; });
+                          }}); }}
+                          style={{ padding: "1px 4px", border: "none", background: "transparent", cursor: "pointer", fontSize: 11, color: "#DC2626", lineHeight: 1 }}>✕</button>
+                        )}
+                      </button>
+                    ))}
+                    {projects.length < 5 && (
+                      <button
+                        onClick={() => {
+                          const p = newProject(`Projet ${projects.length + 1}`, [{ id: `site-${Date.now()}`, label: "Nouveau site", ...SITE_PALETTE[0] }]);
+                          setProjects(prev => [...prev, p]);
+                          setCurrentProjectId(p.id);
+                          sbSaveProject(p).catch(() => {});
+                        }}
+                        style={{ padding: "8px 16px", borderRadius: 10, border: `2px dashed ${C.blue}`, background: C.blueLight, color: C.blue, cursor: "pointer", fontSize: 13, fontWeight: 600 }}
+                      >+ Nouveau projet</button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <SectionHeader title="Import des données" sub="Chargez les exports CSV pour chaque site" />
 
             {/* DB status banner */}
@@ -1577,24 +1598,34 @@ export default function App() {
                 )}
               </div>
             )}
-            <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "20px 24px", marginBottom: 24, display: "flex", alignItems: "center", gap: 24, flexWrap: "wrap" }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: C.textMid }}>📅 Période GSC / GA4</div>
-              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                {["from","to"].map((k, i) => (
-                  <div key={k} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    {i === 1 && <span style={{ color: C.textLight }}>→</span>}
-                    <div>
-                      <label style={{ fontSize: 11, color: C.textLight, display: "block", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.8 }}>{k === "from" ? "Du" : "Au"}</label>
-                      <input type="date" value={dates[k]} onChange={e => setDates(d => ({...d, [k]: e.target.value}))}
-                        style={{ border: `1px solid ${C.border}`, borderRadius: 7, padding: "6px 12px", fontSize: 13, color: C.text, background: C.white, outline: "none" }} />
+            {/* Last import dates per source — derived from dbHistory */}
+            {dbHistory.length > 0 && (() => {
+              const fmt = (d) => new Date(d).toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "numeric" });
+              const lastBySrc = {};
+              for (const row of dbHistory) {
+                if (!lastBySrc[row.source] || row.uploaded_at > lastBySrc[row.source].uploaded_at) lastBySrc[row.source] = row;
+              }
+              const items = [
+                { src: "gsc",  icon: "🔍", label: "GSC" },
+                { src: "ga",   icon: "📊", label: "GA4" },
+                { src: "bing", icon: "🤖", label: "Bing AI" },
+                { src: "sf",   icon: "🕷️", label: "Screaming Frog" },
+              ].filter(i => lastBySrc[i.src]);
+              if (!items.length) return null;
+              return (
+                <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 20px", marginBottom: 24, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 12, color: C.textLight, fontWeight: 600, marginRight: 4 }}>📅 Derniers imports :</span>
+                  {items.map(({ src, icon, label }) => (
+                    <div key={src} style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 12px", background: C.bg, borderRadius: 20, fontSize: 12 }}>
+                      <span>{icon}</span>
+                      <span style={{ fontWeight: 600, color: C.textMid }}>{label}</span>
+                      <span style={{ color: C.textLight }}>·</span>
+                      <span style={{ color: C.text }}>{fmt(lastBySrc[src].uploaded_at)}</span>
                     </div>
-                  </div>
-                ))}
-              </div>
-              <div style={{ marginLeft: "auto", fontSize: 12, color: C.blue, background: C.blueLight, padding: "6px 14px", borderRadius: 20 }}>
-                {dates.from} → {dates.to}
-              </div>
-            </div>
+                  ))}
+                </div>
+              );
+            })()}
 
             <div style={{ display: "grid", gridTemplateColumns: `repeat(${Math.min(sites.length + (sites.length < 3 ? 1 : 0), 3)}, 1fr)`, gap: 20 }}>
               {sites.map(site => (
