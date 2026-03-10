@@ -11,3 +11,7 @@
   for = "/*"
   [headers.values]
     X-Frame-Options = "DENY"
+
+[[edge_functions]]
+  function = "supabase-proxy"
+  path = "/api/supabase/*"
