@@ -600,7 +600,6 @@ function AnalyseTab({ metrics, corrMatrix, resultVals, analysis, setAnalysis, an
               {(() => {
                 const siteId = activeRoadmap;
                 const rm = analysis.roadmaps?.[siteId];
-                const site = SITES.find(s => s.id === siteId);
                 if (!rm) return <div style={{ color: C.textLight, fontSize: 13 }}>Aucune roadmap générée pour ce site.</div>;
                 return (
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 20 }}>
