@@ -21,21 +21,21 @@ const SITES = [
 
 // ── SF DIMENSIONS ───────────────────────────────────────────────
 const SF_DIMS = [
-  { key: "titleOptRate",    label: "Title optimisé (%)",        higher: true  },
-  { key: "metaOptRate",     label: "Meta desc. optimisée (%)",  higher: true  },
-  { key: "h1Rate",          label: "H1 renseigné (%)",          higher: true  },
-  { key: "avgWords",        label: "Mots moyens / page",        higher: true  },
-  { key: "avgPageSizeKB",   label: "Poids pages contenu (KB)",  higher: false },
-  { key: "avgImgSizeKB",    label: "Poids moyen images (KB)",   higher: false },
-  { key: "avgInlinks",      label: "Liens entrants moy.",       higher: true  },
-  { key: "avgOutlinks",     label: "Liens sortants moy.",       higher: true  },
-  { key: "avgDepth",        label: "Profondeur crawl moy.",     higher: false },
-  { key: "avgFlesch",       label: "Score Flesch moy.",         higher: true  },
-  { key: "tableRate",       label: "Pages avec tableau (%)",    higher: true  },
-  { key: "schemaRate",      label: "Pages avec Schema (%)",     higher: true  },
-  { key: "errorRate",       label: "Taux d'erreurs (%)",        higher: false },
-  { key: "redirectRate",    label: "Taux redirections (%)",     higher: false },
-  { key: "totalPages",      label: "Nb pages crawlées",         higher: true  },
+  { key: "avgTitleLen",     label: "Longueur moy. title (car.)", higher: true  },
+  { key: "avgMetaLen",      label: "Longueur moy. meta (car.)",  higher: true  },
+  { key: "avgH1Len",        label: "Longueur moy. H1 (car.)",    higher: true  },
+  { key: "avgWords",        label: "Mots moyens / page",         higher: true  },
+  { key: "avgPageSizeKB",   label: "Poids pages contenu (KB)",   higher: false },
+  { key: "avgImgSizeKB",    label: "Poids moyen images (KB)",    higher: false },
+  { key: "avgInlinks",      label: "Liens entrants moy.",        higher: true  },
+  { key: "avgOutlinks",     label: "Liens sortants moy.",        higher: true  },
+  { key: "avgDepth",        label: "Profondeur crawl moy.",      higher: false },
+  { key: "avgFlesch",       label: "Score Flesch moy.",          higher: true  },
+  { key: "tableRate",       label: "Pages avec tableau (%)",     higher: true  },
+  { key: "schemaRate",      label: "Pages avec Schema (%)",      higher: true  },
+  { key: "errorRate",       label: "Taux d'erreurs (%)",         higher: false },
+  { key: "redirectRate",    label: "Taux redirections (%)",      higher: false },
+  { key: "totalPages",      label: "Nb pages crawlées",          higher: true  },
 ];
 
 
@@ -162,14 +162,12 @@ function intraCorr(sfRows, gscRows, gaRows, bingRows, dimKey, kpiKey) {
 
     // SF dim value for this page
     let sfVal = 0;
-    if (dimKey === "titleOptRate") {
-      const l = safeNum(r["longueur du title 1"] || r["title 1 length"] || 0) || (r["title 1"] || "").length;
-      sfVal = (l >= 30 && l <= 65) ? 1 : 0;
-    } else if (dimKey === "metaOptRate") {
-      const l = safeNum(r["longueur de la meta description 1"] || r["meta description 1 length"] || 0) || (r["meta description 1"] || "").length;
-      sfVal = (l >= 100 && l <= 160) ? 1 : 0;
-    } else if (dimKey === "h1Rate") {
-      sfVal = (r["h1-1"] || r["h1"] || "").trim() !== "" ? 1 : 0;
+    if (dimKey === "avgTitleLen") {
+      sfVal = safeNum(r["longueur du title 1"] || r["title 1 length"] || 0) || (r["title 1"] || "").length;
+    } else if (dimKey === "avgMetaLen") {
+      sfVal = safeNum(r["longueur de la meta description 1"] || r["meta description 1 length"] || 0) || (r["meta description 1"] || "").length;
+    } else if (dimKey === "avgH1Len") {
+      sfVal = (r["h1-1"] || r["h1"] || "").trim().length;
     } else if (dimKey === "avgWords")      { sfVal = safeNum(r["nombre de mots"]   || r["word count"]  || 0); }
     else if (dimKey === "avgPageSizeKB")   { sfVal = safeNum(r["taille (octets)"]  || r["size"]        || 0) / 1024; }
     else if (dimKey === "avgInlinks")      { sfVal = safeNum(r["liens entrants"]   || r["inlinks"]     || 0); }
@@ -364,22 +362,16 @@ function extractSF(rows, mode = "all", bingRows = [], gscRows = []) {
   const total = html.length || 1;
   const allTotal = filtered.length || 1;
 
-  // Title
-  const titlesOk = html.filter(r => {
-    const l = safeNum(r["longueur du title 1"] || r["title 1 length"] || 0) || (r["title 1"] || "").length;
-    return l >= 30 && l <= 65;
-  }).length;
+  // Title — longueur moyenne (pages HTML avec un title renseigné)
+  const titleLens = html.map(r => safeNum(r["longueur du title 1"] || r["title 1 length"] || 0) || (r["title 1"] || "").length).filter(l => l > 0);
 
-  // Meta
-  const metaOk = html.filter(r => {
-    const l = safeNum(r["longueur de la meta description 1"] || r["meta description 1 length"] || 0) || (r["meta description 1"] || "").length;
-    return l >= 100 && l <= 160;
-  }).length;
+  // Meta — longueur moyenne (pages avec meta)
+  const metaLens = html.map(r => safeNum(r["longueur de la meta description 1"] || r["meta description 1 length"] || 0) || (r["meta description 1"] || "").length).filter(l => l > 0);
 
-  // H1
-  const h1Ok = html.filter(r => (r["h1-1"] || r["h1"] || "").trim() !== "").length;
+  // H1 — longueur moyenne (pages avec H1)
+  const h1Lens = html.map(r => (r["h1-1"] || r["h1"] || "").trim().length).filter(l => l > 0);
 
-  // Content page weight (HTML pages)
+  // Content page weight (HTML pages only)
   const pageSizes = html.map(r => safeNum(r["taille (octets)"] || r["size"] || 0));
 
   // Image weight — rows where content type includes "image"
@@ -389,11 +381,25 @@ function extractSF(rows, mode = "all", bingRows = [], gscRows = []) {
   });
   const imgSizes = imgRows.map(r => safeNum(r["taille (octets)"] || r["size"] || 0));
 
-  const words  = html.map(r => safeNum(r["nombre de mots"]   || r["word count"]  || 0));
+  // Mots — HTML uniquement, exclure 0
+  const words  = html.map(r => safeNum(r["nombre de mots"]   || r["word count"]  || 0)).filter(x => x > 0);
+
+  // Inlinks / Outlinks — HTML uniquement
   const inlk   = html.map(r => safeNum(r["liens entrants"]   || r["inlinks"]     || 0));
   const outlk  = html.map(r => safeNum(r["liens sortants"]   || r["outlinks"]    || 0));
-  const depth  = html.map(r => safeNum(r["crawl profondeur"] || r["crawl depth"] || 0));
-  const flesch = html.map(r => safeNum(r["score de lisibilité de flesch"] || r["flesch reading ease"] || 0));
+
+  // Profondeur — HTML uniquement, exclure les pages à profondeur 0 (home)
+  const depth  = html.map(r => safeNum(r["crawl profondeur"] || r["crawl depth"] || 0)).filter(x => x >= 0);
+
+  // Flesch — HTML uniquement, exclure 0 (pages sans score)
+  const flesch = html.map(r => safeNum(r["score de lisibilité de flesch"] || r["flesch reading ease"] || 0)).filter(x => x > 0);
+
+  // Indexabilité — pages HTML indexables
+  const indexable = html.filter(r => {
+    const idx = (r["indexabilité"] || r["indexability"] || r["indexable"] || "").toLowerCase();
+    return idx === "indexable" || idx === "" || idx === "true";
+  }).length;
+  const totalImg = imgRows.length;
 
   // Tables — colonnes "Présence Table 1" à "Présence Table 18"
   const withTable = html.filter(r => {
@@ -425,16 +431,18 @@ function extractSF(rows, mode = "all", bingRows = [], gscRows = []) {
 
   return {
     totalPages:    total,
-    titleOptRate:  Math.round((titlesOk / total) * 100),
-    metaOptRate:   Math.round((metaOk / total) * 100),
-    h1Rate:        Math.round((h1Ok / total) * 100),
-    avgWords:      Math.round(avg(words)),
+    totalImg,
+    indexableRate: Math.round((indexable / total) * 100),
+    avgTitleLen:   Math.round(titleLens.reduce((a,b)=>a+b,0) / (titleLens.length || 1)),
+    avgMetaLen:    Math.round(metaLens.reduce((a,b)=>a+b,0)  / (metaLens.length  || 1)),
+    avgH1Len:      Math.round(h1Lens.reduce((a,b)=>a+b,0)    / (h1Lens.length    || 1)),
+    avgWords:      Math.round(words.reduce((a,b)=>a+b,0)     / (words.length     || 1)),
     avgPageSizeKB: Math.round(avg(pageSizes) / 1024),
     avgImgSizeKB:  imgSizes.length ? Math.round(avg(imgSizes) / 1024) : 0,
     avgInlinks:    Math.round(avg(inlk) * 10) / 10,
     avgOutlinks:   Math.round(avg(outlk) * 10) / 10,
-    avgDepth:      Math.round(avg(depth) * 10) / 10,
-    avgFlesch:     Math.round(avg(flesch.filter(x => x > 0)) * 10) / 10,
+    avgDepth:      Math.round((depth.reduce((a,b)=>a+b,0) / (depth.length || 1)) * 10) / 10,
+    avgFlesch:     Math.round((flesch.reduce((a,b)=>a+b,0) / (flesch.length || 1)) * 10) / 10,
     tableRate:     Math.round((withTable / total) * 100),
     schemaRate:    Math.round((withSchema / total) * 100),
     schemaTypes,
@@ -608,9 +616,9 @@ function buildPrompt(metrics, corrMatrix, resultVals) {
     return `
 SITE: ${m.site.label}
 — Screaming Frog:
-  Title optimisé: ${sf.titleOptRate ?? "N/A"}%
-  Meta optimisée: ${sf.metaOptRate ?? "N/A"}%
-  H1 renseigné: ${sf.h1Rate ?? "N/A"}%
+  Title longueur moy.: ${sf.avgTitleLen ?? "N/A"} car.
+  Meta longueur moy.: ${sf.avgMetaLen ?? "N/A"} car.
+  H1 longueur moy.: ${sf.avgH1Len ?? "N/A"} car.
   Mots moyens/page: ${sf.avgWords ?? "N/A"}
   Poids pages (KB): ${sf.avgPageSizeKB ?? "N/A"}
   Poids images (KB): ${sf.avgImgSizeKB ?? "N/A"}
@@ -945,9 +953,9 @@ function SfDimCell({ dim, rowBg }) {
 
 // ── SF DIM TOOLTIPS BY KEY ────────────────────────────────────────
 const SF_DIM_TOOLTIPS = {
-  titleOptRate:  "% de pages avec un title entre 30 et 65 caractères. Hors plage = tronqué ou trop vague pour Google.",
-  metaOptRate:   "% de pages avec une meta description entre 100 et 160 caractères. Hors plage = réécriture probable par Google.",
-  h1Rate:        "% de pages avec un H1 renseigné. Le H1 est le signal de titre principal pour les moteurs et les LLMs.",
+  avgTitleLen:   "Longueur moyenne des balises title en caractères. Idéalement entre 30 et 65 car. pour Google.",
+  avgMetaLen:    "Longueur moyenne des meta descriptions en caractères. Idéalement entre 100 et 160 car.",
+  avgH1Len:      "Longueur moyenne des H1 en caractères. Un H1 présent et descriptif est essentiel pour le SEO et le GEO.",
   avgWords:      "Nombre moyen de mots par page HTML. Plus de contenu (500+ mots) favorise le positionnement et la compréhension GEO.",
   avgPageSizeKB: "Poids moyen des pages HTML en KB. Des pages légères améliorent le Core Web Vitals et l'expérience mobile.",
   avgImgSizeKB:  "Poids moyen des images en KB. Des images lourdes ralentissent le chargement — impact direct sur le classement.",
@@ -1110,9 +1118,17 @@ export default function App() {
     }));
   }, [matrixSites, sfData, gscData, gaData, bingData]);
 
-  const radarData = useMemo(() => SF_DIMS.slice(0,8).map(d => {
-    const row = { dim: d.label.split(" ")[0] };
-    metrics.forEach(m => { row[m.site.id] = m.sf ? Math.min((m.sf[d.key] / (d.key==="avgWords"?800:d.key.includes("KB")?300:100))*100, 100) : 0; });
+  const RADAR_DIMS = [
+    { key: "totalPages",    label: "Pages",         max: 5000  },
+    { key: "totalImg",      label: "Images",        max: 2000  },
+    { key: "avgInlinks",    label: "Inlinks moy.",  max: 100   },
+    { key: "avgOutlinks",   label: "Outlinks moy.", max: 100   },
+    { key: "indexableRate", label: "Indexables %",  max: 100   },
+    { key: "avgWords",      label: "Mots moy.",     max: 1000  },
+  ];
+  const radarData = useMemo(() => RADAR_DIMS.map(d => {
+    const row = { dim: d.label };
+    metrics.forEach(m => { row[m.site.id] = m.sf ? Math.min(((m.sf[d.key] ?? 0) / d.max) * 100, 100) : 0; });
     return row;
   }), [metrics]);
 
@@ -1266,9 +1282,9 @@ export default function App() {
                         <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, color: C.textLight, marginBottom: 10 }}>🕷️ Screaming Frog</div>
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5 }}>
                           {[
-                            ["Title OK", `${sf.titleOptRate}%`],
-                            ["Meta OK", `${sf.metaOptRate}%`],
-                            ["H1 OK", `${sf.h1Rate}%`],
+                            ["Title moy.", `${sf.avgTitleLen} car.`],
+                            ["Meta moy.", `${sf.avgMetaLen} car.`],
+                            ["H1 moy.", `${sf.avgH1Len} car.`],
                             ["Mots moy.", sf.avgWords],
                             ["Poids pages", `${sf.avgPageSizeKB}KB`],
                             ["Poids images", `${sf.avgImgSizeKB}KB`],
@@ -1278,6 +1294,7 @@ export default function App() {
                             ["Flesch", sf.avgFlesch],
                             ["Tableaux", `${sf.tableRate}%`],
                             ["Schemas", `${sf.schemaRate}%`],
+                            ["Indexables", `${sf.indexableRate}%`],
                             ["Erreurs", `${sf.errorRate}%`],
                             ["Redirects", `${sf.redirectRate}%`],
                           ].map(([k, v]) => <MetricRow key={k} label={k} value={v} />)}
