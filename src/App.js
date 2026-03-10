@@ -59,37 +59,6 @@ const SF_TOOLTIPS = {
 };
 
 // ── TOOLTIP COMPONENT ────────────────────────────────────────────
-function MetricRow({ label, value }) {
-  const [show, setShow] = useState(false);
-  const tip = SF_TOOLTIPS[label];
-  return (
-    <div
-      key={label}
-      onMouseEnter={() => setShow(true)}
-      onMouseLeave={() => setShow(false)}
-      style={{ position: "relative", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 8px", background: show && tip ? "#F0F4FF" : C.bg, borderRadius: 5, cursor: tip ? "help" : "default", transition: "background 0.15s" }}
-    >
-      <span style={{ fontSize: 11, color: C.textMid, display: "flex", alignItems: "center", gap: 4 }}>
-        {label}
-        {tip && <span style={{ fontSize: 9, color: C.textLight, border: `1px solid ${C.border}`, borderRadius: "50%", width: 13, height: 13, display: "inline-flex", alignItems: "center", justifyContent: "center", fontStyle: "normal" }}>?</span>}
-      </span>
-      <span style={{ fontSize: 11, fontWeight: 600, color: C.text }}>{value}</span>
-      {show && tip && (
-        <div style={{
-          position: "absolute", bottom: "calc(100% + 6px)", left: 0, zIndex: 200,
-          background: C.text, color: "#fff", fontSize: 11, lineHeight: 1.5,
-          padding: "8px 12px", borderRadius: 8, width: 240,
-          boxShadow: "0 4px 16px rgba(0,0,0,0.18)",
-          pointerEvents: "none",
-        }}>
-          {tip}
-          <div style={{ position: "absolute", bottom: -5, left: 16, width: 10, height: 10, background: C.text, transform: "rotate(45deg)", borderRadius: 2 }} />
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ── RESULT KPIs ─────────────────────────────────────────────────
 const RES_KPIS = [
   { key: "clicks",          label: "Clics GSC",             src: "gsc"  },
@@ -1205,7 +1174,7 @@ export default function App() {
       site: s,
       sf: extractSF(sfData[s.id], "all", bingData[s.id], gscData[s.id]),
     }));
-  }, [sfData, gscData, gaData, bingData]);
+  }, [sfData, gscData, bingData]);
 
   const metrics = useMemo(() => {
     return SITES.map((s, si) => {
@@ -1457,7 +1426,7 @@ export default function App() {
                           ].map(([k, v, bv, unit]) => {
                             const showD = pageMode !== "all" && bv !== null && bv !== undefined;
                             const diff = showD ? Math.round((v - bv) * 10) / 10 : null;
-                            const up = diff > 0, down = diff < 0;
+                            const up = diff > 0;
                             return (
                               <div key={k} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "3px 0", borderBottom: `1px solid ${C.borderLight}`, gap: 4 }}>
                                 <span style={{ fontSize: 11, color: C.textLight, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{k}</span>
