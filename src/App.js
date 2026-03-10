@@ -231,25 +231,26 @@ async function sbUpload(path, csvText) {
   return path;
 }
 
-async function sbInsertImport({ site_id, source, filename, storage_path, row_count }) {
+async function sbInsertImport({ project_id, site_id, source, filename, storage_path, row_count }) {
   const res = await fetch(`${PROXY}/rest/v1/imports`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Prefer": "return=representation" },
-    body: JSON.stringify({ site_id, source, filename, storage_path, row_count }),
+    body: JSON.stringify({ project_id, site_id, source, filename, storage_path, row_count }),
   });
   if (!res.ok) throw new Error(`Insert failed: ${res.status}`);
   return res.json();
 }
 
-async function sbGetHistory(limit = 50) {
-  const res = await fetch(`${PROXY}/rest/v1/imports?select=*&order=uploaded_at.desc&limit=${limit}`);
+async function sbGetHistory(projectId, limit = 50) {
+  const filter = projectId ? `&project_id=eq.${encodeURIComponent(projectId)}` : "";
+  const res = await fetch(`${PROXY}/rest/v1/imports?select=*&order=uploaded_at.desc&limit=${limit}${filter}`);
   if (!res.ok) throw new Error(`Fetch history failed: ${res.status}`);
   return res.json();
 }
 
-async function sbGetLatest() {
-  // Get latest import per site+source
-  const res = await fetch(`${PROXY}/rest/v1/imports?select=*&order=uploaded_at.desc&limit=200`);
+async function sbGetLatest(projectId) {
+  const filter = projectId ? `&project_id=eq.${encodeURIComponent(projectId)}` : "";
+  const res = await fetch(`${PROXY}/rest/v1/imports?select=*&order=uploaded_at.desc&limit=200${filter}`);
   if (!res.ok) return {};
   const rows = await res.json();
   const latest = {};
@@ -264,6 +265,27 @@ async function sbDownload(storage_path) {
   const res = await fetch(`${PROXY}/storage/v1/object/csv-imports/${storage_path}`);
   if (!res.ok) throw new Error(`Download failed: ${res.status}`);
   return res.text();
+}
+
+// ── Projects persistence ──
+async function sbSaveProject(project) {
+  const res = await fetch(`${PROXY}/rest/v1/projects`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
+    body: JSON.stringify({ id: project.id, name: project.name, sites_json: JSON.stringify(project.sites), updated_at: new Date().toISOString() }),
+  });
+  if (!res.ok) console.warn("Save project failed:", res.status);
+}
+
+async function sbLoadProjects() {
+  const res = await fetch(`${PROXY}/rest/v1/projects?select=*&order=created_at.asc`);
+  if (!res.ok) return null;
+  const rows = await res.json();
+  return rows.map(r => ({ id: r.id, name: r.name, sites: JSON.parse(r.sites_json || "[]") }));
+}
+
+async function sbDeleteProject(projectId) {
+  await fetch(`${PROXY}/rest/v1/projects?id=eq.${encodeURIComponent(projectId)}`, { method: "DELETE" });
 }
 
 function safeNum(v) {
@@ -522,7 +544,7 @@ function SectionHeader({ title, sub }) {
   );
 }
 
-function UploadCard({ label, icon, hint, onData, loaded, color, siteId, source }) {
+function UploadCard({ label, icon, hint, onData, loaded, color, siteId, source, projectId }) {
   const [drag, setDrag]       = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadErr, setUploadErr] = useState(null);
@@ -541,9 +563,9 @@ function UploadCard({ label, icon, hint, onData, loaded, color, siteId, source }
         setUploading(true);
         try {
           const ts   = new Date().toISOString().replace(/[:.]/g, "-");
-          const path = `${siteId}/${source}/${ts}_${file.name}`;
+          const path = `${projectId || "proj-default"}/${siteId}/${source}/${ts}_${file.name}`;
           await sbUpload(path, text);
-          await sbInsertImport({ site_id: siteId, source, filename: file.name, storage_path: path, row_count: rows.length });
+          await sbInsertImport({ project_id: projectId || "proj-default", site_id: siteId, source, filename: file.name, storage_path: path, row_count: rows.length });
         } catch(err) {
           setUploadErr("Sauvegarde échouée");
           console.warn("Supabase upload error:", err);
@@ -690,7 +712,7 @@ Règles:
 
 // ── ANALYSE TAB COMPONENT ────────────────────────────────────────
 function AnalyseTab({ metrics, corrMatrix, resultVals, analysis, setAnalysis, analysisLoading, setAnalysisLoading, analysisError, setAnalysisError }) {
-  const [activeRoadmap, setActiveRoadmap] = useState(DEFAULT_SITES[0].id);
+  const [activeRoadmap, setActiveRoadmap] = useState(() => metrics[0]?.site.id || "");
   const hasData = metrics.some(m => m.sf !== null);
 
   const runAnalysis = async () => {
@@ -850,7 +872,7 @@ function AnalyseTab({ metrics, corrMatrix, resultVals, analysis, setAnalysis, an
             <div style={{ padding: "20px 24px", borderBottom: `1px solid ${C.border}` }}>
               <div style={{ fontWeight: 700, fontSize: 15, color: C.text, marginBottom: 12 }}>🗺️ Roadmaps par site</div>
               <div style={{ display: "flex", gap: 8 }}>
-                {sites.map(s => (
+                {metrics.map(({ site: s }) => (
                   <button key={s.id} onClick={() => setActiveRoadmap(s.id)} style={{
                     padding: "7px 18px", border: `1px solid ${activeRoadmap === s.id ? s.color : C.border}`,
                     borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: activeRoadmap === s.id ? 700 : 400,
@@ -1188,7 +1210,6 @@ export default function App() {
     const ids = sites.map(s => s.id);
     setMatrixSites(ids);
     setRadarSites(ids);
-    setActiveRoadmap(ids[0]);
     setAnalysis(null);
     setAnalysisError(null);
   }, [currentProjectId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1197,7 +1218,6 @@ export default function App() {
     const ids = sites.map(s => s.id);
     setMatrixSites(prev => { const kept = prev.filter(id => ids.includes(id)); return kept.length ? kept : ids; });
     setRadarSites(prev => { const kept = prev.filter(id => ids.includes(id)); return kept.length ? kept : ids; });
-    setActiveRoadmap(prev => ids.includes(prev) ? prev : ids[0]);
   }, [sites]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const today = new Date().toISOString().slice(0,10);
@@ -1211,34 +1231,91 @@ export default function App() {
   const [showHistory,  setShowHistory]  = useState(false);
 
   const loadCsv = useCallback(async (row) => {
-    const setterMap = { sf: setSfData, gsc: setGscData, ga: setGaData, bing: setBingData };
     try {
       const text = await sbDownload(row.storage_path);
       const rows = parseCSV(text);
-      setterMap[row.source](p => ({ ...p, [row.site_id]: rows }));
+      const src = row.source;
+      const sid = row.site_id;
+      if (src === "sf")   setSfData(p => ({ ...p, [sid]: rows }));
+      if (src === "gsc")  setGscData(p => ({ ...p, [sid]: rows }));
+      if (src === "ga")   setGaData(p => ({ ...p, [sid]: rows }));
+      if (src === "bing") setBingData(p => ({ ...p, [sid]: rows }));
     } catch(e) { console.warn("Load error", e); }
   }, [setSfData, setGscData, setGaData, setBingData]);
 
-  // Auto-load latest imports on mount
+  // Load projects list + data for initial project on mount
   useEffect(() => {
     (async () => {
       setDbLoading(true);
       try {
-        const [latest, history] = await Promise.all([sbGetLatest(), sbGetHistory()]);
-        setDbHistory(history);
-        if (Object.keys(latest).length > 0) {
-          await Promise.all(Object.values(latest).map(row => loadCsv(row)));
-          setDbAutoLoaded(true);
+        // Try to restore saved projects list from Supabase
+        const savedProjects = await sbLoadProjects();
+        if (savedProjects && savedProjects.length > 0) {
+          // Restore projects with empty data maps (data loaded separately)
+          const restored = savedProjects.map(p => ({
+            ...p,
+            sfData:   emptyDataMap(p.sites),
+            gscData:  emptyDataMap(p.sites),
+            gaData:   emptyDataMap(p.sites),
+            bingData: emptyDataMap(p.sites),
+          }));
+          setProjects(restored);
+          const firstId = restored[0].id;
+          setCurrentProjectId(firstId);
+          // Load data for first project
+          const [latest, history] = await Promise.all([sbGetLatest(firstId), sbGetHistory(firstId)]);
+          setDbHistory(history);
+          if (Object.keys(latest).length > 0) {
+            await Promise.all(Object.values(latest).map(row => loadCsv(row)));
+            setDbAutoLoaded(true);
+          }
+        } else {
+          // No saved projects — save the initial one and load its data
+          await sbSaveProject(INITIAL_PROJECT);
+          const [latest, history] = await Promise.all([sbGetLatest(INITIAL_PROJECT.id), sbGetHistory(INITIAL_PROJECT.id)]);
+          setDbHistory(history);
+          if (Object.keys(latest).length > 0) {
+            await Promise.all(Object.values(latest).map(row => loadCsv(row)));
+            setDbAutoLoaded(true);
+          }
         }
       } catch(e) { console.warn("Supabase init error", e); }
       finally { setDbLoading(false); }
     })();
-  }, [loadCsv]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // When switching project: load its CSV data from Supabase
+  const loadedProjectsRef = useRef(new Set([INITIAL_PROJECT.id]));
+  useEffect(() => {
+    if (loadedProjectsRef.current.has(currentProjectId)) return;
+    loadedProjectsRef.current.add(currentProjectId);
+    (async () => {
+      setDbLoading(true);
+      try {
+        const [latest, history] = await Promise.all([sbGetLatest(currentProjectId), sbGetHistory(currentProjectId)]);
+        setDbHistory(history);
+        if (Object.keys(latest).length > 0) {
+          await Promise.all(Object.values(latest).map(row => loadCsv(row)));
+          setDbAutoLoaded(true);
+        } else {
+          setDbAutoLoaded(false);
+        }
+      } catch(e) { console.warn("Supabase project switch error", e); }
+      finally { setDbLoading(false); }
+    })();
+  }, [currentProjectId, loadCsv]);
+
+  // Auto-save project meta (name + sites) when it changes
+  useEffect(() => {
+    if (!currentProject) return;
+    const t = setTimeout(() => sbSaveProject(currentProject), 800);
+    return () => clearTimeout(t);
+  }, [currentProject]);
 
   const refreshHistory = useCallback(async () => {
-    const history = await sbGetHistory();
+    const history = await sbGetHistory(currentProjectId);
     setDbHistory(history);
-  }, []);
+  }, [currentProjectId]);
 
   // Computed metrics, mode-aware
   const baseMetrics = useMemo(() => {
@@ -1381,6 +1458,7 @@ export default function App() {
                           <button
                             title="Supprimer ce projet"
                             onClick={e => { e.stopPropagation(); setProjectMenuOpen(false); setConfirmModal({ message: `Supprimer le projet "${p.name}" ?`, onConfirm: () => {
+                              sbDeleteProject(p.id).catch(e => console.warn("Delete project error:", e));
                               setProjects(prev => { const next = prev.filter(x => x.id !== p.id); if (currentProjectId === p.id) setCurrentProjectId(next[0].id); return next; });
                             }}); }}
                             style={{ padding: "2px 6px", border: "none", background: "transparent", cursor: "pointer", fontSize: 13, color: "#DC2626" }}
@@ -1397,6 +1475,7 @@ export default function App() {
                           setProjects(prev => [...prev, p]);
                           setCurrentProjectId(p.id);
                           setProjectMenuOpen(false);
+                          sbSaveProject(p).catch(e => console.warn("Save new project error:", e));
                         }}
                         style={{ width: "100%", padding: "7px 0", border: `1px dashed ${C.blue}`, borderRadius: 7, background: C.blueLight, color: C.blue, cursor: "pointer", fontSize: 13, fontWeight: 600 }}
                       >+ Nouveau projet</button>
@@ -1534,13 +1613,13 @@ export default function App() {
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                     <UploadCard label="Screaming Frog Internal" icon="🕷️" hint="Export interne SF · données techniques uniquement" color={site.color}
-                      loaded={sfData[site.id]?.length > 0} onData={rows => setSfData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="sf" />
+                      loaded={sfData[site.id]?.length > 0} onData={rows => setSfData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="sf" projectId={currentProjectId} />
                     <UploadCard label="Google Search Console" icon="🔍" hint="Export GSC · clics, impressions, CTR, position" color={site.color}
-                      loaded={gscData[site.id]?.length > 0} onData={rows => setGscData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="gsc" />
+                      loaded={gscData[site.id]?.length > 0} onData={rows => setGscData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="gsc" projectId={currentProjectId} />
                     <UploadCard label="Google Analytics 4" icon="📊" hint="Export GA4 · sessions, vues" color={site.color}
-                      loaded={gaData[site.id]?.length > 0} onData={rows => setGaData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="ga" />
+                      loaded={gaData[site.id]?.length > 0} onData={rows => setGaData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="ga" projectId={currentProjectId} />
                     <UploadCard label="Bing AI Performance" icon="🤖" hint="Export Bing Webmaster · colonne Citations" color={site.color}
-                      loaded={bingData[site.id]?.length > 0} onData={rows => setBingData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="bing" />
+                      loaded={bingData[site.id]?.length > 0} onData={rows => setBingData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="bing" projectId={currentProjectId} />
                   </div>
                   <div style={{ marginTop: 16, display: "flex", gap: 6, flexWrap: "wrap" }}>
                     {[["SF", sfData[site.id]?.length || 0], ["GSC", gscData[site.id]?.length || 0], ["GA4", gaData[site.id]?.length || 0], ["Bing", bingData[site.id]?.length || 0]].map(([src, n]) => (
