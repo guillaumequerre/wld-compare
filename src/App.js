@@ -41,23 +41,6 @@ const SF_DIMS = [
 
 
 // ── SF TOOLTIPS ──────────────────────────────────────────────────
-const SF_TOOLTIPS = {
-  "Title OK":      "% de pages dont le title est entre 30 et 65 caractères. En dessous : trop court, peu descriptif. Au-dessus : tronqué par Google.",
-  "Meta OK":       "% de pages dont la meta description est entre 100 et 160 caractères. Hors de cette plage, Google peut réécrire ou ignorer la meta.",
-  "H1 OK":         "% de pages avec un H1 renseigné. Le H1 est le titre principal de la page, il doit être unique et présent sur chaque page.",
-  "Mots moy.":     "Nombre moyen de mots par page HTML. Un contenu plus riche (500+ mots) favorise généralement le positionnement SEO et la compréhension par les LLMs.",
-  "Poids pages":   "Poids moyen des pages HTML en Ko (HTML + CSS + JS). Des pages légères (<500KB) améliorent le Core Web Vitals et l'expérience mobile.",
-  "Poids images":  "Poids moyen des ressources images en Ko. Les images lourdes ralentissent le chargement. Idéalement < 100KB par image en moyenne.",
-  "Inlinks":       "Nombre moyen de liens internes entrants par page. Un maillage interne dense améliore la diffusion du PageRank et la découverte des pages.",
-  "Outlinks":      "Nombre moyen de liens sortants par page (internes + externes). Un trop grand nombre peut diluer l'autorité de la page.",
-  "Profondeur":    "Profondeur de crawl moyenne. Les pages trop profondes (> 4 clics depuis la home) sont moins bien indexées et moins visitées.",
-  "Flesch":        "Score de lisibilité Flesch-Kincaid (0-100). Plus le score est élevé, plus le texte est facile à lire. Idéalement > 60 pour du contenu grand public.",
-  "Tableaux":      "% de pages contenant au moins un tableau HTML. Les tableaux structurent les données et favorisent l'apparition en rich snippets et réponses GEO.",
-  "Schemas":       "% de pages avec au moins un schema JSON-LD. Les schemas aident Google et les LLMs à comprendre le type et le contenu de la page.",
-  "Erreurs":       "% de pages retournant un code HTTP 4xx (404, 403…). Ces erreurs nuisent à l'expérience utilisateur et au crawl budget.",
-  "Redirects":     "% d'URLs retournant un code 3xx (301, 302…). Les redirections consomment du crawl budget et peuvent diluer le PageRank.",
-};
-
 // ── TOOLTIP COMPONENT ────────────────────────────────────────────
 // ── RESULT KPIs ─────────────────────────────────────────────────
 const RES_KPIS = [
