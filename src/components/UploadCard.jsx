@@ -1,9 +1,9 @@
 import { useState, useCallback, useRef } from "react";
-import { C } from "../lib/constants.js";
-import { parseCSV } from "../lib/helpers.js";
-import { sbUpload, sbInsertImport } from "../lib/supabase.js";
+import { C } from "../lib/constants";
+import { parseCSV } from "../lib/helpers";
+import { sbUpload, sbInsertImport } from "../lib/supabase";
 
-export default function UploadCard({ label, icon, hint, onData, loaded, color, siteId, source, projectId, onLoadFromHistory }) {
+export default function UploadCard({ label, icon, hint, onData, loaded, color, siteId, source, projectId, onLoadFromHistory, rawMode }) {
   const [drag, setDrag]               = useState(false);
   const [dragHistory, setDragHistory] = useState(false);
   const [uploading, setUploading]     = useState(false);
@@ -16,15 +16,16 @@ export default function UploadCard({ label, icon, hint, onData, loaded, color, s
     const reader = new FileReader();
     reader.onload = async (e) => {
       const text = e.target.result;
-      const rows = parseCSV(text);
-      onData(rows);
+      // rawMode: pass raw text to onData (let caller parse), else parse CSV here
+      const rows = rawMode ? null : parseCSV(text);
+      rawMode ? onData(null, text) : onData(rows);
       if (siteId && source) {
         setUploading(true);
         try {
           const ts   = new Date().toISOString().replace(/[:.]/g, "-");
           const path = `${projectId || "proj-default"}/${siteId}/${source}/${ts}_${file.name}`;
           await sbUpload(path, text);
-          await sbInsertImport({ project_id: projectId || "proj-default", site_id: siteId, source, filename: file.name, storage_path: path, row_count: rows.length });
+          await sbInsertImport({ project_id: projectId || "proj-default", site_id: siteId, source, filename: file.name, storage_path: path, row_count: rawMode ? 0 : rows.length });
         } catch (err) {
           setUploadErr("Sauvegarde échouée");
           console.warn("Supabase upload error:", err);
@@ -34,7 +35,7 @@ export default function UploadCard({ label, icon, hint, onData, loaded, color, s
       }
     };
     reader.readAsText(file);
-  }, [onData, siteId, source, projectId]);
+  }, [onData, siteId, source, projectId, rawMode]);
 
   const handleDragOver = (e) => {
     e.preventDefault();

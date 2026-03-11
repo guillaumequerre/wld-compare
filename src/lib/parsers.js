@@ -1,5 +1,5 @@
-import { SCHEMA_TYPES } from "./constants.js";
-import { safeNum, avg, toUrlPath } from "./helpers.js";
+import { SCHEMA_TYPES } from "./constants";
+import { safeNum, avg, toUrlPath } from "./helpers";
 
 // ── GSC value helper ─────────────────────────────────────────────
 export function gscVal(r, ...keys) {
@@ -168,5 +168,97 @@ export function extractBing(rows) {
   return {
     geoMentions: rows.map(r => safeNum(r["citations"] || r["mentions"] || r["impressions"] || r["appearancecount"] || 0)).reduce((a, b) => a + b, 0),
     pageCount:   rows.filter(r => safeNum(r["citations"] || r["mentions"] || 0) >= 1).length,
+  };
+}
+
+// ── PARSE SEMRUSH (position tracking - landing pages) ────────────
+// Format : 5 lignes header + 1 vide, puis colonnes avec dates préfixées
+// Une ligne par (URL × mot-clé) → agrégation par URL
+export function parseSemrush(rows) {
+  // Trouver la dernière date disponible dans les colonnes
+  // Colonnes attendues : {DATE}_keywords_count, {DATE}_estimated_traffic, {DATE}_position, {DATE}_volume
+  if (!rows.length) return [];
+
+  const cols = Object.keys(rows[0]).map(k => k.toLowerCase());
+
+  // Détecter la date la plus récente (format YYYYMMDD_xxx)
+  const datePattern = /^(\d{8})_/;
+  const dates = [...new Set(
+    cols.map(c => { const m = c.match(datePattern); return m ? m[1] : null; }).filter(Boolean)
+  )].sort();
+  const latest = dates[dates.length - 1];
+  if (!latest) return [];
+
+  // Normaliser les clés (case-insensitive)
+  const key = (row, ...candidates) => {
+    for (const c of candidates) {
+      const found = Object.keys(row).find(k => k.toLowerCase() === c.toLowerCase());
+      if (found !== undefined && row[found] !== undefined && row[found] !== "") return row[found];
+    }
+    return null;
+  };
+
+  // Agréger par URL
+  const byUrl = {};
+  for (const row of rows) {
+    const url = (key(row, "url") || "").trim();
+    if (!url) continue;
+
+    const position = safeNum(key(row, `${latest}_position`, "position_difference") || 0);
+    const volume   = safeNum(key(row, "volume") || 0); // volume du mot-clé individuel
+
+    if (!byUrl[url]) {
+      byUrl[url] = {
+        url,
+        // Ces valeurs sont identiques pour toutes les lignes d'une même URL
+        kwCount:   safeNum(key(row, `${latest}_keywords_count`) || 0),
+        traffic:   safeNum(key(row, `${latest}_estimated_traffic`) || 0),
+        totalVol:  safeNum(key(row, `${latest}_volume`) || 0),
+        keywords:  [], // liste de { position, volume }
+      };
+    }
+    if (position > 0) {
+      byUrl[url].keywords.push({ position, volume });
+    }
+  }
+
+  // Calculer top3/top10/opportunités à partir de la liste de mots-clés
+  return Object.values(byUrl).map(u => {
+    const kws = u.keywords;
+    const top3   = kws.filter(k => k.position <= 3).length;
+    const top10  = kws.filter(k => k.position <= 10).length;
+    // Opportunités : mots-clés entre position 11 et 20 (quick wins)
+    const opps   = kws.filter(k => k.position >= 11 && k.position <= 20).length;
+    const avgPos = kws.length ? Math.round(kws.reduce((s, k) => s + k.position, 0) / kws.length * 10) / 10 : 0;
+
+    return {
+      url:        u.url,
+      kwCount:    u.kwCount  || kws.length,
+      top3,
+      top10,
+      opps,
+      avgPos,
+      traffic:    u.traffic,
+      totalVol:   u.totalVol,
+    };
+  });
+}
+
+// ── EXTRACT SEMRUSH (agrégats site-level) ───────────────────────
+export function extractSemrush(rows) {
+  if (!rows.length) return null;
+  const sum  = (fn) => rows.reduce((a, r) => a + (fn(r) || 0), 0);
+  const mean = (fn) => { const v = rows.map(fn).filter(x => x > 0); return v.length ? Math.round(v.reduce((a,b)=>a+b,0)/v.length*10)/10 : 0; };
+  return {
+    totalKw:    sum(r => r.kwCount),
+    totalTop3:  sum(r => r.top3),
+    totalTop10: sum(r => r.top10),
+    totalOpps:  sum(r => r.opps),
+    totalTraffic: Math.round(sum(r => r.traffic)),
+    totalVol:   sum(r => r.totalVol),
+    avgPos:     mean(r => r.avgPos),
+    pageCount:  rows.length,
+    top3Rate:   rows.length ? Math.round(rows.filter(r => r.top3 > 0).length / rows.length * 100) : 0,
+    top10Rate:  rows.length ? Math.round(rows.filter(r => r.top10 > 0).length / rows.length * 100) : 0,
   };
 }

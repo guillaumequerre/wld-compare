@@ -1,9 +1,9 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from "react";
-import { C, SF_DIMS, RES_KPIS, RADAR_DIMS, DEFAULT_SITES } from "./lib/constants";
+import { C, SF_DIMS, RES_KPIS, RADAR_DIMS, DEFAULT_SITES, SEMRUSH_DIMS } from "./lib/constants";
 import { emptyDataMap, makeInitialProject, parseCSV } from "./lib/helpers";
 import { pearson } from "./lib/helpers";
-import { extractSF, extractGSC, extractGA, extractBing, filterByMode } from "./lib/parsers";
-import { buildUrlMaps, buildSfPageVectors, intraCorrFast } from "./lib/correlations";
+import { extractSF, extractGSC, extractGA, extractBing, extractSemrush, filterByMode } from "./lib/parsers";
+import { buildUrlMaps, buildSfPageVectors, intraCorrFast, smIntraCorr } from "./lib/correlations";
 import { sbSaveProject, sbLoadProjects, sbGetHistory, sbGetLatest, sbDownload } from "./lib/supabase";
 import AnalyseTab from "./components/AnalyseTab";
 import ImportTab from "./tabs/ImportTab";
@@ -12,6 +12,7 @@ import MatrixTab from "./tabs/MatrixTab";
 import PagesTab from "./tabs/PagesTab";
 import SitesTab from "./tabs/SitesTab";
 import AllProjectsTab from "./tabs/AllProjectsTab";
+import SemrushTab from "./tabs/SemrushTab";
 
 const INITIAL_PROJECT = makeInitialProject();
 const NAV_TABS = [
@@ -21,6 +22,7 @@ const NAV_TABS = [
   { key: "pages",       label: "Pages"              },
   { key: "analyse",     label: "✦ Analyse IA"       },
   { key: "sites",       label: "Sites"              },
+  { key: "semrush",     label: "📊 Semrush"         },
   { key: "allprojects", label: "◈ Tous les projets" },
 ];
 
@@ -47,12 +49,14 @@ export default function App() {
   const gscData  = currentProject.gscData;
   const gaData   = currentProject.gaData;
   const bingData = currentProject.bingData;
+  const smData   = currentProject.smData;
 
   const setSfData   = useCallback((fn) => updateProject(p => ({ sfData:   typeof fn === "function" ? fn(p.sfData)   : fn })), [updateProject]);
   const setGscData  = useCallback((fn) => updateProject(p => ({ gscData:  typeof fn === "function" ? fn(p.gscData)  : fn })), [updateProject]);
   const setGaData   = useCallback((fn) => updateProject(p => ({ gaData:   typeof fn === "function" ? fn(p.gaData)   : fn })), [updateProject]);
   const setBingData = useCallback((fn) => updateProject(p => ({ bingData: typeof fn === "function" ? fn(p.bingData) : fn })), [updateProject]);
   const setSites    = useCallback((fn) => updateProject(p => ({ sites:    typeof fn === "function" ? fn(p.sites)    : fn })), [updateProject]);
+  const setSmData   = useCallback((fn) => updateProject(p => ({ smData:   typeof fn === "function" ? fn(p.smData)   : fn })), [updateProject]);
 
   // ── UI state ─────────────────────────────────────────────────────
   const [confirmModal, setConfirmModal] = useState(null);
@@ -94,7 +98,7 @@ export default function App() {
         const text = await sbDownload(row.storage_path);
         const rows = parseCSV(text);
         const src = row.source;
-        const key = src === "sf" ? "sfData" : src === "gsc" ? "gscData" : src === "ga" ? "gaData" : src === "bing" ? "bingData" : null;
+        const key = src === "sf" ? "sfData" : src === "gsc" ? "gscData" : src === "ga" ? "gaData" : src === "bing" ? "bingData" : src === "sm" ? "smData" : null;
         return key ? { key, storedSid: row.site_id, rows } : null;
       } catch (e) { console.warn("Auto-load failed:", row.source, e); return null; }
     }));
@@ -128,6 +132,7 @@ export default function App() {
             gscData:  emptyDataMap(p.sites),
             gaData:   emptyDataMap(p.sites),
             bingData: emptyDataMap(p.sites),
+            smData:   emptyDataMap(p.sites),
           }));
           // Load all CSV data first (before touching state)
           const allData = await Promise.all(restored.map(async (p) => {
@@ -139,7 +144,7 @@ export default function App() {
                 const text = await sbDownload(row.storage_path);
                 const rows = parseCSV(text);
                 const src = row.source;
-                const key = src === "sf" ? "sfData" : src === "gsc" ? "gscData" : src === "ga" ? "gaData" : src === "bing" ? "bingData" : null;
+                const key = src === "sf" ? "sfData" : src === "gsc" ? "gscData" : src === "ga" ? "gaData" : src === "bing" ? "bingData" : src === "sm" ? "smData" : null;
                 return key ? { key, sid: row.site_id, rows } : null;
               } catch(e) { return null; }
             }));
@@ -208,8 +213,9 @@ export default function App() {
       gsc:    gscData[s.id]?.length  > 0 ? extractGSC(gscData[s.id])   : null,
       ga:     gaData[s.id]?.length   > 0 ? extractGA(gaData[s.id])     : null,
       bing:   bingData[s.id]?.length > 0 ? extractBing(bingData[s.id]) : null,
+      sm:     smData[s.id]?.length   > 0 ? extractSemrush(smData[s.id]) : null,
     };
-  }), [sites, sfData, gscData, gaData, bingData, pageMode, baseMetrics]);
+  }), [sites, sfData, gscData, gaData, bingData, smData, pageMode, baseMetrics]);
 
   const resultVals = useMemo(() => metrics.map(m => ({
     clicks:      m.gsc?.clicks      ?? 0,
@@ -220,6 +226,22 @@ export default function App() {
     views:       m.ga?.views         ?? 0,
     geoMentions: m.bing?.geoMentions ?? 0,
   })), [metrics]);
+
+  const semrushCorrMatrix = useMemo(() => {
+    const smRows = matrixSites.flatMap(id => smData[id] || []);
+    if (!smRows.length) return SEMRUSH_DIMS.map(dim => ({ dim, corrs: RES_KPIS.map(kpi => ({ kpi, value: null, n: 0 })) }));
+    const gscRows  = matrixSites.flatMap(id => gscData[id]  || []);
+    const gaRows   = matrixSites.flatMap(id => gaData[id]   || []);
+    const bingRows = matrixSites.flatMap(id => bingData[id] || []);
+    const urlMaps  = buildUrlMaps(gscRows, gaRows, bingRows);
+    return SEMRUSH_DIMS.map(dim => ({
+      dim,
+      corrs: RES_KPIS.map(kpi => {
+        const res = smIntraCorr(smRows, urlMaps, dim.key, kpi.key);
+        return { kpi, value: res?.value ?? null, n: res?.n ?? 0 };
+      }),
+    }));
+  }, [matrixSites, smData, gscData, gaData, bingData]);
 
   const corrMatrix = useMemo(() => {
     const hasAny = metrics.some(m => m.sf !== null);
@@ -366,6 +388,8 @@ export default function App() {
               setGscData={setGscData}
               setGaData={setGaData}
               setBingData={setBingData}
+              smData={smData}
+              setSmData={setSmData}
               confirmModal={confirmModal}
               setConfirmModal={setConfirmModal}
               dbHistory={dbHistory}
@@ -379,6 +403,7 @@ export default function App() {
           {tab === "overview" && (
             <OverviewTab
               sites={sites}
+              smData={smData}
               pageMode={pageMode}
               setPageMode={setPageMode}
               radarSites={radarSites}
@@ -392,6 +417,8 @@ export default function App() {
             <MatrixTab
               sites={sites}
               sfData={sfData}
+              smData={smData}
+              semrushCorrMatrix={semrushCorrMatrix}
               pageMode={pageMode}
               setPageMode={setPageMode}
               matrixSites={matrixSites}
@@ -428,9 +455,19 @@ export default function App() {
           {tab === "sites" && (
             <SitesTab
               sites={sites}
+              smData={smData}
               pageMode={pageMode}
               setPageMode={setPageMode}
               metrics={metrics}
+            />
+          )}
+
+          {tab === "semrush" && (
+            <SemrushTab
+              sites={sites}
+              smData={smData}
+              metrics={metrics}
+              semrushCorrMatrix={semrushCorrMatrix}
             />
           )}
 

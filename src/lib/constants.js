@@ -103,3 +103,22 @@ export const KPI_TOOLTIPS = {
   "Vues GA4":          "Nombre total de pages vues (GA4 Views). Inclut les visites multiples d'une même page dans une session.",
   "Citations Bing AI": "Nombre de fois où vos pages sont citées dans les réponses générées par Bing AI (Copilot). Métrique clé du GEO.",
 };
+
+
+export const SEMRUSH_DIMS = [
+  { key: "smKwCount",    label: "Mots-clés trackés",       higher: true  },
+  { key: "smTop3",       label: "Mots-clés Top 3",          higher: true  },
+  { key: "smTop10",      label: "Mots-clés Top 10",         higher: true  },
+  { key: "smOpps",       label: "Opportunités (pos. 11-20)", higher: true  },
+  { key: "smTraffic",    label: "Trafic estimé Semrush",    higher: true  },
+  { key: "smAvgPos",     label: "Position moy. Semrush",    higher: false },
+];
+
+export const SEMRUSH_DIM_TOOLTIPS = {
+  "Mots-clés trackés":         "Nombre total de mots-clés pour lesquels cette page est positionnée dans le suivi Semrush.",
+  "Mots-clés Top 3":           "Nombre de mots-clés positionnés entre la 1ère et la 3ème place.",
+  "Mots-clés Top 10":          "Nombre de mots-clés positionnés entre la 1ère et la 10ème place.",
+  "Opportunités (pos. 11-20)": "Mots-clés entre la 11ème et la 20ème place — potentiel de progression vers la 1ère page.",
+  "Trafic estimé Semrush":     "Estimation du trafic organique mensuel généré par cette page selon Semrush.",
+  "Position moy. Semrush":     "Position moyenne de la page sur l'ensemble de ses mots-clés trackés.",
+};

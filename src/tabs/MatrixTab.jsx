@@ -47,7 +47,7 @@ export default function MatrixTab({ sites, sfData, pageMode, setPageMode, matrix
     <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
       {[["#15803D","#DCFCE7","#86EFAC","≥ 0.25","Positif fort"],["#16A34A","#F0FDF4","#BBF7D0","0.05–0.25","Positif léger"],["#64748B","#F1F5F9","#CBD5E1","-0.05–0.05","Neutre"],["#DC2626","#FEF2F2","#FECACA","-0.25–-0.05","Négatif léger"],["#B91C1C","#FEE2E2","#FCA5A5","≤ -0.25","Négatif fort"],["#C0C0CC","#F5F5F7","#E8E8ED","—","Données insuffisantes"]].map(([tc,bg,bc,label,desc]) => (
         <div key={label} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <div style={{ width: 28, height: 22, background: bg, border: `1px solid ${bc}`, borderRadius: 5, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: tc, fontWeight: 700 }}>{label}</div>
+          <div style={{ width: 45, height: 22, background: bg, border: `1px solid ${bc}`, borderRadius: 5, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: tc, fontWeight: 700 }}>{label}</div>
           <span style={{ fontSize: 12, color: C.textMid }}>{desc}</span>
         </div>
       ))}

@@ -75,6 +75,7 @@ export function newProject(name, sites) {
     gscData:  emptyDataMap(sites),
     gaData:   emptyDataMap(sites),
     bingData: emptyDataMap(sites),
+    smData:   emptyDataMap(sites),
   };
 }
 
@@ -91,4 +92,28 @@ export function corrColor(v) {
   if (v <   0.05) return { bg: "#F1F5F9", text: "#64748B", border: "#CBD5E1" };
   if (v <   0.25) return { bg: "#F0FDF4", text: "#16A34A", border: "#BBF7D0" };
   return              { bg: "#DCFCE7", text: "#15803D", border: "#86EFAC" };
+}
+
+
+
+// Détecte si un CSV est un export Semrush (header propriétaire sur 5 lignes)
+export function isSemrushCSV(text) {
+  return text.trimStart().startsWith("-----");
+}
+
+// Parse un CSV Semrush en sautant les 5 lignes de header + ligne vide
+export function parseSemrushCSV(text) {
+  const lines = text.split(/\r?\n/);
+  // Trouver la ligne d'en-tête (après les tirets)
+  let headerIdx = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].startsWith("---")) continue;
+    if (lines[i].trim() === "") continue;
+    // Première ligne non-vide après les tirets = headers
+    headerIdx = i;
+    break;
+  }
+  // Reconstruire un CSV propre à partir de headerIdx
+  const clean = lines.slice(headerIdx).join("\n");
+  return parseCSV(clean);
 }

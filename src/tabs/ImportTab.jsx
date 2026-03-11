@@ -1,10 +1,11 @@
 import { C, SITE_PALETTE } from "../lib/constants";
-import { newProject, parseCSV } from "../lib/helpers";
+import { newProject, parseCSV, parseSemrushCSV } from "../lib/helpers";
 import { sbSaveProject, sbDeleteProject, sbDownload } from "../lib/supabase";
+import { parseSemrush } from "../lib/parsers";
 import UploadCard from "../components/UploadCard";
 import { SectionHeader } from "../components/ui";
 
-export default function ImportTab({ projects, currentProjectId, setCurrentProjectId, editingProjectName, setEditingProjectName, setProjects, sites, setSites, sfData, gscData, gaData, bingData, setSfData, setGscData, setGaData, setBingData, confirmModal, setConfirmModal, dbHistory, dbLoading, showHistory, setShowHistory, refreshHistory }) {
+export default function ImportTab({ projects, currentProjectId, setCurrentProjectId, editingProjectName, setEditingProjectName, setProjects, sites, setSites, sfData, gscData, gaData, bingData, smData, setSfData, setGscData, setGaData, setBingData, setSmData, confirmModal, setConfirmModal, dbHistory, dbLoading, showHistory, setShowHistory, refreshHistory }) {
   return (
   <div>
     {/* ── Project selector ── */}
@@ -171,6 +172,7 @@ export default function ImportTab({ projects, currentProjectId, setCurrentProjec
                   setGscData(p => ({...p, [site.id]: []}));
                   setGaData(p => ({...p, [site.id]: []}));
                   setBingData(p => ({...p, [site.id]: []}));
+                  setSmData(p => ({...p, [site.id]: []}));
                 }})}
                 style={{ padding: "4px 8px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.white, cursor: "pointer", fontSize: 13, color: C.textLight }}
               >🗑</button>
@@ -183,6 +185,7 @@ export default function ImportTab({ projects, currentProjectId, setCurrentProjec
                     setGscData(p => { const n = {...p}; delete n[site.id]; return n; });
                     setGaData(p => { const n = {...p}; delete n[site.id]; return n; });
                     setBingData(p => { const n = {...p}; delete n[site.id]; return n; });
+                    setSmData(p => { const n = {...p}; delete n[site.id]; return n; });
                   }})}
                   style={{ padding: "4px 8px", border: `1px solid #FCA5A5`, borderRadius: 6, background: "#FFF5F5", cursor: "pointer", fontSize: 13, color: "#DC2626" }}
                 >✕</button>
@@ -202,9 +205,15 @@ export default function ImportTab({ projects, currentProjectId, setCurrentProjec
             <UploadCard label="Bing AI Performance" icon="🤖" hint="Export Bing Webmaster · colonne Citations" color={site.color}
               loaded={bingData[site.id]?.length > 0} onData={rows => setBingData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="bing" projectId={currentProjectId}
               onLoadFromHistory={async row => { try { const text = await sbDownload(row.storage_path); setBingData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn("History load error", e); } }} />
+            <UploadCard label="Semrush Position Tracking" icon="📊" hint="Export Landing Pages · positions, trafic estimé, volumes" color={site.color}
+              loaded={smData[site.id]?.length > 0}
+              onData={(_, rawText) => { const rows = parseSemrush(parseSemrushCSV(rawText)); setSmData(p => ({...p, [site.id]: rows})); }}
+              rawMode
+              siteId={site.id} source="sm" projectId={currentProjectId}
+              onLoadFromHistory={async row => { try { const text = await sbDownload(row.storage_path); const rows = parseSemrush(parseSemrushCSV(text)); setSmData(p => ({...p, [site.id]: rows})); } catch(e) { console.warn("History load error", e); } }} />
           </div>
           <div style={{ marginTop: 16, display: "flex", gap: 6, flexWrap: "wrap" }}>
-            {[["SF", sfData[site.id]?.length || 0], ["GSC", gscData[site.id]?.length || 0], ["GA4", gaData[site.id]?.length || 0], ["Bing", bingData[site.id]?.length || 0]].map(([src, n]) => (
+            {[["SF", sfData[site.id]?.length || 0], ["GSC", gscData[site.id]?.length || 0], ["GA4", gaData[site.id]?.length || 0], ["Bing", bingData[site.id]?.length || 0], ["SM", smData[site.id]?.length || 0]].map(([src, n]) => (
               <div key={src} style={{ fontSize: 11, padding: "3px 9px", borderRadius: 20, fontWeight: 600, background: n > 0 ? site.bg : C.borderLight, color: n > 0 ? site.color : C.textLight }}>
                 {src} {n > 0 ? `· ${n}` : "· vide"}
               </div>
@@ -225,6 +234,7 @@ export default function ImportTab({ projects, currentProjectId, setCurrentProjec
             setGscData(p => ({...p, [newId]: []}));
             setGaData(p => ({...p, [newId]: []}));
             setBingData(p => ({...p, [newId]: []}));
+            setSmData(p => ({...p, [newId]: []}));
           }}
           style={{ background: C.white, border: `2px dashed ${C.border}`, borderRadius: 14, padding: 24, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, cursor: "pointer", minHeight: 200, transition: "border-color 0.15s" }}
           onMouseEnter={e => e.currentTarget.style.borderColor = C.blue}
