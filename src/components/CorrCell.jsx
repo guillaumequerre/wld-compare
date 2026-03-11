@@ -1,6 +1,25 @@
-import { useState } from "react";
-import { C, SF_DIM_TOOLTIPS, KPI_TOOLTIPS } from "../lib/constants.js";
-import { corrColor } from "../lib/helpers.js";
+import { useState, useCallback } from "react";
+import { C, SF_DIM_TOOLTIPS, KPI_TOOLTIPS } from "../lib/constants";
+import { corrColor } from "../lib/helpers";
+
+// Tooltip toujours visible dans le viewport via position: fixed
+function useTooltip() {
+  const [rect, setRect] = useState(null);
+  const onEnter = useCallback((e) => setRect(e.currentTarget.getBoundingClientRect()), []);
+  const onLeave = useCallback(() => setRect(null), []);
+  return { rect, onEnter, onLeave };
+}
+
+function tooltipStyle(rect, w, h, gap = 10) {
+  if (!rect) return null;
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const above = rect.top - h - gap;
+  const below = rect.bottom + gap;
+  const top = above >= 0 ? above : (below + h <= vh ? below : Math.max(8, vh - h - 8));
+  let left = rect.left + rect.width / 2 - w / 2;
+  left = Math.max(8, Math.min(left, vw - w - 8));
+  return { position: "fixed", top, left, zIndex: 9999, pointerEvents: "none" };
+}
 
 function corrInterpret(r) {
   if (r === null) return null;
@@ -12,13 +31,15 @@ function corrInterpret(r) {
 }
 
 export function CorrCell({ kpi, value, n, dim, base, delta, showDelta }) {
-  const [show, setShow] = useState(false);
+  const { rect, onEnter, onLeave } = useTooltip();
   const col    = corrColor(value);
   const interp = corrInterpret(value);
+  const W = 240, H = value !== null ? (showDelta && delta !== null ? 300 : 240) : 100;
+  const ts = tooltipStyle(rect, W, H);
   return (
     <td
-      onMouseEnter={() => setShow(true)}
-      onMouseLeave={() => setShow(false)}
+      onMouseEnter={onEnter}
+      onMouseLeave={onLeave}
       style={{ padding: "8px 6px", textAlign: "center", borderRight: `1px solid ${C.borderLight}`, borderBottom: `1px solid ${C.borderLight}`, cursor: "help", position: "relative" }}
     >
       <div style={{ background: col.bg, color: col.text, border: `1px solid ${col.border}`, borderRadius: 7, padding: "5px 6px", fontSize: 12, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>
@@ -30,8 +51,8 @@ export function CorrCell({ kpi, value, n, dim, base, delta, showDelta }) {
         </div>
       )}
       {n > 0 && <div style={{ fontSize: 9, color: C.textLight, marginTop: 1 }}>{n}p</div>}
-      {show && (
-        <div style={{ position: "absolute", bottom: "calc(100% + 8px)", left: "50%", transform: "translateX(-50%)", background: "#1E1E2E", color: "#fff", borderRadius: 10, padding: "13px 15px", fontSize: 12, zIndex: 50, pointerEvents: "none", boxShadow: "0 6px 20px rgba(0,0,0,0.3)", width: 240, lineHeight: 1.7 }}>
+      {ts && (
+        <div style={{ ...ts, background: "#1E1E2E", color: "#fff", borderRadius: 10, padding: "13px 15px", fontSize: 12, boxShadow: "0 6px 20px rgba(0,0,0,0.3)", width: W, lineHeight: 1.7 }}>
           {value !== null ? (<>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
               <span style={{ fontSize: 16, fontWeight: 800 }}>{value > 0 ? "+" : ""}{value}</span>
@@ -80,7 +101,6 @@ export function CorrCell({ kpi, value, n, dim, base, delta, showDelta }) {
               Minimum 5 requis pour calculer une corrélation fiable.
             </div>
           </>)}
-          <div style={{ position: "absolute", bottom: -5, left: "50%", transform: "translateX(-50%)", width: 10, height: 10, background: "#1E1E2E", clipPath: "polygon(0 0, 100% 0, 50% 100%)" }} />
         </div>
       )}
     </td>
@@ -88,19 +108,20 @@ export function CorrCell({ kpi, value, n, dim, base, delta, showDelta }) {
 }
 
 export function KpiHeaderCell({ kpi }) {
-  const [show, setShow] = useState(false);
+  const { rect, onEnter, onLeave } = useTooltip();
   const tip = KPI_TOOLTIPS[kpi.label];
+  const W = 220, H = 60;
+  const ts = tip ? tooltipStyle(rect, W, H) : null;
   return (
     <th
-      onMouseEnter={() => setShow(true)}
-      onMouseLeave={() => setShow(false)}
+      onMouseEnter={onEnter}
+      onMouseLeave={onLeave}
       style={{ padding: "12px 10px", fontSize: 11, color: C.textLight, fontWeight: 600, textAlign: "center", textTransform: "uppercase", letterSpacing: 0.8, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap", cursor: tip ? "help" : "default", position: "relative" }}
     >
       {kpi.label}
-      {show && tip && (
-        <div style={{ position: "absolute", bottom: "calc(100% + 6px)", left: "50%", transform: "translateX(-50%)", background: "#1E1E2E", color: "#fff", borderRadius: 9, padding: "10px 13px", fontSize: 11, zIndex: 60, pointerEvents: "none", boxShadow: "0 4px 16px rgba(0,0,0,0.3)", width: 220, lineHeight: 1.6 }}>
+      {ts && (
+        <div style={{ ...ts, background: "#1E1E2E", color: "#fff", borderRadius: 9, padding: "10px 13px", fontSize: 11, boxShadow: "0 4px 16px rgba(0,0,0,0.3)", width: W, lineHeight: 1.6 }}>
           {tip}
-          <div style={{ position: "absolute", bottom: -5, left: "50%", transform: "translateX(-50%)", width: 10, height: 10, background: "#1E1E2E", clipPath: "polygon(0 0, 100% 0, 50% 100%)" }} />
         </div>
       )}
     </th>
@@ -108,17 +129,19 @@ export function KpiHeaderCell({ kpi }) {
 }
 
 export function SfDimCell({ dim, rowBg }) {
-  const [show, setShow] = useState(false);
+  const { rect, onEnter, onLeave } = useTooltip();
   const tip = SF_DIM_TOOLTIPS[dim.key];
+  const W = 240, H = 60;
+  const ts = tip ? tooltipStyle(rect, W, H) : null;
   return (
     <td
-      onMouseEnter={() => setShow(true)}
-      onMouseLeave={() => setShow(false)}
+      onMouseEnter={onEnter}
+      onMouseLeave={onLeave}
       style={{ padding: "10px 16px", fontSize: 12, color: C.textMid, fontWeight: 500, whiteSpace: "nowrap", background: rowBg, borderBottom: `1px solid ${C.borderLight}`, borderRight: `1px solid ${C.border}`, cursor: tip ? "help" : "default", position: "relative" }}
     >
       {dim.label}
-      {show && tip && (
-        <div style={{ position: "absolute", top: "50%", left: "calc(100% + 8px)", transform: "translateY(-50%)", background: "#1E1E2E", color: "#fff", borderRadius: 9, padding: "10px 13px", fontSize: 11, zIndex: 60, pointerEvents: "none", boxShadow: "0 4px 16px rgba(0,0,0,0.3)", width: 240, lineHeight: 1.6 }}>
+      {ts && (
+        <div style={{ ...ts, background: "#1E1E2E", color: "#fff", borderRadius: 9, padding: "10px 13px", fontSize: 11, boxShadow: "0 4px 16px rgba(0,0,0,0.3)", width: W, lineHeight: 1.6 }}>
           {tip}
         </div>
       )}
