@@ -27,7 +27,8 @@ export default function UploadCard({ label, icon, hint, onData, loaded, color, s
           await sbUpload(path, text);
           await sbInsertImport({ project_id: projectId || "proj-default", site_id: siteId, source, filename: file.name, storage_path: path, row_count: rawMode ? 0 : rows.length });
         } catch (err) {
-          setUploadErr("Sauvegarde échouée");
+          const msg = err?.message || String(err);
+          setUploadErr(`Sauvegarde échouée — ${msg.slice(0, 60)}`);
           console.warn("Supabase upload error:", err);
         } finally {
           setUploading(false);

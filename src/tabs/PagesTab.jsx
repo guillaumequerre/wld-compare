@@ -12,9 +12,9 @@ export default function PagesTab({ sites, sfData, gscData, bingData, pageMode, s
 
   return (
   <div>
-    <InfoCard tabKey="pages" />
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
       <SectionHeader title="Analyse par pages" sub="Scoring et filtrage des pages selon leur présence GEO et SEO" />
+    <InfoCard tabKey="pages" />
       <PageModeSelector value={pageMode} onChange={setPageMode} />
     </div>
 
@@ -57,7 +57,7 @@ export default function PagesTab({ sites, sfData, gscData, bingData, pageMode, s
             site,
             url,
             path,
-            words:    safeNum(r["nombre de mots"] || r["word count"] || 0),
+            flesch:   safeNum(r["score de lisibilité"] || r["readability"] || r["flesch"] || 0),
             title:    r["title 1"] || r["title"] || "",
             depth:    safeNum(r["crawl profondeur"] || r["crawl depth"] || 0),
             inlinks:  safeNum(r["liens entrants uniques"] || r["inlinks"] || 0),
@@ -69,7 +69,7 @@ export default function PagesTab({ sites, sfData, gscData, bingData, pageMode, s
       });
 
       const SORTS = [
-        { key: "words",     label: "Mots" },
+        { key: "flesch",    label: "Flesch" },
         { key: "clicks",    label: "Clics" },
         { key: "citations", label: "Citations" },
         { key: "inlinks",   label: "Liens ent." },
@@ -109,7 +109,7 @@ export default function PagesTab({ sites, sfData, gscData, bingData, pageMode, s
                 <tr>
                   <th style={{ padding: "10px 12px", textAlign: "left", borderBottom: `1px solid ${C.border}`, color: C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8 }}>Site</th>
                   <th style={{ padding: "10px 12px", textAlign: "left", borderBottom: `1px solid ${C.border}`, color: C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8 }}>URL</th>
-                  <th style={{ padding: "10px 12px", textAlign: "center", borderBottom: `1px solid ${C.border}`, color: sortKey === "words" ? C.blue : C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, cursor: "pointer" }} onClick={() => setSortKey("words")}>Mots</th>
+                  <th style={{ padding: "10px 12px", textAlign: "center", borderBottom: `1px solid ${C.border}`, color: sortKey === "flesch" ? C.blue : C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, cursor: "pointer" }} onClick={() => setSortKey("flesch")}>Flesch</th>
                   <th style={{ padding: "10px 12px", textAlign: "center", borderBottom: `1px solid ${C.border}`, color: sortKey === "inlinks" ? C.blue : C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, cursor: "pointer" }} onClick={() => setSortKey("inlinks")}>Liens ent.</th>
                   <th style={{ padding: "10px 12px", textAlign: "center", borderBottom: `1px solid ${C.border}`, color: sortKey === "depth" ? C.blue : C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, cursor: "pointer" }} onClick={() => setSortKey("depth")}>Prof.</th>
                   <th style={{ padding: "10px 12px", textAlign: "center", borderBottom: `1px solid ${C.border}`, color: sortKey === "clicks" ? C.blue : C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, cursor: "pointer" }} onClick={() => setSortKey("clicks")}>Clics GSC</th>
@@ -137,7 +137,7 @@ export default function PagesTab({ sites, sfData, gscData, bingData, pageMode, s
                       {p.title && <div style={{ fontSize: 10, color: C.textLight, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.title}</div>}
                     </td>
                     <td style={{ padding: "7px 12px", borderBottom: `1px solid ${C.borderLight}`, textAlign: "center", fontVariantNumeric: "tabular-nums" }}>
-                      {p.words > 0 ? <span style={{ fontWeight: 600, color: p.words > 1000 ? C.green : p.words > 500 ? C.amber : C.textMid }}>{p.words}</span> : <span style={{ color: C.textLight }}>—</span>}
+                      {p.flesch > 0 ? <span style={{ fontWeight: 600, color: p.flesch >= 60 ? C.green : p.flesch >= 30 ? C.amber : C.red }}>{p.flesch}</span> : <span style={{ color: C.textLight }}>—</span>}
                     </td>
                     <td style={{ padding: "7px 12px", borderBottom: `1px solid ${C.borderLight}`, textAlign: "center", color: C.textMid, fontVariantNumeric: "tabular-nums" }}>{p.inlinks || "—"}</td>
                     <td style={{ padding: "7px 12px", borderBottom: `1px solid ${C.borderLight}`, textAlign: "center", color: C.textMid }}>{p.depth}</td>
