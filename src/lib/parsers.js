@@ -175,21 +175,8 @@ export function extractBing(rows) {
 // Format : 5 lignes header + 1 vide, puis colonnes avec dates préfixées
 // Une ligne par (URL × mot-clé) → agrégation par URL
 export function parseSemrush(rows) {
-  // Trouver la dernière date disponible dans les colonnes
-  // Colonnes attendues : {DATE}_keywords_count, {DATE}_estimated_traffic, {DATE}_position, {DATE}_volume
   if (!rows.length) return [];
 
-  const cols = Object.keys(rows[0]).map(k => k.toLowerCase());
-
-  // Détecter la date la plus récente (format YYYYMMDD_xxx)
-  const datePattern = /^(\d{8})_/;
-  const dates = [...new Set(
-    cols.map(c => { const m = c.match(datePattern); return m ? m[1] : null; }).filter(Boolean)
-  )].sort();
-  const latest = dates[dates.length - 1];
-  if (!latest) return [];
-
-  // Normaliser les clés (case-insensitive)
   const key = (row, ...candidates) => {
     for (const c of candidates) {
       const found = Object.keys(row).find(k => k.toLowerCase() === c.toLowerCase());
@@ -198,48 +185,86 @@ export function parseSemrush(rows) {
     return null;
   };
 
-  // Agréger par URL
+  const cols = Object.keys(rows[0]).map(k => k.toLowerCase());
+
+  // ── Détection du format ────────────────────────────────────────
+  const isOrganicPages = cols.includes("number of keywords") || cols.includes("traffic (%)");
+  const datePattern = /^(\d{8})_/;
+  const dates = [...new Set(
+    cols.map(c => { const m = c.match(datePattern); return m ? m[1] : null; }).filter(Boolean)
+  )].sort();
+  const latest = dates[dates.length - 1];
+
+  if (isOrganicPages) {
+    // ── Format Organic Research Pages ─────────────────────────────
+    // Colonnes : URL, Traffic (%), Number of Keywords, Traffic, Traffic Change,
+    //   Positions with {intent} intents in top 20, Traffic with {intent} intents in top 20
+    return rows.map(row => {
+      const url     = (key(row, "url") || "").trim();
+      if (!url) return null;
+      const kwCount  = safeNum(key(row, "number of keywords") || 0);
+      const traffic  = safeNum(key(row, "traffic") || 0);
+      const delta    = safeNum(key(row, "traffic change") || 0);
+      // Positions par intent (top 20)
+      const posComm  = safeNum(key(row, "positions with commercial intents in top 20") || 0);
+      const posInfo  = safeNum(key(row, "positions with informational intents in top 20") || 0);
+      const posNav   = safeNum(key(row, "positions with navigational intents in top 20") || 0);
+      const posTrans = safeNum(key(row, "positions with transactional intents in top 20") || 0);
+      const posTotal = posComm + posInfo + posNav + posTrans
+        + safeNum(key(row, "positions with unknown intents in top 20") || 0);
+      return {
+        url,
+        kwCount,
+        traffic,
+        trafficDelta: delta,
+        top3:    0,   // non disponible dans ce format
+        top10:   posTotal,
+        opps:    0,   // non disponible dans ce format
+        avgPos:  0,
+        totalVol: 0,
+        // Intent breakdown
+        intentCommercial:    posComm,
+        intentInformational: posInfo,
+        intentNavigational:  posNav,
+        intentTransactional: posTrans,
+        format: "organic_pages",
+      };
+    }).filter(Boolean);
+  }
+
+  // ── Format Position Tracking ───────────────────────────────────
+  if (!latest) return [];
   const byUrl = {};
   for (const row of rows) {
     const url = (key(row, "url") || "").trim();
     if (!url) continue;
-
     const position = safeNum(key(row, `${latest}_position`, "position_difference") || 0);
-    const volume   = safeNum(key(row, "volume") || 0); // volume du mot-clé individuel
-
+    const volume   = safeNum(key(row, "volume") || 0);
     if (!byUrl[url]) {
       byUrl[url] = {
         url,
-        // Ces valeurs sont identiques pour toutes les lignes d'une même URL
-        kwCount:   safeNum(key(row, `${latest}_keywords_count`) || 0),
-        traffic:   safeNum(key(row, `${latest}_estimated_traffic`) || 0),
-        totalVol:  safeNum(key(row, `${latest}_volume`) || 0),
-        keywords:  [], // liste de { position, volume }
+        kwCount:  safeNum(key(row, `${latest}_keywords_count`) || 0),
+        traffic:  safeNum(key(row, `${latest}_estimated_traffic`) || 0),
+        totalVol: safeNum(key(row, `${latest}_volume`) || 0),
+        keywords: [],
       };
     }
-    if (position > 0) {
-      byUrl[url].keywords.push({ position, volume });
-    }
+    if (position > 0) byUrl[url].keywords.push({ position, volume });
   }
-
-  // Calculer top3/top10/opportunités à partir de la liste de mots-clés
   return Object.values(byUrl).map(u => {
     const kws = u.keywords;
-    const top3   = kws.filter(k => k.position <= 3).length;
-    const top10  = kws.filter(k => k.position <= 10).length;
-    // Opportunités : mots-clés entre position 11 et 20 (quick wins)
-    const opps   = kws.filter(k => k.position >= 11 && k.position <= 20).length;
+    const top3  = kws.filter(k => k.position <= 3).length;
+    const top10 = kws.filter(k => k.position <= 10).length;
+    const opps  = kws.filter(k => k.position >= 11 && k.position <= 20).length;
     const avgPos = kws.length ? Math.round(kws.reduce((s, k) => s + k.position, 0) / kws.length * 10) / 10 : 0;
-
     return {
-      url:        u.url,
-      kwCount:    u.kwCount  || kws.length,
-      top3,
-      top10,
-      opps,
-      avgPos,
-      traffic:    u.traffic,
-      totalVol:   u.totalVol,
+      url: u.url,
+      kwCount:  u.kwCount || kws.length,
+      top3, top10, opps, avgPos,
+      traffic:  u.traffic,
+      totalVol: u.totalVol,
+      trafficDelta: 0,
+      format: "position_tracking",
     };
   });
 }
@@ -249,16 +274,24 @@ export function extractSemrush(rows) {
   if (!rows.length) return null;
   const sum  = (fn) => rows.reduce((a, r) => a + (fn(r) || 0), 0);
   const mean = (fn) => { const v = rows.map(fn).filter(x => x > 0); return v.length ? Math.round(v.reduce((a,b)=>a+b,0)/v.length*10)/10 : 0; };
+  const fmt = rows[0]?.format || "position_tracking";
   return {
-    totalKw:    sum(r => r.kwCount),
-    totalTop3:  sum(r => r.top3),
-    totalTop10: sum(r => r.top10),
-    totalOpps:  sum(r => r.opps),
+    format:       fmt,
+    totalKw:      sum(r => r.kwCount),
+    totalTop3:    sum(r => r.top3),
+    totalTop10:   sum(r => r.top10),
+    totalOpps:    sum(r => r.opps),
     totalTraffic: Math.round(sum(r => r.traffic)),
-    totalVol:   sum(r => r.totalVol),
-    avgPos:     mean(r => r.avgPos),
-    pageCount:  rows.length,
-    top3Rate:   rows.length ? Math.round(rows.filter(r => r.top3 > 0).length / rows.length * 100) : 0,
-    top10Rate:  rows.length ? Math.round(rows.filter(r => r.top10 > 0).length / rows.length * 100) : 0,
+    trafficDelta: Math.round(sum(r => r.trafficDelta || 0)),
+    totalVol:     sum(r => r.totalVol),
+    avgPos:       mean(r => r.avgPos),
+    pageCount:    rows.length,
+    top3Rate:     rows.length ? Math.round(rows.filter(r => r.top3 > 0).length / rows.length * 100) : 0,
+    top10Rate:    rows.length ? Math.round(rows.filter(r => r.top10 > 0).length / rows.length * 100) : 0,
+    // intent breakdown (organic_pages only)
+    totalIntentCommercial:    sum(r => r.intentCommercial || 0),
+    totalIntentInformational: sum(r => r.intentInformational || 0),
+    totalIntentNavigational:  sum(r => r.intentNavigational || 0),
+    totalIntentTransactional: sum(r => r.intentTransactional || 0),
   };
 }

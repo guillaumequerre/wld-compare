@@ -98,21 +98,38 @@ export function corrColor(v) {
 
 // Détecte si un CSV est un export Semrush (header propriétaire sur 5 lignes)
 export function isSemrushCSV(text) {
-  return text.trimStart().startsWith("-----");
+  const t = text.trimStart();
+  // Format Position Tracking (header propriétaire avec tirets)
+  if (t.startsWith("-----")) return true;
+  // Format Organic Research Pages (header direct avec URL,Traffic...)
+  const firstLine = t.split(/\r?\n/)[0].toLowerCase();
+  if (firstLine.startsWith("url,") && firstLine.includes("traffic") && firstLine.includes("keyword")) return true;
+  return false;
 }
 
-// Parse un CSV Semrush en sautant les lignes de header propriétaire
+// Détecte le sous-format Semrush
+export function semrushFormat(text) {
+  const t = text.trimStart();
+  if (t.startsWith("-----")) return "position_tracking";
+  return "organic_pages";
+}
+
+// Parse un CSV Semrush — gère les deux formats
 export function parseSemrushCSV(text) {
   const lines = text.split(/\r?\n/);
-  // Trouver la vraie ligne d'en-tête : celle qui commence par "Url,"
-  let headerIdx = 0;
-  for (let i = 0; i < lines.length; i++) {
-    const lower = lines[i].toLowerCase().trim();
-    if (lower.startsWith("url,") || lower.startsWith('"url",')) {
-      headerIdx = i;
-      break;
+  const fmt = semrushFormat(text);
+  if (fmt === "position_tracking") {
+    // Trouver la vraie ligne d'en-tête : celle qui commence par "Url,"
+    let headerIdx = 0;
+    for (let i = 0; i < lines.length; i++) {
+      const lower = lines[i].toLowerCase().trim();
+      if (lower.startsWith("url,") || lower.startsWith('"url",')) {
+        headerIdx = i;
+        break;
+      }
     }
+    return parseCSV(lines.slice(headerIdx).join("\n"));
   }
-  const clean = lines.slice(headerIdx).join("\n");
-  return parseCSV(clean);
+  // organic_pages : header standard, pas de lignes à sauter
+  return parseCSV(text);
 }

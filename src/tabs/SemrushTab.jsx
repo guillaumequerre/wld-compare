@@ -1,3 +1,4 @@
+import InfoCard from "../components/InfoCard";
 import { C, RES_KPIS } from "../lib/constants";
 import { SectionHeader } from "../components/ui";
 import { CorrCell, KpiHeaderCell } from "../components/CorrCell";
@@ -13,7 +14,15 @@ function SmStatCard({ site, sm }) {
     </div>
   );
 
-  const stats = [
+  const isOrganic = sm.format === "organic_pages";
+  const stats = isOrganic ? [
+    { label: "Mots-clés totaux",   value: sm.totalKw.toLocaleString("fr"),     icon: "🔑" },
+    { label: "Trafic estimé",      value: Math.round(sm.totalTraffic).toLocaleString("fr"), icon: "📈" },
+    { label: "Évolution trafic",   value: (sm.trafficDelta >= 0 ? "+" : "") + Math.round(sm.trafficDelta).toLocaleString("fr"), icon: sm.trafficDelta >= 0 ? "📈" : "📉" },
+    { label: "Top 20 total",       value: sm.totalTop10.toLocaleString("fr"),   icon: "🏅" },
+    { label: "Intent commercial",  value: sm.totalIntentCommercial.toLocaleString("fr"),  icon: "💼" },
+    { label: "Intent info.",       value: sm.totalIntentInformational.toLocaleString("fr"), icon: "📖" },
+  ] : [
     { label: "Mots-clés trackés",  value: sm.totalKw.toLocaleString("fr"),    icon: "🔑" },
     { label: "Top 3",              value: sm.totalTop3.toLocaleString("fr"),   icon: "🥇" },
     { label: "Top 10",             value: sm.totalTop10.toLocaleString("fr"),  icon: "🏅" },
@@ -37,20 +46,35 @@ function SmStatCard({ site, sm }) {
           </div>
         ))}
       </div>
-      {/* Top 3 / Top 10 rates */}
+      {/* Taux synthétiques — adaptatif selon format */}
       <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-        <div style={{ flex: 1, background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 8, padding: "8px 12px", textAlign: "center" }}>
-          <div style={{ fontSize: 11, color: "#15803D", marginBottom: 2 }}>Pages avec Top 3</div>
-          <div style={{ fontSize: 18, fontWeight: 800, color: "#15803D" }}>{sm.top3Rate}%</div>
-        </div>
-        <div style={{ flex: 1, background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 8, padding: "8px 12px", textAlign: "center" }}>
-          <div style={{ fontSize: 11, color: "#2563EB", marginBottom: 2 }}>Pages avec Top 10</div>
-          <div style={{ fontSize: 18, fontWeight: 800, color: "#2563EB" }}>{sm.top10Rate}%</div>
-        </div>
-        <div style={{ flex: 1, background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, padding: "8px 12px", textAlign: "center" }}>
-          <div style={{ fontSize: 11, color: "#D97706", marginBottom: 2 }}>Opps / page</div>
-          <div style={{ fontSize: 18, fontWeight: 800, color: "#D97706" }}>{sm.pageCount > 0 ? (sm.totalOpps / sm.pageCount).toFixed(1) : "—"}</div>
-        </div>
+        {isOrganic ? (<>
+          <div style={{ flex: 1, background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 8, padding: "8px 12px", textAlign: "center" }}>
+            <div style={{ fontSize: 11, color: "#2563EB", marginBottom: 2 }}>Top 20 / page</div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: "#2563EB" }}>{sm.pageCount > 0 ? (sm.totalTop10 / sm.pageCount).toFixed(1) : "—"}</div>
+          </div>
+          <div style={{ flex: 1, background: sm.trafficDelta >= 0 ? "#F0FDF4" : "#FEF2F2", border: sm.trafficDelta >= 0 ? "1px solid #BBF7D0" : "1px solid #FECACA", borderRadius: 8, padding: "8px 12px", textAlign: "center" }}>
+            <div style={{ fontSize: 11, color: sm.trafficDelta >= 0 ? "#15803D" : "#DC2626", marginBottom: 2 }}>Δ Trafic</div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: sm.trafficDelta >= 0 ? "#15803D" : "#DC2626" }}>{sm.trafficDelta >= 0 ? "+" : ""}{Math.round(sm.trafficDelta)}</div>
+          </div>
+          <div style={{ flex: 1, background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, padding: "8px 12px", textAlign: "center" }}>
+            <div style={{ fontSize: 11, color: "#D97706", marginBottom: 2 }}>Intent comm.</div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: "#D97706" }}>{sm.totalIntentCommercial}</div>
+          </div>
+        </>) : (<>
+          <div style={{ flex: 1, background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 8, padding: "8px 12px", textAlign: "center" }}>
+            <div style={{ fontSize: 11, color: "#15803D", marginBottom: 2 }}>Pages avec Top 3</div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: "#15803D" }}>{sm.top3Rate}%</div>
+          </div>
+          <div style={{ flex: 1, background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 8, padding: "8px 12px", textAlign: "center" }}>
+            <div style={{ fontSize: 11, color: "#2563EB", marginBottom: 2 }}>Pages avec Top 10</div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: "#2563EB" }}>{sm.top10Rate}%</div>
+          </div>
+          <div style={{ flex: 1, background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, padding: "8px 12px", textAlign: "center" }}>
+            <div style={{ fontSize: 11, color: "#D97706", marginBottom: 2 }}>Opps / page</div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: "#D97706" }}>{sm.pageCount > 0 ? (sm.totalOpps / sm.pageCount).toFixed(1) : "—"}</div>
+          </div>
+        </>)}
       </div>
     </div>
   );
@@ -63,6 +87,7 @@ export default function SemrushTab({ sites, smData, metrics, semrushCorrMatrix }
     <div>
       <div style={{ marginBottom: 24 }}>
         <SectionHeader title="Semrush · Position Tracking" sub="Mots-clés, trafic estimé, opportunités par page" />
+      <InfoCard tabKey="semrush" />
       </div>
 
       {!hasAny && (
@@ -85,18 +110,32 @@ export default function SemrushTab({ sites, smData, metrics, semrushCorrMatrix }
           {/* ── Top pages tableau ── */}
           <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: "20px 24px", marginBottom: 32 }}>
             <div style={{ fontWeight: 700, fontSize: 14, color: C.text, marginBottom: 16 }}>Top pages par trafic estimé</div>
+            {(() => {
+              const fmt = sites.flatMap(s => smData[s.id] || []).find(r => r.format)?.format || "position_tracking";
+              const isOrg = fmt === "organic_pages";
+              const TH = ({ children, left }) => (
+                <th style={{ padding: "10px 12px", textAlign: left ? "left" : "center", borderBottom: `1px solid ${C.border}`, color: C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8 }}>{children}</th>
+              );
+              return (
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                 <thead>
                   <tr style={{ background: C.bg }}>
-                    <th style={{ padding: "10px 12px", textAlign: "left", borderBottom: `1px solid ${C.border}`, color: C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8 }}>Site</th>
-                    <th style={{ padding: "10px 12px", textAlign: "left", borderBottom: `1px solid ${C.border}`, color: C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8 }}>URL</th>
-                    <th style={{ padding: "10px 12px", textAlign: "center", borderBottom: `1px solid ${C.border}`, color: C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8 }}>Trafic estimé</th>
-                    <th style={{ padding: "10px 12px", textAlign: "center", borderBottom: `1px solid ${C.border}`, color: C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8 }}>Top 3</th>
-                    <th style={{ padding: "10px 12px", textAlign: "center", borderBottom: `1px solid ${C.border}`, color: C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8 }}>Top 10</th>
-                    <th style={{ padding: "10px 12px", textAlign: "center", borderBottom: `1px solid ${C.border}`, color: C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8 }}>Opps</th>
-                    <th style={{ padding: "10px 12px", textAlign: "center", borderBottom: `1px solid ${C.border}`, color: C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8 }}>Pos. moy.</th>
-                    <th style={{ padding: "10px 12px", textAlign: "center", borderBottom: `1px solid ${C.border}`, color: C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8 }}>KW</th>
+                    <TH left>Site</TH>
+                    <TH left>URL</TH>
+                    <TH>Trafic</TH>
+                    {isOrg ? (<>
+                      <TH>Δ Trafic</TH>
+                      <TH>Top 20</TH>
+                      <TH>Comm.</TH>
+                      <TH>Info.</TH>
+                    </>) : (<>
+                      <TH>Top 3</TH>
+                      <TH>Top 10</TH>
+                      <TH>Opps</TH>
+                      <TH>Pos. moy.</TH>
+                    </>)}
+                    <TH>KW</TH>
                   </tr>
                 </thead>
                 <tbody>
@@ -121,16 +160,27 @@ export default function SemrushTab({ sites, smData, metrics, semrushCorrMatrix }
                           <td style={{ padding: "8px 12px", borderBottom: `1px solid ${C.borderLight}`, textAlign: "center" }}>
                             <span style={{ fontWeight: 700, color: C.text }}>{Math.round(r.traffic).toLocaleString("fr")}</span>
                           </td>
-                          <td style={{ padding: "8px 12px", borderBottom: `1px solid ${C.borderLight}`, textAlign: "center" }}>
-                            <span style={{ background: r.top3 > 0 ? "#DCFCE7" : C.bg, color: r.top3 > 0 ? "#15803D" : C.textLight, borderRadius: 5, padding: "2px 7px", fontWeight: 600 }}>{r.top3}</span>
-                          </td>
-                          <td style={{ padding: "8px 12px", borderBottom: `1px solid ${C.borderLight}`, textAlign: "center" }}>
-                            <span style={{ background: r.top10 > 0 ? "#EFF6FF" : C.bg, color: r.top10 > 0 ? "#2563EB" : C.textLight, borderRadius: 5, padding: "2px 7px", fontWeight: 600 }}>{r.top10}</span>
-                          </td>
-                          <td style={{ padding: "8px 12px", borderBottom: `1px solid ${C.borderLight}`, textAlign: "center" }}>
-                            <span style={{ background: r.opps > 0 ? "#FFFBEB" : C.bg, color: r.opps > 0 ? "#D97706" : C.textLight, borderRadius: 5, padding: "2px 7px", fontWeight: 600 }}>{r.opps}</span>
-                          </td>
-                          <td style={{ padding: "8px 12px", borderBottom: `1px solid ${C.borderLight}`, textAlign: "center", color: C.textMid }}>{r.avgPos}</td>
+                          {isOrg ? (<>
+                            <td style={{ padding: "8px 12px", borderBottom: `1px solid ${C.borderLight}`, textAlign: "center" }}>
+                              <span style={{ fontWeight: 600, color: (r.trafficDelta||0) >= 0 ? "#15803D" : "#DC2626" }}>{(r.trafficDelta||0) >= 0 ? "+" : ""}{r.trafficDelta||0}</span>
+                            </td>
+                            <td style={{ padding: "8px 12px", borderBottom: `1px solid ${C.borderLight}`, textAlign: "center" }}>
+                              <span style={{ background: r.top10 > 0 ? "#EFF6FF" : C.bg, color: r.top10 > 0 ? "#2563EB" : C.textLight, borderRadius: 5, padding: "2px 7px", fontWeight: 600 }}>{r.top10}</span>
+                            </td>
+                            <td style={{ padding: "8px 12px", borderBottom: `1px solid ${C.borderLight}`, textAlign: "center", color: C.textMid }}>{r.intentCommercial||0}</td>
+                            <td style={{ padding: "8px 12px", borderBottom: `1px solid ${C.borderLight}`, textAlign: "center", color: C.textMid }}>{r.intentInformational||0}</td>
+                          </>) : (<>
+                            <td style={{ padding: "8px 12px", borderBottom: `1px solid ${C.borderLight}`, textAlign: "center" }}>
+                              <span style={{ background: r.top3 > 0 ? "#DCFCE7" : C.bg, color: r.top3 > 0 ? "#15803D" : C.textLight, borderRadius: 5, padding: "2px 7px", fontWeight: 600 }}>{r.top3}</span>
+                            </td>
+                            <td style={{ padding: "8px 12px", borderBottom: `1px solid ${C.borderLight}`, textAlign: "center" }}>
+                              <span style={{ background: r.top10 > 0 ? "#EFF6FF" : C.bg, color: r.top10 > 0 ? "#2563EB" : C.textLight, borderRadius: 5, padding: "2px 7px", fontWeight: 600 }}>{r.top10}</span>
+                            </td>
+                            <td style={{ padding: "8px 12px", borderBottom: `1px solid ${C.borderLight}`, textAlign: "center" }}>
+                              <span style={{ background: r.opps > 0 ? "#FFFBEB" : C.bg, color: r.opps > 0 ? "#D97706" : C.textLight, borderRadius: 5, padding: "2px 7px", fontWeight: 600 }}>{r.opps}</span>
+                            </td>
+                            <td style={{ padding: "8px 12px", borderBottom: `1px solid ${C.borderLight}`, textAlign: "center", color: C.textMid }}>{r.avgPos}</td>
+                          </>)}
                           <td style={{ padding: "8px 12px", borderBottom: `1px solid ${C.borderLight}`, textAlign: "center", color: C.textMid }}>{r.kwCount}</td>
                         </tr>
                       ))
@@ -138,6 +188,8 @@ export default function SemrushTab({ sites, smData, metrics, semrushCorrMatrix }
                 </tbody>
               </table>
             </div>
+            );
+            })()}
           </div>
 
           {/* ── Matrice de corrélation Semrush ── */}

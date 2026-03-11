@@ -441,7 +441,7 @@ export default function App() {
           {tab === "analyse" && (
             <AnalyseTab
               metrics={metrics}
-              corrMatrix={corrMatrix}
+              corrMatrix={filteredCorrMatrix}
               resultVals={resultVals}
               analysis={analysis}
               setAnalysis={setAnalysis}

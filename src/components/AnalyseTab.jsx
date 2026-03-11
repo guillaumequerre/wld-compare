@@ -62,10 +62,30 @@ SITE: ${m.site.label}
     return `\n\nANALYSE COMPARATIVE (${names.join(" vs ")}):\nScores GEO-readiness: ${scores}\n\nÉcarts techniques entre sites:\n  ${deltas}\n\nComparaison KPIs:\n  ${kpis}`;
   })() : "";
 
+  // Matrice complète formatée en tableau lisible pour le LLM
+  const kpiHeaders = corrMatrix[0]?.corrs.map(c => c.kpi.label) || [];
+  const corrTableLines = [
+    `Dimension SF | ${kpiHeaders.join(" | ")}`,
+    `${"—".repeat(20)}|${kpiHeaders.map(() => "—".repeat(14)).join("|")}`,
+    ...corrMatrix.map(({ dim, corrs }) => {
+      const vals = corrs.map(c => {
+        if (c.value === null) return "  N/A  ";
+        const v = (c.value > 0 ? "+" : "") + c.value.toFixed(2);
+        const flag = Math.abs(c.value) >= 0.4 ? " ★" : Math.abs(c.value) >= 0.2 ? " ·" : "  ";
+        return `${v}${flag}`.padStart(9);
+      });
+      return `${dim.label.padEnd(28)} | ${vals.join(" | ")}`;
+    }),
+    "",
+    "★ = corrélation forte (|r|≥0.4)  · = corrélation modérée (|r|≥0.2)  r>0 = relation positive  r<0 = relation inverse",
+  ].join("\n");
+
+  // Top corrélations significatives pour résumé rapide
   const topCorr = corrMatrix.flatMap(({ dim, corrs }) =>
-    corrs.filter(c => c.value !== null && Math.abs(c.value) >= 0.4)
-      .map(c => `${dim.label} ↔ ${c.kpi.label}: ${c.value > 0 ? "+" : ""}${c.value}`)
-  ).join("\n");
+    corrs.filter(c => c.value !== null && Math.abs(c.value) >= 0.25)
+      .map(c => ({ label: `${dim.label} ↔ ${c.kpi.label}`, value: c.value, abs: Math.abs(c.value) }))
+  ).sort((a, b) => b.abs - a.abs).slice(0, 10)
+   .map(c => `  ${c.label}: ${c.value > 0 ? "+" : ""}${c.value.toFixed(2)}`).join("\n");
 
   return `Tu es un expert SEO et GEO (Generative Engine Optimization). Tu analyses des données de sites web concurrents et tu dois produire une analyse stratégique et des roadmaps actionnables.
 
@@ -74,8 +94,11 @@ ${sitesData}
 
 ${comparativeData}
 
-CORRÉLATIONS SIGNIFICATIVES (Pearson ≥ 0.4 ou ≤ -0.4):
-${topCorr || "Données insuffisantes pour calculer des corrélations significatives."}
+MATRICE DE CORRÉLATION COMPLÈTE (Pearson r · page-par-page · SF × KPIs):
+${corrTableLines}
+
+TOP CORRÉLATIONS SIGNIFICATIVES (|r| ≥ 0.25, triées par force):
+${topCorr || "Pas encore de corrélations significatives détectées."}
 
 INSTRUCTIONS:
 Produis un JSON STRICT avec exactement cette structure (rien d'autre, pas de markdown, pas de backticks):
