@@ -1,5 +1,6 @@
 import InfoCard from "../components/InfoCard";
 import { computeSiteScore, scoreLabel } from "../lib/scoring";
+import ScoreTooltip from "../components/ScoreTooltip";
 import { C, SF_DIMS } from "../lib/constants";
 import SchemaBreakdown from "../components/SchemaBreakdown";
 import LlmsStatus from "../components/LlmsStatus";
@@ -36,6 +37,7 @@ export default function SitesTab({ sites, pageMode, setPageMode, metrics }) {
                   <span style={{ fontSize: 11, fontWeight: 600, color: lbl.color, background: lbl.bg, padding: "2px 8px", borderRadius: 10 }}>{lbl.label}</span>
                   <span style={{ fontSize: 24, fontWeight: 800, color: lbl.color, fontVariantNumeric: "tabular-nums" }}>{score}</span>
                   <span style={{ fontSize: 12, color: C.textLight }}>/100</span>
+                  <ScoreTooltip detail={detail} score={score} />
                 </div>
               )}
               {score === null && <span style={{ fontSize: 12, color: C.textLight }}>Pas de données SF</span>}
