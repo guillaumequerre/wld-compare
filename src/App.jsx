@@ -99,19 +99,20 @@ export default function App() {
       } catch (e) { console.warn("Auto-load failed:", row.source, e); return null; }
     }));
     const valid = updates.filter(Boolean);
-    if (valid.length === 0) return;
-    setProjects(prev => prev.map(p => {
-      if (p.id !== pid) return p;
-      const patch = {};
-      const siteIds = new Set(p.sites.map(s => s.id));
-      for (const { key, storedSid, rows } of valid) {
-        // Only inject if site_id exists in this project (ignores stale/migrated ids)
-        if (siteIds.has(storedSid)) {
-          patch[key] = { ...(patch[key] || p[key]), [storedSid]: rows };
+    if (valid.length > 0) {
+      setProjects(prev => prev.map(p => {
+        if (p.id !== pid) return p;
+        const patch = {};
+        const siteIds = new Set(p.sites.map(s => s.id));
+        for (const { key, storedSid, rows } of valid) {
+          if (siteIds.has(storedSid)) {
+            patch[key] = { ...(patch[key] || p[key]), [storedSid]: rows };
+          }
         }
-      }
-      return { ...p, ...patch };
-    }));
+        return { ...p, ...patch };
+      }));
+    }
+    return valid.length; // return import count so caller can pick best project
   }, []);
 
   useEffect(() => {
@@ -128,14 +129,15 @@ export default function App() {
             gaData:   emptyDataMap(p.sites),
             bingData: emptyDataMap(p.sites),
           }));
-          setProjects(restored);
-          const firstId = restored[0].id;
-          setCurrentProjectId(firstId);
-          // Load all projects data in parallel
-          await Promise.all(restored.map(async (p) => {
+          // Load all projects in parallel, activate the one with most imports
+          const counts = await Promise.all(restored.map(async (p) => {
             loadedProjectsRef.current.add(p.id);
-            await loadProjectData(p.id);
+            const n = await loadProjectData(p.id);
+            return { id: p.id, n: n || 0 };
           }));
+          setProjects(restored);
+          const bestId = counts.sort((a, b) => b.n - a.n)[0]?.id || restored[0].id;
+          setCurrentProjectId(bestId);
         } else {
           await sbSaveProject(INITIAL_PROJECT);
           loadedProjectsRef.current.add(INITIAL_PROJECT.id);
