@@ -1,13 +1,14 @@
 import InfoCard from "../components/InfoCard";
 import { computePageScore, scoreLabel } from "../lib/scoring";
+import ScoreTooltip from "../components/ScoreTooltip";
 import { useState } from "react";
-import { C } from "../lib/constants";
+import { C, PAGE_TYPE_MAP } from "../lib/constants";
 import { safeNum, toUrlPath } from "../lib/helpers";
 import { filterByMode } from "../lib/parsers";
 import { SectionHeader, Badge } from "../components/ui";
 import PageModeSelector from "../components/PageModeSelector";
 
-export default function PagesTab({ sites, sfData, gscData, bingData, pageMode, setPageMode }) {
+export default function PagesTab({ sites, sfData, gscData, bingData, pageMode, setPageMode, templateFilter, pageTypes }) {
   const [sortKey, setSortKey] = useState("score");
   const [sortDir, setSortDir] = useState("desc");
   const [search, setSearch] = useState("");
@@ -73,7 +74,7 @@ export default function PagesTab({ sites, sfData, gscData, bingData, pageMode, s
             redirectRate:   0,
             avgImgSizeKB:   0,
           };
-          const { score: pageScore } = computePageScore(pageDims);
+          const { score: pageScore, detail: pageDetail } = computePageScore(pageDims);
           return {
             site,
             url,
@@ -86,6 +87,7 @@ export default function PagesTab({ sites, sfData, gscData, bingData, pageMode, s
             position:  gscR ? safeNum(gscR["position"] || 0) : 0,
             citations: bingR ? safeNum(bingR["citations"] || bingR["mentions"] || 0) : 0,
             score:     pageScore,
+            scoreDetail: pageDetail,
           };
         });
       });
@@ -100,7 +102,13 @@ export default function PagesTab({ sites, sfData, gscData, bingData, pageMode, s
       ];
 
       const filtered = allPages
-        .filter(p => !search || p.url.toLowerCase().includes(search.toLowerCase()) || p.title.toLowerCase().includes(search.toLowerCase()))
+        .filter(p => {
+          if (templateFilter) {
+            const map = pageTypes[p.site?.id] || {};
+            if (map[p.url] !== templateFilter) return false;
+          }
+          return !search || p.url.toLowerCase().includes(search.toLowerCase()) || p.title.toLowerCase().includes(search.toLowerCase());
+        })
         .sort((a, b) => sortDir === "desc" ? b[sortKey] - a[sortKey] : a[sortKey] - b[sortKey]);
 
       return (
@@ -159,6 +167,15 @@ export default function PagesTab({ sites, sfData, gscData, bingData, pageMode, s
                         {p.path || "/"}
                       </div>
                       {p.title && <div style={{ fontSize: 10, color: C.textLight, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.title}</div>}
+                      {(() => {
+                        const ptype = (pageTypes[p.site?.id] || {})[p.url];
+                        const def = ptype ? PAGE_TYPE_MAP[ptype] : null;
+                        return def ? (
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 3, marginTop: 3, fontSize: 10, fontWeight: 600, color: def.color, background: def.bg, border: `1px solid ${def.color}33`, borderRadius: 10, padding: "1px 7px" }}>
+                            {def.icon} {def.label}
+                          </span>
+                        ) : null;
+                      })()}
                     </td>
                     <td style={{ padding: "7px 12px", borderBottom: `1px solid ${C.borderLight}`, textAlign: "center" }}>
                       {(() => { const lbl = scoreLabel(p.score); return p.score !== null ? (
@@ -166,6 +183,7 @@ export default function PagesTab({ sites, sfData, gscData, bingData, pageMode, s
                           <div style={{ width: 32, height: 32, borderRadius: "50%", background: lbl.bg, border: `2px solid ${lbl.color}`, display: "flex", alignItems: "center", justifyContent: "center" }}>
                             <span style={{ fontSize: 11, fontWeight: 800, color: lbl.color }}>{p.score}</span>
                           </div>
+                          <ScoreTooltip detail={p.scoreDetail} score={p.score} />
                         </div>
                       ) : <span style={{ color: C.textLight }}>—</span>; })()}
                     </td>

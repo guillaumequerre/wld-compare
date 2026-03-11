@@ -4,9 +4,10 @@ import { newProject, parseCSV, parseSemrushCSV } from "../lib/helpers";
 import { sbSaveProject, sbDeleteProject, sbDownload } from "../lib/supabase";
 import { parseSemrush } from "../lib/parsers";
 import UploadCard from "../components/UploadCard";
+import PageTypeClassifier from "../components/Pagetypeclassifier.jsx";
 import { SectionHeader } from "../components/ui";
 
-export default function ImportTab({ projects, currentProjectId, setCurrentProjectId, editingProjectName, setEditingProjectName, setProjects, sites, setSites, sfData, gscData, gaData, bingData, smData, setSfData, setGscData, setGaData, setBingData, setSmData, confirmModal, setConfirmModal, dbHistory, dbLoading, showHistory, setShowHistory, refreshHistory }) {
+export default function ImportTab({ projects, currentProjectId, setCurrentProjectId, editingProjectName, setEditingProjectName, setProjects, sites, setSites, sfData, gscData, gaData, bingData, smData, setSfData, setGscData, setGaData, setBingData, setSmData, confirmModal, setConfirmModal, dbHistory, dbLoading, showHistory, setShowHistory, refreshHistory, pageTypes, setPageTypes }) {
   return (
   <div>
     {/* ── Project selector ── */}
@@ -221,6 +222,17 @@ export default function ImportTab({ projects, currentProjectId, setCurrentProjec
               </div>
             ))}
           </div>
+          {sfData[site.id]?.length > 0 && (
+            <div style={{ marginTop: 16 }}>
+              <PageTypeClassifier
+                siteId={site.id}
+                projectId={currentProjectId}
+                sfRows={sfData[site.id]}
+                pageTypes={pageTypes}
+                setPageTypes={setPageTypes}
+              />
+            </div>
+          )}
         </div>
       ))}
 

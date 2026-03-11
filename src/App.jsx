@@ -3,8 +3,9 @@ import { C, SF_DIMS, RES_KPIS, RADAR_DIMS, DEFAULT_SITES, SEMRUSH_DIMS } from ".
 import { emptyDataMap, makeInitialProject, parseCSV } from "./lib/helpers";
 import { extractSF, extractGSC, extractGA, extractBing, extractSemrush, filterByMode } from "./lib/parsers";
 import { buildUrlMaps, buildSfPageVectors, intraCorrFast, smIntraCorr } from "./lib/correlations";
-import { sbSaveProject, sbLoadProjects, sbGetHistory, sbGetLatest, sbDownload } from "./lib/supabase";
+import { sbSaveProject, sbLoadProjects, sbGetHistory, sbGetLatest, sbDownload, sbGetPageTypes } from "./lib/supabase";
 import AnalyseTab from "./components/AnalyseTab";
+import TemplateFilterBar from "./components/TemplateFilterBar";
 import ImportTab from "./tabs/ImportTab";
 import OverviewTab from "./tabs/OverviewTab";
 import MatrixTab from "./tabs/MatrixTab";
@@ -61,6 +62,8 @@ export default function App() {
   const [confirmModal, setConfirmModal] = useState(null);
   const [tab, setTab]                   = useState("import");
   const [pageMode, setPageMode]         = useState("all");
+  const [templateFilter, setTemplateFilter] = useState(null); // null = all types
+  const [pageTypes, setPageTypes]           = useState({}); // { siteId: { urlPath: type } }
   const [matrixSites, setMatrixSites]   = useState(DEFAULT_SITES.map(s => s.id));
   const [radarSites, setRadarSites]     = useState(DEFAULT_SITES.map(s => s.id));
   const [analysis, setAnalysis]         = useState(null);
@@ -74,6 +77,8 @@ export default function App() {
     setRadarSites(ids);
     setAnalysis(null);
     setAnalysisError(null);
+    setTemplateFilter(null);
+    setPageTypes({});
   }, [currentProjectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -114,6 +119,24 @@ export default function App() {
         }
         return { ...p, ...patch };
       }));
+    }
+    // Load page types for all sites
+    const ptUpdates = await Promise.all(
+      Object.keys(latest).map(async sid => {
+        const rows = await sbGetPageTypes(pid, sid);
+        if (!rows.length) return null;
+        const map = {};
+        rows.forEach(r => { map[r.url] = r.page_type; });
+        return { sid, map };
+      })
+    );
+    const ptValid = ptUpdates.filter(Boolean);
+    if (ptValid.length) {
+      setPageTypes(prev => {
+        const next = { ...prev };
+        ptValid.forEach(({ sid, map }) => { next[sid] = map; });
+        return next;
+      });
     }
     return valid.length; // return import count so caller can pick best project
   }, []);
@@ -270,7 +293,14 @@ export default function App() {
     const gaRows   = matrixSites.flatMap(id => gaData[id]   || []);
     const bingRows = matrixSites.flatMap(id => bingData[id] || []);
     const sfFiltered = filterByMode(sfRowsAll, pageMode, bingRows, gscRows);
-    const sfPages    = buildSfPageVectors(sfFiltered);
+    const sfByTemplate = templateFilter
+      ? sfFiltered.filter(r => {
+          const url = (r["adresse"] || r["address"] || r["url"] || "").trim();
+          const type = matrixSites.reduce((found, sid) => found || (pageTypes[sid] || {})[url] || (pageTypes[sid] || {})[url.replace(/\/$/, "")], null);
+          return type === templateFilter;
+        })
+      : sfFiltered;
+    const sfPages    = buildSfPageVectors(sfByTemplate);
     const urlMaps    = buildUrlMaps(gscRows, gaRows, bingRows);
     return SF_DIMS.map((dim, di) => ({
       dim,
@@ -282,7 +312,7 @@ export default function App() {
         return { kpi, value: val, n: res ? res.n : 0, base, delta };
       }),
     }));
-  }, [matrixSites, sfData, gscData, gaData, bingData, pageMode, baseMatrix]);
+  }, [matrixSites, sfData, gscData, gaData, bingData, pageMode, baseMatrix, templateFilter, pageTypes]);
 
   const radarData = useMemo(() => RADAR_DIMS.map(d => {
     const row = { dim: d.label };
@@ -353,6 +383,14 @@ export default function App() {
           </div>
         </div>
 
+        {/* ── TEMPLATE FILTER BAR ── */}
+        <TemplateFilterBar
+          pageTypes={pageTypes}
+          templateFilter={templateFilter}
+          setTemplateFilter={setTemplateFilter}
+          sites={sites}
+        />
+
         {/* ── CONTENT ── */}
         <div style={{ maxWidth: 1400, margin: "0 auto", padding: "32px 28px" }}>
 
@@ -383,6 +421,8 @@ export default function App() {
               showHistory={showHistory}
               setShowHistory={setShowHistory}
               refreshHistory={refreshHistory}
+            pageTypes={pageTypes}
+            setPageTypes={setPageTypes}
             />
           )}
 
@@ -410,6 +450,8 @@ export default function App() {
               matrixSites={matrixSites}
               setMatrixSites={setMatrixSites}
               filteredCorrMatrix={filteredCorrMatrix}
+              templateFilter={templateFilter}
+              setTemplateFilter={setTemplateFilter}
             />
           )}
 
@@ -421,6 +463,8 @@ export default function App() {
               bingData={bingData}
               pageMode={pageMode}
               setPageMode={setPageMode}
+              templateFilter={templateFilter}
+              pageTypes={pageTypes}
             />
           )}
 
