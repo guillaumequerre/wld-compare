@@ -89,15 +89,27 @@ export default function App() {
   const loadProjectData = useCallback(async (pid) => {
     const [latest, history] = await Promise.all([sbGetLatest(pid), sbGetHistory(pid)]);
     setDbHistory(history);
-    await Promise.all(Object.values(latest).map(async (row) => {
+    // Collect all CSV data first, then apply in a single setProjects to avoid race conditions
+    const updates = await Promise.all(Object.values(latest).map(async (row) => {
       try {
         const text = await sbDownload(row.storage_path);
         const rows = parseCSV(text);
         const sid = row.site_id, src = row.source;
         const key = src === "sf" ? "sfData" : src === "gsc" ? "gscData" : src === "ga" ? "gaData" : src === "bing" ? "bingData" : null;
-        if (key) setProjects(prev => prev.map(p => p.id === pid ? { ...p, [key]: { ...p[key], [sid]: rows } } : p));
-      } catch (e) { console.warn("Auto-load row failed:", row.source, e); }
+        return key ? { key, sid, rows } : null;
+      } catch (e) { console.warn("Auto-load row failed:", row.source, e); return null; }
     }));
+    const valid = updates.filter(Boolean);
+    if (valid.length > 0) {
+      setProjects(prev => prev.map(p => {
+        if (p.id !== pid) return p;
+        const patch = {};
+        for (const { key, sid, rows } of valid) {
+          patch[key] = { ...(patch[key] || p[key]), [sid]: rows };
+        }
+        return { ...p, ...patch };
+      }));
+    }
   }, []);
 
   useEffect(() => {
