@@ -6,7 +6,6 @@ const TYPE_KEYS = PAGE_TYPES.map(t => t.key);
 
 // ── Signal detection ─────────────────────────────────────────────
 
-// Find a column by multiple possible name fragments
 function findCol(row, fragments) {
   const key = Object.keys(row).find(k =>
     fragments.some(f => k.toLowerCase().includes(f.toLowerCase()))
@@ -14,19 +13,17 @@ function findCol(row, fragments) {
   return key ? (row[key] || "").trim() : "";
 }
 
-// Detect which signals are available in the SF rows
 export function detectSignals(sfRows) {
   if (!sfRows?.length) return { jsonLd: false, breadcrumb: false, bodyClass: false, mainContent: false };
   const keys = Object.keys(sfRows[0]).map(k => k.toLowerCase());
   return {
     jsonLd:      keys.some(k => k.includes("json_ld")      || k.includes("json-ld")     || k.includes("ld+json")),
-    breadcrumb:  keys.some(k => k.includes("breadcrumb")   || k.includes("fil d'ariane") || k.includes("fil ariane") || k.includes("miette")),
-    bodyClass:   keys.some(k => k.includes("body_class")   || k.includes("body class")  || k.includes("classe body") || k.includes("body/@class")),
+    breadcrumb:  keys.some(k => k.includes("breadcrumb")   || k.includes("fil d'ariane") || k.includes("miette")),
+    bodyClass:   keys.some(k => k.includes("body_class")   || k.includes("body class")  || k.includes("body/@class")),
     mainContent: keys.some(k => k.includes("custom extraction") || k.includes("extraction personnalisée") || k.includes("main_content") || k.includes("custom_extract")),
   };
 }
 
-// Extract signals from a single SF row
 function extractSignals(row) {
   return {
     jsonLd:      findCol(row, ["json_ld", "json-ld", "ld+json", "schema"]).slice(0, 800),
@@ -36,31 +33,21 @@ function extractSignals(row) {
   };
 }
 
-// Try to classify deterministically from JSON-LD @type — avoids API call for clear cases
+// ── Deterministic classification ─────────────────────────────────
+
 const JSONLD_TYPE_MAP = {
-  "article":         "article",
-  "newsarticle":     "article",
-  "blogposting":     "article",
-  "techarticle":     "article",
-  "product":         "fiche",
-  "itempage":        "fiche",
-  "productgroup":    "fiche",
-  "collectionpage":  "categorie",
-  "categorypage":    "categorie",
-  "searchresultspage": "categorie",
-  "contactpage":     "contact",
-  "aboutpage":       "about",
-  "webpage":         null,  // too generic, send to Claude
-  "website":         "home",
+  "article": "article", "newsarticle": "article", "blogposting": "article", "techarticle": "article",
+  "product": "fiche", "itempage": "fiche", "productgroup": "fiche",
+  "collectionpage": "categorie", "categorypage": "categorie", "searchresultspage": "categorie",
+  "contactpage": "contact", "aboutpage": "about", "website": "home", "webpage": null,
 };
 
 function tryJsonLdClassify(jsonLdRaw) {
   if (!jsonLdRaw) return null;
-  // Extract all @type values (could be array or nested)
   const types = [...jsonLdRaw.matchAll(/"@type"\s*:\s*"([^"]+)"/g)].map(m => m[1].toLowerCase());
   for (const t of types) {
     const mapped = JSONLD_TYPE_MAP[t];
-    if (mapped !== undefined) return mapped; // null = ambiguous, keep for Claude
+    if (mapped !== undefined) return mapped;
   }
   return null;
 }
@@ -88,36 +75,25 @@ function tryBreadcrumbClassify(breadcrumb) {
   return null;
 }
 
-// Try all deterministic rules — returns type or null
 function tryDeterministicClassify(url, signals) {
   const path = url.toLowerCase().replace(/https?:\/\/[^/]+/, "");
-
-  // Home page
   if (path === "/" || path === "" || path === "/index" || path === "/accueil") return "home";
-
-  // JSON-LD (highest confidence)
   const fromJsonLd = tryJsonLdClassify(signals.jsonLd);
   if (fromJsonLd) return fromJsonLd;
-
-  // Body class
   const fromBody = tryBodyClassClassify(signals.bodyClass);
   if (fromBody) return fromBody;
-
-  // Breadcrumb
   const fromBreadcrumb = tryBreadcrumbClassify(signals.breadcrumb);
   if (fromBreadcrumb) return fromBreadcrumb;
-
-  // URL patterns (last resort, lower confidence)
   if (/\/(blog|article|news|actu|guide|tuto|post)\//.test(path)) return "article";
   if (/\/(categorie|category|collection|tag|archive|listing)\//.test(path)) return "categorie";
   if (/\/(produit|product|shop|boutique|fiche)\//.test(path)) return "fiche";
   if (/\/(contact|devis|quote|rdv)/.test(path)) return "contact";
   if (/\/(about|a-propos|equipe|team|cgv|cgu|mentions|privacy|legal)/.test(path)) return "about";
-
-  return null; // needs Claude
+  return null;
 }
 
-// Build prompt only for pages that couldn't be classified deterministically
+// ── AI prompt ────────────────────────────────────────────────────
+
 function buildClassifyPrompt(pages) {
   const typeList = PAGE_TYPES.map(t => `"${t.key}" — ${t.label}`).join("\n");
   const pagesStr = pages.map((p, i) => {
@@ -127,40 +103,26 @@ function buildClassifyPrompt(pages) {
     if (p.signals.mainContent) lines.push(`Contenu main: ${p.signals.mainContent}`);
     return lines.join("\n");
   }).join("\n\n");
-
-  return `Tu es un expert SEO. Classe chaque page dans UN seul type parmi cette liste :
-${typeList}
-
-Règles :
-- "article" = contenu éditorial long (blog, guide, news, tutoriel)
-- "landing" = page de conversion, présentation service/offre, pas un article
-- "categorie" = listing de produits, d'articles ou d'entités (archive, pagination)
-- "home" = page d'accueil (URL = "/" ou "/index")
-- "fiche" = fiche produit e-commerce individuelle
-- "contact" = formulaire de contact, coordonnées, devis
-- "about" = équipe, histoire, mentions légales, CGU, politique de confidentialité
-- "comparatif" = tableau comparatif, VS, benchmark
-- "autre" = si vraiment aucun des types ci-dessus ne convient
-
-Réponds UNIQUEMENT avec un JSON strict, tableau d'objets, rien d'autre :
-[{"i":0,"type":"landing"},{"i":1,"type":"article"},...]
-
-Pages à classifier :
-${pagesStr}`;
+  return `Tu es un expert SEO. Classe chaque page dans UN seul type parmi cette liste :\n${typeList}\n\nRéponds UNIQUEMENT avec un JSON strict, tableau d'objets :\n[{"i":0,"type":"landing"},{"i":1,"type":"article"},...]\n\nPages à classifier :\n${pagesStr}`;
 }
 
 // ── Component ────────────────────────────────────────────────────
+
 export default function PageTypeClassifier({ siteId, projectId, sfRows, pageTypes, setPageTypes }) {
-  const [status, setStatus]     = useState("idle");
-  const [progress, setProgress] = useState({ done: 0, total: 0, deterministic: 0 });
-  const [error, setError]       = useState(null);
+  const [status, setStatus]         = useState("idle"); // idle | running_det | running_ai | done | partial
+  const [progress, setProgress]     = useState({ det: 0, ai: 0, aiTotal: 0, total: 0 });
+  const [pendingAI, setPendingAI]   = useState([]); // pages that still need AI (after 429 exhaustion)
+  const [warnings, setWarnings]     = useState([]); // e.g. "3 pages non classifiées (429)"
+  const autoTriggeredRef            = useRef(false);
+  // Keep partial results across retries
+  const resultsRef                  = useRef({});
+  const dbRowsRef                   = useRef([]);
 
-  const signals = sfRows?.length ? detectSignals(sfRows) : {};
-  const hasAnySignal = Object.values(signals).some(Boolean);
-  const BATCH = 10;
+  const signals    = sfRows?.length ? detectSignals(sfRows) : {};
+  const hasSignal  = Object.values(signals).some(Boolean);
+  const BATCH      = 10;
 
-  // Load existing classifications from DB on mount, auto-classify if none found
-  const autoTriggeredRef = useRef(false);
+  // ── Load from DB on mount, auto-run deterministic if nothing saved ──
   useEffect(() => {
     if (!projectId || !siteId || !sfRows?.length) return;
     sbGetPageTypes(projectId, siteId).then(rows => {
@@ -170,25 +132,26 @@ export default function PageTypeClassifier({ siteId, projectId, sfRows, pageType
         setPageTypes(prev => ({ ...prev, [siteId]: map }));
       } else if (!autoTriggeredRef.current) {
         autoTriggeredRef.current = true;
-        classify();
+        runDeterministic();
       }
     });
   }, [projectId, siteId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const classify = async () => {
-    setStatus("loading");
-    setError(null);
+  // ── Pass 1: deterministic only ───────────────────────────────────
+  const runDeterministic = async () => {
+    setStatus("running_det");
+    setWarnings([]);
+    resultsRef.current  = {};
+    dbRowsRef.current   = [];
 
     const html = sfRows.filter(r => {
       const ct = (r["type de contenu"] || r["content type"] || r["type"] || "").toLowerCase();
       const sc = parseInt(r["code http"] || r["status code"] || 200);
       if (sc >= 400) return false;
       if (ct.includes("html")) return true;
-      // If content-type is empty, require a title or h1 to confirm it's an HTML page
       if (ct === "") {
-        const hasTitle = (r["title 1"] || r["title"] || "").trim() !== "";
-        const hasH1    = (r["h1-1"]   || r["h1"]    || "").trim() !== "";
-        return hasTitle || hasH1;
+        return (r["title 1"] || r["title"] || "").trim() !== "" ||
+               (r["h1-1"]   || r["h1"]    || "").trim() !== "";
       }
       return false;
     });
@@ -200,92 +163,129 @@ export default function PageTypeClassifier({ siteId, projectId, sfRows, pageType
       signals: extractSignals(r),
     })).filter(p => p.url);
 
-    setProgress({ done: 0, total: allPages.length, deterministic: 0 });
-
-    const results = {};
-    const dbRows  = [];
-
-    // Pass 1 — deterministic classification (free, instant)
     const needsAI = [];
-    let deterministicCount = 0;
+    let detCount = 0;
 
     allPages.forEach(p => {
       const type = tryDeterministicClassify(p.url, p.signals);
       if (type) {
-        results[p.url] = type;
-        dbRows.push({ project_id: projectId, site_id: siteId, url: p.url, page_type: type, confidence: "auto" });
-        deterministicCount++;
+        resultsRef.current[p.url] = type;
+        dbRowsRef.current.push({ project_id: projectId, site_id: siteId, url: p.url, page_type: type, confidence: "auto" });
+        detCount++;
       } else {
         needsAI.push(p);
       }
     });
 
-    setProgress({ done: deterministicCount, total: allPages.length, deterministic: deterministicCount });
+    setProgress({ det: detCount, ai: 0, aiTotal: needsAI.length, total: allPages.length });
+    setPendingAI(needsAI);
 
-    // Pass 2 — Claude for remaining pages
-    try {
-      for (let i = 0; i < needsAI.length; i += BATCH) {
-        const batch = needsAI.slice(i, i + BATCH);
-        const prompt = buildClassifyPrompt(batch);
+    // Save deterministic results immediately
+    if (dbRowsRef.current.length) {
+      await sbSavePageTypes(dbRowsRef.current);
+      setPageTypes(prev => ({ ...prev, [siteId]: { ...resultsRef.current } }));
+    }
 
-        // Retry with exponential backoff on 429
-        let res, retries = 0;
-        while (retries <= 4) {
-          res = await fetch("/api/anthropic", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              model: "claude-sonnet-4-20250514",
-              max_tokens: 1000,
-              messages: [{ role: "user", content: prompt }],
-            }),
-          });
-          if (res.status === 429) {
-            const wait = 2000 * Math.pow(2, retries); // 2s, 4s, 8s, 16s, 32s
-            retries++;
-            await new Promise(r => setTimeout(r, wait));
-          } else {
-            break;
-          }
+    setStatus("done");
+  };
+
+  // ── Pass 2: AI for pending pages ─────────────────────────────────
+  const runAI = async (pages) => {
+    if (!pages?.length) return;
+    setStatus("running_ai");
+    setWarnings([]);
+
+    const newDbRows = [];
+    const stillPending = [];
+
+    for (let i = 0; i < pages.length; i += BATCH) {
+      const batch = pages.slice(i, i + BATCH);
+      const prompt = buildClassifyPrompt(batch);
+
+      let res, retries = 0, hit429 = false;
+      while (retries <= 4) {
+        res = await fetch("/api/anthropic", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: "claude-sonnet-4-20250514",
+            max_tokens: 1000,
+            messages: [{ role: "user", content: prompt }],
+          }),
+        });
+        if (res.status === 429) {
+          const wait = 2000 * Math.pow(2, retries);
+          retries++;
+          await new Promise(r => setTimeout(r, wait));
+        } else {
+          break;
         }
-        if (!res.ok) throw new Error(`API error ${res.status}`);
+      }
+
+      // After max retries, still 429 → keep pages pending, continue
+      if (res.status === 429) {
+        hit429 = true;
+        batch.forEach(p => stillPending.push(p));
+      } else if (res.ok) {
         const data = await res.json();
         const text = data.content?.find(b => b.type === "text")?.text || "[]";
-
         let parsed = [];
-        try {
-          parsed = JSON.parse(text.replace(/```json|```/g, "").trim());
-        } catch {
-          console.warn("Parse error on batch", i, text.slice(0, 200));
-        }
+        try { parsed = JSON.parse(text.replace(/```json|```/g, "").trim()); }
+        catch { console.warn("Parse error", text.slice(0, 200)); }
 
         parsed.forEach(({ i: idx, type }) => {
           const page = batch[idx];
           if (!page) return;
           const validType = TYPE_KEYS.includes(type) ? type : "autre";
-          results[page.url] = validType;
-          dbRows.push({ project_id: projectId, site_id: siteId, url: page.url, page_type: validType, confidence: "auto" });
+          resultsRef.current[page.url] = validType;
+          newDbRows.push({ project_id: projectId, site_id: siteId, url: page.url, page_type: validType, confidence: "auto" });
         });
-
-        setProgress({ done: deterministicCount + Math.min(i + BATCH, needsAI.length), total: allPages.length, deterministic: deterministicCount });
-        if (i + BATCH < needsAI.length) await new Promise(r => setTimeout(r, 1500));
+        // Pages not returned by Claude → mark as "autre"
+        batch.forEach((page, idx) => {
+          if (!parsed.find(p => p.i === idx)) {
+            resultsRef.current[page.url] = "autre";
+            newDbRows.push({ project_id: projectId, site_id: siteId, url: page.url, page_type: "autre", confidence: "auto" });
+          }
+        });
+      } else {
+        // Other error — keep pending
+        batch.forEach(p => stillPending.push(p));
       }
 
-      await sbSavePageTypes(dbRows);
-      setPageTypes(prev => ({ ...prev, [siteId]: results }));
-      setStatus("done");
+      setProgress(prev => ({
+        ...prev,
+        ai: Math.min(i + BATCH, pages.length) - stillPending.length,
+      }));
 
-    } catch (e) {
-      setError(e.message);
-      setStatus("error");
+      if (!hit429 && i + BATCH < pages.length) await new Promise(r => setTimeout(r, 1500));
+    }
+
+    // Save new AI results
+    if (newDbRows.length) {
+      await sbSavePageTypes(newDbRows);
+      setPageTypes(prev => ({ ...prev, [siteId]: { ...resultsRef.current } }));
+    }
+
+    if (stillPending.length) {
+      setPendingAI(stillPending);
+      setWarnings([`${stillPending.length} page${stillPending.length > 1 ? "s" : ""} non classifiée${stillPending.length > 1 ? "s" : ""} (limite API 429) — cliquez "Relancer" pour réessayer`]);
+      setStatus("partial");
+    } else {
+      setPendingAI([]);
+      setStatus("done");
     }
   };
 
   const reset = async () => {
     await sbDeletePageTypes(projectId, siteId);
     setPageTypes(prev => ({ ...prev, [siteId]: {} }));
+    resultsRef.current  = {};
+    dbRowsRef.current   = [];
+    setPendingAI([]);
+    setWarnings([]);
     setStatus("idle");
-    setProgress({ done: 0, total: 0, deterministic: 0 });
+    setProgress({ det: 0, ai: 0, aiTotal: 0, total: 0 });
+    autoTriggeredRef.current = false;
   };
 
   const typeCount = pageTypes[siteId] ? Object.keys(pageTypes[siteId]).length : 0;
@@ -293,9 +293,11 @@ export default function PageTypeClassifier({ siteId, projectId, sfRows, pageType
     ? PAGE_TYPES.map(t => ({ ...t, count: Object.values(pageTypes[siteId]).filter(v => v === t.key).length })).filter(t => t.count > 0)
     : [];
 
-  const pct = progress.total ? Math.round(progress.done / progress.total * 100) : 0;
+  const isRunning = status === "running_det" || status === "running_ai";
+  const pct = progress.total
+    ? Math.round((progress.det + progress.ai) / progress.total * 100)
+    : 0;
 
-  // Signal badges to display
   const signalBadges = [
     { key: "jsonLd",      label: "JSON-LD",    active: signals.jsonLd,      tip: "Meilleur signal — @type détecté directement" },
     { key: "breadcrumb",  label: "Breadcrumb", active: signals.breadcrumb,  tip: "Chemin de navigation" },
@@ -311,39 +313,19 @@ export default function PageTypeClassifier({ siteId, projectId, sfRows, pageType
         <div>
           <div style={{ fontWeight: 700, fontSize: 13, color: C.text }}>🏷️ Classification des templates</div>
           <div style={{ fontSize: 11, color: C.textLight, marginTop: 2 }}>
-            {hasAnySignal
+            {hasSignal
               ? "Signaux SF détectés — classification déterministe + Claude pour les cas ambigus"
               : "Aucun signal custom — classification par URL + Title + H1 uniquement"}
           </div>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          {typeCount > 0 && (
-            <button onClick={reset} style={{ padding: "5px 12px", border: `1px solid ${C.border}`, borderRadius: 7, background: C.white, color: C.textLight, fontSize: 11, cursor: "pointer" }}>
-              Réinitialiser
-            </button>
-          )}
-          <button
-            onClick={classify}
-            disabled={status === "loading" || !sfRows?.length}
-            style={{
-              padding: "6px 14px", border: "none", borderRadius: 7,
-              cursor: status === "loading" ? "wait" : "pointer",
-              background: status === "loading" ? C.bg : C.blue,
-              color: status === "loading" ? C.textLight : "#fff",
-              fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", gap: 6,
-            }}
-          >
-            {status === "loading" ? (
-              <>
-                <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: "50%", border: "2px solid #94A3B8", borderTopColor: C.blue, animation: "spin 0.7s linear infinite" }} />
-                {progress.done}/{progress.total} pages…
-              </>
-            ) : typeCount > 0 ? "Reclassifier" : "Classifier avec Claude"}
+        {typeCount > 0 && !isRunning && (
+          <button onClick={reset} style={{ padding: "5px 12px", border: `1px solid ${C.border}`, borderRadius: 7, background: C.white, color: C.textLight, fontSize: 11, cursor: "pointer" }}>
+            Réinitialiser
           </button>
-        </div>
+        )}
       </div>
 
-      {/* Signal availability */}
+      {/* Signal badges */}
       <div style={{ display: "flex", gap: 5, marginBottom: 10, flexWrap: "wrap" }}>
         {signalBadges.map(b => (
           <span key={b.key} title={b.tip} style={{
@@ -357,37 +339,53 @@ export default function PageTypeClassifier({ siteId, projectId, sfRows, pageType
         ))}
       </div>
 
-      {/* Progress */}
-      {status === "loading" && (
+      {/* Progress bar (while running) */}
+      {isRunning && (
         <>
           <div style={{ height: 4, background: C.bg, borderRadius: 2, marginBottom: 6, overflow: "hidden" }}>
             <div style={{ height: "100%", width: `${pct}%`, background: C.blue, borderRadius: 2, transition: "width 0.3s" }} />
           </div>
-          <div style={{ fontSize: 10, color: C.textLight, marginBottom: 8 }}>
-            {progress.deterministic > 0 && <span style={{ color: "#059669" }}>{progress.deterministic} classifiés sans IA · </span>}
-            {progress.done - progress.deterministic > 0 && <span>{progress.done - progress.deterministic} via Claude · </span>}
-            {progress.total - progress.done > 0 && <span>{progress.total - progress.done} restants…</span>}
+          <div style={{ fontSize: 10, color: C.textLight, marginBottom: 10 }}>
+            {status === "running_det" && "Classification déterministe en cours…"}
+            {status === "running_ai" && (
+              <>
+                <span style={{ color: "#059669" }}>{progress.det} sans IA</span>
+                {" · "}
+                <span style={{ color: C.blue }}>{progress.ai}/{progress.aiTotal} via Claude…</span>
+              </>
+            )}
           </div>
         </>
       )}
 
-      {status === "done" && progress.deterministic > 0 && (
-        <div style={{ fontSize: 10, color: C.textLight, marginBottom: 8 }}>
-          <span style={{ color: "#059669" }}>{progress.deterministic}</span> classifiés par règles ·{" "}
-          <span style={{ color: C.blue }}>{progress.total - progress.deterministic}</span> via Claude
+      {/* Done summary */}
+      {(status === "done" || status === "partial") && progress.total > 0 && (
+        <div style={{ fontSize: 11, color: C.textLight, marginBottom: 10, display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <span>
+            <span style={{ fontWeight: 700, color: C.text }}>{typeCount}</span> pages classifiées
+            <span style={{ color: "#94A3B8" }}> / {progress.total}</span>
+          </span>
+          <span style={{ color: "#059669" }}>✓ {progress.det} par règles</span>
+          {progress.ai > 0 && <span style={{ color: C.blue }}>✦ {progress.ai} via Claude</span>}
         </div>
       )}
 
-      {/* Error */}
-      {status === "error" && (
-        <div style={{ fontSize: 11, color: C.red, background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 7, padding: "6px 10px", marginBottom: 10 }}>
-          ⚠️ {error}
+      {/* 429 warning + retry */}
+      {warnings.map((w, i) => (
+        <div key={i} style={{ fontSize: 11, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "8px 12px", marginBottom: 10, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+          <span>⚠️ {w}</span>
+          <button
+            onClick={() => runAI(pendingAI)}
+            style={{ padding: "4px 10px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 6, background: "#F59E0B", color: "#fff", cursor: "pointer", whiteSpace: "nowrap" }}
+          >
+            Relancer ({pendingAI.length})
+          </button>
         </div>
-      )}
+      ))}
 
-      {/* Distribution */}
+      {/* Type distribution */}
       {typeDist.length > 0 && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 12 }}>
           {typeDist.sort((a, b) => b.count - a.count).map(t => (
             <div key={t.key} style={{ display: "flex", alignItems: "center", gap: 4, background: t.bg, border: `1px solid ${t.color}33`, borderRadius: 20, padding: "3px 10px" }}>
               <span style={{ fontSize: 11 }}>{t.icon}</span>
@@ -399,21 +397,81 @@ export default function PageTypeClassifier({ siteId, projectId, sfRows, pageType
       )}
 
       {/* SF config hint when no signals */}
-      {!hasAnySignal && status === "idle" && typeCount === 0 && (
-        <div style={{ marginTop: 10, fontSize: 11, color: C.textLight, background: C.bg, borderRadius: 7, padding: "10px 12px", borderLeft: `3px solid ${C.border}` }}>
-          <div style={{ fontWeight: 600, marginBottom: 6 }}>💡 Ajouter des extracts dans Screaming Frog pour une meilleure précision</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            {[
-              ["JSON-LD (recommandé)", "XPath", "//script[@type='application/ld+json']", "Inner HTML", "Identifie Article, Product, FAQPage…"],
-              ["Breadcrumb", "XPath", "//nav[contains(@class,'bread') or contains(@aria-label,'bread')]//text()", "Text", "Chemin de navigation"],
-              ["Body class", "XPath", "//body/@class", "Text", "Classes CSS du template CMS"],
-            ].map(([name, type, selector, extractType, tip]) => (
-              <div key={name} style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 6, padding: "6px 10px" }}>
-                <div style={{ fontWeight: 600, color: C.text, fontSize: 11 }}>{name}</div>
-                <div style={{ fontFamily: "monospace", fontSize: 10, color: C.blue, marginTop: 2 }}>{selector}</div>
-                <div style={{ fontSize: 10, color: C.textLight }}>Type : {extractType} · {tip}</div>
-              </div>
-            ))}
+      {!hasSignal && status !== "running_det" && status !== "running_ai" && typeCount === 0 && (
+        <div style={{ marginTop: 6, fontSize: 11, color: C.textLight, background: C.bg, borderRadius: 7, padding: "10px 12px", borderLeft: `3px solid ${C.border}`, marginBottom: 10 }}>
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>💡 Ajouter des extracts SF pour une meilleure précision</div>
+          {[
+            ["JSON-LD", "//script[@type='application/ld+json']", "Inner HTML"],
+            ["Breadcrumb", "//nav[contains(@class,'bread')]//text()", "Text"],
+            ["Body class", "//body/@class", "Text"],
+          ].map(([name, selector, type]) => (
+            <div key={name} style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 6, padding: "5px 10px", marginBottom: 4 }}>
+              <span style={{ fontWeight: 600, color: C.text }}>{name}</span>
+              <span style={{ fontFamily: "monospace", fontSize: 10, color: C.blue, marginLeft: 8 }}>{selector}</span>
+              <span style={{ fontSize: 10, color: C.textLight, marginLeft: 6 }}>· {type}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* AI button — discreet, at the bottom */}
+      {!isRunning && (
+        <div style={{ borderTop: `1px solid ${C.borderLight}`, paddingTop: 10, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <span style={{ fontSize: 10, color: C.textLight }}>
+            {pendingAI.length > 0
+              ? `${pendingAI.length} page${pendingAI.length > 1 ? "s" : ""} à affiner avec Claude`
+              : typeCount > 0
+                ? `${progress.total - progress.det > 0 ? progress.total - progress.det + " pages via Claude · " : ""}Classification complète`
+                : sfRows?.length
+                  ? `${sfRows.length} pages à classifier`
+                  : "Importez un CSV SF"}
+          </span>
+          <div style={{ display: "flex", gap: 6 }}>
+            {status === "idle" && sfRows?.length > 0 && (
+              <button
+                onClick={runDeterministic}
+                disabled={!sfRows?.length}
+                style={{ padding: "4px 12px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.white, color: C.textMid, fontSize: 11, fontWeight: 600, cursor: "pointer" }}
+              >
+                Classifier (sans IA)
+              </button>
+            )}
+            {(status === "done" || status === "partial" || status === "idle") && sfRows?.length > 0 && (
+              <button
+                onClick={() => {
+                  // Collect all unclassified pages for AI pass
+                  const html = sfRows.filter(r => {
+                    const ct = (r["type de contenu"] || r["content type"] || r["type"] || "").toLowerCase();
+                    const sc = parseInt(r["code http"] || r["status code"] || 200);
+                    if (sc >= 400) return false;
+                    if (ct.includes("html")) return true;
+                    if (ct === "") return (r["title 1"] || r["title"] || "").trim() !== "" || (r["h1-1"] || r["h1"] || "").trim() !== "";
+                    return false;
+                  });
+                  const allPages = html.map(r => ({
+                    url:     (r["adresse"] || r["address"] || r["url"] || "").trim(),
+                    title:   (r["title 1"] || r["title"] || "").slice(0, 80),
+                    h1:      (r["h1-1"] || r["h1"] || "").slice(0, 80),
+                    signals: extractSignals(r),
+                  })).filter(p => p.url);
+                  // Only send pages not yet classified or classified as "autre"
+                  const toReclassify = allPages.filter(p =>
+                    !resultsRef.current[p.url] || resultsRef.current[p.url] === "autre"
+                  );
+                  // If no pending from 429, use those pending pages or all unclassified
+                  const target = pendingAI.length > 0 ? pendingAI : toReclassify;
+                  setProgress(prev => ({ ...prev, aiTotal: target.length, ai: 0 }));
+                  runAI(target);
+                }}
+                style={{
+                  padding: "4px 12px", border: `1px solid ${C.blue}33`, borderRadius: 6,
+                  background: "transparent", color: C.blue,
+                  fontSize: 11, fontWeight: 600, cursor: "pointer", opacity: 0.8,
+                }}
+              >
+                {pendingAI.length > 0 ? `Relancer Claude (${pendingAI.length})` : "✦ Affiner avec Claude"}
+              </button>
+            )}
           </div>
         </div>
       )}
