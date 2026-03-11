@@ -1,5 +1,5 @@
 import { C, RES_KPIS } from "../lib/constants";
-import { SectionHeader, StatPill } from "../components/ui";
+import { SectionHeader } from "../components/ui";
 import { CorrCell, KpiHeaderCell } from "../components/CorrCell";
 
 function SmStatCard({ site, sm }) {
