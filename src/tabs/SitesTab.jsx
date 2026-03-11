@@ -1,4 +1,5 @@
 import InfoCard from "../components/InfoCard";
+import { computeSiteScore, scoreLabel } from "../lib/scoring";
 import { C, SF_DIMS } from "../lib/constants";
 import SchemaBreakdown from "../components/SchemaBreakdown";
 import LlmsStatus from "../components/LlmsStatus";
@@ -8,20 +9,56 @@ import { SectionHeader } from "../components/ui";
 export default function SitesTab({ sites, pageMode, setPageMode, metrics }) {
   return (
   <div>
-      <InfoCard tabKey="sites" />
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24 }}>
       <SectionHeader title="Comparatif par outil" sub="Tous les sites côte à côte pour chaque source de données" />
+      <InfoCard tabKey="sites" />
       <PageModeSelector value={pageMode} onChange={setPageMode} />
     </div>
 
-    {/* Site legend */}
-    <div style={{ display: "flex", gap: 10, marginBottom: 24, flexWrap: "wrap" }}>
-      {metrics.map(({ site }) => (
-        <div key={site.id} style={{ display: "flex", alignItems: "center", gap: 7, padding: "5px 14px", background: site.bg, border: `1.5px solid ${site.color}33`, borderRadius: 20 }}>
-          <div style={{ width: 8, height: 8, borderRadius: "50%", background: site.color }} />
-          <span style={{ fontSize: 12, fontWeight: 600, color: site.color }}>{site.label}</span>
-        </div>
-      ))}
+    {/* Score cards par site */}
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 16, marginBottom: 24 }}>
+      {metrics.map(({ site, sf }) => {
+        const { score, detail } = computeSiteScore(sf);
+        const lbl = scoreLabel(score);
+        const topActions = score !== null ? Object.entries(detail)
+          .sort((a, b) => (b[1].maxPts - b[1].pts) - (a[1].maxPts - a[1].pts))
+          .slice(0, 3) : [];
+        const DIM_LABELS = { avgFlesch: "Score Flesch", avgInlinksUniq: "Maillage interne", avgWords: "Volume contenu", schemaRate: "Schema JSON-LD", tableRate: "Tableaux", avgTitleLen: "Title", avgDepth: "Profondeur", avgH1Len: "H1", errorRate: "Erreurs 4xx", avgMetaLen: "Meta description", avgPageSizeKB: "Poids pages", redirectRate: "Redirections", avgImgSizeKB: "Poids images" };
+        return (
+          <div key={site.id} style={{ background: C.white, border: `1.5px solid ${site.color}33`, borderRadius: 14, overflow: "hidden" }}>
+            <div style={{ background: site.bg, padding: "14px 18px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ width: 10, height: 10, borderRadius: "50%", background: site.color }} />
+                <span style={{ fontSize: 14, fontWeight: 700, color: site.color }}>{site.label}</span>
+              </div>
+              {score !== null && (
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 11, fontWeight: 600, color: lbl.color, background: lbl.bg, padding: "2px 8px", borderRadius: 10 }}>{lbl.label}</span>
+                  <span style={{ fontSize: 24, fontWeight: 800, color: lbl.color, fontVariantNumeric: "tabular-nums" }}>{score}</span>
+                  <span style={{ fontSize: 12, color: C.textLight }}>/100</span>
+                </div>
+              )}
+              {score === null && <span style={{ fontSize: 12, color: C.textLight }}>Pas de données SF</span>}
+            </div>
+            {score !== null && (
+              <div style={{ padding: "12px 18px" }}>
+                {/* Barre de score */}
+                <div style={{ height: 6, background: C.bg, borderRadius: 3, marginBottom: 12, overflow: "hidden" }}>
+                  <div style={{ height: "100%", width: `${score}%`, background: lbl.color, borderRadius: 3, transition: "width 0.4s" }} />
+                </div>
+                {/* Top 3 leviers */}
+                <div style={{ fontSize: 11, color: C.textLight, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.7 }}>Top leviers</div>
+                {topActions.map(([k, d]) => (
+                  <div key={k} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 0", borderBottom: `1px solid ${C.borderLight}` }}>
+                    <span style={{ fontSize: 12, color: C.textMid }}>{DIM_LABELS[k] || k}</span>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: C.amber }}>+{Math.round(d.maxPts - d.pts)}pts potentiels</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
 
     {/* ── Card SF ── */}

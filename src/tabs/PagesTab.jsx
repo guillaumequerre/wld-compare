@@ -1,4 +1,5 @@
 import InfoCard from "../components/InfoCard";
+import { computePageScore, scoreLabel } from "../lib/scoring";
 import { useState } from "react";
 import { C } from "../lib/constants";
 import { safeNum, toUrlPath } from "../lib/helpers";
@@ -7,7 +8,7 @@ import { SectionHeader, Badge } from "../components/ui";
 import PageModeSelector from "../components/PageModeSelector";
 
 export default function PagesTab({ sites, sfData, gscData, bingData, pageMode, setPageMode }) {
-  const [sortKey, setSortKey] = useState("words");
+  const [sortKey, setSortKey] = useState("score");
   const [search, setSearch] = useState("");
 
   return (
@@ -53,22 +54,43 @@ export default function PagesTab({ sites, sfData, gscData, bingData, pageMode, s
           const path  = toUrlPath(url);
           const gscR  = gscMap[path];
           const bingR = bingMap[path];
+          const jsons = [r["json 1"],r["json 2"],r["json 3"],r["json 4"],r["json 5"]].filter(Boolean).join(" ");
+          let hasTable = false;
+          for (let i = 1; i <= 18; i++) { const v = r[`présence table ${i}`]||r[`presence table ${i}`]||""; if (v && v.trim() !== "" && v.trim() !== "0") { hasTable = true; break; } }
+          const pageDims = {
+            avgTitleLen:    safeNum(r["longueur du title 1"] || r["title 1 length"] || 0) || (r["title 1"]||"").length,
+            avgMetaLen:     safeNum(r["longueur de la meta description 1"] || r["meta description 1 length"] || 0) || (r["meta description 1"]||"").length,
+            avgH1Len:       safeNum(r["longueur du h1-1"] || r["h1-1 length"] || 0) || (r["h1-1"]||r["h1"]||"").trim().length,
+            avgWords:       safeNum(r["nombre de mots"] || r["word count"] || 0),
+            avgPageSizeKB:  safeNum(r["taille (octets)"] || r["size"] || 0) / 1024,
+            avgInlinksUniq: safeNum(r["liens entrants uniques"] || 0),
+            avgFlesch:      safeNum(r["score de lisibilité de flesch"] || r["score de lisibilité"] || r["flesch reading ease"] || 0),
+            tableRate:      hasTable ? 1 : 0,
+            schemaRate:     jsons.length > 0 ? 1 : 0,
+            avgDepth:       safeNum(r["crawl profondeur"] || r["crawl depth"] || 0),
+            errorRate:      0,
+            redirectRate:   0,
+            avgImgSizeKB:   0,
+          };
+          const { score: pageScore } = computePageScore(pageDims);
           return {
             site,
             url,
             path,
-            flesch:   safeNum(r["score de lisibilité"] || r["readability"] || r["flesch"] || 0),
-            title:    r["title 1"] || r["title"] || "",
-            depth:    safeNum(r["crawl profondeur"] || r["crawl depth"] || 0),
-            inlinks:  safeNum(r["liens entrants uniques"] || r["inlinks"] || 0),
-            clicks:   gscR ? safeNum(gscR["clics"] || gscR["clicks"] || 0) : 0,
-            position: gscR ? safeNum(gscR["position"] || 0) : 0,
+            flesch:    pageDims.avgFlesch,
+            title:     r["title 1"] || r["title"] || "",
+            depth:     pageDims.avgDepth,
+            inlinks:   pageDims.avgInlinksUniq,
+            clicks:    gscR ? safeNum(gscR["clics"] || gscR["clicks"] || 0) : 0,
+            position:  gscR ? safeNum(gscR["position"] || 0) : 0,
             citations: bingR ? safeNum(bingR["citations"] || bingR["mentions"] || 0) : 0,
+            score:     pageScore,
           };
         });
       });
 
       const SORTS = [
+        { key: "score",     label: "Score" },
         { key: "flesch",    label: "Flesch" },
         { key: "clicks",    label: "Clics" },
         { key: "citations", label: "Citations" },
@@ -109,6 +131,7 @@ export default function PagesTab({ sites, sfData, gscData, bingData, pageMode, s
                 <tr>
                   <th style={{ padding: "10px 12px", textAlign: "left", borderBottom: `1px solid ${C.border}`, color: C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8 }}>Site</th>
                   <th style={{ padding: "10px 12px", textAlign: "left", borderBottom: `1px solid ${C.border}`, color: C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8 }}>URL</th>
+                  <th style={{ padding: "10px 12px", textAlign: "center", borderBottom: `1px solid ${C.border}`, color: sortKey === "score" ? C.blue : C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, cursor: "pointer" }} onClick={() => setSortKey("score")}>Score</th>
                   <th style={{ padding: "10px 12px", textAlign: "center", borderBottom: `1px solid ${C.border}`, color: sortKey === "flesch" ? C.blue : C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, cursor: "pointer" }} onClick={() => setSortKey("flesch")}>Flesch</th>
                   <th style={{ padding: "10px 12px", textAlign: "center", borderBottom: `1px solid ${C.border}`, color: sortKey === "inlinks" ? C.blue : C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, cursor: "pointer" }} onClick={() => setSortKey("inlinks")}>Liens ent.</th>
                   <th style={{ padding: "10px 12px", textAlign: "center", borderBottom: `1px solid ${C.border}`, color: sortKey === "depth" ? C.blue : C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, cursor: "pointer" }} onClick={() => setSortKey("depth")}>Prof.</th>
@@ -118,7 +141,7 @@ export default function PagesTab({ sites, sfData, gscData, bingData, pageMode, s
               </thead>
               <tbody>
                 {filtered.length === 0 && (
-                  <tr><td colSpan={7} style={{ padding: 30, textAlign: "center", color: C.textLight, fontSize: 13 }}>
+                  <tr><td colSpan={8} style={{ padding: 30, textAlign: "center", color: C.textLight, fontSize: 13 }}>
                     {allPages.length === 0 ? "Chargez un CSV SF dans l'onglet Import" : "Aucune page correspondante"}
                   </td></tr>
                 )}
@@ -135,6 +158,15 @@ export default function PagesTab({ sites, sfData, gscData, bingData, pageMode, s
                         {p.path || "/"}
                       </div>
                       {p.title && <div style={{ fontSize: 10, color: C.textLight, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.title}</div>}
+                    </td>
+                    <td style={{ padding: "7px 12px", borderBottom: `1px solid ${C.borderLight}`, textAlign: "center" }}>
+                      {(() => { const lbl = scoreLabel(p.score); return p.score !== null ? (
+                        <div style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                          <div style={{ width: 32, height: 32, borderRadius: "50%", background: lbl.bg, border: `2px solid ${lbl.color}`, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                            <span style={{ fontSize: 11, fontWeight: 800, color: lbl.color }}>{p.score}</span>
+                          </div>
+                        </div>
+                      ) : <span style={{ color: C.textLight }}>—</span>; })()}
                     </td>
                     <td style={{ padding: "7px 12px", borderBottom: `1px solid ${C.borderLight}`, textAlign: "center", fontVariantNumeric: "tabular-nums" }}>
                       {p.flesch > 0 ? <span style={{ fontWeight: 600, color: p.flesch >= 60 ? C.green : p.flesch >= 30 ? C.amber : C.red }}>{p.flesch}</span> : <span style={{ color: C.textLight }}>—</span>}

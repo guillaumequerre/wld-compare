@@ -2,8 +2,9 @@ import InfoCard from "../components/InfoCard";
 import { useState, useEffect } from "react";
 import { C } from "../lib/constants";
 import { sbSaveAnalysis, sbGetLatestAnalysis, sbSaveRecommendations, sbGetRecommendations, sbUpdateRecommendation } from "../lib/supabase";
+import { computeSiteScore } from "../lib/scoring";
 
-function buildPrompt(metrics, corrMatrix, resultVals) {
+function buildPrompt(metrics, corrMatrix, resultVals, siteScores) {
   const sitesData = metrics.map((m, i) => {
     const sf = m.sf || {};
     const rv = resultVals[i] || {};
@@ -37,6 +38,30 @@ SITE: ${m.site.label}
   Citations Bing AI: ${rv.geoMentions ?? 0}`;
   }).join("\n\n");
 
+  // Comparative data (only if ≥2 sites)
+  const comparativeData = metrics.length >= 2 ? (() => {
+    const names = metrics.map(m => m.site.label);
+    const scores = metrics.map((m, i) => `${m.site.label}: ${siteScores[i] ?? "N/A"}/100`).join(", ");
+    // Delta par dimension entre les sites (meilleur vs moins bon)
+    const dims = ["avgFlesch","avgInlinksUniq","avgWords","schemaRate","tableRate","avgTitleLen","avgDepth","errorRate"];
+    const dimLabels = { avgFlesch:"Flesch", avgInlinksUniq:"Maillage interne", avgWords:"Mots/page", schemaRate:"Schema %", tableRate:"Tableaux %", avgTitleLen:"Title (car.)", avgDepth:"Profondeur", errorRate:"Erreurs %" };
+    const deltas = dims.map(k => {
+      const vals = metrics.map(m => ({ site: m.site.label, val: m.sf?.[k] ?? null })).filter(v => v.val !== null);
+      if (vals.length < 2) return null;
+      const best = vals.reduce((a, b) => (["avgDepth","errorRate"].includes(k) ? (a.val < b.val ? a : b) : (a.val > b.val ? a : b)));
+      const worst = vals.reduce((a, b) => (["avgDepth","errorRate"].includes(k) ? (a.val > b.val ? a : b) : (a.val < b.val ? a : b)));
+      const delta = Math.abs(best.val - worst.val);
+      if (delta < 0.01) return null;
+      return `${dimLabels[k]}: ${best.site} mène (${Math.round(best.val*10)/10}) vs ${worst.site} (${Math.round(worst.val*10)/10}), écart=${Math.round(delta*10)/10}`;
+    }).filter(Boolean).join("\n  ");
+    // KPI comparatif
+    const kpis = metrics.map((m, i) => {
+      const rv = resultVals[i] || {};
+      return `${m.site.label} — clics:${rv.clicks??0} impressions:${rv.impressions??0} CTR:${rv.ctr??0}% position:${rv.position??0} citations Bing:${rv.geoMentions??0}`;
+    }).join("\n  ");
+    return `\n\nANALYSE COMPARATIVE (${names.join(" vs ")}):\nScores GEO-readiness: ${scores}\n\nÉcarts techniques entre sites:\n  ${deltas}\n\nComparaison KPIs:\n  ${kpis}`;
+  })() : "";
+
   const topCorr = corrMatrix.flatMap(({ dim, corrs }) =>
     corrs.filter(c => c.value !== null && Math.abs(c.value) >= 0.4)
       .map(c => `${dim.label} ↔ ${c.kpi.label}: ${c.value > 0 ? "+" : ""}${c.value}`)
@@ -46,6 +71,8 @@ SITE: ${m.site.label}
 
 DONNÉES DES SITES:
 ${sitesData}
+
+${comparativeData}
 
 CORRÉLATIONS SIGNIFICATIVES (Pearson ≥ 0.4 ou ≤ -0.4):
 ${topCorr || "Données insuffisantes pour calculer des corrélations significatives."}
@@ -59,6 +86,14 @@ Produis un JSON STRICT avec exactement cette structure (rien d'autre, pas de mar
   "insights_geo": [
     {"title": "titre court", "detail": "1-2 phrases max", "impact": "fort|moyen|faible"}
   ],
+  "comparative": {
+    "winner_seo": "nom du site le plus fort SEO et pourquoi en 1 phrase",
+    "winner_geo": "nom du site le plus fort GEO et pourquoi en 1 phrase",
+    "gap_analysis": [
+      {"dimension": "dimension SF ou KPI", "leader": "site leader", "gap": "description de l'écart et ce que ça signifie", "opportunity": "ce que le site en retard peut faire"}
+    ],
+    "strategic_summary": "synthèse comparative en 2-3 phrases : positionnement relatif des sites, principal levier différenciateur"
+  },
   "roadmaps": {
     ${metrics.map((m, i) => `"${m.site.id}": ${i === 0
       ? `{"quick_wins": [{"action": "action concrète", "metric": "métrique SF concernée", "why": "pourquoi basé sur les données", "effort": "1-3j|1sem|2sem", "ice_impact": 7, "ice_confidence": 6, "ice_effort": 3}], "moyen_terme": [{"action": "action concrète", "metric": "métrique SF concernée", "why": "pourquoi basé sur les données", "effort": "1mois|2mois|3mois", "ice_impact": 7, "ice_confidence": 6, "ice_effort": 5}], "long_terme": [{"action": "action concrète", "metric": "métrique SF concernée", "why": "pourquoi basé sur les données", "effort": "3-6mois|6-12mois", "ice_impact": 7, "ice_confidence": 6, "ice_effort": 8}]}`
@@ -68,6 +103,7 @@ Produis un JSON STRICT avec exactement cette structure (rien d'autre, pas de mar
 }
 
 Règles:
+- Si plusieurs sites : renseigne "comparative" avec 2-3 gap_analysis maximum, sinon laisse comparative avec des strings vides et gap_analysis vide
 - 3 insights SEO et 3 insights GEO maximum
 - 2 actions par horizon temporel par site maximum
 - Chaque action doit être concrète et basée sur les données
@@ -183,7 +219,8 @@ export default function AnalyseTab({ metrics, corrMatrix, resultVals, analysis, 
     setAnalysisLoading(true);
     setAnalysisError(null);
     try {
-      const prompt = buildPrompt(metrics, corrMatrix, resultVals);
+      const siteScores = metrics.map(m => computeSiteScore(m.sf).score);
+      const prompt = buildPrompt(metrics, corrMatrix, resultVals, siteScores);
       const res = await fetch("/api/anthropic", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -272,8 +309,7 @@ export default function AnalyseTab({ metrics, corrMatrix, resultVals, analysis, 
 
   return (
     <div>
-      <InfoCard tabKey="analyse" />
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
         <div>
           <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: C.text, fontFamily: "'Georgia', serif", letterSpacing: -0.5 }}>
             Analyse IA & Roadmaps
@@ -290,6 +326,8 @@ export default function AnalyseTab({ metrics, corrMatrix, resultVals, analysis, 
           {analysisLoading ? <><span style={{ display: "inline-block", animation: "spin 1s linear infinite" }}>⟳</span> Analyse en cours…</> : analysis ? "↻ Relancer l'analyse" : "✦ Générer l'analyse"}
         </button>
       </div>
+      <InfoCard tabKey="analyse" />
+      <div style={{ marginBottom: 16 }} />
 
       {!hasData && (
         <div style={{ background: C.amberLight, border: "1px solid #FDE68A", borderRadius: 12, padding: "16px 20px", marginBottom: 24, fontSize: 13, color: C.amber }}>
@@ -339,6 +377,56 @@ export default function AnalyseTab({ metrics, corrMatrix, resultVals, analysis, 
               </div>
             ))}
           </div>
+
+          {/* Analyse comparative */}
+          {metrics.length >= 2 && analysis.comparative?.strategic_summary && (
+            <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden", marginBottom: 28 }}>
+              <div style={{ padding: "16px 24px", borderBottom: `1px solid ${C.border}`, borderLeft: `4px solid #7C3AED` }}>
+                <div style={{ fontWeight: 700, fontSize: 15, color: C.text }}>⚖️ Analyse comparative</div>
+                <div style={{ fontSize: 12, color: C.textLight, marginTop: 2 }}>{metrics.map(m => m.site.label).join(" · ")}</div>
+              </div>
+              <div style={{ padding: "20px 24px" }}>
+                {/* Synthèse */}
+                <div style={{ background: "#F5F3FF", border: "1px solid #DDD6FE", borderRadius: 10, padding: "14px 16px", marginBottom: 20, fontSize: 13, color: "#4C1D95", lineHeight: 1.7 }}>
+                  {analysis.comparative.strategic_summary}
+                </div>
+                {/* Winners */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 20 }}>
+                  {[
+                    { key: "winner_seo", icon: "🔍", label: "Leader SEO" , color: C.blue,   bg: C.blueLight },
+                    { key: "winner_geo", icon: "🤖", label: "Leader GEO",  color: C.purple, bg: C.purpleLight },
+                  ].map(({ key, icon, label, color, bg }) => analysis.comparative[key] ? (
+                    <div key={key} style={{ background: bg, border: `1px solid ${color}33`, borderRadius: 10, padding: "12px 16px" }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 6 }}>{icon} {label}</div>
+                      <div style={{ fontSize: 13, color: C.text, lineHeight: 1.5 }}>{analysis.comparative[key]}</div>
+                    </div>
+                  ) : null)}
+                </div>
+                {/* Gap analysis */}
+                {(analysis.comparative.gap_analysis || []).length > 0 && (
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.8, color: C.textLight, marginBottom: 10 }}>Écarts clés</div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                      {(analysis.comparative.gap_analysis || []).map((gap, i) => (
+                        <div key={i} style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 16px" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                            <span style={{ fontSize: 11, fontWeight: 700, color: C.amber, background: C.amberLight, padding: "2px 8px", borderRadius: 10 }}>{gap.dimension}</span>
+                            <span style={{ fontSize: 12, fontWeight: 600, color: C.text }}>→ {gap.leader} en tête</span>
+                          </div>
+                          <div style={{ fontSize: 12, color: C.textMid, lineHeight: 1.6, marginBottom: 4 }}>{gap.gap}</div>
+                          {gap.opportunity && (
+                            <div style={{ fontSize: 11, color: C.green, background: C.greenLight, padding: "4px 10px", borderRadius: 7, display: "inline-block" }}>
+                              💡 {gap.opportunity}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Roadmap visuelle */}
           <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden", marginBottom: 28 }}>
