@@ -156,7 +156,7 @@ function RecCard({ rec, site, onToggle, onIceChange }) {
 export default function AnalyseTab({ metrics, corrMatrix, resultVals, analysis, setAnalysis, analysisLoading, setAnalysisLoading, analysisError, setAnalysisError, currentProjectId, sites }) {
   const [activeRoadmap, setActiveRoadmap] = useState(() => metrics[0]?.site.id || "");
   const [recs, setRecs] = useState([]);
-  const [recsLoading, setRecsLoading] = useState(false);
+
   const [filterHorizon, setFilterHorizon] = useState("all");
   const [filterSite, setFilterSite] = useState("all");
   const [showDone, setShowDone] = useState(false);
