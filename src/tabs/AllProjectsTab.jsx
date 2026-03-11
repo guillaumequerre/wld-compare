@@ -8,10 +8,10 @@ export default function AllProjectsTab({ projects, sites, sfData, allProjectsMat
   <div>
     <div style={{ marginBottom: 24 }}>
       <SectionHeader
-      <InfoCard tabKey="allprojects" />
         title="Tous les projets"
         sub={`Analyse consolidée · ${projects.length} projet${projects.length > 1 ? "s" : ""} · pages concaténées`}
       />
+      <InfoCard tabKey="allprojects" />
     </div>
 
     {/* Legend: one dot per project */}
