@@ -1,17 +1,17 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from "react";
-import { C, SF_DIMS, RES_KPIS, RADAR_DIMS, DEFAULT_SITES } from "./lib/constants.js";
-import { emptyDataMap, newProject, makeInitialProject, parseCSV } from "./lib/helpers.js";
-import { pearson } from "./lib/helpers.js";
-import { extractSF, extractGSC, extractGA, extractBing, filterByMode } from "./lib/parsers.js";
-import { buildUrlMaps, buildSfPageVectors, intraCorrFast } from "./lib/correlations.js";
-import { sbSaveProject, sbLoadProjects, sbGetHistory, sbGetLatest, sbDownload } from "./lib/supabase.js";
-import AnalyseTab from "./components/AnalyseTab.jsx";
-import ImportTab from "./tabs/ImportTab.jsx";
-import OverviewTab from "./tabs/OverviewTab.jsx";
-import MatrixTab from "./tabs/MatrixTab.jsx";
-import PagesTab from "./tabs/PagesTab.jsx";
-import SitesTab from "./tabs/SitesTab.jsx";
-import AllProjectsTab from "./tabs/AllProjectsTab.jsx";
+import { C, SF_DIMS, RES_KPIS, RADAR_DIMS, DEFAULT_SITES } from "./lib/constants";
+import { emptyDataMap, newProject, makeInitialProject, parseCSV } from "./lib/helpers";
+import { pearson } from "./lib/helpers";
+import { extractSF, extractGSC, extractGA, extractBing, filterByMode } from "./lib/parsers";
+import { buildUrlMaps, buildSfPageVectors, intraCorrFast } from "./lib/correlations";
+import { sbSaveProject, sbLoadProjects, sbGetHistory, sbGetLatest, sbDownload } from "./lib/supabase";
+import AnalyseTab from "./components/AnalyseTab";
+import ImportTab from "./tabs/ImportTab";
+import OverviewTab from "./tabs/OverviewTab";
+import MatrixTab from "./tabs/MatrixTab";
+import PagesTab from "./tabs/PagesTab";
+import SitesTab from "./tabs/SitesTab";
+import AllProjectsTab from "./tabs/AllProjectsTab";
 
 const INITIAL_PROJECT = makeInitialProject();
 const NAV_TABS = [
