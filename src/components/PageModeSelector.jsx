@@ -14,8 +14,6 @@ export default function PageModeSelector({ value, onChange, pageTypes, sites, te
   const hasTypes = Object.keys(typeCounts).length > 0;
   const activeTypes = templateFilter || [];
   const hasActiveFilter = activeTypes.length > 0;
-  const hasSfData = (sites || []).some(s => Object.keys(pageTypes?.[s.id] || {}).length > 0 || false);
-
   const toggleType = (key) => {
     if (!setTemplateFilter) return;
     setTemplateFilter(prev => {
