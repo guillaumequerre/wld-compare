@@ -1,12 +1,14 @@
+import InfoCard from "../components/InfoCard";
 import { C, RES_KPIS, SITE_PALETTE } from "../lib/constants";
 import { RadarChart, Radar, PolarGrid, PolarAngleAxis, ResponsiveContainer, Legend } from "recharts";
 import { SectionHeader } from "../components/ui";
 
-export default function AllProjectsTab({ projects, sites, sfData, allProjectsMatrix, allProjectsRadar }) {
+export default function AllProjectsTab({ projects, sites, sfData, allProjectsMatrix, allProjectsRadar, templateFilter, setTemplateFilter, pageTypes }) {
   return (
   <div>
     <div style={{ marginBottom: 24 }}>
       <SectionHeader
+      <InfoCard tabKey="allprojects" />
         title="Tous les projets"
         sub={`Analyse consolidée · ${projects.length} projet${projects.length > 1 ? "s" : ""} · pages concaténées`}
       />

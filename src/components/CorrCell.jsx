@@ -32,7 +32,7 @@ function corrInterpret(r) {
 // Shared dark tooltip shell
 function DarkTooltip({ style, children }) {
   return (
-    <div style={{ ...style, background: "#1E1E2E", color: "#fff", borderRadius: 10, padding: "13px 15px", fontSize: 12, boxShadow: "0 6px 20px rgba(0,0,0,0.3)", lineHeight: 1.7 }}>
+    <div style={{ ...style, background: "#1E1E2E", color: "#fff", borderRadius: 10, padding: "13px 15px", fontSize: 12, boxShadow: "0 6px 20px rgba(0,0,0,0.3)", lineHeight: 1.7, wordWrap: "break-word", overflowWrap: "break-word", whiteSpace: "normal" }}>
       {children}
     </div>
   );

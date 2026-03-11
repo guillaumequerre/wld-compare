@@ -8,7 +8,7 @@ import { filterByMode } from "../lib/parsers";
 import { SectionHeader, Badge } from "../components/ui";
 import PageModeSelector from "../components/PageModeSelector";
 
-export default function PagesTab({ sites, sfData, gscData, bingData, pageMode, setPageMode, templateFilter, pageTypes }) {
+export default function PagesTab({ sites, sfData, gscData, bingData, pageMode, setPageMode, templateFilter, setTemplateFilter, pageTypes }) {
   const [sortKey, setSortKey] = useState("score");
   const [sortDir, setSortDir] = useState("desc");
   const [search, setSearch] = useState("");
@@ -18,7 +18,7 @@ export default function PagesTab({ sites, sfData, gscData, bingData, pageMode, s
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
       <SectionHeader title="Analyse par pages" sub="Scoring et filtrage des pages selon leur présence GEO et SEO" />
     <InfoCard tabKey="pages" />
-      <PageModeSelector value={pageMode} onChange={setPageMode} />
+      <PageModeSelector value={pageMode} onChange={setPageMode} pageTypes={pageTypes} sites={sites} templateFilter={templateFilter} setTemplateFilter={setTemplateFilter} />
     </div>
 
     {/* ── Mode "all" : tableau par URL ── */}
@@ -103,9 +103,9 @@ export default function PagesTab({ sites, sfData, gscData, bingData, pageMode, s
 
       const filtered = allPages
         .filter(p => {
-          if (templateFilter) {
+          if (templateFilter?.length) {
             const map = pageTypes[p.site?.id] || {};
-            if (map[p.url] !== templateFilter) return false;
+            if (!templateFilter.includes(map[p.url])) return false;
           }
           return !search || p.url.toLowerCase().includes(search.toLowerCase()) || p.title.toLowerCase().includes(search.toLowerCase());
         })

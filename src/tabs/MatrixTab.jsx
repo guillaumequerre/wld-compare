@@ -62,7 +62,7 @@ function Switch({ value, onChange, label }) {
   );
 }
 
-export default function MatrixTab({ sites, sfData, pageMode, setPageMode, matrixSites, setMatrixSites, filteredCorrMatrix }) {
+export default function MatrixTab({ sites, sfData, pageMode, setPageMode, matrixSites, setMatrixSites, filteredCorrMatrix, templateFilter, setTemplateFilter, pageTypes }) {
   const [sortCol, setSortCol] = useState({ key: null, dir: null });
   const [tooltipEnabled, setTooltipEnabled] = useState(true);
 
@@ -92,7 +92,7 @@ export default function MatrixTab({ sites, sfData, pageMode, setPageMode, matrix
   <div>
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
       <SectionHeader title="Matrice de corrélation" sub="Pearson · SF (ordonnées) × KPIs résultats (abscisses)" />
-      <PageModeSelector value={pageMode} onChange={setPageMode} />
+      <PageModeSelector value={pageMode} onChange={setPageMode} pageTypes={pageTypes} sites={sites} templateFilter={templateFilter} setTemplateFilter={setTemplateFilter} />
     </div>
     <InfoCard tabKey="matrix" />
 

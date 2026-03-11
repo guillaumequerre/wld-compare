@@ -1,18 +1,18 @@
 import InfoCard from "../components/InfoCard";
-import { C } from "../lib/constants";
+import { C, PAGE_TYPES } from "../lib/constants";
 import { RadarChart, Radar, PolarGrid, PolarAngleAxis, ResponsiveContainer, Legend } from "recharts";
 import { StatPill, SectionHeader, Badge } from "../components/ui";
 import PageModeSelector from "../components/PageModeSelector";
 import SchemaBreakdown from "../components/SchemaBreakdown";
 import LlmsStatus from "../components/LlmsStatus";
 
-export default function OverviewTab({ sites, pageMode, setPageMode, radarSites, setRadarSites, metrics, radarData }) {
+export default function OverviewTab({ sites, pageMode, setPageMode, radarSites, setRadarSites, metrics, radarData, pageTypes, templateFilter, setTemplateFilter }) {
   return (
   <div>
-      <InfoCard tabKey="overview" />
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
       <SectionHeader title="Vue d'ensemble" sub="Scores agrégés et comparaison des 3 sites" />
-      <PageModeSelector value={pageMode} onChange={setPageMode} />
+      <InfoCard tabKey="overview" />
+      <PageModeSelector value={pageMode} onChange={setPageMode} pageTypes={pageTypes} sites={sites} templateFilter={templateFilter} setTemplateFilter={setTemplateFilter} />
     </div>
 
     {/* Row-based grid: each section spans all 3 sites */}
@@ -25,6 +25,42 @@ export default function OverviewTab({ sites, pageMode, setPageMode, radarSites, 
           {sf && <Badge color={site.color} bg={site.bg}>{sf.totalPages} pages</Badge>}
         </div>
       ))}
+
+      {/* ── ROW: Page type distribution ── */}
+      {sites.map(({ id: siteId }) => {
+        const dist = pageTypes?.[siteId] ? PAGE_TYPES.map(t => ({
+          ...t, count: Object.values(pageTypes[siteId]).filter(v => v === t.key).length
+        })).filter(t => t.count > 0) : [];
+        return (
+          <div key={siteId} style={{ background: C.white, border: `1px solid ${C.border}`, borderTop: "none", borderBottom: "none", padding: "10px 20px" }}>
+            {dist.length > 0 ? (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                {dist.sort((a, b) => b.count - a.count).map(t => {
+                  const active = !templateFilter?.length || templateFilter.includes(t.key);
+                  return (
+                    <div key={t.key} onClick={() => setTemplateFilter && setTemplateFilter(prev => {
+                      const cur = prev || [];
+                      return cur.includes(t.key) ? cur.filter(k => k !== t.key) : [...cur, t.key];
+                    })} style={{
+                      display: "flex", alignItems: "center", gap: 4, padding: "3px 9px",
+                      borderRadius: 20, cursor: setTemplateFilter ? "pointer" : "default",
+                      background: active ? t.bg : C.bg,
+                      border: `1px solid ${active ? t.color + "55" : C.border}`,
+                      opacity: active ? 1 : 0.4, transition: "all 0.15s",
+                    }}>
+                      <span style={{ fontSize: 10 }}>{t.icon}</span>
+                      <span style={{ fontSize: 10, fontWeight: 600, color: active ? t.color : C.textLight }}>{t.label}</span>
+                      <span style={{ fontSize: 10, color: active ? t.color : C.textLight, opacity: 0.7 }}>{t.count}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>Pas encore classifié</div>
+            )}
+          </div>
+        );
+      })}
 
       {/* ── ROW: SF metrics ── */}
       {metrics.map(({ site, sf, sfBase }) => (

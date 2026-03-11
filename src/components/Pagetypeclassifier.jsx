@@ -159,17 +159,29 @@ export default function PageTypeClassifier({ siteId, projectId, sfRows, pageType
   const hasAnySignal = Object.values(signals).some(Boolean);
   const BATCH = 20;
 
-  // Load existing classifications from DB on mount
+  // Load existing classifications from DB on mount, then auto-classify if none found
   useEffect(() => {
-    if (!projectId || !siteId) return;
+    if (!projectId || !siteId || !sfRows?.length) return;
     sbGetPageTypes(projectId, siteId).then(rows => {
       if (rows.length) {
         const map = {};
         rows.forEach(r => { map[r.url] = r.page_type; });
         setPageTypes(prev => ({ ...prev, [siteId]: map }));
+      } else {
+        // No existing classifications → auto-trigger
+        setAutoTrigger(true);
       }
     });
-  }, [projectId, siteId, setPageTypes]);
+  }, [projectId, siteId, sfRows, setPageTypes]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-trigger classify when sfRows first loaded and no existing types
+  const [autoTrigger, setAutoTrigger] = useState(false);
+  useEffect(() => {
+    if (autoTrigger && status === "idle" && sfRows?.length) {
+      setAutoTrigger(false);
+      classify();
+    }
+  }); // intentionally no deps — runs after state settles
 
   const classify = async () => {
     setStatus("loading");

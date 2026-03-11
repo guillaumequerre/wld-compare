@@ -5,7 +5,6 @@ import { extractSF, extractGSC, extractGA, extractBing, extractSemrush, filterBy
 import { buildUrlMaps, buildSfPageVectors, intraCorrFast, smIntraCorr } from "./lib/correlations";
 import { sbSaveProject, sbLoadProjects, sbGetHistory, sbGetLatest, sbDownload, sbGetPageTypes } from "./lib/supabase";
 import AnalyseTab from "./components/AnalyseTab";
-import TemplateFilterBar from "./components/TemplateFilterBar";
 import ImportTab from "./tabs/ImportTab";
 import OverviewTab from "./tabs/OverviewTab";
 import MatrixTab from "./tabs/MatrixTab";
@@ -62,7 +61,7 @@ export default function App() {
   const [confirmModal, setConfirmModal] = useState(null);
   const [tab, setTab]                   = useState("import");
   const [pageMode, setPageMode]         = useState("all");
-  const [templateFilter, setTemplateFilter] = useState(null); // null = all types
+  const [templateFilter, setTemplateFilter] = useState([]); // [] = all types, array for multi-select
   const [pageTypes, setPageTypes]           = useState({}); // { siteId: { urlPath: type } }
   const [matrixSites, setMatrixSites]   = useState(DEFAULT_SITES.map(s => s.id));
   const [radarSites, setRadarSites]     = useState(DEFAULT_SITES.map(s => s.id));
@@ -77,7 +76,7 @@ export default function App() {
     setRadarSites(ids);
     setAnalysis(null);
     setAnalysisError(null);
-    setTemplateFilter(null);
+    setTemplateFilter([]);
     setPageTypes({});
   }, [currentProjectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -293,11 +292,11 @@ export default function App() {
     const gaRows   = matrixSites.flatMap(id => gaData[id]   || []);
     const bingRows = matrixSites.flatMap(id => bingData[id] || []);
     const sfFiltered = filterByMode(sfRowsAll, pageMode, bingRows, gscRows);
-    const sfByTemplate = templateFilter
+    const sfByTemplate = templateFilter?.length
       ? sfFiltered.filter(r => {
           const url = (r["adresse"] || r["address"] || r["url"] || "").trim();
-          const type = matrixSites.reduce((found, sid) => found || (pageTypes[sid] || {})[url] || (pageTypes[sid] || {})[url.replace(/\/$/, "")], null);
-          return type === templateFilter;
+          const type = matrixSites.reduce((found, sid) => found || (pageTypes[sid] || {})[url] || null, null);
+          return type && templateFilter.includes(type);
         })
       : sfFiltered;
     const sfPages    = buildSfPageVectors(sfByTemplate);
@@ -326,7 +325,16 @@ export default function App() {
     const allGsc  = projects.flatMap(p => Object.values(p.gscData  || {}).flat());
     const allGa   = projects.flatMap(p => Object.values(p.gaData   || {}).flat());
     const allBing = projects.flatMap(p => Object.values(p.bingData || {}).flat());
-    const sfPages = buildSfPageVectors(allSf);
+    const allSfFiltered = templateFilter?.length
+      ? allSf.filter(r => {
+          const url = (r["adresse"] || r["address"] || r["url"] || "").trim();
+          const type = projects.flatMap(p => Object.keys(pageTypes[Object.keys(p.sfData||{})[0]]||{})).length
+            ? Object.values(pageTypes).reduce((found, map) => found || map[url] || null, null)
+            : null;
+          return type && templateFilter.includes(type);
+        })
+      : allSf;
+    const sfPages = buildSfPageVectors(allSfFiltered);
     const urlMaps = buildUrlMaps(allGsc, allGa, allBing);
     return SF_DIMS.map(dim => ({
       dim,
@@ -335,7 +343,7 @@ export default function App() {
         return { kpi, value: res ? res.value : null, n: res ? res.n : 0 };
       }),
     }));
-  }, [projects]);
+  }, [projects, templateFilter, pageTypes]);
 
   const allProjectsRadar = useMemo(() => {
     const anyData = projects.some(p => Object.values(p.sfData || {}).flat().length > 0);
@@ -350,7 +358,7 @@ export default function App() {
       });
       return row;
     });
-  }, [projects]);
+  }, [projects, templateFilter, pageTypes]);
 
   // ── Render ───────────────────────────────────────────────────────
   return (
@@ -382,14 +390,6 @@ export default function App() {
             </div>
           </div>
         </div>
-
-        {/* ── TEMPLATE FILTER BAR ── */}
-        <TemplateFilterBar
-          pageTypes={pageTypes}
-          templateFilter={templateFilter}
-          setTemplateFilter={setTemplateFilter}
-          sites={sites}
-        />
 
         {/* ── CONTENT ── */}
         <div style={{ maxWidth: 1400, margin: "0 auto", padding: "32px 28px" }}>
@@ -436,6 +436,9 @@ export default function App() {
               setRadarSites={setRadarSites}
               metrics={metrics}
               radarData={radarData}
+              pageTypes={pageTypes}
+              templateFilter={templateFilter}
+              setTemplateFilter={setTemplateFilter}
             />
           )}
 
@@ -452,6 +455,7 @@ export default function App() {
               filteredCorrMatrix={filteredCorrMatrix}
               templateFilter={templateFilter}
               setTemplateFilter={setTemplateFilter}
+              pageTypes={pageTypes}
             />
           )}
 
@@ -464,6 +468,7 @@ export default function App() {
               pageMode={pageMode}
               setPageMode={setPageMode}
               templateFilter={templateFilter}
+              setTemplateFilter={setTemplateFilter}
               pageTypes={pageTypes}
             />
           )}
@@ -510,6 +515,9 @@ export default function App() {
               sfData={sfData}
               allProjectsMatrix={allProjectsMatrix}
               allProjectsRadar={allProjectsRadar}
+              templateFilter={templateFilter}
+              setTemplateFilter={setTemplateFilter}
+              pageTypes={pageTypes}
             />
           )}
 
