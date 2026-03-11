@@ -1,1247 +1,67 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from "react";
-import { RadarChart, Radar, PolarGrid, PolarAngleAxis, ResponsiveContainer, Legend } from "recharts";
+import { C, SF_DIMS, RES_KPIS, RADAR_DIMS, DEFAULT_SITES } from "./lib/constants.js";
+import { emptyDataMap, newProject, makeInitialProject, parseCSV } from "./lib/helpers.js";
+import { pearson } from "./lib/helpers.js";
+import { extractSF, extractGSC, extractGA, extractBing, filterByMode } from "./lib/parsers.js";
+import { buildUrlMaps, buildSfPageVectors, intraCorrFast } from "./lib/correlations.js";
+import { sbSaveProject, sbLoadProjects, sbGetHistory, sbGetLatest, sbDownload } from "./lib/supabase.js";
+import AnalyseTab from "./components/AnalyseTab.jsx";
+import ImportTab from "./tabs/ImportTab.jsx";
+import OverviewTab from "./tabs/OverviewTab.jsx";
+import MatrixTab from "./tabs/MatrixTab.jsx";
+import PagesTab from "./tabs/PagesTab.jsx";
+import SitesTab from "./tabs/SitesTab.jsx";
+import AllProjectsTab from "./tabs/AllProjectsTab.jsx";
 
-// ── PALETTE ─────────────────────────────────────────────────────
-const C = {
-  bg: "#FAFAFA", white: "#FFFFFF", border: "#E8E8ED", borderLight: "#F0F0F5",
-  text: "#0D0D14", textMid: "#4A4A5A", textLight: "#9090A0",
-  blue: "#2563EB", blueLight: "#EFF6FF",
-  green: "#059669", greenLight: "#ECFDF5",
-  amber: "#D97706", amberLight: "#FFFBEB",
-  red: "#DC2626", redLight: "#FEF2F2",
-  purple: "#7C3AED", purpleLight: "#F5F3FF",
-  teal: "#0891B2", tealLight: "#ECFEFF",
-};
-
-// Color palette for up to 3 sites
-const SITE_PALETTE = [
-  { color: "#2563EB", bg: "#EFF6FF" },
-  { color: "#059669", bg: "#ECFDF5" },
-  { color: "#7C3AED", bg: "#F5F3FF" },
-];
-const DEFAULT_SITES = [
-  { id: "site-1", label: "wedig.fr",      color: "#2563EB", bg: "#EFF6FF" },
-  { id: "site-2", label: "deux.io",       color: "#059669", bg: "#ECFDF5" },
-  { id: "site-3", label: "lets-clic.com", color: "#7C3AED", bg: "#F5F3FF" },
-];
-// Helper to build empty data map from sites array
-function emptyDataMap(sites) {
-  return Object.fromEntries(sites.map(s => [s.id, []]));
-}
-
-// Build a fresh project object
-function newProject(name, sites) {
-  return {
-    id: `proj-${Date.now()}-${Math.random().toString(36).slice(2,6)}`,
-    name,
-    sites,
-    sfData:   emptyDataMap(sites),
-    gscData:  emptyDataMap(sites),
-    gaData:   emptyDataMap(sites),
-    bingData: emptyDataMap(sites),
-  };
-}
-
-const INITIAL_PROJECT = newProject("Projet 1", DEFAULT_SITES);
-// Override id so it's stable
-INITIAL_PROJECT.id = "proj-default";
-
-// ── SF DIMENSIONS ───────────────────────────────────────────────
-const SF_DIMS = [
-  { key: "avgTitleLen",     label: "Longueur moy. title (car.)", higher: true  },
-  { key: "avgMetaLen",      label: "Longueur moy. meta (car.)",  higher: true  },
-  { key: "avgH1Len",        label: "Longueur moy. H1 (car.)",    higher: true  },
-  { key: "avgWords",        label: "Mots moyens / page",         higher: true  },
-  { key: "avgPageSizeKB",   label: "Poids pages contenu (KB)",   higher: false },
-  { key: "avgImgSizeKB",    label: "Poids moyen images (KB)",    higher: false },
-  { key: "avgInlinksUniq",  label: "Liens entrants uniques moy.", higher: true  },
-  { key: "avgOutlinksUniq", label: "Liens sortants uniques moy.", higher: true  },
-  { key: "avgExtLinksUniq", label: "Liens ext. uniques moy.",        higher: false },
-  { key: "avgDepth",        label: "Profondeur crawl moy.",      higher: false },
-  { key: "avgFlesch",       label: "Score Flesch moy.",          higher: true  },
-  { key: "tableRate",       label: "Pages avec tableau (%)",     higher: true  },
-  { key: "schemaRate",      label: "Pages avec Schema (%)",      higher: true  },
-  { key: "errorRate",       label: "Taux d'erreurs (%)",         higher: false },
-  { key: "redirectRate",    label: "Taux redirections (%)",      higher: false },
-  { key: "totalPages",      label: "Nb pages crawlées",          higher: true  },
+const INITIAL_PROJECT = makeInitialProject();
+const NAV_TABS = [
+  { key: "import",      label: "Import"            },
+  { key: "overview",    label: "Vue d'ensemble"     },
+  { key: "matrix",      label: "Matrice"            },
+  { key: "pages",       label: "Pages"              },
+  { key: "analyse",     label: "✦ Analyse IA"       },
+  { key: "sites",       label: "Sites"              },
+  { key: "allprojects", label: "◈ Tous les projets" },
 ];
 
-
-// ── SF TOOLTIPS ──────────────────────────────────────────────────
-// ── TOOLTIP COMPONENT ────────────────────────────────────────────
-// ── RESULT KPIs ─────────────────────────────────────────────────
-const RES_KPIS = [
-  { key: "clicks",          label: "Clics GSC",             src: "gsc"  },
-  { key: "impressions",     label: "Impressions GSC",       src: "gsc"  },
-  { key: "ctr",             label: "CTR (%)",               src: "gsc"  },
-  { key: "position",        label: "Position moy.",         src: "gsc"  },
-  { key: "sessions",  label: "Sessions GA4",  src: "ga" },
-  { key: "views",     label: "Vues GA4",      src: "ga" },
-  { key: "geoMentions",     label: "Citations Bing AI",     src: "bing" },
-];
-
-// ── PAGE SCORING MODES ──────────────────────────────────────────
-const PAGE_MODES = [
-  { key: "all",  label: "Toutes les pages",           icon: "📄" },
-  { key: "geo",  label: "Top succès GEO (Bing)",      icon: "🤖" },
-  { key: "seo",  label: "Top succès SEO (GSC)",       icon: "🔍" },
-];
-
-// Schema types to detect
-const SCHEMA_TYPES = [
-  "Article", "BlogPosting", "Product", "Offer", "FAQPage",
-  "BreadcrumbList", "Organization", "LocalBusiness", "WebPage",
-  "Service", "Event", "Person", "Review", "HowTo",
-];
-
-// ── HELPERS ─────────────────────────────────────────────────────
-function splitCSVLine(line, sep) {
-  const fields = [];
-  let cur = "", inQ = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (ch === '"') {
-      if (inQ && line[i+1] === '"') { cur += '"'; i++; }
-      else inQ = !inQ;
-    } else if (ch === sep && !inQ) {
-      fields.push(cur); cur = "";
-    } else { cur += ch; }
-  }
-  fields.push(cur);
-  return fields;
-}
-
-function parseCSV(text) {
-  const lines = text.trim().split(/\r?\n/);
-  if (lines.length < 2) return [];
-  const raw = lines[0];
-  const sep = raw.includes("\t") ? "\t" : ",";
-  const headers = splitCSVLine(raw, sep).map(h => h.trim().toLowerCase());
-  const result = [];
-  for (let i = 1; i < lines.length; i++) {
-    if (!lines[i].trim()) continue;
-    const vals = splitCSVLine(lines[i], sep);
-    const obj = {};
-    headers.forEach((h, idx) => { obj[h] = (vals[idx] ?? "").trim(); });
-    result.push(obj);
-  }
-  return result;
-}
-
-
-// ── INTRA-SITE CORRELATION (page-level) ─────────────────────────
-// ── URL map builder — call ONCE per matrix computation, pass to intraCorrFromMaps ──
-function buildUrlMaps(gscRows, gaRows, bingRows) {
-  const toPath = (raw) => {
-    const s = (raw || "").trim().toLowerCase();
-    try { return new URL(s).pathname.replace(/\/+$/, "") || "/"; } catch { return s.replace(/\/+$/, "") || "/"; }
-  };
-  const toFull = (raw) => (raw || "").trim().toLowerCase().replace(/\/+$/, "") || "/";
-  const buildMap = (rows, ...keys) => {
-    const pathMap = {}, fullMap = {};
-    for (const r of rows) {
-      const raw = keys.map(k => r[k]).find(v => v) || "";
-      const p = toPath(raw), f = toFull(raw);
-      if (!pathMap[p]) pathMap[p] = r;
-      if (!fullMap[f])  fullMap[f] = r;
-    }
-    return { pathMap, fullMap, toPath, toFull };
-  };
-  return {
-    gsc:  buildMap(gscRows,  "pages les plus populaires", "page", "adresse", "address", "url"),
-    ga:   buildMap(gaRows,   "page", "pagepath", "page path", "adresse", "url"),
-    bing: buildMap(bingRows, "url", "page", "adresse", "address"),
-    toPath, toFull,
-  };
-}
-
-// ── Pre-extract per-page SF values for ALL dims at once — call ONCE per matrix ──
-function buildSfPageVectors(sfRows) {
-  const toPath = (raw) => {
-    const s = (raw || "").trim().toLowerCase();
-    try { return new URL(s).pathname.replace(/\/+$/, "") || "/"; } catch { return s.replace(/\/+$/, "") || "/"; }
-  };
-  const pages = [];
-  for (const r of sfRows) {
-    const ct = (r["type de contenu"] || r["content type"] || "").toLowerCase();
-    const sc = safeNum(r["code http"] || r["status code"] || 200);
-    const isHtml = ct.includes("html") || (ct === "" && (r["title 1"] || r["h1-1"] || r["h1"] || "").trim() !== "");
-    if (!isHtml || sc >= 400) continue;
-    const sfRaw = r["adresse"] || r["address"] || r["url"] || "";
-    let hasTable = false;
-    for (let i = 1; i <= 18; i++) {
-      const v = r[`présence table ${i}`] || r[`presence table ${i}`] || "";
-      if (v && v.trim() !== "" && v.trim() !== "0") { hasTable = true; break; }
-    }
-    const jsons = [r["json 1"],r["json 2"],r["json 3"],r["json 4"],r["json 5"]].filter(Boolean).join(" ");
-    pages.push({
-      path: toPath(sfRaw),
-      full: (sfRaw || "").trim().toLowerCase().replace(/\/+$/, "") || "/",
-      avgTitleLen:     safeNum(r["longueur du title 1"] || r["title 1 length"] || 0) || (r["title 1"] || "").length,
-      avgMetaLen:      safeNum(r["longueur de la meta description 1"] || r["meta description 1 length"] || 0) || (r["meta description 1"] || "").length,
-      avgH1Len:        safeNum(r["longueur du h1-1"] || r["h1-1 length"] || 0) || (r["h1-1"] || r["h1"] || "").trim().length,
-      avgWords:        safeNum(r["nombre de mots"]   || r["word count"]  || 0),
-      avgPageSizeKB:   safeNum(r["taille (octets)"]  || r["size"]        || 0) / 1024,
-      avgInlinks:      safeNum(r["liens entrants"]   || r["inlinks"]   || 0),
-      avgOutlinks:     safeNum(r["liens sortants"]   || r["outlinks"]  || 0),
-      avgInlinksUniq:  safeNum(r["liens entrants uniques"] || 0),
-      avgOutlinksUniq: safeNum(r["liens sortants uniques"] || 0),
-      avgExtLinksUniq: safeNum(r["liens sortants externes uniques"] || 0),
-      avgDepth:        safeNum(r["crawl profondeur"] || r["crawl depth"] || 0),
-      avgFlesch:       safeNum(r["score de lisibilité de flesch"] || r["flesch reading ease"] || 0),
-      tableRate:       hasTable ? 1 : 0,
-      schemaRate:      jsons.length > 0 ? 1 : 0,
-      errorRate:       0, redirectRate: 0, totalPages: 0, avgImgSizeKB: 0,
-    });
-  }
-  return pages;
-}
-
-// ── Compute one Pearson correlation from pre-built vectors+maps ──
-function intraCorrFast(sfPages, urlMaps, dimKey, kpiKey) {
-  if (!sfPages.length) return null;
-  const { gsc, ga, bing } = urlMaps;
-  const lookup = ({ pathMap, fullMap }, path, full) => pathMap[path] || fullMap[full] || null;
-  const sfVals = [], resVals = [];
-  for (const p of sfPages) {
-    const sfVal = p[dimKey];
-    if (sfVal === undefined) continue;
-    const gscR  = lookup(gsc,  p.path, p.full);
-    const gaR   = lookup(ga,   p.path, p.full);
-    const bingR = lookup(bing, p.path, p.full);
-    let resVal = null;
-    if      (kpiKey === "clicks")      { if (gscR)  resVal = safeNum(gscVal(gscR,"clics","clicks") || 0); }
-    else if (kpiKey === "impressions") { if (gscR)  resVal = safeNum(gscVal(gscR,"impressions") || 0); }
-    else if (kpiKey === "ctr")         { if (gscR)  resVal = safeNum(String(gscVal(gscR,"ctr") || "0").replace("%","")); }
-    else if (kpiKey === "position")    { if (gscR)  resVal = safeNum(gscVal(gscR,"position") || 0); }
-    else if (kpiKey === "sessions")    { if (gaR)   resVal = safeNum(gaR["sessions"]     || gaR["ga4 sessions"] || 0); }
-    else if (kpiKey === "views")       { if (gaR)   resVal = safeNum(gaR["views"]        || gaR["ga4 views"]    || 0); }
-    else if (kpiKey === "geoMentions") { if (bingR) resVal = safeNum(bingR["citations"]  || bingR["mentions"]   || 0); }
-    if (resVal !== null) { sfVals.push(sfVal); resVals.push(resVal); }
-  }
-  if (sfVals.length < 5) return null;
-  return { value: pearson(sfVals, resVals), n: sfVals.length };
-}
-
-
-// ── SUPABASE CONFIG ──────────────────────────────────────────────
-const PROXY = "/api/supabase";
-
-async function sbUpload(path, csvText) {
-  const res = await fetch(`${PROXY}/storage/v1/object/csv-imports/${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "text/csv", "x-upsert": "true" },
-    body: csvText,
-  });
-  if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
-  return path;
-}
-
-async function sbInsertImport({ project_id, site_id, source, filename, storage_path, row_count }) {
-  const res = await fetch(`${PROXY}/rest/v1/imports`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "Prefer": "return=representation" },
-    body: JSON.stringify({ project_id, site_id, source, filename, storage_path, row_count }),
-  });
-  if (!res.ok) throw new Error(`Insert failed: ${res.status}`);
-  return res.json();
-}
-
-async function sbGetHistory(projectId, limit = 50) {
-  const filter = projectId ? `&project_id=eq.${encodeURIComponent(projectId)}` : "";
-  const res = await fetch(`${PROXY}/rest/v1/imports?select=*&order=uploaded_at.desc&limit=${limit}${filter}`);
-  if (!res.ok) throw new Error(`Fetch history failed: ${res.status}`);
-  return res.json();
-}
-
-async function sbGetLatest(projectId) {
-  const filter = projectId ? `&project_id=eq.${encodeURIComponent(projectId)}` : "";
-  const res = await fetch(`${PROXY}/rest/v1/imports?select=*&order=uploaded_at.desc&limit=200${filter}`);
-  if (!res.ok) return {};
-  const rows = await res.json();
-  const latest = {};
-  for (const row of rows) {
-    const key = `${row.site_id}_${row.source}`;
-    if (!latest[key]) latest[key] = row;
-  }
-  return latest;
-}
-
-async function sbDownload(storage_path) {
-  const res = await fetch(`${PROXY}/storage/v1/object/csv-imports/${storage_path}`);
-  if (!res.ok) throw new Error(`Download failed: ${res.status}`);
-  return res.text();
-}
-
-// ── Projects persistence ──
-async function sbSaveProject(project) {
-  const res = await fetch(`${PROXY}/rest/v1/projects`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
-    body: JSON.stringify({ id: project.id, name: project.name, sites_json: JSON.stringify(project.sites), updated_at: new Date().toISOString() }),
-  });
-  if (!res.ok) console.warn("Save project failed:", res.status);
-}
-
-async function sbLoadProjects() {
-  const res = await fetch(`${PROXY}/rest/v1/projects?select=*&order=created_at.asc`);
-  if (!res.ok) return null;
-  const rows = await res.json();
-  return rows.map(r => ({ id: r.id, name: r.name, sites: JSON.parse(r.sites_json || "[]") }));
-}
-
-async function sbDeleteProject(projectId) {
-  await fetch(`${PROXY}/rest/v1/projects?id=eq.${encodeURIComponent(projectId)}`, { method: "DELETE" });
-}
-
-function safeNum(v) {
-  if (v === undefined || v === null || v === "") return 0;
-  const n = parseFloat(String(v).replace(/[^0-9.-]/g, ""));
-  return isNaN(n) ? 0 : n;
-}
-function avg(arr) {
-  const n = arr.filter(x => x > 0);
-  return n.length ? n.reduce((a, b) => a + b, 0) / n.length : 0;
-}
-function pearson(xs, ys) {
-  const n = xs.length;
-  if (n < 2) return null;
-  const mx = avg(xs), my = avg(ys);
-  const num = xs.reduce((s, x, i) => s + (x - mx) * (ys[i] - my), 0);
-  const dx = Math.sqrt(xs.reduce((s, x) => s + (x - mx) ** 2, 0));
-  const dy = Math.sqrt(ys.reduce((s, y) => s + (y - my) ** 2, 0));
-  if (!dx || !dy) return null;
-  return Math.round((num / (dx * dy)) * 100) / 100;
-}
-
-// ── FILTER ROWS BY PAGE MODE ─────────────────────────────────────
-// Normalize to path for cross-format URL matching (SF absolute, GSC relative)
-function toUrlPath(raw) {
-  const s = (raw || "").trim().toLowerCase();
-  try { return new URL(s).pathname.replace(/\/+$/, "") || "/"; } catch { return s.replace(/\/+$/, "") || "/"; }
-}
-
-function filterByMode(rows, mode, bingRows, gscRows = []) {
-  if (mode === "all") return rows;
-
-  if (mode === "geo") {
-    // Pages présentes dans Bing avec au moins 1 citation — match par path
-    const bingPaths = new Set(
-      bingRows
-        .filter(r => safeNum(r["citations"] || r["mentions"] || 0) >= 1)
-        .map(r => toUrlPath(r["page"] || r["url"] || r["adresse"] || ""))
-    );
-    if (bingPaths.size === 0) return rows; // fallback si pas de data Bing
-    return rows.filter(r => bingPaths.has(toUrlPath(r["adresse"] || r["address"] || r["url"] || "")));
-  }
-
-  if (mode === "seo") {
-    // GSC séparé — top 30% des URLs par clics, match par path
-    if (gscRows.length > 0) {
-      const col = (r) => r["pages les plus populaires"] || r["page"] || r["adresse"] || r["url"] || "";
-      const gscWithClics = gscRows.filter(r => safeNum(r["clics"] || r["clicks"] || 0) > 0);
-      const src = gscWithClics.length > 0 ? gscWithClics : gscRows;
-      // Deduplicate by path before sorting — keep highest clicks per URL
-      const pathDedup = {};
-      src.forEach(r => {
-        const p = toUrlPath(col(r));
-        if (!pathDedup[p] || safeNum(r["clics"]||r["clicks"]) > safeNum(pathDedup[p]["clics"]||pathDedup[p]["clicks"])) pathDedup[p] = r;
-      });
-      const sorted = Object.values(pathDedup).sort((a, b) => safeNum(b["clics"] || b["clicks"]) - safeNum(a["clics"] || a["clicks"]));
-      const top = sorted.slice(0, Math.max(1, Math.ceil(sorted.length * 0.3)));
-      const topPaths = new Set(top.map(r => toUrlPath(col(r))));
-      return rows.filter(r => topPaths.has(toUrlPath(r["adresse"] || r["address"] || r["url"] || "")));
-    }
-    return [];
-  }
-
-  return rows;
-}
-
-// ── DETECT SCHEMA TYPES ─────────────────────────────────────────
-function detectSchemas(jsonStr) {
-  if (!jsonStr) return [];
-  const found = [];
-  SCHEMA_TYPES.forEach(type => {
-    if (jsonStr.toLowerCase().includes(`"@type":"${type.toLowerCase()}`) ||
-        jsonStr.toLowerCase().includes(`"@type": "${type.toLowerCase()}`)) {
-      found.push(type);
-    }
-  });
-  return found;
-}
-
-// ── EXTRACT SF ──────────────────────────────────────────────────
-function extractSF(rows, mode = "all", bingRows = [], gscRows = []) {
-  if (!rows.length) return null;
-
-  const filtered = filterByMode(rows, mode, bingRows, gscRows);
-
-  const html = filtered.filter(r => {
-    const ct = (r["type de contenu"] || r["content type"] || r["type"] || "").toLowerCase();
-    const sc = safeNum(r["code http"] || r["status code"] || r["statuscode"] || 200);
-    // Exclure les ressources (images, css, js, fonts...) — garder uniquement text/html
-    // Si ct vide, vérifier qu'il y a un title ou h1 (signe que c'est une vraie page)
-    const isHtml = ct.includes("html") || (ct === "" && (r["title 1"] || r["h1-1"] || r["h1"] || "").trim() !== "");
-    return isHtml && sc < 400;
-  });
-  const total = html.length || 1;
-  const allTotal = filtered.length || 1;
-
-  // Title — longueur moyenne (pages HTML avec un title renseigné)
-  const titleLens = html.map(r => safeNum(r["longueur du title 1"] || r["title 1 length"] || 0) || (r["title 1"] || "").length).filter(l => l > 0);
-
-  // Meta — longueur moyenne (pages avec meta)
-  const metaLens = html.map(r => safeNum(r["longueur de la meta description 1"] || r["meta description 1 length"] || 0) || (r["meta description 1"] || "").length).filter(l => l > 0);
-
-  // H1 — longueur moyenne (pages avec H1)
-  const h1Lens = html.map(r => safeNum(r["longueur du h1-1"] || r["h1-1 length"] || 0) || (r["h1-1"] || r["h1"] || "").trim().length).filter(l => l > 0);
-
-  // Content page weight (HTML pages only)
-  const pageSizes = html.map(r => safeNum(r["taille (octets)"] || r["size"] || 0));
-
-  // Image weight — rows where content type includes "image"
-  const imgRows = filtered.filter(r => {
-    const ct = (r["type de contenu"] || r["content type"] || r["type"] || "").toLowerCase();
-    return ct.includes("image");
-  });
-  const imgSizes = imgRows.map(r => safeNum(r["taille (octets)"] || r["size"] || 0));
-
-  // Mots — HTML uniquement, exclure 0
-  const words  = html.map(r => safeNum(r["nombre de mots"]   || r["word count"]  || 0)).filter(x => x > 0);
-
-  // Inlinks / Outlinks — HTML uniquement
-  const inlk       = html.map(r => safeNum(r["liens entrants"]           || r["inlinks"]   || 0));
-  const outlk      = html.map(r => safeNum(r["liens sortants"]           || r["outlinks"]  || 0));
-  const inlkUniq   = html.map(r => safeNum(r["liens entrants uniques"]   || 0));
-  const outlkUniq  = html.map(r => safeNum(r["liens sortants uniques"]   || 0));
-  const extlkUniq  = html.map(r => safeNum(r["liens sortants externes uniques"] || 0));
-
-  // Profondeur — HTML uniquement, exclure les pages à profondeur 0 (home)
-  const depth  = html.map(r => safeNum(r["crawl profondeur"] || r["crawl depth"] || 0)).filter(x => x >= 0);
-
-  // Flesch — HTML uniquement, exclure 0 (pages sans score)
-  const flesch = html.map(r => safeNum(r["score de lisibilité de flesch"] || r["flesch reading ease"] || 0)).filter(x => x > 0);
-
-  // Indexabilité — pages HTML indexables
-  const indexable = html.filter(r => {
-    const idx = (r["indexabilité"] || r["indexability"] || r["indexable"] || "").toLowerCase();
-    return idx === "indexable" || idx === "" || idx === "true";
-  }).length;
-  const totalImg = imgRows.length;
-
-  // Tables — colonnes "Présence Table 1" à "Présence Table 18"
-  const withTable = html.filter(r => {
-    for (let i = 1; i <= 18; i++) {
-      const val = r[`présence table ${i}`] || r[`presence table ${i}`] || r[`table ${i}`] || "";
-      if (val && val.trim() !== "" && val.trim() !== "0") return true;
-    }
-    return false;
-  }).length;
-
-  // Schemas — colonnes JSON 1..5
-  const schemaTypes = {};
-  const withSchema = html.filter(r => {
-    const jsons = [r["json 1"], r["json 2"], r["json 3"], r["json 4"], r["json 5"]].filter(Boolean).join(" ");
-    if (!jsons) return false;
-    const types = detectSchemas(jsons);
-    types.forEach(t => { schemaTypes[t] = (schemaTypes[t] || 0) + 1; });
-    return types.length > 0;
-  }).length;
-
-  const redirects = filtered.filter(r => { const sc = safeNum(r["code http"] || r["status code"] || 200); return sc >= 300 && sc < 400; }).length;
-  const errors    = filtered.filter(r => { const sc = safeNum(r["code http"] || r["status code"] || 200); return sc >= 400; }).length;
-
-  // llms.txt detection — cherche dans toutes les lignes du crawl (pas seulement HTML filtrées)
-  const llmsRow     = rows.find(r => /\/llms\.txt$/i.test((r["adresse"] || r["address"] || r["url"] || "").trim()));
-  const llmsFullRow = rows.find(r => /\/llms-full\.txt$/i.test((r["adresse"] || r["address"] || r["url"] || "").trim()));
-  const llmsStatus     = llmsRow     ? safeNum(llmsRow["code http"]     || llmsRow["status code"]     || 0) : null;
-  const llmsFullStatus = llmsFullRow ? safeNum(llmsFullRow["code http"] || llmsFullRow["status code"] || 0) : null;
-
-  return {
-    totalPages:    total,
-    totalImg,
-    indexableRate: Math.round((indexable / total) * 100),
-    avgTitleLen:   Math.round(titleLens.reduce((a,b)=>a+b,0) / (titleLens.length || 1)),
-    avgMetaLen:    Math.round(metaLens.reduce((a,b)=>a+b,0)  / (metaLens.length  || 1)),
-    avgH1Len:      Math.round(h1Lens.reduce((a,b)=>a+b,0)    / (h1Lens.length    || 1)),
-    avgWords:      Math.round(words.reduce((a,b)=>a+b,0)     / (words.length     || 1)),
-    avgPageSizeKB: Math.round(avg(pageSizes) / 1024),
-    avgImgSizeKB:  imgSizes.length ? Math.round(avg(imgSizes) / 1024) : 0,
-    avgInlinks:       Math.round(avg(inlk)      * 10) / 10,
-    avgOutlinks:      Math.round(avg(outlk)     * 10) / 10,
-    avgInlinksUniq:   Math.round(avg(inlkUniq)  * 10) / 10,
-    avgOutlinksUniq:  Math.round(avg(outlkUniq) * 10) / 10,
-    avgExtLinksUniq:  Math.round(avg(extlkUniq) * 10) / 10,
-    avgDepth:      Math.round((depth.reduce((a,b)=>a+b,0) / (depth.length || 1)) * 10) / 10,
-    avgFlesch:     Math.round((flesch.reduce((a,b)=>a+b,0) / (flesch.length || 1)) * 10) / 10,
-    tableRate:     Math.round((withTable / total) * 100),
-    schemaRate:    Math.round((withSchema / total) * 100),
-    schemaTypes,
-    errorRate:     Math.round((errors / allTotal) * 100),
-    redirectRate:  Math.round((redirects / allTotal) * 100),
-    llms:     llmsRow     ? { present: true,  status: llmsStatus,     url: llmsRow["adresse"]     || llmsRow["url"]     || "" } : { present: false },
-    llmsFull: llmsFullRow ? { present: true,  status: llmsFullStatus, url: llmsFullRow["adresse"] || llmsFullRow["url"] || "" } : { present: false },
-  };
-}
-
-// ── EXTRACT GSC ─────────────────────────────────────────────────
-function gscVal(r, ...keys) { return keys.map(k => r[k]).find(v => v !== undefined && v !== null && v !== "") ?? null; }
-function extractGSC(rows) {
-  if (!rows.length) return null;
-  const validRows = rows.filter(r => safeNum(gscVal(r,"clics","clicks") || 0) > 0 || safeNum(gscVal(r,"impressions") || 0) > 0);
-  const src = validRows.length > 0 ? validRows : rows;
-  return {
-    clicks:      src.map(r => safeNum(gscVal(r,"clics","clicks") || 0)).reduce((a,b)=>a+b,0),
-    impressions: src.map(r => safeNum(gscVal(r,"impressions") || 0)).reduce((a,b)=>a+b,0),
-    ctr:         Math.round(avg(src.map(r => safeNum(String(gscVal(r,"ctr") || "0").replace("%",""))).filter(x=>x>0)) * 100) / 100,
-    position:    Math.round(avg(src.map(r => safeNum(gscVal(r,"position") || 0)).filter(x=>x>0)) * 10) / 10,
-  };
-}
-
-// ── EXTRACT GA ──────────────────────────────────────────────────
-function extractGA(rows) {
-  if (!rows.length) return null;
-  return {
-    sessions: rows.map(r => safeNum(r["ga4 sessions"] || r["sessions"] || r["séances"] || 0)).reduce((a,b)=>a+b,0),
-    views:    rows.map(r => safeNum(r["ga4 views"]    || r["views"]    || r["pages vues"] || 0)).reduce((a,b)=>a+b,0),
-  };
-}
-
-// ── EXTRACT BING ─────────────────────────────────────────────────
-function extractBing(rows) {
-  if (!rows.length) return null;
-  return {
-    geoMentions: rows.map(r => safeNum(r["citations"] || r["mentions"] || r["impressions"] || r["appearancecount"] || 0)).reduce((a,b)=>a+b,0),
-    pageCount:   rows.filter(r => safeNum(r["citations"] || r["mentions"] || 0) >= 1).length,
-  };
-}
-
-// ── CORRELATION CELL COLOR ───────────────────────────────────────
-function corrColor(v) {
-  if (v === null) return { bg: "#F5F5F7", text: "#C0C0CC", border: "#E8E8ED" };
-  if (v <= -0.25) return { bg: "#FEE2E2", text: "#B91C1C", border: "#FCA5A5" }; // rouge vif
-  if (v <  -0.05) return { bg: "#FEF2F2", text: "#DC2626", border: "#FECACA" }; // rouge léger
-  if (v <   0.05) return { bg: "#F1F5F9", text: "#64748B", border: "#CBD5E1" }; // gris neutre
-  if (v <   0.25) return { bg: "#F0FDF4", text: "#16A34A", border: "#BBF7D0" }; // vert clair
-  return              { bg: "#DCFCE7", text: "#15803D", border: "#86EFAC" };     // vert vif
-}
-
-// ── COMPONENTS ──────────────────────────────────────────────────
-function Badge({ children, color, bg }) {
-  return <span style={{ background: bg, color, borderRadius: 6, padding: "2px 10px", fontSize: 12, fontWeight: 600 }}>{children}</span>;
-}
-
-function StatPill({ label, value, color }) {
-  return (
-    <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 8, padding: "10px 14px", minWidth: 110 }}>
-      <div style={{ fontSize: 11, color: C.textLight, marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.8 }}>{label}</div>
-      <div style={{ fontSize: 20, fontWeight: 700, color: color || C.text, fontVariantNumeric: "tabular-nums" }}>{value ?? "—"}</div>
-    </div>
-  );
-}
-
-function SectionHeader({ title, sub }) {
-  return (
-    <div style={{ marginBottom: 20 }}>
-      <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: C.text, fontFamily: "'Georgia', serif", letterSpacing: -0.5 }}>{title}</h2>
-      {sub && <p style={{ margin: "4px 0 0", fontSize: 13, color: C.textLight }}>{sub}</p>}
-    </div>
-  );
-}
-
-function UploadCard({ label, icon, hint, onData, loaded, color, siteId, source, projectId, onLoadFromHistory }) {
-  const [drag, setDrag]           = useState(false);
-  const [dragHistory, setDragHistory] = useState(false); // dragging a history row over this card
-  const [uploading, setUploading] = useState(false);
-  const [uploadErr, setUploadErr] = useState(null);
-  const ref = useRef();
-
-  const handle = useCallback(async (file) => {
-    if (!file) return;
-    setUploadErr(null);
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-      const text = e.target.result;
-      const rows = parseCSV(text);
-      onData(rows);
-      if (siteId && source) {
-        setUploading(true);
-        try {
-          const ts   = new Date().toISOString().replace(/[:.]/g, "-");
-          const path = `${projectId || "proj-default"}/${siteId}/${source}/${ts}_${file.name}`;
-          await sbUpload(path, text);
-          await sbInsertImport({ project_id: projectId || "proj-default", site_id: siteId, source, filename: file.name, storage_path: path, row_count: rows.length });
-        } catch(err) {
-          setUploadErr("Sauvegarde échouée");
-          console.warn("Supabase upload error:", err);
-        } finally {
-          setUploading(false);
-        }
-      }
-    };
-    reader.readAsText(file);
-  }, [onData, siteId, source, projectId]);
-
-  const handleDragOver = (e) => {
-    e.preventDefault();
-    // Distinguish history row drag from file drag
-    const types = Array.from(e.dataTransfer.types);
-    if (types.includes("historyrow")) { setDragHistory(true); setDrag(false); }
-    else { setDrag(true); setDragHistory(false); }
-  };
-  const handleDragLeave = () => { setDrag(false); setDragHistory(false); };
-  const handleDrop = (e) => {
-    e.preventDefault();
-    setDrag(false); setDragHistory(false);
-    const histJson = e.dataTransfer.getData("historyRow");
-    if (histJson) {
-      try {
-        const row = JSON.parse(histJson);
-        onLoadFromHistory && onLoadFromHistory(row);
-      } catch {}
-    } else {
-      handle(e.dataTransfer.files[0]);
-    }
-  };
-
-  const isHistDrag = dragHistory;
-  const borderColor = isHistDrag ? C.blue : drag ? color : loaded ? color : "#D1D5DB";
-  const bgColor     = isHistDrag ? `${C.blue}12` : drag ? `${color}08` : loaded ? `${color}0D` : "#FAFAFA";
-
-  return (
-    <div
-      onClick={() => ref.current.click()}
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
-      style={{ border: `1.5px dashed ${borderColor}`, borderRadius: 10, padding: "14px 16px", cursor: "pointer", background: bgColor, transition: "all 0.18s", display: "flex", alignItems: "center", gap: 12, position: "relative" }}
-    >
-      {isHistDrag && (
-        <div style={{ position: "absolute", inset: 0, borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center", background: `${C.blue}18`, fontSize: 13, fontWeight: 700, color: C.blue, pointerEvents: "none" }}>
-          Déposer ici
-        </div>
-      )}
-      <input ref={ref} type="file" accept=".csv" style={{ display: "none" }} onChange={e => handle(e.target.files[0])} />
-      <div style={{ fontSize: 22 }}>{uploading ? "⏳" : loaded ? "✅" : icon}</div>
-      <div>
-        <div style={{ fontSize: 13, fontWeight: 600, color: loaded ? color : C.textMid }}>{label}</div>
-        <div style={{ fontSize: 11, color: uploadErr ? C.red : C.textLight, marginTop: 2 }}>
-          {uploading ? "Chargement…" : uploadErr ? uploadErr : loaded ? "Fichier chargé · sauvegardé" : hint}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── PAGE MODE SELECTOR ───────────────────────────────────────────
-function PageModeSelector({ value, onChange }) {
-  return (
-    <div style={{ display: "flex", gap: 6, background: C.bg, borderRadius: 10, padding: 4, border: `1px solid ${C.border}` }}>
-      {PAGE_MODES.map(m => (
-        <button key={m.key} onClick={() => onChange(m.key)} style={{
-          padding: "7px 16px", border: "none", borderRadius: 7, cursor: "pointer", fontSize: 12, fontWeight: 500,
-          background: value === m.key ? C.blue : "transparent",
-          color: value === m.key ? "#fff" : C.textMid,
-          transition: "all 0.15s", display: "flex", alignItems: "center", gap: 6,
-        }}>
-          <span>{m.icon}</span><span>{m.label}</span>
-        </button>
-      ))}
-    </div>
-  );
-}
-
-// ── SCHEMA BREAKDOWN ────────────────────────────────────────────
-function SchemaBreakdown({ schemaTypes, color }) {
-  const entries = Object.entries(schemaTypes || {}).sort((a,b) => b[1]-a[1]);
-  if (!entries.length) return <div style={{ fontSize: 12, color: C.textLight }}>Aucun schema détecté</div>;
-  const max = entries[0][1];
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-      {entries.map(([type, count]) => (
-        <div key={type} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <div style={{ fontSize: 11, color: C.textMid, minWidth: 140 }}>{type}</div>
-          <div style={{ flex: 1, height: 6, background: C.borderLight, borderRadius: 3 }}>
-            <div style={{ height: "100%", width: `${(count/max)*100}%`, background: color, borderRadius: 3 }} />
-          </div>
-          <div style={{ fontSize: 11, fontWeight: 600, color, minWidth: 30, textAlign: "right" }}>{count}</div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-
-// ── BUILD PROMPT FOR CLAUDE ──────────────────────────────────────
-function buildPrompt(metrics, corrMatrix, resultVals) {
-  const sitesData = metrics.map((m, i) => {
-    const sf = m.sf || {};
-    const rv = resultVals[i] || {};
-    return `
-SITE: ${m.site.label}
-— Screaming Frog:
-  Title longueur moy.: ${sf.avgTitleLen ?? "N/A"} car.
-  Meta longueur moy.: ${sf.avgMetaLen ?? "N/A"} car.
-  H1 longueur moy.: ${sf.avgH1Len ?? "N/A"} car.
-  Mots moyens/page: ${sf.avgWords ?? "N/A"}
-  Poids pages (KB): ${sf.avgPageSizeKB ?? "N/A"}
-  Poids images (KB): ${sf.avgImgSizeKB ?? "N/A"}
-  Liens entrants uniques moy.: ${sf.avgInlinksUniq ?? "N/A"}
-  Liens sortants uniques moy.: ${sf.avgOutlinksUniq ?? "N/A"}
-  Liens ext. uniques moy.: ${sf.avgExtLinksUniq ?? "N/A"}
-  Profondeur crawl: ${sf.avgDepth ?? "N/A"}
-  Score Flesch: ${sf.avgFlesch ?? "N/A"}
-  Pages avec tableau: ${sf.tableRate ?? "N/A"}%
-  Pages avec Schema: ${sf.schemaRate ?? "N/A"}%
-  Types de schema: ${Object.entries(sf.schemaTypes || {}).map(([k,v]) => k+":"+v).join(", ") || "aucun"}
-  Taux erreurs: ${sf.errorRate ?? "N/A"}%
-  Taux redirections: ${sf.redirectRate ?? "N/A"}%
-  Nb pages: ${sf.totalPages ?? "N/A"}
-— Résultats GSC/GA4/Bing:
-  Clics GSC: ${rv.clicks ?? 0}
-  Impressions GSC: ${rv.impressions ?? 0}
-  CTR: ${rv.ctr ?? 0}%
-  Position moy.: ${rv.position ?? 0}
-  Sessions GA4: ${rv.sessions ?? 0}
-  Vues GA4: ${rv.views ?? 0}
-  Citations Bing AI: ${rv.geoMentions ?? 0}`;
-  }).join("\n\n");
-
-  const topCorr = corrMatrix.flatMap(({ dim, corrs }) =>
-    corrs.filter(c => c.value !== null && Math.abs(c.value) >= 0.4)
-      .map(c => `${dim.label} ↔ ${c.kpi.label}: ${c.value > 0 ? "+" : ""}${c.value}`)
-  ).join("\n");
-
-  return `Tu es un expert SEO et GEO (Generative Engine Optimization). Tu analyses des données de 3 sites web concurrents et tu dois produire une analyse stratégique et des roadmaps actionnables.
-
-DONNÉES DES 3 SITES:
-${sitesData}
-
-CORRÉLATIONS SIGNIFICATIVES (Pearson ≥ 0.4 ou ≤ -0.4):
-${topCorr || "Données insuffisantes pour calculer des corrélations significatives."}
-
-INSTRUCTIONS:
-Produis un JSON STRICT avec exactement cette structure (rien d'autre, pas de markdown, pas de backticks):
-{
-  "insights_seo": [
-    {"title": "titre court", "detail": "1-2 phrases max", "impact": "fort|moyen|faible"}
-  ],
-  "insights_geo": [
-    {"title": "titre court", "detail": "1-2 phrases max", "impact": "fort|moyen|faible"}
-  ],
-  "roadmaps": {
-    ${metrics.map((m, i) => `"${m.site.id}": ${i === 0
-      ? `{"quick_wins": [{"action": "action concrète", "metric": "métrique SF concernée", "why": "pourquoi basé sur les données", "effort": "1-3j|1sem|2sem"}], "moyen_terme": [{"action": "action concrète", "metric": "métrique SF concernée", "why": "pourquoi basé sur les données", "effort": "1mois|2mois|3mois"}], "long_terme": [{"action": "action concrète", "metric": "métrique SF concernée", "why": "pourquoi basé sur les données", "effort": "3-6mois|6-12mois"}]}`
-      : `{"quick_wins": [], "moyen_terme": [], "long_terme": []}`
-    }`).join(",\n    ")}
-  }
-}
-
-Règles:
-- 3 insights SEO et 3 insights GEO maximum
-- 2 actions par horizon temporel par site maximum
-- Chaque action doit être concrète et basée sur les données
-- Distingue les leviers SEO (GSC/GA4) des leviers GEO (Bing AI)
-- Réponds UNIQUEMENT avec le JSON valide et complet, sans texte avant ou après
-- IMPORTANT: le JSON doit être complet et bien fermé, ne tronque pas`;
-}
-
-// ── ANALYSE TAB COMPONENT ────────────────────────────────────────
-function AnalyseTab({ metrics, corrMatrix, resultVals, analysis, setAnalysis, analysisLoading, setAnalysisLoading, analysisError, setAnalysisError }) {
-  const [activeRoadmap, setActiveRoadmap] = useState(() => metrics[0]?.site.id || "");
-  const hasData = metrics.some(m => m.sf !== null);
-
-  const runAnalysis = async () => {
-    setAnalysisLoading(true);
-    setAnalysisError(null);
-    try {
-      const prompt = buildPrompt(metrics, corrMatrix, resultVals);
-      const res = await fetch("/api/anthropic", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 3500,
-          messages: [{ role: "user", content: prompt }],
-        }),
-      });
-      const text = await res.text();
-      if (res.status === 500) {
-        let msg = text.slice(0, 200);
-        try { const j = JSON.parse(text); msg = j.error || msg; } catch {}
-        throw new Error(`Erreur serveur (500) — vérifiez que ANTHROPIC_API_KEY est configurée dans Netlify. Détail : ${msg}`);
-      }
-      if (!res.ok) {
-        let msg = text.slice(0, 200);
-        try { const j = JSON.parse(text); msg = j.error?.message || j.error || msg; } catch {}
-        throw new Error(`Erreur ${res.status} : ${msg}`);
-      }
-      const data = JSON.parse(text);
-      if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
-      const raw = data.content?.map(b => b.text || "").join("") || "";
-      const clean = raw.replace(/```json|```/g, "").trim();
-      const start = clean.indexOf("{");
-      const end = clean.lastIndexOf("}");
-      if (start === -1 || end === -1) throw new Error("La réponse ne contient pas de JSON valide");
-      let jsonStr = clean.substring(start, end + 1);
-      // Fix truncated arrays/objects caused by token limit
-      let attempts = 0;
-      while (attempts++ < 20) {
-        try { const parsed = JSON.parse(jsonStr); setAnalysis(parsed); break; }
-        catch {
-          // Remove last incomplete element and close structures
-          jsonStr = jsonStr
-            .replace(/,\s*"[^"]*"\s*:\s*[^,}\]]*$/, "")  // trailing key:value
-            .replace(/,\s*\{[^}]*$/, "")                   // trailing open object
-            .replace(/,\s*"[^"]*"$/, "");                  // trailing string
-          // Close any open arrays/objects
-          const opens = (jsonStr.match(/\[/g)||[]).length - (jsonStr.match(/\]/g)||[]).length;
-          const objs  = (jsonStr.match(/\{/g)||[]).length - (jsonStr.match(/\}/g)||[]).length;
-          jsonStr += "]".repeat(Math.max(0,opens)) + "}".repeat(Math.max(0,objs));
-        }
-      }
-    } catch(e) {
-      setAnalysisError("Erreur lors de l'analyse : " + e.message);
-    } finally {
-      setAnalysisLoading(false);
-    }
-  };
-
-  const impactColor = (impact) => impact === "fort" ? C.green : impact === "moyen" ? C.amber : C.textLight;
-  const impactBg    = (impact) => impact === "fort" ? C.greenLight : impact === "moyen" ? C.amberLight : C.bg;
-
-  const horizonConfig = [
-    { key: "quick_wins",   label: "⚡ Quick Wins",    sub: "1 jour – 2 semaines", color: C.green,  bg: C.greenLight  },
-    { key: "moyen_terme",  label: "📈 Moyen terme",   sub: "1 – 3 mois",          color: C.amber,  bg: C.amberLight  },
-    { key: "long_terme",   label: "🏗️ Long terme",    sub: "3 – 12 mois",         color: C.purple, bg: C.purpleLight },
-  ];
-
-  return (
-    <div>
-      {/* Header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24 }}>
-        <div>
-          <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: C.text, fontFamily: "'Georgia', serif", letterSpacing: -0.5 }}>
-            Analyse IA & Roadmaps
-          </h2>
-          <p style={{ margin: "4px 0 0", fontSize: 13, color: C.textLight }}>
-            Interprétation des corrélations · Leviers SEO & GEO · Actions priorisées par site
-          </p>
-        </div>
-        <button
-          onClick={runAnalysis}
-          disabled={analysisLoading || !hasData}
-          style={{
-            padding: "10px 24px", background: analysisLoading ? C.border : C.blue, color: analysisLoading ? C.textLight : "#fff",
-            border: "none", borderRadius: 9, cursor: hasData && !analysisLoading ? "pointer" : "not-allowed",
-            fontSize: 14, fontWeight: 600, display: "flex", alignItems: "center", gap: 8,
-            transition: "all 0.2s", boxShadow: analysisLoading ? "none" : "0 2px 8px #2563EB33",
-          }}
-        >
-          {analysisLoading ? (
-            <><span style={{ display: "inline-block", animation: "spin 1s linear infinite" }}>⟳</span> Analyse en cours…</>
-          ) : analysis ? "↻ Relancer l'analyse" : "✦ Générer l'analyse"}
-        </button>
-      </div>
-
-      {/* No data warning */}
-      {!hasData && (
-        <div style={{ background: C.amberLight, border: `1px solid #FDE68A`, borderRadius: 12, padding: "16px 20px", marginBottom: 24, fontSize: 13, color: C.amber }}>
-          ⚠️ Chargez au moins un fichier CSV Screaming Frog dans l'onglet Import pour générer l'analyse.
-        </div>
-      )}
-
-      {/* Error */}
-      {analysisError && (
-        <div style={{ background: C.redLight, border: `1px solid #FCA5A5`, borderRadius: 12, padding: "16px 20px", marginBottom: 24, fontSize: 13, color: C.red }}>
-          {analysisError}
-        </div>
-      )}
-
-      {/* Loading skeleton */}
-      {analysisLoading && (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 24 }}>
-          {[1,2].map(i => (
-            <div key={i} style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: 24 }}>
-              <div style={{ height: 16, background: C.borderLight, borderRadius: 6, width: "40%", marginBottom: 16 }} />
-              {[1,2,3].map(j => (
-                <div key={j} style={{ height: 60, background: C.bg, borderRadius: 8, marginBottom: 10 }} />
-              ))}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Analysis results */}
-      {analysis && !analysisLoading && (
-        <>
-          {/* Insights SEO + GEO */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 28 }}>
-            {[
-              { key: "insights_seo", label: "🔍 Leviers SEO", sub: "Basés sur corrélations GSC & GA4", border: C.blue },
-              { key: "insights_geo", label: "🤖 Leviers GEO", sub: "Basés sur corrélations Bing AI",   border: C.purple },
-            ].map(({ key, label, sub, border }) => (
-              <div key={key} style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden" }}>
-                <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.border}`, borderLeft: `4px solid ${border}` }}>
-                  <div style={{ fontWeight: 700, fontSize: 15, color: C.text }}>{label}</div>
-                  <div style={{ fontSize: 12, color: C.textLight, marginTop: 2 }}>{sub}</div>
-                </div>
-                <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: 12 }}>
-                  {(analysis[key] || []).map((insight, i) => (
-                    <div key={i} style={{ background: impactBg(insight.impact), border: `1px solid ${impactColor(insight.impact)}22`, borderRadius: 10, padding: "14px 16px" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                        <div style={{ fontWeight: 600, fontSize: 13, color: C.text }}>{insight.title}</div>
-                        <span style={{ fontSize: 10, fontWeight: 700, color: impactColor(insight.impact), background: `${impactColor(insight.impact)}18`, padding: "2px 8px", borderRadius: 20, textTransform: "uppercase", letterSpacing: 0.8 }}>
-                          impact {insight.impact}
-                        </span>
-                      </div>
-                      <div style={{ fontSize: 12, color: C.textMid, lineHeight: 1.6 }}>{insight.detail}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* Roadmaps */}
-          <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden" }}>
-            <div style={{ padding: "20px 24px", borderBottom: `1px solid ${C.border}` }}>
-              <div style={{ fontWeight: 700, fontSize: 15, color: C.text, marginBottom: 12 }}>🗺️ Roadmaps par site</div>
-              <div style={{ display: "flex", gap: 8 }}>
-                {metrics.map(({ site: s }) => (
-                  <button key={s.id} onClick={() => setActiveRoadmap(s.id)} style={{
-                    padding: "7px 18px", border: `1px solid ${activeRoadmap === s.id ? s.color : C.border}`,
-                    borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: activeRoadmap === s.id ? 700 : 400,
-                    background: activeRoadmap === s.id ? s.bg : C.white, color: activeRoadmap === s.id ? s.color : C.textMid,
-                    transition: "all 0.15s",
-                  }}>{s.label}</button>
-                ))}
-              </div>
-            </div>
-
-            <div style={{ padding: "24px" }}>
-              {(() => {
-                const siteId = activeRoadmap;
-                const rm = analysis.roadmaps?.[siteId];
-                if (!rm) return <div style={{ color: C.textLight, fontSize: 13 }}>Aucune roadmap générée pour ce site.</div>;
-                return (
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 20 }}>
-                    {horizonConfig.map(({ key, label, sub, color, bg }) => (
-                      <div key={key} style={{ background: bg, border: `1px solid ${color}33`, borderRadius: 12, overflow: "hidden" }}>
-                        <div style={{ padding: "14px 16px", borderBottom: `1px solid ${color}22` }}>
-                          <div style={{ fontWeight: 700, fontSize: 14, color }}>{label}</div>
-                          <div style={{ fontSize: 11, color: `${color}99`, marginTop: 2 }}>{sub}</div>
-                        </div>
-                        <div style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
-                          {(rm[key] || []).map((item, i) => (
-                            <div key={i} style={{ background: C.white, borderRadius: 9, padding: "12px 14px", border: `1px solid ${color}22` }}>
-                              <div style={{ fontWeight: 600, fontSize: 13, color: C.text, marginBottom: 4 }}>{item.action}</div>
-                              <div style={{ fontSize: 11, color: C.textLight, marginBottom: 6, display: "flex", gap: 6, flexWrap: "wrap" }}>
-                                <span style={{ background: `${color}15`, color, padding: "1px 7px", borderRadius: 10, fontWeight: 500 }}>{item.metric}</span>
-                                <span style={{ background: C.bg, color: C.textMid, padding: "1px 7px", borderRadius: 10 }}>⏱ {item.effort}</span>
-                              </div>
-                              <div style={{ fontSize: 11, color: C.textMid, lineHeight: 1.5 }}>{item.why}</div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                );
-              })()}
-            </div>
-          </div>
-        </>
-      )}
-
-      {/* Empty state */}
-      {!analysis && !analysisLoading && hasData && (
-        <div style={{ background: C.white, border: `2px dashed ${C.border}`, borderRadius: 14, padding: "60px 40px", textAlign: "center" }}>
-          <div style={{ fontSize: 40, marginBottom: 16 }}>✦</div>
-          <div style={{ fontSize: 16, fontWeight: 600, color: C.text, marginBottom: 8 }}>Prêt à analyser</div>
-          <div style={{ fontSize: 13, color: C.textLight, maxWidth: 400, margin: "0 auto" }}>
-            Cliquez sur "Générer l'analyse" pour obtenir les insights SEO/GEO et les roadmaps basés sur vos données et les corrélations calculées.
-          </div>
-        </div>
-      )}
-
-      <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
-    </div>
-  );
-}
-
-
-// ── KPI HEADER CELL WITH TOOLTIP ─────────────────────────────────
-function KpiHeaderCell({ kpi }) {
-  const [show, setShow] = useState(false);
-  const tip = KPI_TOOLTIPS[kpi.label];
-  return (
-    <th
-      onMouseEnter={() => setShow(true)}
-      onMouseLeave={() => setShow(false)}
-      style={{ position: "relative", padding: "14px 10px", textAlign: "center", fontSize: 11, fontWeight: 600, color: C.textMid, background: C.bg, borderBottom: `1px solid ${C.border}`, borderRight: `1px solid ${C.borderLight}`, minWidth: 105, lineHeight: 1.3, cursor: tip ? "help" : "default" }}
-    >
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 3 }}>
-        {kpi.label}
-        {tip && <span style={{ fontSize: 9, color: C.textLight, border: `1px solid ${C.border}`, borderRadius: "50%", width: 13, height: 13, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>?</span>}
-      </div>
-      <div style={{ fontSize: 10, fontWeight: 400, color: C.textLight, marginTop: 2 }}>
-        {kpi.src === "gsc" ? "🔍 GSC" : kpi.src === "ga" ? "📊 GA4" : "🤖 Bing"}
-      </div>
-      {show && tip && (
-        <div style={{
-          position: "absolute", top: "calc(100% + 6px)", left: "50%", transform: "translateX(-50%)", zIndex: 300,
-          background: C.text, color: "#fff", fontSize: 11, lineHeight: 1.5,
-          padding: "8px 12px", borderRadius: 8, width: 220, fontWeight: 400, textAlign: "left",
-          boxShadow: "0 4px 16px rgba(0,0,0,0.18)", pointerEvents: "none",
-        }}>
-          <div style={{ position: "absolute", top: -5, left: "50%", transform: "translateX(-50%)", width: 10, height: 10, background: C.text, rotate: "45deg", borderRadius: 2 }} />
-          {tip}
-        </div>
-      )}
-    </th>
-  );
-}
-
-
-// ── SF DIM ROW LABEL WITH TOOLTIP ────────────────────────────────
-function SfDimCell({ dim, rowBg }) {
-  const [show, setShow] = useState(false);
-  const tip = SF_DIM_TOOLTIPS[dim.key];
-  return (
-    <td
-      onMouseEnter={() => setShow(true)}
-      onMouseLeave={() => setShow(false)}
-      style={{ position: "sticky", padding: "11px 18px", fontSize: 12, fontWeight: 500, color: C.text, borderRight: `1px solid ${C.border}`, borderBottom: `1px solid ${C.borderLight}`, left: 0, background: rowBg, zIndex: 1, cursor: tip ? "help" : "default" }}
-    >
-      <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-        {dim.label}
-        <span style={{ fontSize: 10, color: C.textLight }}>{dim.higher ? "↑" : "↓"}</span>
-        {tip && <span style={{ fontSize: 9, color: C.textLight, border: `1px solid ${C.border}`, borderRadius: "50%", width: 13, height: 13, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>?</span>}
-      </span>
-      {show && tip && (
-        <div style={{
-          position: "absolute", top: "50%", left: "calc(100% + 8px)", transform: "translateY(-50%)", zIndex: 400,
-          background: C.text, color: "#fff", fontSize: 11, lineHeight: 1.5,
-          padding: "8px 12px", borderRadius: 8, width: 230, fontWeight: 400,
-          boxShadow: "0 4px 16px rgba(0,0,0,0.18)", pointerEvents: "none",
-        }}>
-          <div style={{ position: "absolute", top: "50%", left: -5, transform: "translateY(-50%)", width: 10, height: 10, background: C.text, rotate: "45deg", borderRadius: 2 }} />
-          {tip}
-        </div>
-      )}
-    </td>
-  );
-}
-
-
-// ── SF DIM TOOLTIPS BY KEY ────────────────────────────────────────
-const SF_DIM_TOOLTIPS = {
-  avgTitleLen:   "Longueur moyenne des balises title en caractères. Idéalement entre 30 et 65 car. pour Google.",
-  avgMetaLen:    "Longueur moyenne des meta descriptions en caractères. Idéalement entre 100 et 160 car.",
-  avgH1Len:      "Longueur moyenne des H1 en caractères. Un H1 présent et descriptif est essentiel pour le SEO et le GEO.",
-  avgWords:      "Nombre moyen de mots par page HTML. Plus de contenu (500+ mots) favorise le positionnement et la compréhension GEO.",
-  avgPageSizeKB: "Poids moyen des pages HTML en KB. Des pages légères améliorent le Core Web Vitals et l'expérience mobile.",
-  avgImgSizeKB:  "Poids moyen des images en KB. Des images lourdes ralentissent le chargement — impact direct sur le classement.",
-  avgInlinks:       "Nombre moyen de liens internes pointant vers chaque page.",
-  avgOutlinks:      "Nombre moyen de liens sortants par page.",
-  avgInlinksUniq:   "Nombre moyen de liens entrants uniques (déduplication des sources). Indicateur clé du maillage interne réel.",
-  avgOutlinksUniq:  "Nombre moyen de liens sortants uniques par page. Un excès peut diluer l'autorité.",
-  avgExtLinksUniq:  "Nombre moyen de liens sortants externes uniques. Trop de liens externes peut diluer l'autorité de la page.",
-  avgDepth:      "Profondeur de crawl moyenne depuis la home. Au-delà de 4 niveaux, les pages sont moins bien indexées.",
-  avgFlesch:     "Score de lisibilité Flesch (0-100). Au-dessus de 60 = texte accessible. Important pour l'engagement et la compréhension GEO.",
-  tableRate:     "% de pages avec un tableau HTML. Les tableaux structurent l'information et favorisent les rich snippets et réponses AI.",
-  schemaRate:    "% de pages avec un schema JSON-LD. Aide Google et les LLMs à comprendre le type et le contenu de la page.",
-  errorRate:     "% de pages en erreur HTTP 4xx. Ces pages nuisent au crawl budget et à l'expérience utilisateur.",
-  redirectRate:  "% d'URLs en redirection 3xx. Consomment du crawl budget et peuvent diluer le PageRank si en chaîne.",
-  totalPages:    "Nombre total de pages HTML crawlées. Donne la taille du site indexable.",
-};
-
-// ── KPI TOOLTIPS ─────────────────────────────────────────────────
-const KPI_TOOLTIPS = {
-  "Clics GSC":             "Nombre total de clics organiques reçus depuis Google Search. Mesure directe de la performance SEO en trafic réel.",
-  "Impressions GSC":       "Nombre de fois où vos pages sont apparues dans les résultats Google. Élevé avec peu de clics = problème de CTR ou de pertinence.",
-  "CTR (%)":               "Taux de clic (Clics ÷ Impressions). Un CTR faible peut indiquer un title/meta peu attractif ou un mauvais positionnement.",
-  "Position moy.":         "Position moyenne dans Google Search. En dessous de 10 = première page. Chaque point gagné peut multiplier le trafic.",
-  "Sessions GA4":          "Nombre de sessions initiées sur le site. Reflète le volume de visites réel, toutes sources confondues.",
-  "Vues GA4":              "Nombre total de pages vues (GA4 Views). Inclut les visites multiples d'une même page dans une session.",
-  "Citations Bing AI":     "Nombre de fois où vos pages sont citées dans les réponses générées par Bing AI (Copilot). Métrique clé du GEO.",
-};
-
-// ── LLMS STATUS BADGE ─────────────────────────────────────────────
-function LlmsStatus({ sf }) {
-  if (!sf) return null;
-  const files = [
-    { key: "llms",     label: "llms.txt",      data: sf.llms },
-    { key: "llmsFull", label: "llms-full.txt",  data: sf.llmsFull },
-  ];
-  return (
-    <div style={{ marginTop: 12, padding: "12px 14px", background: C.bg, borderRadius: 10, border: `1px solid ${C.border}` }}>
-      <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, color: C.textLight, marginBottom: 8, fontWeight: 600 }}>
-        🤖 Fichiers LLMs
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        {files.map(({ key, label, data }) => {
-          const ok  = data?.present && data?.status >= 200 && data?.status < 300;
-          const err = data?.present && (data?.status >= 400 || data?.status === 0);
-          const rdr = data?.present && data?.status >= 300 && data?.status < 400;
-          return (
-            <div key={key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-              <span style={{ fontSize: 12, color: C.textMid, fontFamily: "monospace" }}>{label}</span>
-              {ok  && <span style={{ fontSize: 11, fontWeight: 700, color: C.green,     background: C.greenLight,  padding: "2px 10px", borderRadius: 20 }}>✓ {data.status} OK</span>}
-              {rdr && <span style={{ fontSize: 11, fontWeight: 700, color: C.amber,     background: C.amberLight,  padding: "2px 10px", borderRadius: 20 }}>↪ {data.status} Redirect</span>}
-              {err && <span style={{ fontSize: 11, fontWeight: 700, color: C.red,       background: C.redLight,    padding: "2px 10px", borderRadius: 20 }}>✗ {data.status} Erreur</span>}
-              {!data?.present && <span style={{ fontSize: 11, fontWeight: 600, color: C.textLight, background: C.borderLight, padding: "2px 10px", borderRadius: 20 }}>Absent</span>}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-const RADAR_DIMS = [
-  { key: "totalPages",    label: "Pages",         max: 5000  },
-  { key: "totalImg",      label: "Images",        max: 2000  },
-  { key: "avgInlinksUniq",  label: "Inlinks uniq.",    max: 100 },
-  { key: "avgOutlinksUniq", label: "Outlinks uniq.",   max: 100 },
-  { key: "avgExtLinksUniq", label: "Liens ext. uniq.", max: 50  },
-  { key: "indexableRate", label: "Indexables %",  max: 100   },
-  { key: "avgWords",      label: "Mots moy.",     max: 1000  },
-];
-
-// ── CORR CELL WITH TOOLTIP ───────────────────────────────────────
-function corrInterpret(r) {
-  if (r === null) return null;
-  if (r >= 0.25)  return { label: "Corrélation positive forte",  color: "#86EFAC" };
-  if (r >= 0.05)  return { label: "Corrélation positive faible", color: "#BBF7D0" };
-  if (r > -0.05)  return { label: "Pas de corrélation nette",    color: "#CBD5E1" };
-  if (r > -0.25)  return { label: "Corrélation négative faible", color: "#FECACA" };
-  return               { label: "Corrélation négative forte",    color: "#FCA5A5" };
-}
-
-function CorrCell({ kpi, value, n, dim, base, delta, showDelta }) {
-  const [show, setShow] = useState(false);
-  const col = corrColor(value);
-  const interp = corrInterpret(value);
-  return (
-    <td
-      onMouseEnter={() => setShow(true)}
-      onMouseLeave={() => setShow(false)}
-      style={{ padding: "8px 6px", textAlign: "center", borderRight: `1px solid ${C.borderLight}`, borderBottom: `1px solid ${C.borderLight}`, cursor: "help", position: "relative" }}
-    >
-      <div style={{ background: col.bg, color: col.text, border: `1px solid ${col.border}`, borderRadius: 7, padding: "5px 6px", fontSize: 12, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>
-        {value !== null ? (value > 0 ? "+" : "") + value : "—"}
-      </div>
-      {showDelta && delta !== null && (
-        <div style={{ fontSize: 10, fontWeight: 600, marginTop: 2, color: delta > 0 ? "#16A34A" : delta < 0 ? "#DC2626" : C.textLight, display: "flex", alignItems: "center", justifyContent: "center", gap: 1 }}>
-          {delta > 0 ? "▲" : delta < 0 ? "▼" : "="}{delta !== 0 ? (delta > 0 ? "+" : "") + delta : "="}
-        </div>
-      )}
-      {n > 0 && <div style={{ fontSize: 9, color: C.textLight, marginTop: 1 }}>{n}p</div>}
-      {show && (
-        <div style={{
-          position: "absolute", bottom: "calc(100% + 8px)", left: "50%", transform: "translateX(-50%)",
-          background: "#1E1E2E", color: "#fff", borderRadius: 10, padding: "13px 15px",
-          fontSize: 12, zIndex: 50, pointerEvents: "none",
-          boxShadow: "0 6px 20px rgba(0,0,0,0.3)", width: 240,
-          lineHeight: 1.7,
-        }}>
-          {value !== null ? (<>
-            {/* Score + interprétation */}
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-              <span style={{ fontSize: 16, fontWeight: 800 }}>{value > 0 ? "+" : ""}{value}</span>
-              <span style={{ fontSize: 10, fontWeight: 600, background: interp.color, color: "#1E1E2E", borderRadius: 4, padding: "2px 7px" }}>{interp.label}</span>
-            </div>
-            <div style={{ borderTop: "1px solid #ffffff22", paddingTop: 8, marginBottom: 8 }}>
-              {/* What it measures */}
-              <div style={{ fontSize: 11, color: "#94A3B8", marginBottom: 4 }}>Ce que mesure ce coefficient :</div>
-              <div style={{ fontSize: 11 }}>
-                Quand <b style={{ color: "#E2E8F0" }}>{dim.label}</b> augmente d'une page à l'autre,
-                est-ce que <b style={{ color: "#E2E8F0" }}>{kpi.label}</b> a tendance à {value >= 0 ? "augmenter" : "diminuer"} aussi ?
-              </div>
-            </div>
-            <div style={{ borderTop: "1px solid #ffffff22", paddingTop: 8, marginBottom: 8 }}>
-              {/* How computed */}
-              <div style={{ fontSize: 11, color: "#94A3B8", marginBottom: 4 }}>Comment c'est calculé :</div>
-              <div style={{ fontSize: 11 }}>
-                Pour chaque page présente à la fois dans SF et dans {kpi.label.includes("Bing") ? "Bing" : kpi.label.includes("GSC") || ["Clics","Impressions","CTR","Position"].some(k => kpi.label.includes(k)) ? "GSC" : "GA4"},
-                on compare sa valeur <b style={{ color: "#E2E8F0" }}>{dim.label}</b> avec sa valeur <b style={{ color: "#E2E8F0" }}>{kpi.label}</b>.
-                Le coefficient de Pearson mesure si ces deux séries varient ensemble
-                (r = +1 parfaite covariation, r = 0 aucun lien, r = −1 relation inverse).
-              </div>
-            </div>
-            {showDelta && delta !== null && (
-              <div style={{ borderTop: "1px solid #ffffff22", paddingTop: 8, marginTop: 4 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11 }}>
-                  <span style={{ color: "#94A3B8" }}>Toutes les pages :</span>
-                  <span style={{ fontWeight: 600 }}>{base !== null ? (base > 0 ? "+" : "") + base : "—"}</span>
-                </div>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11 }}>
-                  <span style={{ color: "#94A3B8" }}>Ce filtre :</span>
-                  <span style={{ fontWeight: 600 }}>{value !== null ? (value > 0 ? "+" : "") + value : "—"}</span>
-                </div>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginTop: 2 }}>
-                  <span style={{ color: "#94A3B8" }}>Différence :</span>
-                  <span style={{ fontWeight: 700, color: delta > 0 ? "#86EFAC" : delta < 0 ? "#FCA5A5" : "#94A3B8" }}>
-                    {delta > 0 ? "▲ +" : delta < 0 ? "▼ " : "= "}{delta}
-                  </span>
-                </div>
-              </div>
-            )}
-            <div style={{ borderTop: "1px solid #ffffff22", paddingTop: 7, fontSize: 10, color: "#64748B" }}>
-              {n} pages avec données des deux sources · Pearson r
-            </div>
-          </>) : (<>
-            <div style={{ fontWeight: 700, marginBottom: 6 }}>Données insuffisantes</div>
-            <div style={{ fontSize: 11, color: "#94A3B8" }}>
-              Seulement {n} page{n > 1 ? "s" : ""} avec URL présente dans les deux sources.
-              Minimum 5 requis pour calculer une corrélation fiable.
-            </div>
-          </>)}
-          <div style={{ position: "absolute", bottom: -5, left: "50%", transform: "translateX(-50%)", width: 10, height: 10, background: "#1E1E2E", clipPath: "polygon(0 0, 100% 0, 50% 100%)" }} />
-        </div>
-      )}
-    </td>
-  );
-}
-
-// ── MAIN APP ────────────────────────────────────────────────────
 export default function App() {
-  // ── Projects ──
-  const [projects, setProjects] = useState([INITIAL_PROJECT]);
+  // ── Projects ─────────────────────────────────────────────────────
+  const [projects, setProjects]             = useState([INITIAL_PROJECT]);
   const [currentProjectId, setCurrentProjectId] = useState(INITIAL_PROJECT.id);
-  const [editingProjectName, setEditingProjectName] = useState(null); // project id being renamed
+  const [editingProjectName, setEditingProjectName] = useState(null);
 
   const currentProject = projects.find(p => p.id === currentProjectId) || projects[0];
 
-  // Helpers to mutate current project's data
   const currentProjectIdRef = useRef(currentProjectId);
   useEffect(() => { currentProjectIdRef.current = currentProjectId; }, [currentProjectId]);
-  const updateProject = useCallback((updater) => setProjects(prev => prev.map(p => p.id === currentProjectIdRef.current ? {...p, ...updater(p)} : p)), []);
 
-  // Derived from current project
+  const updateProject = useCallback(
+    (updater) => setProjects(prev => prev.map(p =>
+      p.id === currentProjectIdRef.current ? { ...p, ...updater(p) } : p
+    )),
+    []
+  );
+
   const sites    = currentProject.sites;
   const sfData   = currentProject.sfData;
   const gscData  = currentProject.gscData;
   const gaData   = currentProject.gaData;
   const bingData = currentProject.bingData;
 
-  const setSites   = useCallback((fn) => updateProject(p => ({ sites:   typeof fn === "function" ? fn(p.sites)   : fn })), [updateProject]);
-  const setSfData  = useCallback((fn) => updateProject(p => ({ sfData:  typeof fn === "function" ? fn(p.sfData)  : fn })), [updateProject]);
-  const setGscData = useCallback((fn) => updateProject(p => ({ gscData: typeof fn === "function" ? fn(p.gscData) : fn })), [updateProject]);
-  const setGaData  = useCallback((fn) => updateProject(p => ({ gaData:  typeof fn === "function" ? fn(p.gaData)  : fn })), [updateProject]);
-  const setBingData= useCallback((fn) => updateProject(p => ({ bingData:typeof fn === "function" ? fn(p.bingData): fn })), [updateProject]);
+  const setSfData   = useCallback((fn) => updateProject(p => ({ sfData:   typeof fn === "function" ? fn(p.sfData)   : fn })), [updateProject]);
+  const setGscData  = useCallback((fn) => updateProject(p => ({ gscData:  typeof fn === "function" ? fn(p.gscData)  : fn })), [updateProject]);
+  const setGaData   = useCallback((fn) => updateProject(p => ({ gaData:   typeof fn === "function" ? fn(p.gaData)   : fn })), [updateProject]);
+  const setBingData = useCallback((fn) => updateProject(p => ({ bingData: typeof fn === "function" ? fn(p.bingData) : fn })), [updateProject]);
 
-  const [confirmModal, setConfirmModal] = useState(null); // {message, onConfirm}
-  const [tab, setTab] = useState("import");
-  const [pageMode, setPageMode] = useState("all");
-  const [matrixSites, setMatrixSites] = useState(DEFAULT_SITES.map(s => s.id));
-  const [radarSites,  setRadarSites]  = useState(DEFAULT_SITES.map(s => s.id));
-  const [analysis, setAnalysis] = useState(null);
+  // ── UI state ─────────────────────────────────────────────────────
+  const [confirmModal, setConfirmModal] = useState(null);
+  const [tab, setTab]                   = useState("import");
+  const [pageMode, setPageMode]         = useState("all");
+  const [matrixSites, setMatrixSites]   = useState(DEFAULT_SITES.map(s => s.id));
+  const [radarSites, setRadarSites]     = useState(DEFAULT_SITES.map(s => s.id));
+  const [analysis, setAnalysis]         = useState(null);
   const [analysisLoading, setAnalysisLoading] = useState(false);
-  const [analysisError, setAnalysisError] = useState(null);
+  const [analysisError, setAnalysisError]     = useState(null);
 
   // Sync selection states when project or sites change
   useEffect(() => {
@@ -1255,16 +75,16 @@ export default function App() {
   useEffect(() => {
     const ids = sites.map(s => s.id);
     setMatrixSites(prev => { const kept = prev.filter(id => ids.includes(id)); return kept.length ? kept : ids; });
-    setRadarSites(prev => { const kept = prev.filter(id => ids.includes(id)); return kept.length ? kept : ids; });
+    setRadarSites(prev  => { const kept = prev.filter(id => ids.includes(id)); return kept.length ? kept : ids; });
   }, [sites]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Supabase state
-  const [dbHistory,    setDbHistory]    = useState([]);
-  const [dbLoading,    setDbLoading]    = useState(true);
-  const [showHistory,  setShowHistory]  = useState(false);
+  // ── Supabase ─────────────────────────────────────────────────────
+  const [dbHistory, setDbHistory]   = useState([]);
+  const [dbLoading, setDbLoading]   = useState(true);
+  const [showHistory, setShowHistory] = useState(false);
 
-  // Shared: download + inject all latest CSVs for a given project id
   const loadedProjectsRef = useRef(new Set());
+
   const loadProjectData = useCallback(async (pid) => {
     const [latest, history] = await Promise.all([sbGetLatest(pid), sbGetHistory(pid)]);
     setDbHistory(history);
@@ -1274,12 +94,11 @@ export default function App() {
         const rows = parseCSV(text);
         const sid = row.site_id, src = row.source;
         const key = src === "sf" ? "sfData" : src === "gsc" ? "gscData" : src === "ga" ? "gaData" : src === "bing" ? "bingData" : null;
-        if (key) setProjects(prev => prev.map(p => p.id === pid ? {...p, [key]: {...p[key], [sid]: rows}} : p));
-      } catch(e) { console.warn("Auto-load row failed:", row.source, e); }
+        if (key) setProjects(prev => prev.map(p => p.id === pid ? { ...p, [key]: { ...p[key], [sid]: rows } } : p));
+      } catch (e) { console.warn("Auto-load row failed:", row.source, e); }
     }));
   }, []);
 
-  // Load projects list + data on mount
   useEffect(() => {
     (async () => {
       setDbLoading(true);
@@ -1296,7 +115,7 @@ export default function App() {
           setProjects(restored);
           const firstId = restored[0].id;
           setCurrentProjectId(firstId);
-          loadedProjectsRef.current.add(firstId); // prevent switch useEffect from double-loading
+          loadedProjectsRef.current.add(firstId);
           await loadProjectData(firstId);
         } else {
           await sbSaveProject(INITIAL_PROJECT);
@@ -1304,24 +123,22 @@ export default function App() {
           const history = await sbGetHistory(INITIAL_PROJECT.id);
           setDbHistory(history);
         }
-      } catch(e) { console.warn("Supabase init error", e); }
+      } catch (e) { console.warn("Supabase init error", e); }
       finally { setDbLoading(false); }
     })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // When switching project: load its data (once per session)
   useEffect(() => {
     if (loadedProjectsRef.current.has(currentProjectId)) return;
     loadedProjectsRef.current.add(currentProjectId);
     (async () => {
       setDbLoading(true);
       try { await loadProjectData(currentProjectId); }
-      catch(e) { console.warn("Supabase project switch error", e); }
+      catch (e) { console.warn("Supabase project switch error", e); }
       finally { setDbLoading(false); }
     })();
   }, [currentProjectId, loadProjectData]);
 
-  // Auto-save project meta (name + sites) when it changes
   useEffect(() => {
     if (!currentProject) return;
     const t = setTimeout(() => sbSaveProject(currentProject), 800);
@@ -1333,37 +150,32 @@ export default function App() {
     setDbHistory(history);
   }, [currentProjectId]);
 
-  // Computed metrics, mode-aware
-  const baseMetrics = useMemo(() => {
-    return sites.map(s => ({
-      site: s,
-      sf: extractSF(sfData[s.id], "all", bingData[s.id], gscData[s.id]),
-    }));
-  }, [sites, sfData, gscData, bingData]);
+  // ── Computed metrics ─────────────────────────────────────────────
+  const baseMetrics = useMemo(() => sites.map(s => ({
+    site: s,
+    sf: extractSF(sfData[s.id] || [], "all", bingData[s.id] || [], gscData[s.id] || []),
+  })), [sites, sfData, gscData, bingData]);
 
-  const metrics = useMemo(() => {
-    return sites.map((s, si) => {
-      const base = baseMetrics[si];
-      return {
-        site: s,
-        // Reuse baseMetrics.sf when pageMode === "all" — avoids double extractSF
-        sf:     pageMode === "all" ? (base?.sf ?? null) : extractSF(sfData[s.id] || [], pageMode, bingData[s.id] || [], gscData[s.id] || []),
-        sfBase: base?.sf ?? null,
-        gsc:  (gscData[s.id]?.length  > 0) ? extractGSC(gscData[s.id])        : null,
-        ga:   (gaData[s.id]?.length   > 0) ? extractGA(gaData[s.id])           : null,
-        bing: (bingData[s.id]?.length > 0) ? extractBing(bingData[s.id])       : null,
-      };
-    });
-  }, [sites, sfData, gscData, gaData, bingData, pageMode, baseMetrics]);
+  const metrics = useMemo(() => sites.map((s, si) => {
+    const base = baseMetrics[si];
+    return {
+      site: s,
+      sf:     pageMode === "all" ? (base?.sf ?? null) : extractSF(sfData[s.id] || [], pageMode, bingData[s.id] || [], gscData[s.id] || []),
+      sfBase: base?.sf ?? null,
+      gsc:    gscData[s.id]?.length  > 0 ? extractGSC(gscData[s.id])   : null,
+      ga:     gaData[s.id]?.length   > 0 ? extractGA(gaData[s.id])     : null,
+      bing:   bingData[s.id]?.length > 0 ? extractBing(bingData[s.id]) : null,
+    };
+  }), [sites, sfData, gscData, gaData, bingData, pageMode, baseMetrics]);
 
   const resultVals = useMemo(() => metrics.map(m => ({
-    clicks:          m.gsc?.clicks          ?? 0,
-    impressions:     m.gsc?.impressions      ?? 0,
-    ctr:             m.gsc?.ctr              ?? 0,
-    position:        m.gsc?.position         ?? 0,
-    sessions: m.ga?.sessions ?? 0,
-    views:    m.ga?.views    ?? 0,
-    geoMentions:     m.bing?.geoMentions     ?? 0,
+    clicks:      m.gsc?.clicks      ?? 0,
+    impressions: m.gsc?.impressions  ?? 0,
+    ctr:         m.gsc?.ctr          ?? 0,
+    position:    m.gsc?.position     ?? 0,
+    sessions:    m.ga?.sessions      ?? 0,
+    views:       m.ga?.views         ?? 0,
+    geoMentions: m.bing?.geoMentions ?? 0,
   })), [metrics]);
 
   const corrMatrix = useMemo(() => {
@@ -1380,16 +192,14 @@ export default function App() {
     }));
   }, [metrics, resultVals]);
 
-  // Base matrix always on "all" pages — used as comparison reference
   const baseMatrix = useMemo(() => {
     const sfRows = matrixSites.flatMap(id => sfData[id] || []);
     if (!sfRows.length) return SF_DIMS.map(dim => ({ dim, corrs: RES_KPIS.map(kpi => ({ kpi, value: null })) }));
     const gscRows  = matrixSites.flatMap(id => gscData[id]  || []);
     const gaRows   = matrixSites.flatMap(id => gaData[id]   || []);
     const bingRows = matrixSites.flatMap(id => bingData[id] || []);
-    // Build maps + vectors ONCE for all 119 correlations
-    const sfPages = buildSfPageVectors(sfRows);
-    const urlMaps = buildUrlMaps(gscRows, gaRows, bingRows);
+    const sfPages  = buildSfPageVectors(sfRows);
+    const urlMaps  = buildUrlMaps(gscRows, gaRows, bingRows);
     return SF_DIMS.map(dim => ({
       dim,
       corrs: RES_KPIS.map(kpi => {
@@ -1401,27 +211,27 @@ export default function App() {
 
   const filteredCorrMatrix = useMemo(() => {
     const sfRowsAll = matrixSites.flatMap(id => sfData[id] || []);
-    if (!sfRowsAll.length) return SF_DIMS.map((dim, di) => ({ dim, corrs: RES_KPIS.map((kpi, ki) => ({ kpi, value: null, n: 0, base: baseMatrix[di]?.corrs[ki]?.value ?? null, delta: null })) }));
+    if (!sfRowsAll.length) return SF_DIMS.map((dim, di) => ({
+      dim,
+      corrs: RES_KPIS.map((kpi, ki) => ({ kpi, value: null, n: 0, base: baseMatrix[di]?.corrs[ki]?.value ?? null, delta: null })),
+    }));
     const gscRows  = matrixSites.flatMap(id => gscData[id]  || []);
     const gaRows   = matrixSites.flatMap(id => gaData[id]   || []);
     const bingRows = matrixSites.flatMap(id => bingData[id] || []);
-    // filterByMode ONCE, then build vectors+maps ONCE for 119 correlations
     const sfFiltered = filterByMode(sfRowsAll, pageMode, bingRows, gscRows);
     const sfPages    = buildSfPageVectors(sfFiltered);
     const urlMaps    = buildUrlMaps(gscRows, gaRows, bingRows);
     return SF_DIMS.map((dim, di) => ({
       dim,
       corrs: RES_KPIS.map((kpi, ki) => {
-        const res = intraCorrFast(sfPages, urlMaps, dim.key, kpi.key);
-        const base = baseMatrix[di]?.corrs[ki]?.value ?? null;
-        const val = res ? res.value : null;
-        const delta = (val !== null && base !== null) ? Math.round((val - base) * 100) / 100 : null;
+        const res   = intraCorrFast(sfPages, urlMaps, dim.key, kpi.key);
+        const base  = baseMatrix[di]?.corrs[ki]?.value ?? null;
+        const val   = res ? res.value : null;
+        const delta = val !== null && base !== null ? Math.round((val - base) * 100) / 100 : null;
         return { kpi, value: val, n: res ? res.n : 0, base, delta };
       }),
     }));
   }, [matrixSites, sfData, gscData, gaData, bingData, pageMode, baseMatrix]);
-
-  // Trigger loading spinner when deps change
 
   const radarData = useMemo(() => RADAR_DIMS.map(d => {
     const row = { dim: d.label };
@@ -1429,14 +239,12 @@ export default function App() {
     return row;
   }), [metrics]);
 
-  // ── ALL PROJECTS: concat all projects data for global matrix + radar ──
   const allProjectsMatrix = useMemo(() => {
     const allSf = projects.flatMap(p => Object.values(p.sfData || {}).flat());
     if (!allSf.length) return SF_DIMS.map(dim => ({ dim, corrs: RES_KPIS.map(kpi => ({ kpi, value: null, n: 0 })) }));
     const allGsc  = projects.flatMap(p => Object.values(p.gscData  || {}).flat());
     const allGa   = projects.flatMap(p => Object.values(p.gaData   || {}).flat());
     const allBing = projects.flatMap(p => Object.values(p.bingData || {}).flat());
-    // Build once for all 119 correlations
     const sfPages = buildSfPageVectors(allSf);
     const urlMaps = buildUrlMaps(allGsc, allGa, allBing);
     return SF_DIMS.map(dim => ({
@@ -1448,7 +256,6 @@ export default function App() {
     }));
   }, [projects]);
 
-  // One radar entry per project (avg across its sites)
   const allProjectsRadar = useMemo(() => {
     const anyData = projects.some(p => Object.values(p.sfData || {}).flat().length > 0);
     if (!anyData) return RADAR_DIMS.map(d => ({ dim: d.label }));
@@ -1464,1010 +271,155 @@ export default function App() {
     });
   }, [projects]);
 
-  const TABS = ["import","overview","matrix","pages","analyse","sites","allprojects"];
-
+  // ── Render ───────────────────────────────────────────────────────
   return (
     <>
-    <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
       <div style={{ fontFamily: "'DM Sans', 'Segoe UI', sans-serif", background: C.bg, minHeight: "100vh", color: C.text }}>
-      {/* NAV */}
-      <div style={{ background: C.white, borderBottom: `1px solid ${C.border}`, position: "sticky", top: 0, zIndex: 100 }}>
-        <div style={{ maxWidth: 1400, margin: "0 auto", padding: "0 28px", display: "flex", alignItems: "center", justifyContent: "space-between", height: 56 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={{ width: 28, height: 28, background: C.blue, borderRadius: 7, display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <span style={{ color: "#fff", fontSize: 14, fontWeight: 800 }}>C</span>
+
+        {/* ── NAV ── */}
+        <div style={{ background: C.white, borderBottom: `1px solid ${C.border}`, position: "sticky", top: 0, zIndex: 100 }}>
+          <div style={{ maxWidth: 1400, margin: "0 auto", padding: "0 28px", display: "flex", alignItems: "center", justifyContent: "space-between", height: 56 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <div style={{ width: 28, height: 28, background: C.blue, borderRadius: 7, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <span style={{ color: "#fff", fontSize: 14, fontWeight: 800 }}>C</span>
+              </div>
+              <span style={{ fontWeight: 700, fontSize: 15, letterSpacing: -0.3 }}>CorrelDash</span>
+              <span style={{ color: C.textLight, fontSize: 13 }}>· SEO × GEO</span>
             </div>
-            <span style={{ fontWeight: 700, fontSize: 15, letterSpacing: -0.3 }}>CorrelDash</span>
-            <span style={{ color: C.textLight, fontSize: 13 }}>· SEO × GEO</span>
-          </div>
-          <div style={{ display: "flex", gap: 2 }}>
-            {TABS.map(t => (
-              <button key={t} onClick={() => setTab(t)} style={{
-                padding: "6px 16px", border: "none", borderRadius: 7, cursor: "pointer", fontSize: 13, fontWeight: 500,
-                background: tab === t ? C.blue : "transparent", color: tab === t ? "#fff" : C.textMid, transition: "all 0.15s",
-              }}>
-                {t === "import" ? "Import" : t === "overview" ? "Vue d'ensemble" : t === "matrix" ? "Matrice" : t === "pages" ? "Pages" : t === "analyse" ? "✦ Analyse IA" : t === "sites" ? "Sites" : "◈ Tous les projets"}
-              </button>
-            ))}
+            <div style={{ display: "flex", gap: 2 }}>
+              {NAV_TABS.map(t => (
+                <button key={t.key} onClick={() => setTab(t.key)} style={{
+                  padding: "6px 16px", border: "none", borderRadius: 7, cursor: "pointer", fontSize: 13, fontWeight: 500,
+                  background: tab === t.key ? C.blue : "transparent",
+                  color: tab === t.key ? "#fff" : C.textMid,
+                  transition: "all 0.15s",
+                }}>
+                  {t.label}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
-      </div>
 
-      <div style={{ maxWidth: 1400, margin: "0 auto", padding: "32px 28px" }}>
+        {/* ── CONTENT ── */}
+        <div style={{ maxWidth: 1400, margin: "0 auto", padding: "32px 28px" }}>
 
-        {/* ── IMPORT ── */}
-        {tab === "import" && (
-          <div>
-            {/* ── Project selector ── */}
-            <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: "20px 24px", marginBottom: 20 }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 16 }}>
-                <div>
-                  <div style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: 0.8, color: C.textLight, fontWeight: 600, marginBottom: 8 }}>Projet actif</div>
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                    {projects.map(p => (
-                      <button
-                        key={p.id}
-                        onClick={() => setCurrentProjectId(p.id)}
-                        style={{
-                          display: "flex", alignItems: "center", gap: 8,
-                          padding: "8px 16px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 600,
-                          border: `2px solid ${p.id === currentProjectId ? C.blue : C.border}`,
-                          background: p.id === currentProjectId ? C.blueLight : C.white,
-                          color: p.id === currentProjectId ? C.blue : C.textMid,
-                          transition: "all 0.15s",
-                        }}
-                      >
-                        <span style={{ width: 8, height: 8, borderRadius: "50%", background: p.id === currentProjectId ? C.blue : C.textLight, display: "inline-block", flexShrink: 0 }} />
-                        {editingProjectName === p.id ? (
-                          <input
-                            autoFocus
-                            value={p.name}
-                            onClick={e => e.stopPropagation()}
-                            onChange={e => setProjects(prev => prev.map(x => x.id === p.id ? {...x, name: e.target.value} : x))}
-                            onBlur={() => setEditingProjectName(null)}
-                            onKeyDown={e => e.key === "Enter" && setEditingProjectName(null)}
-                            style={{ border: "none", outline: "none", background: "transparent", fontSize: 13, fontWeight: 600, color: C.blue, width: 100 }}
-                          />
-                        ) : (
-                          <span>{p.name}</span>
-                        )}
-                        <span style={{ fontSize: 11, color: C.textLight, fontWeight: 400 }}>{p.sites.length} site{p.sites.length > 1 ? "s" : ""}</span>
-                        <button title="Renommer" onClick={e => { e.stopPropagation(); setEditingProjectName(p.id); }}
-                          style={{ padding: "1px 4px", border: "none", background: "transparent", cursor: "pointer", fontSize: 11, color: C.textLight, lineHeight: 1 }}>✏️</button>
-                        {projects.length > 1 && (
-                          <button title="Supprimer" onClick={e => { e.stopPropagation(); setConfirmModal({ message: `Supprimer le projet "${p.name}" ?`, onConfirm: () => {
-                            sbDeleteProject(p.id).catch(() => {});
-                            setProjects(prev => { const next = prev.filter(x => x.id !== p.id); if (currentProjectId === p.id) setCurrentProjectId(next[0].id); return next; });
-                          }}); }}
-                          style={{ padding: "1px 4px", border: "none", background: "transparent", cursor: "pointer", fontSize: 11, color: "#DC2626", lineHeight: 1 }}>✕</button>
-                        )}
-                      </button>
-                    ))}
-                    {projects.length < 5 && (
-                      <button
-                        onClick={() => {
-                          const p = newProject(`Projet ${projects.length + 1}`, [{ id: `site-${Date.now()}`, label: "Nouveau site", ...SITE_PALETTE[0] }]);
-                          setProjects(prev => [...prev, p]);
-                          setCurrentProjectId(p.id);
-                          sbSaveProject(p).catch(() => {});
-                        }}
-                        style={{ padding: "8px 16px", borderRadius: 10, border: `2px dashed ${C.blue}`, background: C.blueLight, color: C.blue, cursor: "pointer", fontSize: 13, fontWeight: 600 }}
-                      >+ Nouveau projet</button>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
+          {tab === "import" && (
+            <ImportTab
+              projects={projects}
+              currentProjectId={currentProjectId}
+              setCurrentProjectId={setCurrentProjectId}
+              editingProjectName={editingProjectName}
+              setEditingProjectName={setEditingProjectName}
+              setProjects={setProjects}
+              sites={sites}
+              sfData={sfData}
+              gscData={gscData}
+              gaData={gaData}
+              bingData={bingData}
+              setSfData={setSfData}
+              setGscData={setGscData}
+              setGaData={setGaData}
+              setBingData={setBingData}
+              setConfirmModal={setConfirmModal}
+              dbHistory={dbHistory}
+              dbLoading={dbLoading}
+              showHistory={showHistory}
+              setShowHistory={setShowHistory}
+              refreshHistory={refreshHistory}
+            />
+          )}
 
-            <SectionHeader title="Import des données" sub="Chargez les exports CSV pour chaque site" />
+          {tab === "overview" && (
+            <OverviewTab
+              sites={sites}
+              pageMode={pageMode}
+              setPageMode={setPageMode}
+              radarSites={radarSites}
+              setRadarSites={setRadarSites}
+              metrics={metrics}
+              radarData={radarData}
+            />
+          )}
 
-            {/* DB status banner */}
-            <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 20px", marginBottom: 16, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <div style={{ width: 8, height: 8, borderRadius: "50%", background: dbLoading ? C.amber : dbHistory.length > 0 ? C.green : C.textLight }} />
-                <span style={{ fontSize: 13, color: C.textMid }}>
-                  {dbLoading ? "Chargement de l'historique…" : dbHistory.length > 0 ? `${dbHistory.length} import${dbHistory.length > 1 ? "s" : ""} en base` : "Aucun import en base — chargez vos CSV ci-dessous"}
-                </span>
-              </div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <button onClick={() => { setShowHistory(h => !h); refreshHistory(); }} style={{ padding: "5px 14px", background: showHistory ? C.blue : C.white, color: showHistory ? "#fff" : C.textMid, border: `1px solid ${showHistory ? C.blue : C.border}`, borderRadius: 7, cursor: "pointer", fontSize: 12, fontWeight: 500 }}>
-                  📋 Historique {dbHistory.length > 0 ? `(${dbHistory.length})` : ""}
+          {tab === "matrix" && (
+            <MatrixTab
+              sites={sites}
+              sfData={sfData}
+              pageMode={pageMode}
+              setPageMode={setPageMode}
+              matrixSites={matrixSites}
+              setMatrixSites={setMatrixSites}
+              filteredCorrMatrix={filteredCorrMatrix}
+            />
+          )}
+
+          {tab === "pages" && (
+            <PagesTab
+              sites={sites}
+              sfData={sfData}
+              gscData={gscData}
+              bingData={bingData}
+              pageMode={pageMode}
+              setPageMode={setPageMode}
+            />
+          )}
+
+          {tab === "analyse" && (
+            <AnalyseTab
+              metrics={metrics}
+              corrMatrix={corrMatrix}
+              resultVals={resultVals}
+              analysis={analysis}
+              setAnalysis={setAnalysis}
+              analysisLoading={analysisLoading}
+              setAnalysisLoading={setAnalysisLoading}
+              analysisError={analysisError}
+              setAnalysisError={setAnalysisError}
+            />
+          )}
+
+          {tab === "sites" && (
+            <SitesTab
+              sites={sites}
+              pageMode={pageMode}
+              setPageMode={setPageMode}
+              metrics={metrics}
+            />
+          )}
+
+          {tab === "allprojects" && (
+            <AllProjectsTab
+              projects={projects}
+              sites={sites}
+              sfData={sfData}
+              allProjectsMatrix={allProjectsMatrix}
+              allProjectsRadar={allProjectsRadar}
+            />
+          )}
+
+        </div>
+
+        {/* ── CONFIRM MODAL ── */}
+        {confirmModal && (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <div style={{ background: C.white, borderRadius: 14, padding: 32, maxWidth: 400, width: "90%", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
+              <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 12 }}>Confirmer</div>
+              <div style={{ fontSize: 14, color: C.textMid, marginBottom: 24 }}>{confirmModal.message}</div>
+              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                <button onClick={() => setConfirmModal(null)} style={{ padding: "8px 20px", border: `1px solid ${C.border}`, borderRadius: 8, background: C.white, cursor: "pointer", fontSize: 13, color: C.textMid }}>
+                  Annuler
+                </button>
+                <button onClick={() => { confirmModal.onConfirm(); setConfirmModal(null); }} style={{ padding: "8px 20px", border: "none", borderRadius: 8, background: "#DC2626", cursor: "pointer", fontSize: 13, color: "#fff", fontWeight: 600 }}>
+                  Confirmer
                 </button>
               </div>
             </div>
-
-            {/* History panel */}
-            {showHistory && (
-              <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20, marginBottom: 20 }}>
-                <div style={{ fontWeight: 600, fontSize: 14, color: C.text, marginBottom: 14 }}>Historique des imports</div>
-                {dbHistory.length === 0 ? (
-                  <div style={{ fontSize: 12, color: C.textLight }}>Aucun import enregistré</div>
-                ) : (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 320, overflowY: "auto" }}>
-                    {dbHistory.map(row => {
-                      const site = sites.find(s => s.id === row.site_id);
-                      const srcLabel = { sf: "🕷️ SF", gsc: "🔍 GSC", ga: "📊 GA4", bing: "🤖 Bing" }[row.source] || row.source;
-                      return (
-                        <div
-                          key={row.id}
-                          draggable
-                          onDragStart={e => { e.dataTransfer.setData("historyRow", JSON.stringify(row)); e.dataTransfer.effectAllowed = "copy"; }}
-                          style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: C.bg, borderRadius: 8, fontSize: 12, cursor: "grab", userSelect: "none" }}
-                          title="Glisser vers une case d'import"
-                        >
-                          <span style={{ fontSize: 14, color: C.textLight, flexShrink: 0 }}>⠿</span>
-                          <span style={{ fontWeight: 600, color: site?.color || C.text, minWidth: 90 }}>{site?.label || row.site_id}</span>
-                          <span style={{ color: C.textMid, minWidth: 60 }}>{srcLabel}</span>
-                          <span style={{ color: C.textLight, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.filename}</span>
-                          <span style={{ color: C.textLight, minWidth: 70 }}>{row.row_count} lignes</span>
-                          <span style={{ color: C.textLight, minWidth: 140 }}>{new Date(row.uploaded_at).toLocaleString("fr-FR")}</span>
-
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            )}
-            {/* Last import dates per source — derived from dbHistory */}
-            {dbHistory.length > 0 && (() => {
-              const fmt = (d) => new Date(d).toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "numeric" });
-              const lastBySrc = {};
-              for (const row of dbHistory) {
-                if (!lastBySrc[row.source] || row.uploaded_at > lastBySrc[row.source].uploaded_at) lastBySrc[row.source] = row;
-              }
-              const items = [
-                { src: "gsc",  icon: "🔍", label: "GSC" },
-                { src: "ga",   icon: "📊", label: "GA4" },
-                { src: "bing", icon: "🤖", label: "Bing AI" },
-                { src: "sf",   icon: "🕷️", label: "Screaming Frog" },
-              ].filter(i => lastBySrc[i.src]);
-              if (!items.length) return null;
-              return (
-                <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 20px", marginBottom: 24, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                  <span style={{ fontSize: 12, color: C.textLight, fontWeight: 600, marginRight: 4 }}>📅 Derniers imports :</span>
-                  {items.map(({ src, icon, label }) => (
-                    <div key={src} style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 12px", background: C.bg, borderRadius: 20, fontSize: 12 }}>
-                      <span>{icon}</span>
-                      <span style={{ fontWeight: 600, color: C.textMid }}>{label}</span>
-                      <span style={{ color: C.textLight }}>·</span>
-                      <span style={{ color: C.text }}>{fmt(lastBySrc[src].uploaded_at)}</span>
-                    </div>
-                  ))}
-                </div>
-              );
-            })()}
-
-            <div style={{ display: "grid", gridTemplateColumns: `repeat(${Math.min(sites.length + (sites.length < 3 ? 1 : 0), 3)}, 1fr)`, gap: 20 }}>
-              {sites.map(site => (
-                <div key={site.id} style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: 24 }}>
-                  {/* Site header with editable name */}
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20, paddingBottom: 16, borderBottom: `1px solid ${C.borderLight}` }}>
-                    <div style={{ width: 36, height: 36, borderRadius: 10, background: site.bg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0 }}>🌐</div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <input
-                        value={site.label}
-                        onChange={e => setSites(prev => prev.map(s => s.id === site.id ? {...s, label: e.target.value} : s))}
-                        style={{ fontWeight: 700, fontSize: 15, color: site.color, border: "none", outline: "none", background: "transparent", width: "100%", padding: "2px 0" }}
-                        placeholder="Nom du site"
-                      />
-                      <div style={{ fontSize: 11, color: C.textLight }}>4 sources</div>
-                    </div>
-                    {/* Actions menu */}
-                    <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-                      <button
-                        title="Vider les imports"
-                        onClick={() => setConfirmModal({ message: `Vider tous les imports de "${site.label}" ?`, onConfirm: () => {
-                          setSfData(p => ({...p, [site.id]: []}));
-                          setGscData(p => ({...p, [site.id]: []}));
-                          setGaData(p => ({...p, [site.id]: []}));
-                          setBingData(p => ({...p, [site.id]: []}));
-                        }})}
-                        style={{ padding: "4px 8px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.white, cursor: "pointer", fontSize: 13, color: C.textLight }}
-                      >🗑</button>
-                      {sites.length > 1 && (
-                        <button
-                          title="Supprimer ce site"
-                          onClick={() => setConfirmModal({ message: `Supprimer le site "${site.label}" et tous ses imports ?`, onConfirm: () => {
-                            setSites(prev => prev.filter(s => s.id !== site.id));
-                            setSfData(p => { const n = {...p}; delete n[site.id]; return n; });
-                            setGscData(p => { const n = {...p}; delete n[site.id]; return n; });
-                            setGaData(p => { const n = {...p}; delete n[site.id]; return n; });
-                            setBingData(p => { const n = {...p}; delete n[site.id]; return n; });
-                          }})}
-                          style={{ padding: "4px 8px", border: `1px solid #FCA5A5`, borderRadius: 6, background: "#FFF5F5", cursor: "pointer", fontSize: 13, color: "#DC2626" }}
-                        >✕</button>
-                      )}
-                    </div>
-                  </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                    <UploadCard label="Screaming Frog Internal" icon="🕷️" hint="Export interne SF · données techniques uniquement" color={site.color}
-                      loaded={sfData[site.id]?.length > 0} onData={rows => setSfData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="sf" projectId={currentProjectId}
-                      onLoadFromHistory={async row => { try { const text = await sbDownload(row.storage_path); setSfData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn("History load error", e); } }} />
-                    <UploadCard label="Google Search Console" icon="🔍" hint="Export GSC · clics, impressions, CTR, position" color={site.color}
-                      loaded={gscData[site.id]?.length > 0} onData={rows => setGscData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="gsc" projectId={currentProjectId}
-                      onLoadFromHistory={async row => { try { const text = await sbDownload(row.storage_path); setGscData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn("History load error", e); } }} />
-                    <UploadCard label="Google Analytics 4" icon="📊" hint="Export GA4 · sessions, vues" color={site.color}
-                      loaded={gaData[site.id]?.length > 0} onData={rows => setGaData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="ga" projectId={currentProjectId}
-                      onLoadFromHistory={async row => { try { const text = await sbDownload(row.storage_path); setGaData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn("History load error", e); } }} />
-                    <UploadCard label="Bing AI Performance" icon="🤖" hint="Export Bing Webmaster · colonne Citations" color={site.color}
-                      loaded={bingData[site.id]?.length > 0} onData={rows => setBingData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="bing" projectId={currentProjectId}
-                      onLoadFromHistory={async row => { try { const text = await sbDownload(row.storage_path); setBingData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn("History load error", e); } }} />
-                  </div>
-                  <div style={{ marginTop: 16, display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    {[["SF", sfData[site.id]?.length || 0], ["GSC", gscData[site.id]?.length || 0], ["GA4", gaData[site.id]?.length || 0], ["Bing", bingData[site.id]?.length || 0]].map(([src, n]) => (
-                      <div key={src} style={{ fontSize: 11, padding: "3px 9px", borderRadius: 20, fontWeight: 600, background: n > 0 ? site.bg : C.borderLight, color: n > 0 ? site.color : C.textLight }}>
-                        {src} {n > 0 ? `· ${n}` : "· vide"}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-
-              {/* Add site button */}
-              {sites.length < 3 && (
-                <div
-                  onClick={() => {
-                    const palette = SITE_PALETTE[sites.length] || SITE_PALETTE[0];
-                    const newId = `site-${Date.now()}`;
-                    const newSite = { id: newId, label: `Site ${sites.length + 1}`, ...palette };
-                    setSites(prev => [...prev, newSite]);
-                    setSfData(p => ({...p, [newId]: []}));
-                    setGscData(p => ({...p, [newId]: []}));
-                    setGaData(p => ({...p, [newId]: []}));
-                    setBingData(p => ({...p, [newId]: []}));
-                  }}
-                  style={{ background: C.white, border: `2px dashed ${C.border}`, borderRadius: 14, padding: 24, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, cursor: "pointer", minHeight: 200, transition: "border-color 0.15s" }}
-                  onMouseEnter={e => e.currentTarget.style.borderColor = C.blue}
-                  onMouseLeave={e => e.currentTarget.style.borderColor = C.border}
-                >
-                  <div style={{ width: 48, height: 48, borderRadius: 12, background: C.blueLight, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, color: C.blue }}>+</div>
-                  <div style={{ fontSize: 14, fontWeight: 600, color: C.blue }}>Ajouter un site</div>
-                  <div style={{ fontSize: 12, color: C.textLight, textAlign: "center" }}>Max 3 sites par projet</div>
-                </div>
-              )}
-            </div>
-
-            {/* Confirm modal */}
-            {confirmModal && (
-              <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <div style={{ background: C.white, borderRadius: 14, padding: 32, maxWidth: 400, width: "90%", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
-                  <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 12 }}>Confirmer</div>
-                  <div style={{ fontSize: 14, color: C.textMid, marginBottom: 24 }}>{confirmModal.message}</div>
-                  <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-                    <button onClick={() => setConfirmModal(null)} style={{ padding: "8px 20px", border: `1px solid ${C.border}`, borderRadius: 8, background: C.white, cursor: "pointer", fontSize: 13, color: C.textMid }}>Annuler</button>
-                    <button onClick={() => { confirmModal.onConfirm(); setConfirmModal(null); }} style={{ padding: "8px 20px", border: "none", borderRadius: 8, background: "#DC2626", cursor: "pointer", fontSize: 13, color: "#fff", fontWeight: 600 }}>Confirmer</button>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ── OVERVIEW ── */}
-        {tab === "overview" && (
-          <div>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
-              <SectionHeader title="Vue d'ensemble" sub="Scores agrégés et comparaison des 3 sites" />
-              <PageModeSelector value={pageMode} onChange={setPageMode} />
-            </div>
-
-            {/* Row-based grid: each section spans all 3 sites */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "0 20px", marginBottom: 28 }}>
-
-              {/* ── ROW: Headers ── */}
-              {metrics.map(({ site, sf }) => (
-                <div key={site.id} style={{ background: site.bg, padding: "16px 20px", borderRadius: "14px 14px 0 0", border: `1px solid ${C.border}`, borderBottom: "none", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <div style={{ fontWeight: 700, fontSize: 16, color: site.color }}>{site.label}</div>
-                  {sf && <Badge color={site.color} bg={site.bg}>{sf.totalPages} pages</Badge>}
-                </div>
-              ))}
-
-              {/* ── ROW: SF metrics ── */}
-              {metrics.map(({ site, sf, sfBase }) => (
-                <div key={site.id} style={{ background: C.white, border: `1px solid ${C.border}`, borderTop: "none", borderBottom: "none", padding: "16px 20px" }}>
-                  <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, color: C.textLight, marginBottom: 10 }}>🕷️ Screaming Frog</div>
-                  {sf ? (
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5 }}>
-                      {[
-                        ["Title moy.", sf.avgTitleLen,    sfBase?.avgTitleLen,    "car.", false],
-                        ["Meta moy.",  sf.avgMetaLen,     sfBase?.avgMetaLen,     "car.", false],
-                        ["H1 moy.",    sf.avgH1Len,       sfBase?.avgH1Len,       "car.", false],
-                        ["Mots moy.",  sf.avgWords,       sfBase?.avgWords,       "",     false],
-                        ["Poids pages",sf.avgPageSizeKB,  sfBase?.avgPageSizeKB,  "KB",   true],
-                        ["Poids img.", sf.avgImgSizeKB,   sfBase?.avgImgSizeKB,   "KB",   true],
-                        ["Inlinks uniq.", sf.avgInlinksUniq, sfBase?.avgInlinksUniq, "", false],
-                        ["Outlinks uniq.", sf.avgOutlinksUniq, sfBase?.avgOutlinksUniq, "", false],
-                        ["Liens ext. uniq.", sf.avgExtLinksUniq, sfBase?.avgExtLinksUniq, "", false],
-                        ["Profondeur", sf.avgDepth,       sfBase?.avgDepth,       "",     true],
-                        ["Flesch",     sf.avgFlesch,      sfBase?.avgFlesch,      "",     false],
-                        ["Tableaux",   sf.tableRate,      sfBase?.tableRate,      "%",    false],
-                        ["Schemas",    sf.schemaRate,     sfBase?.schemaRate,     "%",    false],
-                        ["Indexables", sf.indexableRate,  sfBase?.indexableRate,  "%",    false],
-                        ["Erreurs",    sf.errorRate,      sfBase?.errorRate,      "%",    true],
-                        ["Redirects",  sf.redirectRate,   sfBase?.redirectRate,   "%",    true],
-                      ].map(([k, v, bv, unit, lowerIsBetter]) => {
-                        const showD = pageMode !== "all" && bv !== null && bv !== undefined;
-                        const diff = showD ? Math.round((v - bv) * 10) / 10 : null;
-                        const up = diff > 0;
-                        const isGood = lowerIsBetter ? !up : up;
-                        return (
-                          <div key={k} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "3px 0", borderBottom: `1px solid ${C.borderLight}`, gap: 4 }}>
-                            <span style={{ fontSize: 11, color: C.textLight, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{k}</span>
-                            <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
-                              <span style={{ fontSize: 12, fontWeight: 600, color: C.text }}>{v}{unit}</span>
-                              {showD && diff !== 0 && (
-                                <span style={{ fontSize: 10, fontWeight: 700, color: isGood ? "#16A34A" : "#DC2626" }}>
-                                  {up ? "▲" : "▼"}{up ? "+" : ""}{diff}{unit}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : <div style={{ color: C.textLight, fontSize: 12 }}>Aucun CSV SF chargé</div>}
-                </div>
-              ))}
-
-              {/* ── ROW: Schema types ── */}
-              {metrics.map(({ site, sf }) => (
-                <div key={site.id} style={{ background: C.white, border: `1px solid ${C.border}`, borderTop: "none", borderBottom: "none", padding: "0 20px 16px", display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
-                  {sf && Object.keys(sf.schemaTypes || {}).length > 0 && (
-                    <>
-                      <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, color: C.textLight, marginBottom: 8 }}>🏷️ Types de Schema</div>
-                      <SchemaBreakdown schemaTypes={sf.schemaTypes} color={site.color} />
-                    </>
-                  )}
-                  {sf && <LlmsStatus sf={sf} />}
-                </div>
-              ))}
-
-              {/* ── ROW: GSC ── */}
-              {metrics.map(({ site, gsc }) => (
-                <div key={site.id} style={{ background: C.white, border: `1px solid ${C.border}`, borderTop: "none", borderBottom: "none", padding: "16px 20px" }}>
-                  <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, color: C.textLight, marginBottom: 8 }}>🔍 GSC</div>
-                  {gsc ? (
-                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                      <StatPill label="Clics" value={gsc.clicks.toLocaleString()} color={C.blue} />
-                      <StatPill label="Impressions" value={gsc.impressions.toLocaleString()} />
-                      <StatPill label="CTR" value={`${gsc.ctr}%`} color={C.green} />
-                      <StatPill label="Position" value={gsc.position} color={C.amber} />
-                    </div>
-                  ) : <div style={{ fontSize: 12, color: C.textLight }}>—</div>}
-                </div>
-              ))}
-
-              {/* ── ROW: GA4 ── */}
-              {metrics.map(({ site, ga }) => (
-                <div key={site.id} style={{ background: C.white, border: `1px solid ${C.border}`, borderTop: "none", borderBottom: "none", padding: "16px 20px" }}>
-                  <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, color: C.textLight, marginBottom: 8 }}>📊 GA4</div>
-                  {ga ? (
-                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                      <StatPill label="Sessions" value={ga.sessions.toLocaleString()} color={C.blue} />
-                      <StatPill label="Vues" value={ga.views.toLocaleString()} />
-                    </div>
-                  ) : <div style={{ fontSize: 12, color: C.textLight }}>—</div>}
-                </div>
-              ))}
-
-              {/* ── ROW: Bing AI (last — rounded bottom) ── */}
-              {metrics.map(({ site, bing }) => (
-                <div key={site.id} style={{ background: C.white, border: `1px solid ${C.border}`, borderTop: "none", borderRadius: "0 0 14px 14px", padding: "16px 20px" }}>
-                  <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, color: C.textLight, marginBottom: 8 }}>🤖 Bing AI</div>
-                  {bing ? (
-                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                      <StatPill label="Citations" value={bing.geoMentions.toLocaleString()} color={C.purple} />
-                      <StatPill label="Pages citées" value={bing.pageCount} color={C.teal} />
-                    </div>
-                  ) : <div style={{ fontSize: 12, color: C.textLight }}>—</div>}
-                </div>
-              ))}
-
-            </div>
-
-            <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: 24 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: C.textMid }}>Profil technique SF — radar</div>
-                <div style={{ display: "flex", gap: 8 }}>
-                  {sites.map(s => {
-                    const active = radarSites.includes(s.id);
-                    return (
-                      <button key={s.id} onClick={() => setRadarSites(prev =>
-                        prev.includes(s.id) ? prev.filter(x => x !== s.id) : [...prev, s.id]
-                      )} style={{
-                        padding: "4px 12px", borderRadius: 20, fontSize: 12, fontWeight: 600, cursor: "pointer",
-                        border: `2px solid ${s.color}`,
-                        background: active ? s.color : "transparent",
-                        color: active ? "#fff" : s.color,
-                        transition: "all 0.15s",
-                      }}>
-                        {s.label}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-              <div style={{ fontSize: 12, color: C.textLight, marginBottom: 16 }}>Scores normalisés 0–100</div>
-              <ResponsiveContainer width="100%" height={300}>
-                <RadarChart data={radarData}>
-                  <PolarGrid stroke={C.border} />
-                  <PolarAngleAxis dataKey="dim" tick={{ fill: C.textLight, fontSize: 11 }} />
-                  {sites.filter(s => radarSites.includes(s.id)).map(s => <Radar key={s.id} name={s.label} dataKey={s.id} stroke={s.color} fill={s.color} fillOpacity={0.08} strokeWidth={2} dot={{ r: 3 }} />)}
-                  <Legend wrapperStyle={{ fontSize: 12 }} />
-                </RadarChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-        )}
-
-        {/* ── MATRIX ── */}
-        {tab === "matrix" && (
-          <div>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
-              <SectionHeader title="Matrice de corrélation" sub="Pearson · SF (ordonnées) × KPIs résultats (abscisses)" />
-              <PageModeSelector value={pageMode} onChange={setPageMode} />
-            </div>
-
-            {/* Site toggles */}
-            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
-              <span style={{ fontSize: 12, color: C.textLight, fontWeight: 500 }}>Sites inclus dans le calcul :</span>
-              {sites.map(s => {
-                const active = matrixSites.includes(s.id);
-                return (
-                  <button key={s.id} onClick={() => setMatrixSites(prev =>
-                    active
-                      ? prev.filter(id => id !== s.id)
-                      : [...prev, s.id]
-                  )} style={{
-                    padding: "5px 14px", border: `1.5px solid ${active ? s.color : C.border}`,
-                    borderRadius: 20, cursor: "pointer", fontSize: 12, fontWeight: 600,
-                    background: active ? s.bg : C.white, color: active ? s.color : C.textLight,
-                    transition: "all 0.15s", display: "flex", alignItems: "center", gap: 6,
-                  }}>
-                    <span style={{ width: 8, height: 8, borderRadius: "50%", background: active ? s.color : C.border, display: "inline-block" }} />
-                    {s.label}
-                  </button>
-                );
-              })}
-              {matrixSites.length === 0 && (
-                <span style={{ fontSize: 12, color: C.red, fontStyle: "italic" }}>Aucun site sélectionné — matrice vide</span>
-              )}
-              {matrixSites.length > 0 && (
-                <span style={{ fontSize: 11, color: C.purple, background: C.purpleLight, padding: "3px 10px", borderRadius: 20 }}>
-                  Pearson par page · {matrixSites.length === 1
-                    ? sites.find(s => s.id === matrixSites[0])?.label
-                    : `${matrixSites.length} sites combinés`}
-                </span>
-              )}
-            </div>
-
-            <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
-              {[["#15803D","#DCFCE7","#86EFAC","≥ 0.25","Positif fort"],["#16A34A","#F0FDF4","#BBF7D0","0.05–0.25","Positif léger"],["#64748B","#F1F5F9","#CBD5E1","-0.05–0.05","Neutre"],["#DC2626","#FEF2F2","#FECACA","-0.25–-0.05","Négatif léger"],["#B91C1C","#FEE2E2","#FCA5A5","≤ -0.25","Négatif fort"],["#C0C0CC","#F5F5F7","#E8E8ED","—","Données insuffisantes"]].map(([tc,bg,bc,label,desc]) => (
-                <div key={label} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <div style={{ width: 28, height: 22, background: bg, border: `1px solid ${bc}`, borderRadius: 5, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: tc, fontWeight: 700 }}>{label}</div>
-                  <span style={{ fontSize: 12, color: C.textMid }}>{desc}</span>
-                </div>
-              ))}
-            </div>
-
-
-            <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "auto" }}>
-              <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 900 }}>
-                <thead>
-                  <tr>
-                    <th style={{ padding: "14px 18px", textAlign: "left", fontSize: 12, fontWeight: 600, color: C.textMid, background: C.bg, borderBottom: `1px solid ${C.border}`, borderRight: `1px solid ${C.border}`, minWidth: 210, position: "sticky", left: 0, zIndex: 2 }}>
-                      SF \ Résultats
-                    </th>
-                    {RES_KPIS.map(kpi => (
-                      <KpiHeaderCell key={kpi.key} kpi={kpi} />
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {matrixSites.length === 0 ? (
-                    <tr><td colSpan={RES_KPIS.length + 1} style={{ padding: 40, textAlign: "center", color: C.textLight, fontSize: 13 }}>Sélectionnez au moins un site pour afficher la matrice</td></tr>
-                  ) : matrixSites.every(id => !sfData[id]?.length) ? (
-                    <tr><td colSpan={RES_KPIS.length + 1} style={{ padding: 40, textAlign: "center", color: C.textLight, fontSize: 13 }}>Chargez un fichier Screaming Frog pour afficher la matrice</td></tr>
-                  ) : filteredCorrMatrix.map(({ dim, corrs }, ri) => (
-                    <tr key={dim.key} style={{ background: ri % 2 === 0 ? C.white : "#FAFBFC" }}>
-                      <SfDimCell dim={dim} rowBg={ri % 2 === 0 ? C.white : "#FAFBFC"} />
-                      {corrs.map(({ kpi, value, n, base, delta }) => (
-                        <CorrCell key={kpi.key} kpi={kpi} value={value} n={n} dim={dim} base={base} delta={delta} showDelta={pageMode !== "all"} />
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            <div style={{ marginTop: 24, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
-              {[["🟢 Top corrélations positives", (a,b) => b.value-a.value, v => v >= 0.4, C.green, C.greenLight],
-                ["🔴 Top corrélations négatives", (a,b) => a.value-b.value, v => v <= -0.4, C.red, C.redLight]
-              ].map(([title, sort, filter, color, bg]) => (
-                <div key={title} style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: 20 }}>
-                  <div style={{ fontWeight: 600, fontSize: 14, color: C.text, marginBottom: 12 }}>{title}</div>
-                  {filteredCorrMatrix.flatMap(({ dim, corrs }) => corrs.filter(c => c.value !== null && filter(c.value)).map(c => ({ dim, kpi: c.kpi, value: c.value })))
-                    .sort(sort).slice(0,5).map((item, i) => (
-                    <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: `1px solid ${C.borderLight}` }}>
-                      <div>
-                        <div style={{ fontSize: 12, color: C.text }}>{item.dim.label}</div>
-                        <div style={{ fontSize: 11, color: C.textLight }}>→ {item.kpi.label}</div>
-                      </div>
-                      <Badge color={color} bg={bg}>{item.value > 0 ? "+" : ""}{item.value}</Badge>
-                    </div>
-                  ))}
-                  {filteredCorrMatrix.flatMap(({ dim, corrs }) => corrs.filter(c => c.value !== null && filter(c.value))).length === 0 &&
-                    <div style={{ fontSize: 12, color: C.textLight }}>Pas encore de données suffisantes</div>}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* ── PAGES ── */}
-        {tab === "pages" && (
-          <div>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
-              <SectionHeader title="Analyse par pages" sub="Scoring et filtrage des pages selon leur présence GEO et SEO" />
-              <PageModeSelector value={pageMode} onChange={setPageMode} />
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 20 }}>
-              {sites.map(site => {
-                const sfRows   = sfData[site.id];
-                const bingRows = bingData[site.id];
-                const gscRows  = gscData[site.id] || [];
-                const filtered = filterByMode(sfRows, pageMode, bingRows, gscRows);
-                const html     = filtered.filter(r => {
-                  const ct = (r["type de contenu"] || r["content type"] || "").toLowerCase();
-                  const sc = safeNum(r["code http"] || r["status code"] || 200);
-                  const isHtml = ct.includes("html") || (ct === "" && (r["title 1"] || r["h1-1"] || "").trim() !== "");
-                  return isHtml && sc < 400;
-                });
-
-                // GEO pages: SF rows whose URL matches a Bing citation (path-based)
-                const geoPages = sfRows.filter(r => {
-                  const p = toUrlPath(r["adresse"] || r["url"] || "");
-                  return bingRows.some(b => toUrlPath(b["page"] || b["url"] || "") === p && safeNum(b["citations"] || 0) >= 1);
-                });
-
-                // SEO pages: cross-reference with GSC file (path-based), sorted by clicks
-                const gscWithClics = gscRows
-                  .filter(r => safeNum(r["clics"] || r["clicks"] || 0) > 0)
-                  .sort((a, b) => safeNum(b["clics"] || b["clicks"]) - safeNum(a["clics"] || a["clicks"]));
-                const gscPathMap = {};
-                gscWithClics.forEach(r => {
-                  const p = toUrlPath(r["pages les plus populaires"] || r["page"] || r["adresse"] || r["url"] || "");
-                  if (!p) return;
-                  const existing = gscPathMap[p];
-                  const clicks = safeNum(r["clics"] || r["clicks"] || 0);
-                  const existingClicks = existing ? safeNum(existing["clics"] || existing["clicks"] || 0) : -1;
-                  if (!existing || clicks > existingClicks) gscPathMap[p] = r;
-                });
-                const seoPages = sfRows
-                  .map(r => ({ r, gscR: gscPathMap[toUrlPath(r["adresse"] || r["url"] || "")] }))
-                  .filter(({ gscR }) => gscR)
-                  .sort((a, b) => safeNum(b.gscR["clics"] || b.gscR["clicks"]) - safeNum(a.gscR["clics"] || a.gscR["clicks"]));
-
-                return (
-                  <div key={site.id} style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden" }}>
-                    <div style={{ background: site.bg, padding: "14px 20px", borderBottom: `1px solid ${C.border}` }}>
-                      <div style={{ fontWeight: 700, fontSize: 15, color: site.color }}>{site.label}</div>
-                    </div>
-                    <div style={{ padding: 20 }}>
-                      {/* Page counts */}
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 20 }}>
-                        {[
-                          ["📄 Total HTML", sfRows.filter(r => { const ct = (r["type de contenu"]||r["content type"]||"").toLowerCase(); const sc = safeNum(r["code http"]||r["status code"]||200); return (ct.includes("html") || (ct === "" && (r["title 1"]||r["h1-1"]||"").trim() !== "")) && sc < 400; }).length, C.text],
-                          ["🤖 Pages GEO", geoPages.length, C.purple],
-                          ["🔍 Pages SEO", seoPages.length, C.blue],
-                        ].map(([label, count, color]) => (
-                          <div key={label} style={{ background: C.bg, borderRadius: 8, padding: "10px 12px", textAlign: "center" }}>
-                            <div style={{ fontSize: 11, color: C.textLight, marginBottom: 4 }}>{label}</div>
-                            <div style={{ fontSize: 22, fontWeight: 700, color }}>{count}</div>
-                          </div>
-                        ))}
-                      </div>
-
-                      {/* Mode info */}
-                      <div style={{ marginBottom: 16, padding: "10px 14px", background: pageMode === "geo" ? C.purpleLight : pageMode === "seo" ? C.blueLight : C.bg, borderRadius: 8, fontSize: 12, color: pageMode === "geo" ? C.purple : pageMode === "seo" ? C.blue : C.textMid }}>
-                        {pageMode === "all"  && `Analyse sur ${html.length} pages HTML`}
-                        {pageMode === "geo"  && `${html.length} pages présentes dans Bing AI`}
-                        {pageMode === "seo"  && `${html.length} pages top 30% clics GSC`}
-                      </div>
-
-                      {/* Top pages by mode */}
-                      {pageMode !== "all" && (
-                        <div>
-                          <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, color: C.textLight, marginBottom: 10 }}>
-                            Top pages {pageMode === "geo" ? "citées Bing" : "clics GSC"}
-                          </div>
-                          {pageMode === "geo" && (() => {
-                            const bingPathMap = {};
-                            bingRows.forEach(b => { const p = toUrlPath(b["page"] || b["url"] || ""); if (p) bingPathMap[p] = b; });
-                            return html
-                              .map(r => { const p = toUrlPath(r["adresse"] || r["url"] || ""); return { r, bingR: bingPathMap[p], citations: safeNum(bingPathMap[p]?.["citations"] || 0) }; })
-                              .sort((a, b) => b.citations - a.citations)
-                              .slice(0, 8)
-                              .map(({ r, citations }, i) => {
-                                const url = r["adresse"] || r["url"] || "";
-                                const label = url.replace(/https?:\/\/[^/]+/, "").slice(0, 50) || url.slice(0, 50);
-                                return (
-                                  <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: `1px solid ${C.borderLight}`, gap: 8 }}>
-                                    <div style={{ fontSize: 11, color: C.textMid, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={url}>{label || url}</div>
-                                    <Badge color={C.purple} bg={C.purpleLight}>{citations} cit.</Badge>
-                                  </div>
-                                );
-                              });
-                          })()}
-                          {pageMode === "seo" && seoPages.slice(0, 8).map(({ r, gscR }, i) => {
-                            const url = r["adresse"] || r["url"] || "";
-                            const score = safeNum(gscR["clics"] || gscR["clicks"] || 0);
-                            const label = url.replace(/https?:\/\/[^/]+/, "").slice(0, 50) || url.slice(0, 50);
-                            return (
-                              <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: `1px solid ${C.borderLight}`, gap: 8 }}>
-                                <div style={{ fontSize: 11, color: C.textMid, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={url}>{label || url}</div>
-                                <Badge color={C.blue} bg={C.blueLight}>{score} clics</Badge>
-                              </div>
-                            );
-                          })}
-                          {pageMode === "seo" && seoPages.length === 0 && (
-                            <div style={{ fontSize: 12, color: C.textLight, padding: "10px 0" }}>Aucune page GSC chargée pour ce site</div>
-                          )}
-                        </div>
-                      )}
-
-                      {html.length === 0 && sfRows.length === 0 && (
-                        <div style={{ fontSize: 12, color: C.textLight, textAlign: "center", padding: 20 }}>Chargez un CSV SF dans l'onglet Import</div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-
-        {/* ── ANALYSE IA ── */}
-        {tab === "analyse" && (
-          <AnalyseTab
-            metrics={metrics}
-            corrMatrix={corrMatrix}
-            resultVals={resultVals}
-            analysis={analysis}
-            setAnalysis={setAnalysis}
-            analysisLoading={analysisLoading}
-            setAnalysisLoading={setAnalysisLoading}
-            analysisError={analysisError}
-            setAnalysisError={setAnalysisError}
-          />
-        )}
-
-        {/* ── SITES ── */}
-        {tab === "sites" && (
-          <div>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24 }}>
-              <SectionHeader title="Comparatif par outil" sub="Tous les sites côte à côte pour chaque source de données" />
-              <PageModeSelector value={pageMode} onChange={setPageMode} />
-            </div>
-
-            {/* Site legend */}
-            <div style={{ display: "flex", gap: 10, marginBottom: 24, flexWrap: "wrap" }}>
-              {metrics.map(({ site }) => (
-                <div key={site.id} style={{ display: "flex", alignItems: "center", gap: 7, padding: "5px 14px", background: site.bg, border: `1.5px solid ${site.color}33`, borderRadius: 20 }}>
-                  <div style={{ width: 8, height: 8, borderRadius: "50%", background: site.color }} />
-                  <span style={{ fontSize: 12, fontWeight: 600, color: site.color }}>{site.label}</span>
-                </div>
-              ))}
-            </div>
-
-            {/* ── Card SF ── */}
-            <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, marginBottom: 20, overflow: "hidden" }}>
-              <div style={{ padding: "16px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 10 }}>
-                <span style={{ fontSize: 18 }}>🕷️</span>
-                <div>
-                  <div style={{ fontWeight: 700, fontSize: 15, color: C.text }}>Screaming Frog</div>
-                  <div style={{ fontSize: 12, color: C.textLight, marginTop: 2 }}>Métriques techniques · crawl</div>
-                </div>
-              </div>
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                  <thead>
-                    <tr style={{ background: C.bg }}>
-                      <th style={{ padding: "10px 20px", textAlign: "left", fontWeight: 600, fontSize: 11, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.8, borderBottom: `1px solid ${C.border}`, minWidth: 160 }}>Métrique</th>
-                      {metrics.map(({ site }) => (
-                        <th key={site.id} style={{ padding: "10px 20px", textAlign: "right", fontWeight: 700, fontSize: 12, color: site.color, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>{site.label}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {SF_DIMS.map((d, di) => (
-                      <tr key={d.key} style={{ borderBottom: `1px solid ${C.borderLight}`, background: di % 2 === 0 ? C.white : C.bg }}>
-                        <td style={{ padding: "8px 20px", color: C.textMid, fontWeight: 500 }}>{d.label}</td>
-                        {metrics.map(({ site, sf }) => {
-                          const val = sf?.[d.key] ?? null;
-                          const vals = metrics.map(m => m.sf?.[d.key]).filter(v => v !== null && v !== undefined);
-                          const best = vals.length > 1 ? Math.max(...vals) : null;
-                          const isBest = val !== null && best !== null && val === best;
-                          return (
-                            <td key={site.id} style={{ padding: "8px 20px", textAlign: "right", fontWeight: 600, color: val === null ? C.textLight : isBest ? site.color : C.text }}>
-                              {val !== null ? val : "—"}
-                              {isBest && vals.length > 1 && <span style={{ marginLeft: 4, fontSize: 10 }}>★</span>}
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              {/* Schema types row */}
-              {metrics.some(({ sf }) => sf && Object.keys(sf.schemaTypes || {}).length > 0) && (
-                <div style={{ padding: "16px 24px", borderTop: `1px solid ${C.borderLight}`, display: "grid", gridTemplateColumns: `160px repeat(${metrics.length}, 1fr)`, gap: 16, alignItems: "start" }}>
-                  <div style={{ fontSize: 11, color: C.textLight, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.8, paddingTop: 4 }}>🏷️ Schemas</div>
-                  {metrics.map(({ site, sf }) => (
-                    <div key={site.id}>
-                      {sf && Object.keys(sf.schemaTypes || {}).length > 0
-                        ? <SchemaBreakdown schemaTypes={sf.schemaTypes} color={site.color} />
-                        : <span style={{ fontSize: 12, color: C.textLight }}>—</span>}
-                    </div>
-                  ))}
-                </div>
-              )}
-              {/* llms.txt row */}
-              {metrics.some(({ sf }) => sf) && (
-                <div style={{ padding: "0 24px 16px", display: "grid", gridTemplateColumns: `160px repeat(${metrics.length}, 1fr)`, gap: 16, alignItems: "start" }}>
-                  <div style={{ fontSize: 11, color: C.textLight, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.8, paddingTop: 4 }}>🤖 llms.txt</div>
-                  {metrics.map(({ site, sf }) => (
-                    <div key={site.id}>{sf ? <LlmsStatus sf={sf} /> : <span style={{ fontSize: 12, color: C.textLight }}>—</span>}</div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* ── Card GSC ── */}
-            <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, marginBottom: 20, overflow: "hidden" }}>
-              <div style={{ padding: "16px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 10 }}>
-                <span style={{ fontSize: 18 }}>🔍</span>
-                <div>
-                  <div style={{ fontWeight: 700, fontSize: 15, color: C.text }}>Google Search Console</div>
-                  <div style={{ fontSize: 12, color: C.textLight, marginTop: 2 }}>Visibilité organique SEO</div>
-                </div>
-              </div>
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                  <thead>
-                    <tr style={{ background: C.bg }}>
-                      <th style={{ padding: "10px 20px", textAlign: "left", fontWeight: 600, fontSize: 11, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.8, borderBottom: `1px solid ${C.border}`, minWidth: 160 }}>Métrique</th>
-                      {metrics.map(({ site }) => (
-                        <th key={site.id} style={{ padding: "10px 20px", textAlign: "right", fontWeight: 700, fontSize: 12, color: site.color, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>{site.label}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {[
-                      { key: "clicks",      label: "Clics",       fmt: v => v.toLocaleString() },
-                      { key: "impressions", label: "Impressions",  fmt: v => v.toLocaleString() },
-                      { key: "ctr",         label: "CTR",          fmt: v => `${v}%` },
-                      { key: "position",    label: "Position moy.",fmt: v => v },
-                    ].map((row, di) => (
-                      <tr key={row.key} style={{ borderBottom: `1px solid ${C.borderLight}`, background: di % 2 === 0 ? C.white : C.bg }}>
-                        <td style={{ padding: "8px 20px", color: C.textMid, fontWeight: 500 }}>{row.label}</td>
-                        {metrics.map(({ site, gsc }) => {
-                          const val = gsc?.[row.key] ?? null;
-                          const vals = metrics.map(m => m.gsc?.[row.key]).filter(v => v !== null && v !== undefined);
-                          // For position: lower is better
-                          const best = vals.length > 1 ? (row.key === "position" ? Math.min(...vals) : Math.max(...vals)) : null;
-                          const isBest = val !== null && best !== null && val === best;
-                          return (
-                            <td key={site.id} style={{ padding: "8px 20px", textAlign: "right", fontWeight: 600, color: val === null ? C.textLight : isBest ? site.color : C.text }}>
-                              {val !== null ? row.fmt(val) : "—"}
-                              {isBest && vals.length > 1 && <span style={{ marginLeft: 4, fontSize: 10 }}>★</span>}
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* ── Card GA4 ── */}
-            <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, marginBottom: 20, overflow: "hidden" }}>
-              <div style={{ padding: "16px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 10 }}>
-                <span style={{ fontSize: 18 }}>📊</span>
-                <div>
-                  <div style={{ fontWeight: 700, fontSize: 15, color: C.text }}>Google Analytics 4</div>
-                  <div style={{ fontSize: 12, color: C.textLight, marginTop: 2 }}>Comportement & trafic</div>
-                </div>
-              </div>
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                  <thead>
-                    <tr style={{ background: C.bg }}>
-                      <th style={{ padding: "10px 20px", textAlign: "left", fontWeight: 600, fontSize: 11, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.8, borderBottom: `1px solid ${C.border}`, minWidth: 160 }}>Métrique</th>
-                      {metrics.map(({ site }) => (
-                        <th key={site.id} style={{ padding: "10px 20px", textAlign: "right", fontWeight: 700, fontSize: 12, color: site.color, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>{site.label}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {[
-                      { key: "sessions", label: "Sessions",   fmt: v => v.toLocaleString() },
-                      { key: "views",    label: "Pages vues", fmt: v => v.toLocaleString() },
-                    ].map((row, di) => (
-                      <tr key={row.key} style={{ borderBottom: `1px solid ${C.borderLight}`, background: di % 2 === 0 ? C.white : C.bg }}>
-                        <td style={{ padding: "8px 20px", color: C.textMid, fontWeight: 500 }}>{row.label}</td>
-                        {metrics.map(({ site, ga }) => {
-                          const val = ga?.[row.key] ?? null;
-                          const vals = metrics.map(m => m.ga?.[row.key]).filter(v => v !== null && v !== undefined);
-                          const best = vals.length > 1 ? Math.max(...vals) : null;
-                          const isBest = val !== null && best !== null && val === best;
-                          return (
-                            <td key={site.id} style={{ padding: "8px 20px", textAlign: "right", fontWeight: 600, color: val === null ? C.textLight : isBest ? site.color : C.text }}>
-                              {val !== null ? row.fmt(val) : "—"}
-                              {isBest && vals.length > 1 && <span style={{ marginLeft: 4, fontSize: 10 }}>★</span>}
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* ── Card Bing AI ── */}
-            <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, marginBottom: 20, overflow: "hidden" }}>
-              <div style={{ padding: "16px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 10 }}>
-                <span style={{ fontSize: 18 }}>🤖</span>
-                <div>
-                  <div style={{ fontWeight: 700, fontSize: 15, color: C.text }}>Bing AI Performance</div>
-                  <div style={{ fontSize: 12, color: C.textLight, marginTop: 2 }}>Citations & visibilité GEO</div>
-                </div>
-              </div>
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                  <thead>
-                    <tr style={{ background: C.bg }}>
-                      <th style={{ padding: "10px 20px", textAlign: "left", fontWeight: 600, fontSize: 11, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.8, borderBottom: `1px solid ${C.border}`, minWidth: 160 }}>Métrique</th>
-                      {metrics.map(({ site }) => (
-                        <th key={site.id} style={{ padding: "10px 20px", textAlign: "right", fontWeight: 700, fontSize: 12, color: site.color, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>{site.label}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {[
-                      { key: "geoMentions", label: "Citations totales", fmt: v => v.toLocaleString() },
-                      { key: "pageCount",   label: "Pages citées (≥1)", fmt: v => v },
-                    ].map((row, di) => (
-                      <tr key={row.key} style={{ borderBottom: `1px solid ${C.borderLight}`, background: di % 2 === 0 ? C.white : C.bg }}>
-                        <td style={{ padding: "8px 20px", color: C.textMid, fontWeight: 500 }}>{row.label}</td>
-                        {metrics.map(({ site, bing }) => {
-                          const val = bing?.[row.key] ?? null;
-                          const vals = metrics.map(m => m.bing?.[row.key]).filter(v => v !== null && v !== undefined);
-                          const best = vals.length > 1 ? Math.max(...vals) : null;
-                          const isBest = val !== null && best !== null && val === best;
-                          return (
-                            <td key={site.id} style={{ padding: "8px 20px", textAlign: "right", fontWeight: 600, color: val === null ? C.textLight : isBest ? site.color : C.text }}>
-                              {val !== null ? row.fmt(val) : "—"}
-                              {isBest && vals.length > 1 && <span style={{ marginLeft: 4, fontSize: 10 }}>★</span>}
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* ── ALL PROJECTS ── */}
-        {tab === "allprojects" && (
-          <div>
-            <div style={{ marginBottom: 24 }}>
-              <SectionHeader
-                title="Tous les projets"
-                sub={`Analyse consolidée · ${projects.length} projet${projects.length > 1 ? "s" : ""} · pages concaténées`}
-              />
-            </div>
-
-            {/* Legend: one dot per project */}
-            <div style={{ display: "flex", gap: 12, marginBottom: 24, flexWrap: "wrap" }}>
-              {projects.map((p, pi) => {
-                const col = SITE_PALETTE[pi % SITE_PALETTE.length].color;
-                const hasSf = Object.values(p.sfData || {}).flat().length > 0;
-                return (
-                  <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 14px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 20 }}>
-                    <div style={{ width: 10, height: 10, borderRadius: "50%", background: col }} />
-                    <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{p.name}</span>
-                    <span style={{ fontSize: 11, color: C.textLight }}>{p.sites.length} site{p.sites.length > 1 ? "s" : ""}</span>
-                    {!hasSf && <span style={{ fontSize: 11, color: C.amber }}>⚠ pas de SF</span>}
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Global Correlation Matrix */}
-            <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, marginBottom: 24, overflow: "hidden" }}>
-              <div style={{ padding: "20px 24px", borderBottom: `1px solid ${C.border}` }}>
-                <div style={{ fontWeight: 700, fontSize: 15, color: C.text }}>Matrice de corrélation — tous projets</div>
-                <div style={{ fontSize: 12, color: C.textLight, marginTop: 4 }}>Pearson · pages de tous les projets concaténées</div>
-              </div>
-              <div style={{ overflowX: "auto", padding: "0 0 8px" }}>
-                <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 700 }}>
-                  <thead>
-                    <tr>
-                      <th style={{ padding: "12px 16px", fontSize: 11, color: C.textLight, textAlign: "left", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.8, borderBottom: `1px solid ${C.border}` }}>
-                        Dimension SF
-                      </th>
-                      {RES_KPIS.map(kpi => (
-                        <th key={kpi.key} style={{ padding: "12px 10px", fontSize: 11, color: C.textLight, fontWeight: 600, textAlign: "center", textTransform: "uppercase", letterSpacing: 0.8, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>
-                          {kpi.label}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {allProjectsMatrix.every(r => r.corrs.every(c => c.value === null)) ? (
-                      <tr><td colSpan={RES_KPIS.length + 1} style={{ padding: 40, textAlign: "center", color: C.textLight, fontSize: 13 }}>
-                        Chargez des données SF dans au moins un projet pour afficher la matrice
-                      </td></tr>
-                    ) : allProjectsMatrix.map(({ dim, corrs }) => (
-                      <tr key={dim.key} style={{ borderBottom: `1px solid ${C.borderLight}` }}>
-                        <td style={{ padding: "10px 16px", fontSize: 12, color: C.textMid, fontWeight: 500, whiteSpace: "nowrap" }}>{dim.label}</td>
-                        {corrs.map(({ kpi, value, n }) => {
-                          const v = value !== null ? Math.round(value * 100) / 100 : null;
-                          const bg   = v === null ? C.bg : v >= 0.25 ? "#DCFCE7" : v >= 0.05 ? "#F0FDF4" : v <= -0.25 ? "#FEE2E2" : v <= -0.05 ? "#FEF2F2" : "#F1F5F9";
-                          const col2 = v === null ? C.textLight : v >= 0.25 ? "#15803D" : v >= 0.05 ? "#16A34A" : v <= -0.25 ? "#B91C1C" : v <= -0.05 ? "#DC2626" : "#64748B";
-                          return (
-                            <td key={kpi.key} style={{ padding: "8px 10px", textAlign: "center" }}>
-                              {v !== null ? (
-                                <div style={{ display: "inline-block", background: bg, color: col2, borderRadius: 6, padding: "4px 8px", fontWeight: 700, fontSize: 12, minWidth: 48 }}>
-                                  {v > 0 ? "+" : ""}{v}
-                                  <div style={{ fontSize: 10, fontWeight: 400, opacity: 0.7 }}>n={n}</div>
-                                </div>
-                              ) : <span style={{ color: C.textLight, fontSize: 12 }}>—</span>}
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* Radar — one line per project */}
-            <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: 24 }}>
-              <div style={{ fontWeight: 700, fontSize: 15, color: C.text, marginBottom: 4 }}>Profil technique — radar par projet</div>
-              <div style={{ fontSize: 12, color: C.textLight, marginBottom: 20 }}>Scores normalisés 0–100 · moyenne de tous les sites du projet</div>
-              {projects.every(p => Object.values(p.sfData || {}).flat().length === 0) ? (
-                <div style={{ textAlign: "center", padding: 40, color: C.textLight, fontSize: 13 }}>Chargez des données SF pour afficher le radar</div>
-              ) : (
-                <ResponsiveContainer width="100%" height={340}>
-                  <RadarChart data={allProjectsRadar}>
-                    <PolarGrid stroke={C.border} />
-                    <PolarAngleAxis dataKey="dim" tick={{ fill: C.textLight, fontSize: 11 }} />
-                    {projects.map((p, pi) => {
-                      const col = SITE_PALETTE[pi % SITE_PALETTE.length].color;
-                      return <Radar key={p.id} name={p.name} dataKey={p.id} stroke={col} fill={col} fillOpacity={0.08} strokeWidth={2} dot={{ r: 3 }} />;
-                    })}
-                    <Legend wrapperStyle={{ fontSize: 12 }} />
-                  </RadarChart>
-                </ResponsiveContainer>
-              )}
-            </div>
           </div>
         )}
 
       </div>
-    </div>
     </>
   );
 }
