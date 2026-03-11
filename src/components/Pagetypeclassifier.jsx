@@ -157,7 +157,7 @@ export default function PageTypeClassifier({ siteId, projectId, sfRows, pageType
 
   const signals = sfRows?.length ? detectSignals(sfRows) : {};
   const hasAnySignal = Object.values(signals).some(Boolean);
-  const BATCH = 20;
+  const BATCH = 10;
 
   // Load existing classifications from DB on mount, auto-classify if none found
   const autoTriggeredRef = useRef(false);
@@ -182,7 +182,15 @@ export default function PageTypeClassifier({ siteId, projectId, sfRows, pageType
     const html = sfRows.filter(r => {
       const ct = (r["type de contenu"] || r["content type"] || r["type"] || "").toLowerCase();
       const sc = parseInt(r["code http"] || r["status code"] || 200);
-      return (ct.includes("html") || ct === "") && sc < 400;
+      if (sc >= 400) return false;
+      if (ct.includes("html")) return true;
+      // If content-type is empty, require a title or h1 to confirm it's an HTML page
+      if (ct === "") {
+        const hasTitle = (r["title 1"] || r["title"] || "").trim() !== "";
+        const hasH1    = (r["h1-1"]   || r["h1"]    || "").trim() !== "";
+        return hasTitle || hasH1;
+      }
+      return false;
     });
 
     const allPages = html.map(r => ({
@@ -220,16 +228,26 @@ export default function PageTypeClassifier({ siteId, projectId, sfRows, pageType
         const batch = needsAI.slice(i, i + BATCH);
         const prompt = buildClassifyPrompt(batch);
 
-        const res = await fetch("/api/anthropic", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: "claude-sonnet-4-20250514",
-            max_tokens: 1000,
-            messages: [{ role: "user", content: prompt }],
-          }),
-        });
-
+        // Retry with exponential backoff on 429
+        let res, retries = 0;
+        while (retries <= 4) {
+          res = await fetch("/api/anthropic", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              model: "claude-sonnet-4-20250514",
+              max_tokens: 1000,
+              messages: [{ role: "user", content: prompt }],
+            }),
+          });
+          if (res.status === 429) {
+            const wait = 2000 * Math.pow(2, retries); // 2s, 4s, 8s, 16s, 32s
+            retries++;
+            await new Promise(r => setTimeout(r, wait));
+          } else {
+            break;
+          }
+        }
         if (!res.ok) throw new Error(`API error ${res.status}`);
         const data = await res.json();
         const text = data.content?.find(b => b.type === "text")?.text || "[]";
@@ -250,7 +268,7 @@ export default function PageTypeClassifier({ siteId, projectId, sfRows, pageType
         });
 
         setProgress({ done: deterministicCount + Math.min(i + BATCH, needsAI.length), total: allPages.length, deterministic: deterministicCount });
-        if (i + BATCH < needsAI.length) await new Promise(r => setTimeout(r, 300));
+        if (i + BATCH < needsAI.length) await new Promise(r => setTimeout(r, 1500));
       }
 
       await sbSavePageTypes(dbRows);

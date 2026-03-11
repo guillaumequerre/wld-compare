@@ -233,19 +233,37 @@ export function parseSemrush(rows) {
   }
 
   // ── Format Position Tracking ───────────────────────────────────
+  // Colonnes réelles : 20260311_average (position moy), 20260311_keywords_count,
+  //   20260311_estimated_traffic, 20260311_position (par mot-clé), volume
   if (!latest) return [];
   const byUrl = {};
   for (const row of rows) {
     const url = (key(row, "url") || "").trim();
     if (!url) continue;
-    const position = safeNum(key(row, `${latest}_position`, "position_difference") || 0);
-    const volume   = safeNum(key(row, "volume") || 0);
+    // Position par mot-clé (colonne YYYYMMDD_position OU YYYYMMDD_average si une ligne = une page)
+    const position = safeNum(
+      key(row, `${latest}_position`) ||
+      key(row, "position_difference") || 0
+    );
+    const volume = safeNum(key(row, "volume") || 0);
     if (!byUrl[url]) {
       byUrl[url] = {
         url,
-        kwCount:  safeNum(key(row, `${latest}_keywords_count`) || 0),
-        traffic:  safeNum(key(row, `${latest}_estimated_traffic`) || 0),
-        totalVol: safeNum(key(row, `${latest}_volume`) || 0),
+        // keywords_count : colonne YYYYMMDD_keywords_count OU keywords_count_difference
+        kwCount:  safeNum(
+          key(row, `${latest}_keywords_count`) ||
+          key(row, "keywords_count_difference") || 0
+        ),
+        traffic:  safeNum(
+          key(row, `${latest}_estimated_traffic`) ||
+          key(row, "estimated_traffic_difference") || 0
+        ),
+        totalVol: safeNum(key(row, `${latest}_volume`) || key(row, "volume") || 0),
+        // Position moyenne (format page-level vs keyword-level)
+        avgPosRaw: safeNum(
+          key(row, `${latest}_average`) ||
+          key(row, "average_difference") || 0
+        ),
         keywords: [],
       };
     }
@@ -256,7 +274,10 @@ export function parseSemrush(rows) {
     const top3  = kws.filter(k => k.position <= 3).length;
     const top10 = kws.filter(k => k.position <= 10).length;
     const opps  = kws.filter(k => k.position >= 11 && k.position <= 20).length;
-    const avgPos = kws.length ? Math.round(kws.reduce((s, k) => s + k.position, 0) / kws.length * 10) / 10 : 0;
+    // Prefer computed avgPos from keywords, fallback to avgPosRaw from page-level col
+    const avgPos = kws.length
+      ? Math.round(kws.reduce((s, k) => s + k.position, 0) / kws.length * 10) / 10
+      : u.avgPosRaw;
     return {
       url: u.url,
       kwCount:  u.kwCount || kws.length,

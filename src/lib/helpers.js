@@ -101,9 +101,15 @@ export function isSemrushCSV(text) {
   const t = text.trimStart();
   // Format Position Tracking (header propriétaire avec tirets)
   if (t.startsWith("-----")) return true;
-  // Format Organic Research Pages (header direct avec URL,Traffic...)
-  const firstLine = t.split(/\r?\n/)[0].toLowerCase();
-  if (firstLine.startsWith("url,") && firstLine.includes("traffic") && firstLine.includes("keyword")) return true;
+  // Format Organic Research Pages — cherche les colonnes clés (EN et FR)
+  const firstLine = t.split(/\r?\n/)[0].toLowerCase().trim();
+  if (firstLine.startsWith("url,") || firstLine.startsWith('"url",')) {
+    const hasTraffic = firstLine.includes("traffic");
+    const hasKeyword = firstLine.includes("keyword") || firstLine.includes("mot") || firstLine.includes("nombre");
+    if (hasTraffic && hasKeyword) return true;
+    // Fallback: if it has url + at least 4 columns, likely Semrush
+    if (hasTraffic && firstLine.split(",").length >= 4) return true;
+  }
   return false;
 }
 
