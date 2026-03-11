@@ -65,3 +65,48 @@ export async function sbLoadProjects() {
 export async function sbDeleteProject(projectId) {
   await fetch(`${PROXY}/rest/v1/projects?id=eq.${encodeURIComponent(projectId)}`, { method: "DELETE" });
 }
+
+// ── ANALYSES ─────────────────────────────────────────────────────
+export async function sbSaveAnalysis({ id, project_id, content }) {
+  const res = await fetch(`${PROXY}/rest/v1/analyses`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
+    body: JSON.stringify({ id, project_id, content }),
+  });
+  if (!res.ok) throw new Error(`Save analysis failed: ${res.status}`);
+  return res.json();
+}
+
+export async function sbGetLatestAnalysis(project_id) {
+  const res = await fetch(`${PROXY}/rest/v1/analyses?project_id=eq.${encodeURIComponent(project_id)}&order=created_at.desc&limit=1`);
+  if (!res.ok) return null;
+  const rows = await res.json();
+  return rows[0] || null;
+}
+
+// ── RECOMMENDATIONS ───────────────────────────────────────────────
+export async function sbSaveRecommendations(recs) {
+  if (!recs.length) return;
+  const res = await fetch(`${PROXY}/rest/v1/recommendations`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
+    body: JSON.stringify(recs),
+  });
+  if (!res.ok) throw new Error(`Save recommendations failed: ${res.status}`);
+  return res.json();
+}
+
+export async function sbGetRecommendations(project_id) {
+  const res = await fetch(`${PROXY}/rest/v1/recommendations?project_id=eq.${encodeURIComponent(project_id)}&order=created_at.desc&limit=200`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function sbUpdateRecommendation(id, patch) {
+  const res = await fetch(`${PROXY}/rest/v1/recommendations?id=eq.${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error(`Update recommendation failed: ${res.status}`);
+}

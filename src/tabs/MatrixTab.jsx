@@ -1,3 +1,4 @@
+import InfoCard from "../components/InfoCard";
 import { C, RES_KPIS } from "../lib/constants";
 import { SectionHeader, Badge } from "../components/ui";
 import PageModeSelector from "../components/PageModeSelector";
@@ -6,6 +7,7 @@ import { CorrCell, KpiHeaderCell, SfDimCell } from "../components/CorrCell";
 export default function MatrixTab({ sites, sfData, pageMode, setPageMode, matrixSites, setMatrixSites, filteredCorrMatrix }) {
   return (
   <div>
+      <InfoCard tabKey="matrix" />
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
       <SectionHeader title="Matrice de corrélation" sub="Pearson · SF (ordonnées) × KPIs résultats (abscisses)" />
       <PageModeSelector value={pageMode} onChange={setPageMode} />
@@ -105,4 +107,5 @@ export default function MatrixTab({ sites, sfData, pageMode, setPageMode, matrix
       ))}
     </div>
   </div>
-)}
+);
+}

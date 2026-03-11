@@ -101,19 +101,18 @@ export function isSemrushCSV(text) {
   return text.trimStart().startsWith("-----");
 }
 
-// Parse un CSV Semrush en sautant les 5 lignes de header + ligne vide
+// Parse un CSV Semrush en sautant les lignes de header propriétaire
 export function parseSemrushCSV(text) {
   const lines = text.split(/\r?\n/);
-  // Trouver la ligne d'en-tête (après les tirets)
+  // Trouver la vraie ligne d'en-tête : celle qui commence par "Url,"
   let headerIdx = 0;
   for (let i = 0; i < lines.length; i++) {
-    if (lines[i].startsWith("---")) continue;
-    if (lines[i].trim() === "") continue;
-    // Première ligne non-vide après les tirets = headers
-    headerIdx = i;
-    break;
+    const lower = lines[i].toLowerCase().trim();
+    if (lower.startsWith("url,") || lower.startsWith('"url",')) {
+      headerIdx = i;
+      break;
+    }
   }
-  // Reconstruire un CSV propre à partir de headerIdx
   const clean = lines.slice(headerIdx).join("\n");
   return parseCSV(clean);
 }

@@ -1,3 +1,4 @@
+import InfoCard from "../components/InfoCard";
 import { C, SF_DIMS } from "../lib/constants";
 import SchemaBreakdown from "../components/SchemaBreakdown";
 import LlmsStatus from "../components/LlmsStatus";
@@ -7,6 +8,7 @@ import { SectionHeader } from "../components/ui";
 export default function SitesTab({ sites, pageMode, setPageMode, metrics }) {
   return (
   <div>
+      <InfoCard tabKey="sites" />
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24 }}>
       <SectionHeader title="Comparatif par outil" sub="Tous les sites côte à côte pour chaque source de données" />
       <PageModeSelector value={pageMode} onChange={setPageMode} />
@@ -224,4 +226,5 @@ export default function SitesTab({ sites, pageMode, setPageMode, metrics }) {
       </div>
     </div>
   </div>
-)}
+);
+}

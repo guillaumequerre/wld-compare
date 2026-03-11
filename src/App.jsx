@@ -449,6 +449,8 @@ export default function App() {
               setAnalysisLoading={setAnalysisLoading}
               analysisError={analysisError}
               setAnalysisError={setAnalysisError}
+              currentProjectId={currentProjectId}
+              sites={sites}
             />
           )}
 

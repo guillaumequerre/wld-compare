@@ -1,3 +1,4 @@
+import InfoCard from "../components/InfoCard";
 import { C, SITE_PALETTE } from "../lib/constants";
 import { newProject, parseCSV, parseSemrushCSV } from "../lib/helpers";
 import { sbSaveProject, sbDeleteProject, sbDownload } from "../lib/supabase";
@@ -8,6 +9,7 @@ import { SectionHeader } from "../components/ui";
 export default function ImportTab({ projects, currentProjectId, setCurrentProjectId, editingProjectName, setEditingProjectName, setProjects, sites, setSites, sfData, gscData, gaData, bingData, smData, setSfData, setGscData, setGaData, setBingData, setSmData, confirmModal, setConfirmModal, dbHistory, dbLoading, showHistory, setShowHistory, refreshHistory }) {
   return (
   <div>
+      <InfoCard tabKey="import" />
     {/* ── Project selector ── */}
     <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: "20px 24px", marginBottom: 20 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 16 }}>
@@ -261,4 +263,5 @@ export default function ImportTab({ projects, currentProjectId, setCurrentProjec
       </div>
     )}
   </div>
-)}
+);
+}

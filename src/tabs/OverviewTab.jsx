@@ -1,3 +1,4 @@
+import InfoCard from "../components/InfoCard";
 import { C } from "../lib/constants";
 import { RadarChart, Radar, PolarGrid, PolarAngleAxis, ResponsiveContainer, Legend } from "recharts";
 import { StatPill, SectionHeader, Badge } from "../components/ui";
@@ -8,6 +9,7 @@ import LlmsStatus from "../components/LlmsStatus";
 export default function OverviewTab({ sites, pageMode, setPageMode, radarSites, setRadarSites, metrics, radarData }) {
   return (
   <div>
+      <InfoCard tabKey="overview" />
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
       <SectionHeader title="Vue d'ensemble" sub="Scores agrégés et comparaison des 3 sites" />
       <PageModeSelector value={pageMode} onChange={setPageMode} />
@@ -160,4 +162,5 @@ export default function OverviewTab({ sites, pageMode, setPageMode, radarSites, 
       </ResponsiveContainer>
     </div>
   </div>
-)}
+);
+}

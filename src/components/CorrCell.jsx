@@ -110,7 +110,7 @@ export function CorrCell({ kpi, value, n, dim, base, delta, showDelta }) {
 export function KpiHeaderCell({ kpi }) {
   const { rect, onEnter, onLeave } = useTooltip();
   const tip = KPI_TOOLTIPS[kpi.label];
-  const W = 220, H = 60;
+  const W = 240, H = 90;
   const ts = tip ? tooltipStyle(rect, W, H) : null;
   return (
     <th
@@ -120,8 +120,9 @@ export function KpiHeaderCell({ kpi }) {
     >
       {kpi.label}
       {ts && (
-        <div style={{ ...ts, background: "#1E1E2E", color: "#fff", borderRadius: 9, padding: "10px 13px", fontSize: 11, boxShadow: "0 4px 16px rgba(0,0,0,0.3)", width: W, lineHeight: 1.6 }}>
-          {tip}
+        <div style={{ ...ts, background: "#1E1E2E", color: "#fff", borderRadius: 9, padding: "11px 14px", fontSize: 11, boxShadow: "0 4px 16px rgba(0,0,0,0.3)", width: W, lineHeight: 1.6 }}>
+          <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 5, color: "#E2E8F0" }}>{kpi.label}</div>
+          <div style={{ color: "#CBD5E1" }}>{tip}</div>
         </div>
       )}
     </th>
@@ -131,7 +132,7 @@ export function KpiHeaderCell({ kpi }) {
 export function SfDimCell({ dim, rowBg }) {
   const { rect, onEnter, onLeave } = useTooltip();
   const tip = SF_DIM_TOOLTIPS[dim.key];
-  const W = 240, H = 60;
+  const W = 260, H = 90;
   const ts = tip ? tooltipStyle(rect, W, H) : null;
   return (
     <td
@@ -141,8 +142,9 @@ export function SfDimCell({ dim, rowBg }) {
     >
       {dim.label}
       {ts && (
-        <div style={{ ...ts, background: "#1E1E2E", color: "#fff", borderRadius: 9, padding: "10px 13px", fontSize: 11, boxShadow: "0 4px 16px rgba(0,0,0,0.3)", width: W, lineHeight: 1.6 }}>
-          {tip}
+        <div style={{ ...ts, background: "#1E1E2E", color: "#fff", borderRadius: 9, padding: "11px 14px", fontSize: 11, boxShadow: "0 4px 16px rgba(0,0,0,0.3)", width: W, lineHeight: 1.6 }}>
+          <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 5, color: "#E2E8F0" }}>{dim.label}</div>
+          <div style={{ color: "#CBD5E1" }}>{tip}</div>
         </div>
       )}
     </td>
