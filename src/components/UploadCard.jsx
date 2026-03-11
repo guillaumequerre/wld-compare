@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef } from "react";
 import { C } from "../lib/constants";
-import { parseCSV } from "../lib/helpers";
+import { parseCSV, isSemrushCSV } from "../lib/helpers";
 import { sbUpload, sbInsertImport } from "../lib/supabase";
 
 export default function UploadCard({ label, icon, hint, onData, loaded, color, siteId, source, projectId, onLoadFromHistory, rawMode }) {
@@ -16,6 +16,11 @@ export default function UploadCard({ label, icon, hint, onData, loaded, color, s
     const reader = new FileReader();
     reader.onload = async (e) => {
       const text = e.target.result;
+      // Validate Semrush format
+      if (source === "sm" && !isSemrushCSV(text)) {
+        setUploadErr("Format non reconnu — attendu : export Semrush (Organic Pages ou Position Tracking)");
+        return;
+      }
       // rawMode: pass raw text to onData (let caller parse), else parse CSV here
       const rows = rawMode ? null : parseCSV(text);
       rawMode ? onData(null, text) : onData(rows);

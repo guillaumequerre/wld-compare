@@ -1,7 +1,6 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import { C, SF_DIMS, RES_KPIS, RADAR_DIMS, DEFAULT_SITES, SEMRUSH_DIMS } from "./lib/constants";
 import { emptyDataMap, makeInitialProject, parseCSV } from "./lib/helpers";
-import { pearson } from "./lib/helpers";
 import { extractSF, extractGSC, extractGA, extractBing, extractSemrush, filterByMode } from "./lib/parsers";
 import { buildUrlMaps, buildSfPageVectors, intraCorrFast, smIntraCorr } from "./lib/correlations";
 import { sbSaveProject, sbLoadProjects, sbGetHistory, sbGetLatest, sbDownload } from "./lib/supabase";
@@ -124,8 +123,7 @@ export default function App() {
       setDbLoading(true);
       try {
         const savedProjects = await sbLoadProjects();
-        console.log("[mount] savedProjects=", savedProjects);
-        if (savedProjects && savedProjects.length > 0) {
+          if (savedProjects && savedProjects.length > 0) {
           const restored = savedProjects.map(p => ({
             ...p,
             sfData:   emptyDataMap(p.sites),
@@ -243,19 +241,7 @@ export default function App() {
     }));
   }, [matrixSites, smData, gscData, gaData, bingData]);
 
-  const corrMatrix = useMemo(() => {
-    const hasAny = metrics.some(m => m.sf !== null);
-    return SF_DIMS.map(dim => ({
-      dim,
-      corrs: RES_KPIS.map(kpi => ({
-        kpi,
-        value: hasAny ? pearson(
-          metrics.map(m => m.sf ? (m.sf[dim.key] ?? 0) : 0),
-          resultVals.map(r => r[kpi.key] ?? 0)
-        ) : null,
-      })),
-    }));
-  }, [metrics, resultVals]);
+
 
   const baseMatrix = useMemo(() => {
     const sfRows = matrixSites.flatMap(id => sfData[id] || []);

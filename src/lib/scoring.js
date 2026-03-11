@@ -93,23 +93,3 @@ export function scoreLabel(score) {
   if (score >= 20)   return { label: "Faible",     color: "#DC2626", bg: "#FEF2F2" };
   return                    { label: "Critique",   color: "#991B1B", bg: "#FEE2E2" };
 }
-
-/**
- * Top actions pour améliorer le score d'une page
- * Retourne les 3 dimensions avec le plus grand potentiel de gain
- */
-export function topImprovements(page, sfMetrics) {
-  const vals = page || sfMetrics;
-  if (!vals) return [];
-  const actions = [];
-  for (const { key, dir } of DIMS) {
-    const val = safeNum(vals[key] ?? null);
-    if (val === null) continue;
-    const currentNorm = normalizeDim(key, val, dir);
-    const maxPts = WEIGHTS[key] * 100;
-    const currentPts = currentNorm * maxPts;
-    const potential = maxPts - currentPts; // points laissés sur la table
-    if (potential > 0.5) actions.push({ key, potential: Math.round(potential * 10) / 10, currentPts: Math.round(currentPts * 10) / 10, maxPts: Math.round(maxPts * 10) / 10 });
-  }
-  return actions.sort((a, b) => b.potential - a.potential).slice(0, 3);
-}
