@@ -87,19 +87,23 @@ export default function App() {
   const loadedProjectsRef = useRef(new Set());
 
   const loadProjectData = useCallback(async (pid) => {
+    console.log("[loadProjectData] start, pid=", pid);
     const [latest, history] = await Promise.all([sbGetLatest(pid), sbGetHistory(pid)]);
+    console.log("[loadProjectData] latest keys=", Object.keys(latest), "history count=", history.length);
     setDbHistory(history);
-    // Collect all CSV data first, then apply in a single setProjects to avoid race conditions
     const updates = await Promise.all(Object.values(latest).map(async (row) => {
       try {
+        console.log("[loadProjectData] downloading", row.source, row.site_id, row.storage_path);
         const text = await sbDownload(row.storage_path);
         const rows = parseCSV(text);
+        console.log("[loadProjectData] parsed", row.source, row.site_id, "rows=", rows.length);
         const sid = row.site_id, src = row.source;
         const key = src === "sf" ? "sfData" : src === "gsc" ? "gscData" : src === "ga" ? "gaData" : src === "bing" ? "bingData" : null;
         return key ? { key, sid, rows } : null;
-      } catch (e) { console.warn("Auto-load row failed:", row.source, e); return null; }
+      } catch (e) { console.warn("[loadProjectData] failed:", row.source, e); return null; }
     }));
     const valid = updates.filter(Boolean);
+    console.log("[loadProjectData] valid updates=", valid.map(u => u.key + "/" + u.sid));
     if (valid.length > 0) {
       setProjects(prev => prev.map(p => {
         if (p.id !== pid) return p;
@@ -117,6 +121,7 @@ export default function App() {
       setDbLoading(true);
       try {
         const savedProjects = await sbLoadProjects();
+        console.log("[mount] savedProjects=", savedProjects);
         if (savedProjects && savedProjects.length > 0) {
           const restored = savedProjects.map(p => ({
             ...p,
@@ -129,6 +134,7 @@ export default function App() {
           const firstId = restored[0].id;
           setCurrentProjectId(firstId);
           loadedProjectsRef.current.add(firstId);
+          console.log("[mount] calling loadProjectData for", firstId);
           await loadProjectData(firstId);
         } else {
           await sbSaveProject(INITIAL_PROJECT);
