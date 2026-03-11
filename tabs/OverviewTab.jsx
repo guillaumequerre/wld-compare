@@ -158,5 +158,3 @@ export default function OverviewTab({ sites, pageMode, setPageMode, radarSites, 
     </div>
   </div>
 )}
-
-{/* ── MATRIX ── */}
