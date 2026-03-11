@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { C, PAGE_TYPES } from "../lib/constants";
 import { sbSavePageTypes, sbGetPageTypes, sbDeletePageTypes } from "../lib/supabase";
 
@@ -159,7 +159,8 @@ export default function PageTypeClassifier({ siteId, projectId, sfRows, pageType
   const hasAnySignal = Object.values(signals).some(Boolean);
   const BATCH = 20;
 
-  // Load existing classifications from DB on mount, then auto-classify if none found
+  // Load existing classifications from DB on mount, auto-classify if none found
+  const autoTriggeredRef = useRef(false);
   useEffect(() => {
     if (!projectId || !siteId || !sfRows?.length) return;
     sbGetPageTypes(projectId, siteId).then(rows => {
@@ -167,21 +168,12 @@ export default function PageTypeClassifier({ siteId, projectId, sfRows, pageType
         const map = {};
         rows.forEach(r => { map[r.url] = r.page_type; });
         setPageTypes(prev => ({ ...prev, [siteId]: map }));
-      } else {
-        // No existing classifications → auto-trigger
-        setAutoTrigger(true);
+      } else if (!autoTriggeredRef.current) {
+        autoTriggeredRef.current = true;
+        classify();
       }
     });
-  }, [projectId, siteId, sfRows, setPageTypes]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Auto-trigger classify when sfRows first loaded and no existing types
-  const [autoTrigger, setAutoTrigger] = useState(false);
-  useEffect(() => {
-    if (autoTrigger && status === "idle" && sfRows?.length) {
-      setAutoTrigger(false);
-      classify();
-    }
-  }); // intentionally no deps — runs after state settles
+  }, [projectId, siteId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const classify = async () => {
     setStatus("loading");

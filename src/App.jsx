@@ -343,7 +343,7 @@ export default function App() {
         return { kpi, value: res ? res.value : null, n: res ? res.n : 0 };
       }),
     }));
-  }, [projects, templateFilter, pageTypes]);
+  }, [projects]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const allProjectsRadar = useMemo(() => {
     const anyData = projects.some(p => Object.values(p.sfData || {}).flat().length > 0);
@@ -358,7 +358,7 @@ export default function App() {
       });
       return row;
     });
-  }, [projects, templateFilter, pageTypes]);
+  }, [projects]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Render ───────────────────────────────────────────────────────
   return (
