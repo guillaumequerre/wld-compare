@@ -113,3 +113,19 @@ export const SEMRUSH_DIMS = [
   { key: "smTraffic",    label: "Trafic estimé Semrush",    higher: true  },
   { key: "smAvgPos",     label: "Position moy. Semrush",    higher: false },
 ];
+
+
+// ── PAGE TYPES ───────────────────────────────────────────────────
+export const PAGE_TYPES = [
+  { key: "article",     label: "Article",         icon: "📝", color: "#7C3AED", bg: "#F5F3FF" },
+  { key: "landing",     label: "Landing",         icon: "🎯", color: "#DC2626", bg: "#FEF2F2" },
+  { key: "categorie",   label: "Catégorie",       icon: "📂", color: "#D97706", bg: "#FFFBEB" },
+  { key: "home",        label: "Accueil",         icon: "🏠", color: "#059669", bg: "#ECFDF5" },
+  { key: "fiche",       label: "Fiche produit",   icon: "🛍️", color: "#2563EB", bg: "#EFF6FF" },
+  { key: "contact",     label: "Contact",         icon: "📬", color: "#0891B2", bg: "#ECFEFF" },
+  { key: "about",       label: "À propos",        icon: "ℹ️",  color: "#64748B", bg: "#F1F5F9" },
+  { key: "comparatif",  label: "Comparatif",      icon: "⚖️",  color: "#EA580C", bg: "#FFF7ED" },
+  { key: "autre",       label: "Autre",           icon: "❓", color: "#94A3B8", bg: "#F8FAFC" },
+];
+
+export const PAGE_TYPE_MAP = Object.fromEntries(PAGE_TYPES.map(t => [t.key, t]));
