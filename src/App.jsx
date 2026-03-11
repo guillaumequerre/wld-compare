@@ -87,33 +87,31 @@ export default function App() {
   const loadedProjectsRef = useRef(new Set());
 
   const loadProjectData = useCallback(async (pid) => {
-    console.log("[loadProjectData] start, pid=", pid);
     const [latest, history] = await Promise.all([sbGetLatest(pid), sbGetHistory(pid)]);
-    console.log("[loadProjectData] latest keys=", Object.keys(latest), "history count=", history.length);
     setDbHistory(history);
     const updates = await Promise.all(Object.values(latest).map(async (row) => {
       try {
-        console.log("[loadProjectData] downloading", row.source, row.site_id, row.storage_path);
         const text = await sbDownload(row.storage_path);
         const rows = parseCSV(text);
-        console.log("[loadProjectData] parsed", row.source, row.site_id, "rows=", rows.length);
-        const sid = row.site_id, src = row.source;
+        const src = row.source;
         const key = src === "sf" ? "sfData" : src === "gsc" ? "gscData" : src === "ga" ? "gaData" : src === "bing" ? "bingData" : null;
-        return key ? { key, sid, rows } : null;
-      } catch (e) { console.warn("[loadProjectData] failed:", row.source, e); return null; }
+        return key ? { key, storedSid: row.site_id, rows } : null;
+      } catch (e) { console.warn("Auto-load failed:", row.source, e); return null; }
     }));
     const valid = updates.filter(Boolean);
-    console.log("[loadProjectData] valid updates=", valid.map(u => u.key + "/" + u.sid));
-    if (valid.length > 0) {
-      setProjects(prev => prev.map(p => {
-        if (p.id !== pid) return p;
-        const patch = {};
-        for (const { key, sid, rows } of valid) {
-          patch[key] = { ...(patch[key] || p[key]), [sid]: rows };
+    if (valid.length === 0) return;
+    setProjects(prev => prev.map(p => {
+      if (p.id !== pid) return p;
+      const patch = {};
+      const siteIds = new Set(p.sites.map(s => s.id));
+      for (const { key, storedSid, rows } of valid) {
+        // Only inject if site_id exists in this project (ignores stale/migrated ids)
+        if (siteIds.has(storedSid)) {
+          patch[key] = { ...(patch[key] || p[key]), [storedSid]: rows };
         }
-        return { ...p, ...patch };
-      }));
-    }
+      }
+      return { ...p, ...patch };
+    }));
   }, []);
 
   useEffect(() => {
@@ -133,9 +131,11 @@ export default function App() {
           setProjects(restored);
           const firstId = restored[0].id;
           setCurrentProjectId(firstId);
-          loadedProjectsRef.current.add(firstId);
-          console.log("[mount] calling loadProjectData for", firstId);
-          await loadProjectData(firstId);
+          // Load all projects data in parallel
+          await Promise.all(restored.map(async (p) => {
+            loadedProjectsRef.current.add(p.id);
+            await loadProjectData(p.id);
+          }));
         } else {
           await sbSaveProject(INITIAL_PROJECT);
           loadedProjectsRef.current.add(INITIAL_PROJECT.id);
