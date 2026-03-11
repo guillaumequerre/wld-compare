@@ -1,6 +1,9 @@
-import { C, RADAR_DIMS } from "../lib/constants.js";
+import { C, RADAR_DIMS } from "../lib/constants";
 import { RadarChart, Radar, PolarGrid, PolarAngleAxis, ResponsiveContainer, Legend } from "recharts";
-import { StatPill, SectionHeader, Badge } from "../components/ui.jsx";
+import { StatPill, SectionHeader, Badge } from "../components/ui";
+import PageModeSelector from "../components/PageModeSelector";
+import SchemaBreakdown from "../components/SchemaBreakdown";
+import LlmsStatus from "../components/LlmsStatus";
 
 export default function OverviewTab({ sites, pageMode, setPageMode, radarSites, setRadarSites, metrics, radarData }) {
   return (

@@ -1,6 +1,8 @@
-import { C } from "../lib/constants.js";
-import { safeNum, toUrlPath } from "../lib/helpers.js";
-import { SectionHeader, Badge } from "../components/ui.jsx";
+import { C } from "../lib/constants";
+import { safeNum, toUrlPath } from "../lib/helpers";
+import { filterByMode } from "../lib/parsers";
+import { SectionHeader, Badge } from "../components/ui";
+import PageModeSelector from "../components/PageModeSelector";
 
 export default function PagesTab({ sites, sfData, gscData, bingData, pageMode, setPageMode }) {
   return (

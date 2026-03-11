@@ -1,10 +1,10 @@
-import { C, SITE_PALETTE } from "../lib/constants.js";
-import { newProject, emptyDataMap, makeInitialProject } from "../lib/helpers.js";
-import { sbSaveProject, sbDeleteProject } from "../lib/supabase.js";
-import UploadCard from "../components/UploadCard.jsx";
-import { SectionHeader } from "../components/ui.jsx";
+import { C, SITE_PALETTE } from "../lib/constants";
+import { newProject, emptyDataMap, makeInitialProject, parseCSV } from "../lib/helpers";
+import { sbSaveProject, sbDeleteProject, sbDownload } from "../lib/supabase";
+import UploadCard from "../components/UploadCard";
+import { SectionHeader } from "../components/ui";
 
-export default function ImportTab({ projects, currentProjectId, setCurrentProjectId, editingProjectName, setEditingProjectName, setProjects, sites, sfData, gscData, gaData, bingData, setSfData, setGscData, setGaData, setBingData, setConfirmModal, dbHistory, dbLoading, showHistory, setShowHistory, refreshHistory }) {
+export default function ImportTab({ projects, currentProjectId, setCurrentProjectId, editingProjectName, setEditingProjectName, setProjects, sites, setSites, sfData, gscData, gaData, bingData, setSfData, setGscData, setGaData, setBingData, confirmModal, setConfirmModal, dbHistory, dbLoading, showHistory, setShowHistory, refreshHistory }) {
   return (
   <div>
     {/* ── Project selector ── */}

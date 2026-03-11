@@ -1,7 +1,7 @@
-import { C, SF_DIMS, RES_KPIS, RADAR_DIMS } from "../lib/constants.js";
+import { C, SF_DIMS, RES_KPIS, RADAR_DIMS, SITE_PALETTE } from "../lib/constants";
 import { RadarChart, Radar, PolarGrid, PolarAngleAxis, ResponsiveContainer, Legend } from "recharts";
-import { SectionHeader } from "../components/ui.jsx";
-import { CorrCell, KpiHeaderCell, SfDimCell } from "../components/CorrCell.jsx";
+import { SectionHeader } from "../components/ui";
+import { CorrCell, KpiHeaderCell, SfDimCell } from "../components/CorrCell";
 
 export default function AllProjectsTab({ projects, sites, sfData, allProjectsMatrix, allProjectsRadar }) {
   return (
