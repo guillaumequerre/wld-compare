@@ -110,3 +110,29 @@ export async function sbUpdateRecommendation(id, patch) {
   });
   if (!res.ok) throw new Error(`Update recommendation failed: ${res.status}`);
 }
+
+// ── PAGE TYPES ───────────────────────────────────────────────────
+export async function sbSavePageTypes(rows) {
+  // rows: [{ project_id, site_id, url, page_type, confidence }]
+  if (!rows.length) return;
+  const res = await fetch(`${BASE}/rest/v1/page_types`, {
+    method: "POST",
+    headers: { ...HEADERS, "Prefer": "resolution=merge-duplicates" },
+    body: JSON.stringify(rows),
+  });
+  if (!res.ok) console.warn("sbSavePageTypes failed:", res.status);
+  return res.ok;
+}
+
+export async function sbGetPageTypes(project_id, site_id) {
+  const params = new URLSearchParams({ project_id: `eq.${project_id}`, site_id: `eq.${site_id}`, select: "url,page_type,confidence" });
+  const res = await fetch(`${BASE}/rest/v1/page_types?${params}`, { headers: HEADERS });
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function sbDeletePageTypes(project_id, site_id) {
+  const params = new URLSearchParams({ project_id: `eq.${project_id}`, site_id: `eq.${site_id}` });
+  const res = await fetch(`${BASE}/rest/v1/page_types?${params}`, { method: "DELETE", headers: HEADERS });
+  return res.ok;
+}
