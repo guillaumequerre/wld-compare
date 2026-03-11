@@ -129,14 +129,36 @@ export default function App() {
             gaData:   emptyDataMap(p.sites),
             bingData: emptyDataMap(p.sites),
           }));
-          // Load all projects in parallel, activate the one with most imports
-          const counts = await Promise.all(restored.map(async (p) => {
+          // Load all CSV data first (before touching state)
+          const allData = await Promise.all(restored.map(async (p) => {
             loadedProjectsRef.current.add(p.id);
-            const n = await loadProjectData(p.id);
-            return { id: p.id, n: n || 0 };
+            const [latest, history] = await Promise.all([sbGetLatest(p.id), sbGetHistory(p.id)]);
+            if (p.id === restored[0].id) setDbHistory(history);
+            const updates = await Promise.all(Object.values(latest).map(async (row) => {
+              try {
+                const text = await sbDownload(row.storage_path);
+                const rows = parseCSV(text);
+                const src = row.source;
+                const key = src === "sf" ? "sfData" : src === "gsc" ? "gscData" : src === "ga" ? "gaData" : src === "bing" ? "bingData" : null;
+                return key ? { key, sid: row.site_id, rows } : null;
+              } catch(e) { return null; }
+            }));
+            const valid = updates.filter(Boolean);
+            return { id: p.id, count: valid.length, valid };
           }));
-          setProjects(restored);
-          const bestId = counts.sort((a, b) => b.n - a.n)[0]?.id || restored[0].id;
+          // Build fully-loaded projects in one shot, then set state once
+          const loaded = restored.map(p => {
+            const { valid } = allData.find(d => d.id === p.id) || { valid: [] };
+            const patch = {};
+            const siteIds = new Set(p.sites.map(s => s.id));
+            for (const { key, sid, rows } of valid) {
+              if (siteIds.has(sid)) patch[key] = { ...(patch[key] || p[key]), [sid]: rows };
+            }
+            return { ...p, ...patch };
+          });
+          setProjects(loaded);
+          // Activate the project with the most imports
+          const bestId = allData.sort((a, b) => b.count - a.count)[0]?.id || restored[0].id;
           setCurrentProjectId(bestId);
         } else {
           await sbSaveProject(INITIAL_PROJECT);
