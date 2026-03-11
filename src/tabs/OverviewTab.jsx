@@ -1,4 +1,4 @@
-import { C, RADAR_DIMS } from "../lib/constants";
+import { C } from "../lib/constants";
 import { RadarChart, Radar, PolarGrid, PolarAngleAxis, ResponsiveContainer, Legend } from "recharts";
 import { StatPill, SectionHeader, Badge } from "../components/ui";
 import PageModeSelector from "../components/PageModeSelector";

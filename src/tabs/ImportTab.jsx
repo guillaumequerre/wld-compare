@@ -1,5 +1,5 @@
 import { C, SITE_PALETTE } from "../lib/constants";
-import { newProject, emptyDataMap, makeInitialProject, parseCSV } from "../lib/helpers";
+import { newProject, parseCSV } from "../lib/helpers";
 import { sbSaveProject, sbDeleteProject, sbDownload } from "../lib/supabase";
 import UploadCard from "../components/UploadCard";
 import { SectionHeader } from "../components/ui";

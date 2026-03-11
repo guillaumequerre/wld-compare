@@ -103,5 +103,3 @@ export const KPI_TOOLTIPS = {
   "Vues GA4":          "Nombre total de pages vues (GA4 Views). Inclut les visites multiples d'une même page dans une session.",
   "Citations Bing AI": "Nombre de fois où vos pages sont citées dans les réponses générées par Bing AI (Copilot). Métrique clé du GEO.",
 };
-
-export const TABS = ["import", "overview", "matrix", "pages", "analyse", "sites", "allprojects"];

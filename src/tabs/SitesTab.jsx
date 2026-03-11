@@ -1,8 +1,8 @@
-import { C, SF_DIMS, RES_KPIS, RADAR_DIMS } from "../lib/constants.js";
-import SchemaBreakdown from "../components/SchemaBreakdown.jsx";
-import LlmsStatus from "../components/LlmsStatus.jsx";
-import PageModeSelector from "../components/PageModeSelector.jsx";
-import { SectionHeader } from "../components/ui.jsx";
+import { C, SF_DIMS } from "../lib/constants";
+import SchemaBreakdown from "../components/SchemaBreakdown";
+import LlmsStatus from "../components/LlmsStatus";
+import PageModeSelector from "../components/PageModeSelector";
+import { SectionHeader } from "../components/ui";
 
 export default function SitesTab({ sites, pageMode, setPageMode, metrics }) {
   return (

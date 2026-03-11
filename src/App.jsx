@@ -1,6 +1,6 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import { C, SF_DIMS, RES_KPIS, RADAR_DIMS, DEFAULT_SITES } from "./lib/constants";
-import { emptyDataMap, newProject, makeInitialProject, parseCSV } from "./lib/helpers";
+import { emptyDataMap, makeInitialProject, parseCSV } from "./lib/helpers";
 import { pearson } from "./lib/helpers";
 import { extractSF, extractGSC, extractGA, extractBing, filterByMode } from "./lib/parsers";
 import { buildUrlMaps, buildSfPageVectors, intraCorrFast } from "./lib/correlations";
@@ -52,6 +52,7 @@ export default function App() {
   const setGscData  = useCallback((fn) => updateProject(p => ({ gscData:  typeof fn === "function" ? fn(p.gscData)  : fn })), [updateProject]);
   const setGaData   = useCallback((fn) => updateProject(p => ({ gaData:   typeof fn === "function" ? fn(p.gaData)   : fn })), [updateProject]);
   const setBingData = useCallback((fn) => updateProject(p => ({ bingData: typeof fn === "function" ? fn(p.bingData) : fn })), [updateProject]);
+  const setSites    = useCallback((fn) => updateProject(p => ({ sites:    typeof fn === "function" ? fn(p.sites)    : fn })), [updateProject]);
 
   // ── UI state ─────────────────────────────────────────────────────
   const [confirmModal, setConfirmModal] = useState(null);
@@ -314,6 +315,7 @@ export default function App() {
               setEditingProjectName={setEditingProjectName}
               setProjects={setProjects}
               sites={sites}
+              setSites={setSites}
               sfData={sfData}
               gscData={gscData}
               gaData={gaData}
@@ -322,6 +324,7 @@ export default function App() {
               setGscData={setGscData}
               setGaData={setGaData}
               setBingData={setBingData}
+              confirmModal={confirmModal}
               setConfirmModal={setConfirmModal}
               dbHistory={dbHistory}
               dbLoading={dbLoading}

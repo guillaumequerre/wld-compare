@@ -1,4 +1,4 @@
-import { C, SF_DIMS, RES_KPIS } from "../lib/constants";
+import { C, RES_KPIS } from "../lib/constants";
 import { SectionHeader, Badge } from "../components/ui";
 import PageModeSelector from "../components/PageModeSelector";
 import { CorrCell, KpiHeaderCell, SfDimCell } from "../components/CorrCell";
