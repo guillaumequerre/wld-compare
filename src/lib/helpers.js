@@ -1,4 +1,4 @@
-import { DEFAULT_SITES, SITE_PALETTE } from "./constants";
+import { DEFAULT_SITES } from "./constants";
 
 export function safeNum(v) {
   const n = parseFloat(String(v).replace(/\s/g, "").replace(",", "."));
@@ -90,5 +90,5 @@ export function corrColor(v) {
   if (v <  -0.05) return { bg: "#FEF2F2", text: "#DC2626", border: "#FECACA" };
   if (v <   0.05) return { bg: "#F1F5F9", text: "#64748B", border: "#CBD5E1" };
   if (v <   0.25) return { bg: "#F0FDF4", text: "#16A34A", border: "#BBF7D0" };
-  return           { bg: "#DCFCE7", text: "#15803D", border: "#86EFAC" };
+  return              { bg: "#DCFCE7", text: "#15803D", border: "#86EFAC" };
 }
