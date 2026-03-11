@@ -69,7 +69,7 @@ function tryBodyClassClassify(bodyClass) {
   if (!bodyClass) return null;
   const c = bodyClass.toLowerCase();
   if (c.includes("single-post") || c.includes("post-type-post") || c.includes("blog-post") || c.includes("article")) return "article";
-  if (c.includes("single-product") || c.includes("product-page") || c.includes("woocommerce-page") && c.includes("product")) return "fiche";
+  if (c.includes("single-product") || c.includes("product-page") || (c.includes("woocommerce-page") && c.includes("product"))) return "fiche";
   if (c.includes("category") || c.includes("archive") || c.includes("tax-") || c.includes("listing")) return "categorie";
   if (c.includes("home") || c.includes("front-page") || c.includes("page-home")) return "home";
   if (c.includes("contact")) return "contact";
