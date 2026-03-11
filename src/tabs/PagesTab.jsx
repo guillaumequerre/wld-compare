@@ -9,6 +9,7 @@ import PageModeSelector from "../components/PageModeSelector";
 
 export default function PagesTab({ sites, sfData, gscData, bingData, pageMode, setPageMode }) {
   const [sortKey, setSortKey] = useState("score");
+  const [sortDir, setSortDir] = useState("desc");
   const [search, setSearch] = useState("");
 
   return (
@@ -100,7 +101,7 @@ export default function PagesTab({ sites, sfData, gscData, bingData, pageMode, s
 
       const filtered = allPages
         .filter(p => !search || p.url.toLowerCase().includes(search.toLowerCase()) || p.title.toLowerCase().includes(search.toLowerCase()))
-        .sort((a, b) => b[sortKey] - a[sortKey]);
+        .sort((a, b) => sortDir === "desc" ? b[sortKey] - a[sortKey] : a[sortKey] - b[sortKey]);
 
       return (
         <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden" }}>
@@ -115,9 +116,9 @@ export default function PagesTab({ sites, sfData, gscData, bingData, pageMode, s
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
               <span style={{ fontSize: 11, color: C.textLight }}>Trier :</span>
               {SORTS.map(s => (
-                <button key={s.key} onClick={() => setSortKey(s.key)}
+                <button key={s.key} onClick={() => { if (sortKey === s.key) { setSortDir(d => d === "desc" ? "asc" : "desc"); } else { setSortKey(s.key); setSortDir("desc"); } }}
                   style={{ padding: "5px 10px", borderRadius: 6, border: `1px solid ${sortKey === s.key ? C.blue : C.border}`, background: sortKey === s.key ? C.blueLight : C.white, color: sortKey === s.key ? C.blue : C.textMid, fontSize: 11, fontWeight: sortKey === s.key ? 700 : 400, cursor: "pointer" }}>
-                  {s.label}
+                  {s.label}{sortKey === s.key && <span style={{ fontSize: 9, opacity: 0.7 }}>{sortDir === "desc" ? " ↓" : " ↑"}</span>}
                 </button>
               ))}
             </div>
@@ -131,12 +132,12 @@ export default function PagesTab({ sites, sfData, gscData, bingData, pageMode, s
                 <tr>
                   <th style={{ padding: "10px 12px", textAlign: "left", borderBottom: `1px solid ${C.border}`, color: C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8 }}>Site</th>
                   <th style={{ padding: "10px 12px", textAlign: "left", borderBottom: `1px solid ${C.border}`, color: C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8 }}>URL</th>
-                  <th style={{ padding: "10px 12px", textAlign: "center", borderBottom: `1px solid ${C.border}`, color: sortKey === "score" ? C.blue : C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, cursor: "pointer" }} onClick={() => setSortKey("score")}>Score</th>
-                  <th style={{ padding: "10px 12px", textAlign: "center", borderBottom: `1px solid ${C.border}`, color: sortKey === "flesch" ? C.blue : C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, cursor: "pointer" }} onClick={() => setSortKey("flesch")}>Flesch</th>
-                  <th style={{ padding: "10px 12px", textAlign: "center", borderBottom: `1px solid ${C.border}`, color: sortKey === "inlinks" ? C.blue : C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, cursor: "pointer" }} onClick={() => setSortKey("inlinks")}>Liens ent.</th>
-                  <th style={{ padding: "10px 12px", textAlign: "center", borderBottom: `1px solid ${C.border}`, color: sortKey === "depth" ? C.blue : C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, cursor: "pointer" }} onClick={() => setSortKey("depth")}>Prof.</th>
-                  <th style={{ padding: "10px 12px", textAlign: "center", borderBottom: `1px solid ${C.border}`, color: sortKey === "clicks" ? C.blue : C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, cursor: "pointer" }} onClick={() => setSortKey("clicks")}>Clics GSC</th>
-                  <th style={{ padding: "10px 12px", textAlign: "center", borderBottom: `1px solid ${C.border}`, color: sortKey === "citations" ? C.purple : C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, cursor: "pointer" }} onClick={() => setSortKey("citations")}>Bing cit.</th>
+                  <th style={{ padding: "10px 12px", textAlign: "center", borderBottom: `1px solid ${C.border}`, color: sortKey === "score" ? C.blue : C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, cursor: "pointer" }} onClick={() => { if (sortKey === "score") { setSortDir(d => d === "desc" ? "asc" : "desc"); } else { setSortKey("score"); setSortDir("desc"); } }}>Score</th>
+                  <th style={{ padding: "10px 12px", textAlign: "center", borderBottom: `1px solid ${C.border}`, color: sortKey === "flesch" ? C.blue : C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, cursor: "pointer" }} onClick={() => { if (sortKey === "flesch") { setSortDir(d => d === "desc" ? "asc" : "desc"); } else { setSortKey("flesch"); setSortDir("desc"); } }}>Flesch</th>
+                  <th style={{ padding: "10px 12px", textAlign: "center", borderBottom: `1px solid ${C.border}`, color: sortKey === "inlinks" ? C.blue : C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, cursor: "pointer" }} onClick={() => { if (sortKey === "inlinks") { setSortDir(d => d === "desc" ? "asc" : "desc"); } else { setSortKey("inlinks"); setSortDir("desc"); } }}>Liens ent.</th>
+                  <th style={{ padding: "10px 12px", textAlign: "center", borderBottom: `1px solid ${C.border}`, color: sortKey === "depth" ? C.blue : C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, cursor: "pointer" }} onClick={() => { if (sortKey === "depth") { setSortDir(d => d === "desc" ? "asc" : "desc"); } else { setSortKey("depth"); setSortDir("desc"); } }}>Prof.</th>
+                  <th style={{ padding: "10px 12px", textAlign: "center", borderBottom: `1px solid ${C.border}`, color: sortKey === "clicks" ? C.blue : C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, cursor: "pointer" }} onClick={() => { if (sortKey === "clicks") { setSortDir(d => d === "desc" ? "asc" : "desc"); } else { setSortKey("clicks"); setSortDir("desc"); } }}>Clics GSC</th>
+                  <th style={{ padding: "10px 12px", textAlign: "center", borderBottom: `1px solid ${C.border}`, color: sortKey === "citations" ? C.purple : C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, cursor: "pointer" }} onClick={() => { if (sortKey === "citations") { setSortDir(d => d === "desc" ? "asc" : "desc"); } else { setSortKey("citations"); setSortDir("desc"); } }}>Bing cit.</th>
                 </tr>
               </thead>
               <tbody>
