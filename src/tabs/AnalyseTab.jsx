@@ -223,8 +223,12 @@ export default function AnalyseTab({ metrics, corrMatrix, resultVals, analysis, 
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: "claude-sonnet-4-20250514",
-          max_tokens: 8000,
-          messages: [{ role: "user", content: prompt }],
+          max_tokens: 6000,
+          system: "Tu es un assistant d'analyse SEO/GEO. Tu réponds TOUJOURS et UNIQUEMENT avec un objet JSON valide, sans aucun texte avant ou après, sans markdown, sans backticks. Jamais de commentaires. Juste le JSON brut commençant par { et finissant par }.",
+          messages: [
+            { role: "user", content: prompt },
+            { role: "assistant", content: "{" },
+          ],
         }),
       });
       const text = await res.text();
@@ -242,11 +246,15 @@ export default function AnalyseTab({ metrics, corrMatrix, resultVals, analysis, 
       try { data = JSON.parse(text); }
       catch (e) { throw new Error("Réponse non-JSON du proxy : " + text.slice(0, 300)); }
       if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
-      const raw = data.content?.map(b => b.text || "").join("") || "";
+      // Prefill assistant with "{" — so we prepend it to the response
+      const raw = "{" + (data.content?.map(b => b.text || "").join("") || "");
 
-      // Log raw for debug
-      console.log("[Analyse] raw response length:", raw.length);
-      console.log("[Analyse] raw tail:", raw.slice(-200));
+      // Debug: check stop_reason (remove in prod if noisy)
+      const stopReason = data.stop_reason;
+      if (process.env.NODE_ENV !== "production") {
+        // eslint-disable-next-line no-console
+        console.log("[Analyse] stop_reason:", stopReason, "| length:", raw.length, "| tail:", raw.slice(-200));
+      }
 
       // Strip markdown fences
       let jsonStr = raw.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();

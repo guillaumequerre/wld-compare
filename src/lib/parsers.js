@@ -203,7 +203,15 @@ export function parseSemrush(rows) {
       const url     = (key(row, "url") || "").trim();
       if (!url) return null;
       const kwCount  = safeNum(key(row, "number of keywords") || 0);
-      const traffic  = safeNum(key(row, "traffic") || 0);
+      // Explicit: match "traffic" but NOT "traffic (%)" or "traffic with ..."
+      const trafficRaw = (() => {
+        const k = Object.keys(row).find(k => {
+          const kl = k.toLowerCase().trim();
+          return kl === "traffic" || kl === "traffic ";
+        });
+        return k ? row[k] : null;
+      })();
+      const traffic  = safeNum(trafficRaw || 0);
       const delta    = safeNum(key(row, "traffic change") || 0);
       // Positions par intent (top 20)
       const posComm  = safeNum(key(row, "positions with commercial intents in top 20") || 0);

@@ -4,7 +4,7 @@ import { emptyDataMap, makeInitialProject, parseCSV } from "./lib/helpers";
 import { extractSF, extractGSC, extractGA, extractBing, extractSemrush, filterByMode } from "./lib/parsers";
 import { buildUrlMaps, buildSfPageVectors, intraCorrFast, smIntraCorr } from "./lib/correlations";
 import { sbSaveProject, sbLoadProjects, sbGetHistory, sbGetLatest, sbDownload, sbGetPageTypes } from "./lib/supabase";
-import AnalyseTab from "./components/AnalyseTab";
+import AnalyseTab from "./tabs/AnalyseTab";
 import ImportTab from "./tabs/ImportTab";
 import OverviewTab from "./tabs/OverviewTab";
 import MatrixTab from "./tabs/MatrixTab";

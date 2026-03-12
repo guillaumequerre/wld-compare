@@ -140,6 +140,7 @@ export default function PagesTab({ sites, sfData, gscData, bingData, pageMode, s
                 <tr>
                   <th style={{ padding: "10px 12px", textAlign: "left", borderBottom: `1px solid ${C.border}`, color: C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8 }}>Site</th>
                   <th style={{ padding: "10px 12px", textAlign: "left", borderBottom: `1px solid ${C.border}`, color: C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8 }}>URL</th>
+                  <th style={{ padding: "10px 12px", textAlign: "left", borderBottom: `1px solid ${C.border}`, color: C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, whiteSpace: "nowrap" }}>Catégorie</th>
                   <th style={{ padding: "10px 12px", textAlign: "center", borderBottom: `1px solid ${C.border}`, color: sortKey === "score" ? C.blue : C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, cursor: "pointer" }} onClick={() => { if (sortKey === "score") { setSortDir(d => d === "desc" ? "asc" : "desc"); } else { setSortKey("score"); setSortDir("desc"); } }}>Score</th>
                   <th style={{ padding: "10px 12px", textAlign: "center", borderBottom: `1px solid ${C.border}`, color: sortKey === "flesch" ? C.blue : C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, cursor: "pointer" }} onClick={() => { if (sortKey === "flesch") { setSortDir(d => d === "desc" ? "asc" : "desc"); } else { setSortKey("flesch"); setSortDir("desc"); } }}>Flesch</th>
                   <th style={{ padding: "10px 12px", textAlign: "center", borderBottom: `1px solid ${C.border}`, color: sortKey === "inlinks" ? C.blue : C.textLight, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, cursor: "pointer" }} onClick={() => { if (sortKey === "inlinks") { setSortDir(d => d === "desc" ? "asc" : "desc"); } else { setSortKey("inlinks"); setSortDir("desc"); } }}>Liens ent.</th>
@@ -150,7 +151,7 @@ export default function PagesTab({ sites, sfData, gscData, bingData, pageMode, s
               </thead>
               <tbody>
                 {filtered.length === 0 && (
-                  <tr><td colSpan={8} style={{ padding: 30, textAlign: "center", color: C.textLight, fontSize: 13 }}>
+                  <tr><td colSpan={9} style={{ padding: 30, textAlign: "center", color: C.textLight, fontSize: 13 }}>
                     {allPages.length === 0 ? "Chargez un CSV SF dans l'onglet Import" : "Aucune page correspondante"}
                   </td></tr>
                 )}
@@ -167,14 +168,16 @@ export default function PagesTab({ sites, sfData, gscData, bingData, pageMode, s
                         {p.path || "/"}
                       </div>
                       {p.title && <div style={{ fontSize: 10, color: C.textLight, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.title}</div>}
+                    </td>
+                    <td style={{ padding: "7px 12px", borderBottom: `1px solid ${C.borderLight}`, whiteSpace: "nowrap" }}>
                       {(() => {
                         const ptype = (pageTypes[p.site?.id] || {})[p.url];
                         const def = ptype ? PAGE_TYPE_MAP[ptype] : null;
                         return def ? (
-                          <span style={{ display: "inline-flex", alignItems: "center", gap: 3, marginTop: 3, fontSize: 10, fontWeight: 600, color: def.color, background: def.bg, border: `1px solid ${def.color}33`, borderRadius: 10, padding: "1px 7px" }}>
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 10, fontWeight: 600, color: def.color, background: def.bg, border: `1px solid ${def.color}33`, borderRadius: 10, padding: "2px 8px" }}>
                             {def.icon} {def.label}
                           </span>
-                        ) : null;
+                        ) : <span style={{ fontSize: 10, color: C.textLight }}>—</span>;
                       })()}
                     </td>
                     <td style={{ padding: "7px 12px", borderBottom: `1px solid ${C.borderLight}`, textAlign: "center" }}>

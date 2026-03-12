@@ -5,42 +5,6 @@ import { SectionHeader, Badge } from "../components/ui";
 import PageModeSelector from "../components/PageModeSelector";
 import { CorrCell, KpiHeaderCell, SfDimCell } from "../components/CorrCell";
 
-// Génère un texte d'interprétation synthétique pour une ligne entière
-function interpretRow(dim, corrs) {
-  const valid = corrs.filter(c => c.value !== null);
-  if (valid.length === 0) return { text: "Données insuffisantes pour cette dimension.", level: "none" };
-
-  const strong = valid.filter(c => Math.abs(c.value) >= 0.25);
-  const positive = strong.filter(c => c.value > 0);
-  const negative = strong.filter(c => c.value < 0);
-
-  if (strong.length === 0) {
-    return { text: "Aucune corrélation significative détectée — cette dimension n'est pas liée aux KPIs mesurés.", level: "neutral" };
-  }
-
-  const parts = [];
-  if (positive.length > 0) {
-    const names = positive.map(c => c.kpi.label).join(", ");
-    const dir = dim.higher === false ? "baisser" : "augmenter";
-    parts.push(`Faire ${dir} ${dim.label} tend à améliorer ${names}`);
-  }
-  if (negative.length > 0) {
-    const names = negative.map(c => c.kpi.label).join(", ");
-    const dir = dim.higher === false ? "baisser" : "augmenter";
-    parts.push(`${dir === "baisser" ? "Augmenter" : "Baisser"} ${dim.label} dégrade ${names}`);
-  }
-
-  const level = strong.length >= 3 ? "strong" : strong.length >= 1 ? "moderate" : "neutral";
-  return { text: parts.join(". ") + ".", level };
-}
-
-const LEVEL_STYLE = {
-  strong:   { color: "#059669", bg: "#ECFDF5", border: "#6EE7B7" },
-  moderate: { color: "#D97706", bg: "#FFFBEB", border: "#FDE68A" },
-  neutral:  { color: "#64748B", bg: "#F8FAFC", border: "#E2E8F0" },
-  none:     { color: "#94A3B8", bg: "#F8FAFC", border: "#E2E8F0" },
-};
-
 function Switch({ value, onChange, label }) {
   return (
     <button
@@ -102,7 +66,7 @@ export default function MatrixTab({ sites, sfData, pageMode, setPageMode, matrix
     });
   }, [filteredCorrMatrix, sortCol]);
 
-  const colSpanTotal = RES_KPIS.length + 2;
+  const colSpanTotal = RES_KPIS.length + 1;
 
   return (
   <div>
@@ -178,9 +142,7 @@ export default function MatrixTab({ sites, sfData, pageMode, setPageMode, matrix
                 tooltipEnabled={tooltipEnabled}
               />
             ))}
-            <th style={{ padding: "12px 14px", fontSize: 11, fontWeight: 600, color: C.textLight, textAlign: "left", textTransform: "uppercase", letterSpacing: 0.8, borderBottom: `1px solid ${C.border}`, borderLeft: `1px solid ${C.border}`, minWidth: 220, background: C.bg }}>
-              Interprétation
-            </th>
+
           </tr>
         </thead>
         <tbody>
@@ -190,19 +152,12 @@ export default function MatrixTab({ sites, sfData, pageMode, setPageMode, matrix
             <tr><td colSpan={colSpanTotal} style={{ padding: 40, textAlign: "center", color: C.textLight, fontSize: 13 }}>Chargez un fichier Screaming Frog pour afficher la matrice</td></tr>
           ) : sortedMatrix.map(({ dim, corrs }, ri) => {
             const rowBg = ri % 2 === 0 ? C.white : "#FAFBFC";
-            const interp = interpretRow(dim, corrs);
-            const s = LEVEL_STYLE[interp.level];
             return (
               <tr key={dim.key} style={{ background: rowBg }}>
                 <SfDimCell dim={dim} rowBg={rowBg} tooltipEnabled={tooltipEnabled} />
                 {corrs.map(({ kpi, value, n, base, delta }) => (
                   <CorrCell key={kpi.key} kpi={kpi} value={value} n={n} dim={dim} base={base} delta={delta} showDelta={pageMode !== "all"} tooltipEnabled={tooltipEnabled} />
                 ))}
-                <td style={{ padding: "8px 14px", borderBottom: `1px solid ${C.borderLight}`, borderLeft: `1px solid ${C.border}`, verticalAlign: "middle" }}>
-                  <div style={{ background: s.bg, border: `1px solid ${s.border}`, borderRadius: 7, padding: "6px 10px", fontSize: 11, color: s.color, lineHeight: 1.55 }}>
-                    {interp.text}
-                  </div>
-                </td>
               </tr>
             );
           })}
