@@ -34,6 +34,10 @@ const PAGE_INFO = {
     objectif: "Comparer plusieurs projets entre eux en visualisant leurs matrices et radars sur un même écran, pour identifier des patterns stratégiques cross-projets.",
     fonctionnement: "Chaque projet chargé en base apparaît avec sa propre matrice de corrélation agrégée et son radar SF. Les projets sans données importées sont affichés vides. La navigation entre projets se fait depuis ce même onglet.",
   },
+  evolution: {
+    objectif: "Suivre l'évolution des métriques dans le temps toutes sources confondues (SF, GSC, GA4, Bing, Semrush) et corréler les changements observés avec les actions réalisées sur le site.",
+    fonctionnement: "Après chaque import, clique sur '📌 Sauvegarder' pour créer un snapshot. Les valeurs GSC/GA4/Semrush sont normalisées par jour (÷ durée de la période) pour être comparables. Les jalons marquent les actions clés sur la courbe. Le tableau delta compare le dernier snapshot au précédent pour chaque source.",
+  },
 };
 
 export default function InfoCard({ tabKey }) {

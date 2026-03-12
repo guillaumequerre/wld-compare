@@ -279,8 +279,6 @@ export default function EvolutionTab({ projects, sites, currentProjectId }) {
     return (!d.isGood && Math.abs(d.diffPct) >= 15) || (!d.isGood && Math.abs(d.diffPct) >= 10);
   });
 
-  const hasSiteData = sites?.length > 0;
-
   return (
     <div>
       {/* Header */}

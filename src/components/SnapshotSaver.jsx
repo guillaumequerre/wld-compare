@@ -37,7 +37,7 @@ const SOURCE_LABELS = {
   semrush: { label: "Semrush", icon: "📈", color: "#059669" },
 };
 
-function buildMetrics(source, rows, extraArgs) {
+function buildMetrics(source, rows) {
   try {
     if (source === "sf")      return extractSF(rows);
     if (source === "gsc")     return extractGSC(rows);
