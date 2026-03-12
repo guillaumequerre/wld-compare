@@ -184,7 +184,7 @@ export default function SemrushTab({ sites, smData, metrics }) {
   const normalizedSmData = useMemo(() => {
     const result = {};
     for (const site of sites) {
-      const rows = normalizedSmData[site.id] || [];
+      const rows = smData[site.id] || [];
       if (!rows.length) { result[site.id] = []; continue; }
       // Detect raw rows: they have uppercase keys like "URL", "Traffic", not the parsed shape
       const isParsed = rows[0] && ("kwCount" in rows[0] || "format" in rows[0]);
