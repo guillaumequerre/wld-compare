@@ -1,5 +1,5 @@
 import InfoCard from "../components/InfoCard";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { C, RES_KPIS } from "../lib/constants";
 import { SectionHeader, Badge } from "../components/ui";
 import PageModeSelector from "../components/PageModeSelector";
@@ -65,6 +65,22 @@ function Switch({ value, onChange, label }) {
 export default function MatrixTab({ sites, sfData, pageMode, setPageMode, matrixSites, setMatrixSites, filteredCorrMatrix, templateFilter, setTemplateFilter, pageTypes }) {
   const [sortCol, setSortCol] = useState({ key: null, dir: null });
   const [tooltipEnabled, setTooltipEnabled] = useState(true);
+  const [showIntroPopup, setShowIntroPopup] = useState(false);
+  const tableWrapRef = useRef(null);
+  const topBarRef    = useRef(null);
+
+  useEffect(() => {
+    const seen = localStorage.getItem("matrix_intro_seen");
+    if (!seen) setShowIntroPopup(true);
+  }, []);
+
+  const dismissPopup = () => {
+    localStorage.setItem("matrix_intro_seen", "1");
+    setShowIntroPopup(false);
+  };
+
+  const syncFromTop  = () => { if (tableWrapRef.current && topBarRef.current) tableWrapRef.current.scrollLeft = topBarRef.current.scrollLeft; };
+  const syncFromMain = () => { if (tableWrapRef.current && topBarRef.current) topBarRef.current.scrollLeft = tableWrapRef.current.scrollLeft; };
 
   const handleSort = (kpiKey) => {
     setSortCol(prev => {
@@ -139,9 +155,16 @@ export default function MatrixTab({ sites, sfData, pageMode, setPageMode, matrix
       ))}
     </div>
 
-    <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "auto" }}>
+    {/* Top scrollbar mirror */}
+    <div ref={topBarRef} onScroll={syncFromTop}
+      style={{ overflowX: "auto", overflowY: "hidden", marginBottom: 2 }}>
+      <div style={{ height: 1, minWidth: 900 }} />
+    </div>
+
+    <div ref={tableWrapRef} onScroll={syncFromMain}
+      style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "auto" }}>
       <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 900 }}>
-        <thead>
+        <thead style={{ position: "sticky", top: 0, zIndex: 3 }}>
           <tr>
             <th style={{ padding: "14px 18px", textAlign: "left", fontSize: 12, fontWeight: 600, color: C.textMid, background: C.bg, borderBottom: `1px solid ${C.border}`, borderRight: `1px solid ${C.border}`, minWidth: 210, position: "sticky", left: 0, zIndex: 2 }}>
               SF \ Résultats
@@ -208,6 +231,54 @@ export default function MatrixTab({ sites, sfData, pageMode, setPageMode, matrix
         </div>
       ))}
     </div>
+  {/* ── Matrix intro popup ── */}
+  {showIntroPopup && (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(15,15,30,0.55)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div style={{ background: "#fff", borderRadius: 18, padding: "32px 36px", maxWidth: 560, width: "100%", boxShadow: "0 24px 80px rgba(0,0,0,0.25)" }}>
+
+        <div style={{ fontSize: 20, fontWeight: 800, color: C.text, marginBottom: 16, lineHeight: 1.3 }}>
+          Attention, vous entrez sur une page avec beaucoup de chiffres !
+        </div>
+
+        <p style={{ fontSize: 14, color: C.textMid, lineHeight: 1.65, marginBottom: 18 }}>
+          Ce tableau permet de visualiser les <b style={{ color: C.text }}>liens entre certains critères de page</b> et
+          la <b style={{ color: C.text }}>position SEO/GEO de ces pages</b>. Plus le score est élevé (en valeur absolue),
+          plus le lien entre le critère et la performance est fort — dans un sens ou dans l'autre.
+        </p>
+
+        <div style={{ background: C.blueLight, border: `1px solid ${C.blue}33`, borderRadius: 10, padding: "14px 16px", marginBottom: 18 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.8, color: C.blue, marginBottom: 8 }}>Exemple de lecture</div>
+          <p style={{ fontSize: 13, color: C.textMid, lineHeight: 1.6, margin: 0 }}>
+            Si une case affiche <b style={{ color: C.blue }}>+42%</b>, les pages ayant un score élevé sur ce critère
+            tendent à mieux se positionner. Une case à <b style={{ color: "#DC2626" }}>-18%</b> indique l'inverse.
+            Une case proche de <b style={{ color: C.textMid }}>0%</b> signifie qu'il n'y a pas de lien observable.
+          </p>
+        </div>
+
+        <div style={{ background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 10, padding: "12px 16px", marginBottom: 28 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+            <span style={{ fontSize: 16, flexShrink: 0 }}>⚠️</span>
+            <p style={{ fontSize: 13, color: "#92400E", lineHeight: 1.6, margin: 0 }}>
+              <b>Corrélation ≠ causalité.</b> Le critère testé est peut-être simplement présent sur un certain
+              type de page sans en être la raison des résultats. Ce tableau permet uniquement de dire :
+              <em>{" « Les pages du site ayant ce critère fonctionnent mieux (ou moins bien) en moyenne. »"}</em>
+            </p>
+          </div>
+        </div>
+
+        <button onClick={dismissPopup} style={{
+          width: "100%", padding: "12px 0", border: "none", borderRadius: 10,
+          background: C.blue, color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer",
+        }}>
+          J'ai compris, afficher la matrice
+        </button>
+        <div style={{ textAlign: "center", marginTop: 10, fontSize: 11, color: C.textLight }}>
+          Cette popup n'apparaîtra plus au prochain chargement.
+        </div>
+      </div>
+    </div>
+  )}
+
   </div>
   );
 }
