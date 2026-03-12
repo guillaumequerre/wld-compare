@@ -87,52 +87,27 @@ SITE: ${m.site.label}
   ).sort((a, b) => b.abs - a.abs).slice(0, 10)
    .map(c => `  ${c.label}: ${c.value > 0 ? "+" : ""}${c.value.toFixed(2)}`).join("\n");
 
-  return `Tu es un expert SEO et GEO (Generative Engine Optimization). Tu analyses des données de sites web concurrents et tu dois produire une analyse stratégique et des roadmaps actionnables.
+  const siteIds = metrics.map(m => `"${m.site.id}": {"quick_wins": [], "moyen_terme": [], "long_terme": []}`).join(", ");
 
-DONNÉES DES SITES:
+  return `Expert SEO/GEO. Analyse ces données et retourne UNIQUEMENT un objet JSON valide, sans markdown, sans texte autour.
+
+DONNÉES:
 ${sitesData}
-
 ${comparativeData}
 
-MATRICE DE CORRÉLATION COMPLÈTE (Pearson r · page-par-page · SF × KPIs):
-${corrTableLines}
+TOP CORRÉLATIONS (|r|≥0.25):
+${topCorr || "Aucune corrélation significative."}
 
-TOP CORRÉLATIONS SIGNIFICATIVES (|r| ≥ 0.25, triées par force):
-${topCorr || "Pas encore de corrélations significatives détectées."}
+STRUCTURE JSON EXACTE À RETOURNER:
+{"insights_seo":[{"title":"...","detail":"...","impact":"fort|moyen|faible"}],"insights_geo":[{"title":"...","detail":"...","impact":"fort|moyen|faible"}],"comparative":{"winner_seo":"...","winner_geo":"...","gap_analysis":[{"dimension":"...","leader":"...","gap":"...","opportunity":"..."}],"strategic_summary":"..."},"roadmaps":{${siteIds}}}
 
-INSTRUCTIONS:
-Produis un JSON STRICT avec exactement cette structure (rien d'autre, pas de markdown, pas de backticks):
-{
-  "insights_seo": [
-    {"title": "titre court", "detail": "1-2 phrases max", "impact": "fort|moyen|faible"}
-  ],
-  "insights_geo": [
-    {"title": "titre court", "detail": "1-2 phrases max", "impact": "fort|moyen|faible"}
-  ],
-  "comparative": {
-    "winner_seo": "nom du site le plus fort SEO et pourquoi en 1 phrase",
-    "winner_geo": "nom du site le plus fort GEO et pourquoi en 1 phrase",
-    "gap_analysis": [
-      {"dimension": "dimension SF ou KPI", "leader": "site leader", "gap": "description de l'écart et ce que ça signifie", "opportunity": "ce que le site en retard peut faire"}
-    ],
-    "strategic_summary": "synthèse comparative en 2-3 phrases : positionnement relatif des sites, principal levier différenciateur"
-  },
-  "roadmaps": {
-    ${metrics.map((m, i) => `"${m.site.id}": ${i === 0
-      ? `{"quick_wins": [{"action": "action concrète", "metric": "métrique SF concernée", "why": "pourquoi basé sur les données", "effort": "1-3j|1sem|2sem", "ice_impact": 7, "ice_confidence": 6, "ice_effort": 3}], "moyen_terme": [{"action": "action concrète", "metric": "métrique SF concernée", "why": "pourquoi basé sur les données", "effort": "1mois|2mois|3mois", "ice_impact": 7, "ice_confidence": 6, "ice_effort": 5}], "long_terme": [{"action": "action concrète", "metric": "métrique SF concernée", "why": "pourquoi basé sur les données", "effort": "3-6mois|6-12mois", "ice_impact": 7, "ice_confidence": 6, "ice_effort": 8}]}`
-      : `{"quick_wins": [], "moyen_terme": [], "long_terme": []}`
-    }`).join(",\n    ")}
-  }
-}
-
-Règles:
-- Si plusieurs sites : renseigne "comparative" avec 2 gap_analysis maximum, sinon laisse comparative avec des strings vides et gap_analysis vide
-- 2 insights SEO et 2 insights GEO maximum — titres < 8 mots, détail < 20 mots
-- 1 action par horizon temporel par site maximum — action < 15 mots, why < 15 mots
-- ice_impact, ice_confidence, ice_effort : scores 1-10
-- Distingue les leviers SEO (GSC/GA4) des leviers GEO (Bing AI)
-- Réponds UNIQUEMENT avec le JSON brut, sans markdown, sans backticks, sans texte avant ou après
-- CRITIQUE : le JSON DOIT être complet et valide. Si tu manques de place, termine les tableaux ouverts avant de terminer`;
+RÈGLES STRICTES:
+- Maximum 2 insights SEO, 2 insights GEO
+- Maximum 1 action par horizon (quick_wins, moyen_terme, long_terme) par site
+- Chaque action: {"action":"...","metric":"...","why":"...","effort":"...","ice_impact":7,"ice_confidence":6,"ice_effort":5}
+- Si 1 seul site: comparative.winner_seo="", winner_geo="", gap_analysis=[], strategic_summary=""
+- Si plusieurs sites: maximum 2 gap_analysis
+- JSON COMPLET ET VALIDE — ferme tous les tableaux et objets avant de terminer`;
 }
 
 // Parse analysis JSON into flat recommendation cards
@@ -248,7 +223,7 @@ export default function AnalyseTab({ metrics, corrMatrix, resultVals, analysis, 
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: "claude-sonnet-4-20250514",
-          max_tokens: 6000,
+          max_tokens: 8000,
           messages: [{ role: "user", content: prompt }],
         }),
       });
@@ -263,29 +238,48 @@ export default function AnalyseTab({ metrics, corrMatrix, resultVals, analysis, 
         try { const j = JSON.parse(text); msg = j.error?.message || j.error || msg; } catch {}
         throw new Error(`Erreur ${res.status} : ${msg}`);
       }
-      const data = JSON.parse(text);
+      let data;
+      try { data = JSON.parse(text); }
+      catch (e) { throw new Error("Réponse non-JSON du proxy : " + text.slice(0, 300)); }
       if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
       const raw = data.content?.map(b => b.text || "").join("") || "";
-      const clean = raw.replace(/```json|```/g, "").trim();
-      const start = clean.indexOf("{");
-      const end = clean.lastIndexOf("}");
-      if (start === -1 || end === -1) throw new Error("La réponse ne contient pas de JSON valide");
-      let jsonStr = clean.substring(start, end + 1);
+
+      // Log raw for debug
+      console.log("[Analyse] raw response length:", raw.length);
+      console.log("[Analyse] raw tail:", raw.slice(-200));
+
+      // Strip markdown fences
+      let jsonStr = raw.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
+
+      // Find outermost { }
+      const start = jsonStr.indexOf("{");
+      const end   = jsonStr.lastIndexOf("}");
+      if (start === -1) throw new Error("Aucun JSON dans la réponse. Contenu reçu : " + raw.slice(0, 200));
+      jsonStr = jsonStr.substring(start, end === -1 ? undefined : end + 1);
+
+      // Attempt direct parse first
       let parsed = null;
-      let attempts = 0;
-      while (attempts++ < 20) {
-        try { parsed = JSON.parse(jsonStr); break; }
-        catch {
-          jsonStr = jsonStr
-            .replace(/,\s*"[^"]*"\s*:\s*[^,}\]]*$/, "")
-            .replace(/,\s*\{[^}]*$/, "")
-            .replace(/,\s*"[^"]*"$/, "");
-          const opens = (jsonStr.match(/\[/g) || []).length - (jsonStr.match(/\]/g) || []).length;
-          const objs  = (jsonStr.match(/\{/g) || []).length - (jsonStr.match(/\}/g) || []).length;
-          jsonStr += "]".repeat(Math.max(0, opens)) + "}".repeat(Math.max(0, objs));
+      try { parsed = JSON.parse(jsonStr); }
+      catch {
+        // Progressive repair: close open arrays/objects, strip trailing incomplete entries
+        let repaired = jsonStr;
+        for (let attempt = 0; attempt < 30 && !parsed; attempt++) {
+          // Strip last incomplete key-value pair
+          repaired = repaired
+            .replace(/,\s*"[^"]*"\s*:\s*"[^"]*$/, "")   // incomplete string value
+            .replace(/,\s*"[^"]*"\s*:\s*[\d.]*$/, "")    // incomplete number value
+            .replace(/,\s*"[^"]*"\s*:\s*$/, "")           // key with no value
+            .replace(/,\s*"[^"]*"\s*$/, "")                // dangling key
+            .replace(/,\s*\{[^{}]*$/, "")                  // incomplete object
+            .replace(/,\s*\[[^\[\]]*$/, "");              // incomplete array
+          // Close open structures
+          const openBrackets = (repaired.match(/\[/g)||[]).length - (repaired.match(/\]/g)||[]).length;
+          const openBraces   = (repaired.match(/\{/g)||[]).length - (repaired.match(/\}/g)||[]).length;
+          repaired += "]".repeat(Math.max(0, openBrackets)) + "}".repeat(Math.max(0, openBraces));
+          try { parsed = JSON.parse(repaired); } catch {}
         }
       }
-      if (!parsed) throw new Error("Impossible de parser le JSON de l'analyse");
+      if (!parsed) throw new Error("Impossible de parser le JSON. Extrait : " + jsonStr.slice(0, 300));
       setAnalysis(parsed);
 
       // Save analysis + parse recommendations
