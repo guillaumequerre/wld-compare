@@ -16,7 +16,7 @@ import EvolutionTab from "./tabs/EvolutionTab";
 
 const INITIAL_PROJECT = makeInitialProject();
 const NAV_TABS = [
-  { key: "import",      label: "Import"            },
+  { key: "import",      label: "⚙️ Setup"           },
   { key: "overview",    label: "Vue d'ensemble"     },
   { key: "matrix",      label: "Matrice"            },
   { key: "pages",       label: "Pages"              },
