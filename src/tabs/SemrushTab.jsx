@@ -191,7 +191,7 @@ export default function SemrushTab({ sites, smData, metrics }) {
       result[site.id] = isParsed ? rows : parseSemrush(rows);
     }
     return result;
-  }, [smData, sites]);
+  }, [smData, sites]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const hasAny = sites.some(s => (normalizedSmData[s.id] || []).length > 0);
   if (!hasAny) return (
