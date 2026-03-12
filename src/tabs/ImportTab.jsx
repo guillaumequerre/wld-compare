@@ -5,7 +5,6 @@ import { sbSaveProject, sbDeleteProject, sbDownload } from "../lib/supabase";
 import { parseSemrush } from "../lib/parsers";
 import UploadCard from "../components/UploadCard";
 import PageTypeClassifier from "../components/PageTypeClassifier";
-import SnapshotSaver from "../components/SnapshotSaver";
 
 // ── Section wrapper ───────────────────────────────────────────────
 function Section({ number, title, sub, children }) {
@@ -226,20 +225,33 @@ export default function ImportTab({ projects, currentProjectId, setCurrentProjec
 
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 <UploadCard label="Screaming Frog" icon="🕷️" hint="Export interne SF" color={site.color}
-                  loaded={sfData[site.id]?.length > 0} onData={rows => setSfData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="sf" projectId={currentProjectId}
+                  loaded={sfData[site.id]?.length > 0} rows={sfData[site.id]}
+                  onData={rows => setSfData(p => ({...p, [site.id]: rows}))}
+                  onClear={() => setSfData(p => ({...p, [site.id]: []}))}
+                  siteId={site.id} source="sf" projectId={currentProjectId}
                   onLoadFromHistory={async row => { try { const text = await sbDownload(row.storage_path); setSfData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn("History load error", e); } }} />
                 <UploadCard label="Google Search Console" icon="🔍" hint="Clics, impressions, CTR, position" color={site.color}
-                  loaded={gscData[site.id]?.length > 0} onData={rows => setGscData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="gsc" projectId={currentProjectId}
+                  loaded={gscData[site.id]?.length > 0} rows={gscData[site.id]}
+                  onData={rows => setGscData(p => ({...p, [site.id]: rows}))}
+                  onClear={() => setGscData(p => ({...p, [site.id]: []}))}
+                  siteId={site.id} source="gsc" projectId={currentProjectId}
                   onLoadFromHistory={async row => { try { const text = await sbDownload(row.storage_path); setGscData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn("History load error", e); } }} />
                 <UploadCard label="Google Analytics 4" icon="📊" hint="Sessions, vues" color={site.color}
-                  loaded={gaData[site.id]?.length > 0} onData={rows => setGaData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="ga" projectId={currentProjectId}
+                  loaded={gaData[site.id]?.length > 0} rows={gaData[site.id]}
+                  onData={rows => setGaData(p => ({...p, [site.id]: rows}))}
+                  onClear={() => setGaData(p => ({...p, [site.id]: []}))}
+                  siteId={site.id} source="ga" projectId={currentProjectId}
                   onLoadFromHistory={async row => { try { const text = await sbDownload(row.storage_path); setGaData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn("History load error", e); } }} />
                 <UploadCard label="Bing AI Performance" icon="🤖" hint="Citations dans Bing Copilot" color={site.color}
-                  loaded={bingData[site.id]?.length > 0} onData={rows => setBingData(p => ({...p, [site.id]: rows}))} siteId={site.id} source="bing" projectId={currentProjectId}
+                  loaded={bingData[site.id]?.length > 0} rows={bingData[site.id]}
+                  onData={rows => setBingData(p => ({...p, [site.id]: rows}))}
+                  onClear={() => setBingData(p => ({...p, [site.id]: []}))}
+                  siteId={site.id} source="bing" projectId={currentProjectId}
                   onLoadFromHistory={async row => { try { const text = await sbDownload(row.storage_path); setBingData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn("History load error", e); } }} />
-                <UploadCard label="Semrush Position Tracking" icon="📈" hint="Positions, trafic estimé, volumes" color={site.color}
-                  loaded={smData[site.id]?.length > 0}
+                <UploadCard label="Semrush Organic Pages" icon="📈" hint="Positions, trafic estimé, volumes" color={site.color}
+                  loaded={smData[site.id]?.length > 0} rows={smData[site.id]}
                   onData={(_, rawText) => { const rows = parseSemrush(parseSemrushCSV(rawText)); setSmData(p => ({...p, [site.id]: rows})); }}
+                  onClear={() => setSmData(p => ({...p, [site.id]: []}))}
                   rawMode siteId={site.id} source="sm" projectId={currentProjectId}
                   onLoadFromHistory={async row => { try { const text = await sbDownload(row.storage_path); const rows = parseSemrush(parseSemrushCSV(text)); setSmData(p => ({...p, [site.id]: rows})); } catch(e) { console.warn("History load error", e); } }} />
               </div>
@@ -251,15 +263,6 @@ export default function ImportTab({ projects, currentProjectId, setCurrentProjec
                     {src} {n > 0 ? `· ${n}` : "· vide"}
                   </div>
                 ))}
-              </div>
-
-              {/* Snapshot savers */}
-              <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 6 }}>
-                {sfData[site.id]?.length > 0 && <SnapshotSaver source="sf" rows={sfData[site.id]} filename={null} projectId={currentProjectId} siteId={site.id} />}
-                {gscData[site.id]?.length > 0 && <SnapshotSaver source="gsc" rows={gscData[site.id]} filename={null} projectId={currentProjectId} siteId={site.id} />}
-                {gaData[site.id]?.length > 0 && <SnapshotSaver source="ga" rows={gaData[site.id]} filename={null} projectId={currentProjectId} siteId={site.id} />}
-                {bingData[site.id]?.length > 0 && <SnapshotSaver source="bing" rows={bingData[site.id]} filename={null} projectId={currentProjectId} siteId={site.id} />}
-                {smData[site.id]?.length > 0 && <SnapshotSaver source="semrush" rows={smData[site.id]} filename={null} projectId={currentProjectId} siteId={site.id} />}
               </div>
             </div>
           ))}

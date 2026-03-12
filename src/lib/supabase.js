@@ -20,6 +20,16 @@ export async function sbInsertImport({ project_id, site_id, source, filename, st
   return res.json();
 }
 
+export async function sbDeleteImport(id) {
+  const res = await fetch(`${PROXY}/rest/v1/imports?id=eq.${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`Delete import failed: ${res.status}`);
+}
+
+export async function sbDeleteFile(storage_path) {
+  const res = await fetch(`${PROXY}/storage/v1/object/csv-imports/${storage_path}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`Delete file failed: ${res.status}`);
+}
+
 export async function sbGetHistory(projectId, limit = 50) {
   const filter = projectId ? `&project_id=eq.${encodeURIComponent(projectId)}` : "";
   const res = await fetch(`${PROXY}/rest/v1/imports?select=*&order=uploaded_at.desc&limit=${limit}${filter}`);
