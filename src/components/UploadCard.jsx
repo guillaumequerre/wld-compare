@@ -71,8 +71,9 @@ export default function UploadCard({ label, icon, hint, onData, onClear, loaded,
       if (siteId && source) {
         setUploading(true);
         try {
-          const ts   = new Date().toISOString().replace(/[:.]/g, "-");
-          const path = `${projectId || "proj-default"}/${siteId}/${source}/${ts}_${file.name}`;
+          const ts       = new Date().toISOString().replace(/[:.]/g, "-");
+          const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+          const path     = `${projectId || "proj-default"}/${siteId}/${source}/${ts}_${safeName}`;
           await sbUpload(path, text);
           const rc = rawMode ? parseCSV(text).length : parsedRows.length;
           const result = await sbInsertImport({ project_id: projectId || "proj-default", site_id: siteId, source, filename: file.name, storage_path: path, row_count: rc });
