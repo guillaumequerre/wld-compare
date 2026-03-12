@@ -506,7 +506,6 @@ export default function App() {
               sites={sites}
               smData={smData}
               metrics={metrics}
-              semrushCorrMatrix={semrushCorrMatrix}
             />
           )}
 

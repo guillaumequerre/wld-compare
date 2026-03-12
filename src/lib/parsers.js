@@ -220,21 +220,28 @@ export function parseSemrush(rows) {
       const posTrans = safeNum(key(row, "positions with transactional intents in top 20") || 0);
       const posTotal = posComm + posInfo + posNav + posTrans
         + safeNum(key(row, "positions with unknown intents in top 20") || 0);
+      const trafficPct = safeNum(key(row, "traffic (%)") || 0);
+      const trafficComm  = safeNum(key(row, "traffic with commercial intents in top 20")  || 0);
+      const trafficInfo  = safeNum(key(row, "traffic with informational intents in top 20") || 0);
+      const trafficNav   = safeNum(key(row, "traffic with navigational intents in top 20")  || 0);
+      const trafficTrans = safeNum(key(row, "traffic with transactional intents in top 20") || 0);
       return {
         url,
         kwCount,
         traffic,
+        trafficPct,
         trafficDelta: delta,
-        top3:    0,   // non disponible dans ce format
-        top10:   posTotal,
-        opps:    0,   // non disponible dans ce format
-        avgPos:  0,
-        totalVol: 0,
-        // Intent breakdown
+        top20: posTotal,
+        // Intent — positions
         intentCommercial:    posComm,
         intentInformational: posInfo,
         intentNavigational:  posNav,
         intentTransactional: posTrans,
+        // Intent — traffic
+        trafficCommercial:    trafficComm,
+        trafficInformational: trafficInfo,
+        trafficNavigational:  trafficNav,
+        trafficTransactional: trafficTrans,
         format: "organic_pages",
       };
     }).filter(Boolean);
@@ -307,23 +314,33 @@ export function extractSemrush(rows) {
   const sum  = (fn) => rows.reduce((a, r) => a + (fn(r) || 0), 0);
   const mean = (fn) => { const v = rows.map(fn).filter(x => x > 0); return v.length ? Math.round(v.reduce((a,b)=>a+b,0)/v.length*10)/10 : 0; };
   const fmt = rows[0]?.format || "position_tracking";
+  const isOrganic = fmt === "organic_pages";
   return {
     format:       fmt,
-    totalKw:      sum(r => r.kwCount),
-    totalTop3:    sum(r => r.top3),
-    totalTop10:   sum(r => r.top10),
-    totalOpps:    sum(r => r.opps),
+    pageCount:    rows.length,
+    // Traffic
     totalTraffic: Math.round(sum(r => r.traffic)),
     trafficDelta: Math.round(sum(r => r.trafficDelta || 0)),
-    totalVol:     sum(r => r.totalVol),
+    pagesWithTraffic: rows.filter(r => (r.traffic || 0) > 0).length,
+    pagesGrowing:     rows.filter(r => (r.trafficDelta || 0) > 0).length,
+    pagesDeclining:   rows.filter(r => (r.trafficDelta || 0) < 0).length,
+    // Keywords
+    totalKw:      sum(r => r.kwCount),
+    // Top 20 positions (organic) / Top 10 (position tracking)
+    totalTop20:   isOrganic ? sum(r => r.top20 || 0) : sum(r => r.top10 || 0),
+    totalTop3:    sum(r => r.top3 || 0),
+    totalOpps:    sum(r => r.opps || 0),
     avgPos:       mean(r => r.avgPos),
-    pageCount:    rows.length,
-    top3Rate:     rows.length ? Math.round(rows.filter(r => r.top3 > 0).length / rows.length * 100) : 0,
-    top10Rate:    rows.length ? Math.round(rows.filter(r => r.top10 > 0).length / rows.length * 100) : 0,
-    // intent breakdown (organic_pages only)
-    totalIntentCommercial:    sum(r => r.intentCommercial || 0),
-    totalIntentInformational: sum(r => r.intentInformational || 0),
-    totalIntentNavigational:  sum(r => r.intentNavigational || 0),
-    totalIntentTransactional: sum(r => r.intentTransactional || 0),
+    top3Rate:     rows.length ? Math.round(rows.filter(r => (r.top3||0) > 0).length / rows.length * 100) : 0,
+    // Intent — positions (organic only)
+    intentCommercial:    sum(r => r.intentCommercial    || 0),
+    intentInformational: sum(r => r.intentInformational || 0),
+    intentNavigational:  sum(r => r.intentNavigational  || 0),
+    intentTransactional: sum(r => r.intentTransactional || 0),
+    // Intent — traffic (organic only)
+    trafficCommercial:    Math.round(sum(r => r.trafficCommercial    || 0)),
+    trafficInformational: Math.round(sum(r => r.trafficInformational || 0)),
+    trafficNavigational:  Math.round(sum(r => r.trafficNavigational  || 0)),
+    trafficTransactional: Math.round(sum(r => r.trafficTransactional || 0)),
   };
 }
