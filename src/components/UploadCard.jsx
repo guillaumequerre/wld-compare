@@ -30,7 +30,8 @@ export default function UploadCard({ label, icon, hint, onData, loaded, color, s
           const ts   = new Date().toISOString().replace(/[:.]/g, "-");
           const path = `${projectId || "proj-default"}/${siteId}/${source}/${ts}_${file.name}`;
           await sbUpload(path, text);
-          await sbInsertImport({ project_id: projectId || "proj-default", site_id: siteId, source, filename: file.name, storage_path: path, row_count: rawMode ? 0 : rows.length });
+          const rc = rawMode ? (parseCSV ? parseCSV(text).length : 0) : rows.length;
+          await sbInsertImport({ project_id: projectId || "proj-default", site_id: siteId, source, filename: file.name, storage_path: path, row_count: rc });
         } catch (err) {
           const msg = err?.message || String(err);
           setUploadErr(`Sauvegarde échouée — ${msg.slice(0, 60)}`);

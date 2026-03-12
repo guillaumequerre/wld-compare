@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { C } from "../lib/constants";
 import { SectionHeader } from "../components/ui";
 import InfoCard from "../components/InfoCard";
+import { parseSemrush } from "../lib/parsers";
 
 // ── Helpers ──────────────────────────────────────────────────────
 
@@ -49,38 +50,24 @@ function IntentBar({ comm, info, nav, trans, total }) {
 
 function SiteCard({ site, sm }) {
   if (!sm) return (
-    <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: "20px 24px", opacity: 0.5 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+    <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: "20px 24px", opacity: 0.45 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
         <div style={{ width: 10, height: 10, borderRadius: "50%", background: site.color }} />
         <span style={{ fontWeight: 700, fontSize: 14 }}>{site.label}</span>
       </div>
-      <div style={{ fontSize: 12, color: C.textLight }}>Aucune donnée Semrush</div>
+      <div style={{ fontSize: 12, color: C.textLight }}>Aucune donnée Semrush importée</div>
     </div>
   );
 
   const isOrg = sm.format === "organic_pages";
   const totalIntent = n(sm.intentCommercial) + n(sm.intentInformational) + n(sm.intentNavigational) + n(sm.intentTransactional);
-
-  const kpis = isOrg ? [
-    { label: "Pages analysées",   value: fmt(sm.pageCount),         icon: "📄" },
-    { label: "Mots-clés total",   value: fmt(sm.totalKw),           icon: "🔑" },
-    { label: "Trafic organique",  value: fmt(sm.totalTraffic),      icon: "📈" },
-    { label: "Δ Trafic",          value: <Delta v={sm.trafficDelta} />, icon: "📊" },
-    { label: "Pages avec trafic", value: fmt(sm.pagesWithTraffic),  icon: "✅" },
-    { label: "Positions top 20",  value: fmt(sm.totalTop20),        icon: "🏅" },
-  ] : [
-    { label: "Pages trackées",    value: fmt(sm.pageCount),         icon: "📄" },
-    { label: "Mots-clés",         value: fmt(sm.totalKw),           icon: "🔑" },
-    { label: "Trafic estimé",     value: fmt(sm.totalTraffic),      icon: "📈" },
-    { label: "Top 3",             value: fmt(sm.totalTop3),         icon: "🥇" },
-    { label: "Top 10",            value: fmt(sm.totalTop20),        icon: "🏅" },
-    { label: "Position moy.",     value: fmt(sm.avgPos, 1),         icon: "📍" },
-  ];
+  const trafficGrowthRate = sm.totalTraffic > 0 ? Math.round(sm.trafficDelta / (sm.totalTraffic - sm.trafficDelta) * 100) : 0;
 
   return (
-    <div style={{ background: C.white, border: `1.5px solid ${site.color}33`, borderRadius: 14, padding: "20px 24px" }}>
-      {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
+    <div style={{ background: C.white, border: `1.5px solid ${site.color}33`, borderRadius: 14, overflow: "hidden" }}>
+
+      {/* ── Header ── */}
+      <div style={{ padding: "14px 18px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 8 }}>
         <div style={{ width: 10, height: 10, borderRadius: "50%", background: site.color }} />
         <span style={{ fontWeight: 700, fontSize: 14, color: C.text }}>{site.label}</span>
         <span style={{ marginLeft: "auto", fontSize: 10, color: C.textLight, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 5, padding: "2px 7px" }}>
@@ -88,54 +75,91 @@ function SiteCard({ site, sm }) {
         </span>
       </div>
 
-      {/* KPIs */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: isOrg && totalIntent > 0 ? 14 : 0 }}>
-        {kpis.map(({ label, value, icon }) => (
-          <div key={label} style={{ background: C.bg, borderRadius: 9, padding: "9px 11px" }}>
-            <div style={{ fontSize: 10, color: C.textLight, marginBottom: 2 }}>{icon} {label}</div>
-            <div style={{ fontSize: 17, fontWeight: 800, color: C.text, fontVariantNumeric: "tabular-nums" }}>{value}</div>
-          </div>
-        ))}
-      </div>
+      <div style={{ padding: "14px 18px" }}>
 
-      {/* Hausse / baisse */}
-      {isOrg && (
-        <div style={{ display: "flex", gap: 8, marginBottom: totalIntent > 0 ? 14 : 0 }}>
-          <div style={{ flex: 1, background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 8, padding: "7px 10px", textAlign: "center" }}>
-            <div style={{ fontSize: 10, color: "#15803D", marginBottom: 2 }}>Pages en hausse</div>
-            <div style={{ fontSize: 16, fontWeight: 800, color: "#15803D" }}>+{fmt(sm.pagesGrowing)}</div>
+        {/* ── Trafic (hero stat) ── */}
+        <div style={{ background: `linear-gradient(135deg, ${site.color}0D, ${site.color}05)`, border: `1px solid ${site.color}22`, borderRadius: 10, padding: "12px 14px", marginBottom: 10 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+            <div>
+              <div style={{ fontSize: 10, color: C.textLight, marginBottom: 3, textTransform: "uppercase", letterSpacing: 0.7 }}>Trafic organique</div>
+              <div style={{ fontSize: 28, fontWeight: 900, color: C.text, fontVariantNumeric: "tabular-nums", lineHeight: 1 }}>{fmt(sm.totalTraffic)}</div>
+            </div>
+            <div style={{ textAlign: "right" }}>
+              <div style={{ fontSize: 10, color: C.textLight, marginBottom: 3 }}>Variation</div>
+              <div style={{ fontSize: 18, fontWeight: 800 }}><Delta v={sm.trafficDelta} /></div>
+              {sm.totalTraffic > 0 && Math.abs(trafficGrowthRate) < 999 && (
+                <div style={{ fontSize: 10, color: C.textLight }}>{trafficGrowthRate > 0 ? "+" : ""}{trafficGrowthRate} %</div>
+              )}
+            </div>
           </div>
-          <div style={{ flex: 1, background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, padding: "7px 10px", textAlign: "center" }}>
-            <div style={{ fontSize: 10, color: "#DC2626", marginBottom: 2 }}>Pages en baisse</div>
-            <div style={{ fontSize: 16, fontWeight: 800, color: "#DC2626" }}>{fmt(sm.pagesDeclining)}</div>
+          {/* Pages hausse / baisse */}
+          <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
+            <div style={{ flex: 1, background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 7, padding: "5px 8px", textAlign: "center" }}>
+              <div style={{ fontSize: 9, color: "#15803D" }}>En hausse</div>
+              <div style={{ fontSize: 14, fontWeight: 800, color: "#15803D" }}>+{fmt(sm.pagesGrowing)}</div>
+            </div>
+            <div style={{ flex: 1, background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 7, padding: "5px 8px", textAlign: "center" }}>
+              <div style={{ fontSize: 9, color: "#DC2626" }}>En baisse</div>
+              <div style={{ fontSize: 14, fontWeight: 800, color: "#DC2626" }}>{fmt(sm.pagesDeclining)}</div>
+            </div>
+            <div style={{ flex: 1, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 7, padding: "5px 8px", textAlign: "center" }}>
+              <div style={{ fontSize: 9, color: C.textLight }}>Avec trafic</div>
+              <div style={{ fontSize: 14, fontWeight: 800, color: C.text }}>{fmt(sm.pagesWithTraffic)}</div>
+            </div>
           </div>
         </div>
-      )}
 
-      {/* Intent breakdown */}
-      {isOrg && totalIntent > 0 && (
-        <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
-          <div style={{ fontSize: 10, color: C.textLight, fontWeight: 600, marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.6 }}>
-            Intentions · positions top 20
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 7 }}>
-            {[
-              { label: "Commercial",     pos: sm.intentCommercial,    traf: sm.trafficCommercial,    color: "#2563EB", bg: "#EFF6FF" },
-              { label: "Informationnel", pos: sm.intentInformational, traf: sm.trafficInformational, color: "#7C3AED", bg: "#F5F3FF" },
-              { label: "Navigationnel",  pos: sm.intentNavigational,  traf: sm.trafficNavigational,  color: "#059669", bg: "#ECFDF5" },
-              { label: "Transactionnel", pos: sm.intentTransactional, traf: sm.trafficTransactional, color: "#D97706", bg: "#FFFBEB" },
-            ].map(({ label, pos, traf, color, bg }) => pos > 0 ? (
-              <div key={label} style={{ background: bg, border: `1px solid ${color}22`, borderRadius: 7, padding: "7px 9px" }}>
-                <div style={{ fontSize: 9, color, fontWeight: 700, marginBottom: 3, textTransform: "uppercase" }}>{label}</div>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-                  <span style={{ fontSize: 15, fontWeight: 800, color }}>{fmt(pos)} pos.</span>
-                  <span style={{ fontSize: 10, color: C.textMid }}>{fmt(traf)} trafic</span>
+        {/* ── KPI grid ── */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 7, marginBottom: 10 }}>
+          {[
+            { label: "Pages analysées", value: fmt(isOrg ? sm.pageCount : sm.pageCount),        accent: false },
+            { label: "Mots-clés",        value: fmt(sm.totalKw),                                  accent: false },
+            { label: "Positions top 20", value: fmt(isOrg ? sm.totalTop20 : sm.totalTop20),      accent: true },
+            { label: isOrg ? "Pos./page moy." : "Position moy.",
+              value: isOrg
+                ? fmt(sm.pageCount > 0 ? Math.round(sm.totalTop20 / sm.pageCount * 10) / 10 : 0, 1)
+                : fmt(sm.avgPos, 1),
+              accent: false },
+          ].map(({ label, value, accent }) => (
+            <div key={label} style={{ background: C.bg, borderRadius: 8, padding: "8px 10px" }}>
+              <div style={{ fontSize: 10, color: C.textLight, marginBottom: 2 }}>{label}</div>
+              <div style={{ fontSize: 16, fontWeight: 800, color: accent ? site.color : C.text, fontVariantNumeric: "tabular-nums" }}>{value}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* ── Intentions ── */}
+        {isOrg && totalIntent > 0 && (
+          <div>
+            <div style={{ fontSize: 10, color: C.textLight, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 7 }}>
+              Intentions · positions top 20
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+              {[
+                { label: "Commercial",     pos: sm.intentCommercial,    traf: sm.trafficCommercial,    color: "#2563EB", bg: "#EFF6FF" },
+                { label: "Informationnel", pos: sm.intentInformational, traf: sm.trafficInformational, color: "#7C3AED", bg: "#F5F3FF" },
+                { label: "Navigationnel",  pos: sm.intentNavigational,  traf: sm.trafficNavigational,  color: "#059669", bg: "#ECFDF5" },
+                { label: "Transactionnel", pos: sm.intentTransactional, traf: sm.trafficTransactional, color: "#D97706", bg: "#FFFBEB" },
+              ].map(({ label, pos, traf, color, bg }) => n(pos) > 0 ? (
+                <div key={label} style={{ background: bg, border: `1px solid ${color}22`, borderRadius: 8, padding: "8px 10px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                    <span style={{ fontSize: 9, color, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>{label}</span>
+                    <span style={{ fontSize: 10, color: C.textLight }}>{totalIntent > 0 ? Math.round(n(pos)/totalIntent*100) : 0}%</span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                    <span style={{ fontSize: 15, fontWeight: 800, color, fontVariantNumeric: "tabular-nums" }}>{fmt(pos)}</span>
+                    <span style={{ fontSize: 10, color: C.textMid, fontVariantNumeric: "tabular-nums" }}>{fmt(traf)} vis.</span>
+                  </div>
+                  {/* Mini bar */}
+                  <div style={{ marginTop: 5, height: 3, background: `${color}22`, borderRadius: 2, overflow: "hidden" }}>
+                    <div style={{ height: "100%", width: `${Math.round(n(pos)/totalIntent*100)}%`, background: color, borderRadius: 2 }} />
+                  </div>
                 </div>
-              </div>
-            ) : null)}
+              ) : null)}
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }
@@ -156,7 +180,20 @@ export default function SemrushTab({ sites, smData, metrics }) {
   const [search,  setSearch]  = useState("");
   const [maxRows, setMaxRows] = useState(50);
 
-  const hasAny = sites.some(s => (smData[s.id] || []).length > 0);
+  // Auto-normalize: if rows are raw CSV objects (from Supabase reload before fix), re-parse them
+  const normalizedSmData = useMemo(() => {
+    const result = {};
+    for (const site of sites) {
+      const rows = normalizedSmData[site.id] || [];
+      if (!rows.length) { result[site.id] = []; continue; }
+      // Detect raw rows: they have uppercase keys like "URL", "Traffic", not the parsed shape
+      const isParsed = rows[0] && ("kwCount" in rows[0] || "format" in rows[0]);
+      result[site.id] = isParsed ? rows : parseSemrush(rows);
+    }
+    return result;
+  }, [smData, sites]);
+
+  const hasAny = sites.some(s => (normalizedSmData[s.id] || []).length > 0);
   if (!hasAny) return (
     <div style={{ padding: 40, textAlign: "center", color: C.textLight }}>
       <div style={{ fontSize: 32, marginBottom: 10 }}>📈</div>
@@ -165,12 +202,12 @@ export default function SemrushTab({ sites, smData, metrics }) {
     </div>
   );
 
-  const allRows = sites.flatMap(s => smData[s.id] || []);
+  const allRows = sites.flatMap(s => normalizedSmData[s.id] || []);
   const isOrganic = allRows[0]?.format === "organic_pages";
 
   // Flat list with site context
   const urlRows = sites.flatMap(site =>
-    (smData[site.id] || []).map(r => ({ ...r, site }))
+    (normalizedSmData[site.id] || []).map(r => ({ ...r, site }))
   );
 
   const filtered = urlRows
@@ -206,10 +243,34 @@ export default function SemrushTab({ sites, smData, metrics }) {
         <div style={{ fontSize: 12, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 12 }}>
           Vue par site
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: `repeat(${Math.min(sites.filter(s => (smData[s.id]||[]).length > 0).length, 3)}, 1fr)`, gap: 16 }}>
-          {sites.map((site, i) => (
-            <SiteCard key={site.id} site={site} sm={metrics[i]?.sm ?? null} />
-          ))}
+        <div style={{ display: "grid", gridTemplateColumns: `repeat(${Math.min(sites.filter(s => (normalizedSmData[s.id]||[]).length > 0).length || 1, 3)}, 1fr)`, gap: 16 }}>
+          {sites.map((site) => {
+            const smRows = normalizedSmData[site.id] || [];
+            if (!smRows.length) return <SiteCard key={site.id} site={site} sm={null} />;
+            const sum = (fn) => smRows.reduce((a, r) => a + (fn(r) || 0), 0);
+            const isOrg = smRows[0]?.format === "organic_pages";
+            const sm = {
+              format: smRows[0]?.format || "organic_pages",
+              pageCount: smRows.length,
+              totalTraffic: Math.round(sum(r => r.traffic)),
+              trafficDelta: Math.round(sum(r => r.trafficDelta || 0)),
+              pagesWithTraffic: smRows.filter(r => (r.traffic || 0) > 0).length,
+              pagesGrowing: smRows.filter(r => (r.trafficDelta || 0) > 0).length,
+              pagesDeclining: smRows.filter(r => (r.trafficDelta || 0) < 0).length,
+              totalKw: sum(r => r.kwCount),
+              totalTop20: isOrg ? sum(r => r.top20 || 0) : sum(r => r.top10 || 0),
+              avgPos: 0,
+              intentCommercial:    sum(r => r.intentCommercial    || 0),
+              intentInformational: sum(r => r.intentInformational || 0),
+              intentNavigational:  sum(r => r.intentNavigational  || 0),
+              intentTransactional: sum(r => r.intentTransactional || 0),
+              trafficCommercial:    Math.round(sum(r => r.trafficCommercial    || 0)),
+              trafficInformational: Math.round(sum(r => r.trafficInformational || 0)),
+              trafficNavigational:  Math.round(sum(r => r.trafficNavigational  || 0)),
+              trafficTransactional: Math.round(sum(r => r.trafficTransactional || 0)),
+            };
+            return <SiteCard key={site.id} site={site} sm={sm} />;
+          })}
         </div>
       </div>
 

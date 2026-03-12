@@ -1,7 +1,7 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import { C, SF_DIMS, RES_KPIS, RADAR_DIMS, DEFAULT_SITES, SEMRUSH_DIMS } from "./lib/constants";
 import { emptyDataMap, makeInitialProject, parseCSV } from "./lib/helpers";
-import { extractSF, extractGSC, extractGA, extractBing, extractSemrush, filterByMode } from "./lib/parsers";
+import { extractSF, extractGSC, extractGA, extractBing, extractSemrush, parseSemrush, filterByMode } from "./lib/parsers";
 import { buildUrlMaps, buildSfPageVectors, intraCorrFast, smIntraCorr } from "./lib/correlations";
 import { sbSaveProject, sbLoadProjects, sbGetHistory, sbGetLatest, sbDownload, sbGetPageTypes } from "./lib/supabase";
 import AnalyseTab from "./tabs/AnalyseTab";
@@ -101,10 +101,12 @@ export default function App() {
     const updates = await Promise.all(Object.values(latest).map(async (row) => {
       try {
         const text = await sbDownload(row.storage_path);
-        const rows = parseCSV(text);
         const src = row.source;
         const key = src === "sf" ? "sfData" : src === "gsc" ? "gscData" : src === "ga" ? "gaData" : src === "bing" ? "bingData" : src === "sm" ? "smData" : null;
-        return key ? { key, storedSid: row.site_id, rows } : null;
+        if (!key) return null;
+        const rawRows = parseCSV(text);
+        const rows = src === "sm" ? parseSemrush(rawRows) : rawRows;
+        return { key, storedSid: row.site_id, rows };
       } catch (e) { console.warn("Auto-load failed:", row.source, e); return null; }
     }));
     const valid = updates.filter(Boolean);
