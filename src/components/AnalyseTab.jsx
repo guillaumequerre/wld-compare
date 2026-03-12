@@ -126,14 +126,13 @@ Produis un JSON STRICT avec exactement cette structure (rien d'autre, pas de mar
 }
 
 Règles:
-- Si plusieurs sites : renseigne "comparative" avec 2-3 gap_analysis maximum, sinon laisse comparative avec des strings vides et gap_analysis vide
-- 3 insights SEO et 3 insights GEO maximum
-- 2 actions par horizon temporel par site maximum
-- Chaque action doit être concrète et basée sur les données
+- Si plusieurs sites : renseigne "comparative" avec 2 gap_analysis maximum, sinon laisse comparative avec des strings vides et gap_analysis vide
+- 2 insights SEO et 2 insights GEO maximum — titres < 8 mots, détail < 20 mots
+- 1 action par horizon temporel par site maximum — action < 15 mots, why < 15 mots
 - ice_impact, ice_confidence, ice_effort : scores 1-10
 - Distingue les leviers SEO (GSC/GA4) des leviers GEO (Bing AI)
-- Réponds UNIQUEMENT avec le JSON valide et complet, sans texte avant ou après
-- IMPORTANT: le JSON doit être complet et bien fermé, ne tronque pas`;
+- Réponds UNIQUEMENT avec le JSON brut, sans markdown, sans backticks, sans texte avant ou après
+- CRITIQUE : le JSON DOIT être complet et valide. Si tu manques de place, termine les tableaux ouverts avant de terminer`;
 }
 
 // Parse analysis JSON into flat recommendation cards
@@ -249,7 +248,7 @@ export default function AnalyseTab({ metrics, corrMatrix, resultVals, analysis, 
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: "claude-sonnet-4-20250514",
-          max_tokens: 3500,
+          max_tokens: 6000,
           messages: [{ role: "user", content: prompt }],
         }),
       });

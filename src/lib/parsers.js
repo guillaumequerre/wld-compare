@@ -233,60 +233,63 @@ export function parseSemrush(rows) {
   }
 
   // ── Format Position Tracking ───────────────────────────────────
-  // Colonnes réelles : 20260311_average (position moy), 20260311_keywords_count,
-  //   20260311_estimated_traffic, 20260311_position (par mot-clé), volume
+  // Deux sous-formats :
+  // • Page-level  : 1 ligne par URL — colonnes YYYYMMDD_average, _keywords_count, _estimated_traffic
+  // • Keyword-level : 1 ligne par (URL × mot-clé) — colonnes YYYYMMDD_position, volume
   if (!latest) return [];
+
+  // Détecte si page-level (colonne _average présente, _position absente)
+  const sampleRow = rows[0] || {};
+  const hasPositionCol = Object.keys(sampleRow).some(k => k.toLowerCase() === `${latest}_position`);
+  const hasAverageCol  = Object.keys(sampleRow).some(k => k.toLowerCase() === `${latest}_average`);
+  const isPageLevel = !hasPositionCol && hasAverageCol;
+
   const byUrl = {};
   for (const row of rows) {
     const url = (key(row, "url") || "").trim();
     if (!url) continue;
-    // Position par mot-clé (colonne YYYYMMDD_position OU YYYYMMDD_average si une ligne = une page)
-    const position = safeNum(
-      key(row, `${latest}_position`) ||
-      key(row, "position_difference") || 0
-    );
-    const volume = safeNum(key(row, "volume") || 0);
-    if (!byUrl[url]) {
-      byUrl[url] = {
-        url,
-        // keywords_count : colonne YYYYMMDD_keywords_count OU keywords_count_difference
-        kwCount:  safeNum(
-          key(row, `${latest}_keywords_count`) ||
-          key(row, "keywords_count_difference") || 0
-        ),
-        traffic:  safeNum(
-          key(row, `${latest}_estimated_traffic`) ||
-          key(row, "estimated_traffic_difference") || 0
-        ),
-        totalVol: safeNum(key(row, `${latest}_volume`) || key(row, "volume") || 0),
-        // Position moyenne (format page-level vs keyword-level)
-        avgPosRaw: safeNum(
-          key(row, `${latest}_average`) ||
-          key(row, "average_difference") || 0
-        ),
-        keywords: [],
-      };
+
+    if (isPageLevel) {
+      // Page-level : 1 ligne = 1 URL, toutes les métriques sont directes
+      const kwCount  = safeNum(key(row, `${latest}_keywords_count`) || key(row, "keywords_count_difference") || 0);
+      const traffic  = safeNum(key(row, `${latest}_estimated_traffic`) || key(row, "estimated_traffic_difference") || 0);
+      const avgPos   = safeNum(key(row, `${latest}_average`) || key(row, "average_difference") || 0);
+      const totalVol = safeNum(key(row, `${latest}_volume`) || key(row, "volume") || 0);
+      // top3/top10/opps estimés via avgPos (pas de détail par mot-clé)
+      const estTop3  = avgPos > 0 && avgPos <= 3  ? Math.max(1, Math.round(kwCount * 0.3)) : 0;
+      const estTop10 = avgPos > 0 && avgPos <= 10 ? Math.max(1, Math.round(kwCount * 0.6)) : 0;
+      const estOpps  = avgPos > 10 && avgPos <= 20 ? Math.max(1, Math.round(kwCount * 0.4)) : 0;
+      byUrl[url] = { url, kwCount, traffic, totalVol, avgPos, top3: estTop3, top10: estTop10, opps: estOpps };
+    } else {
+      // Keyword-level : 1 ligne par (URL × mot-clé)
+      const position = safeNum(key(row, `${latest}_position`) || key(row, "position_difference") || 0);
+      const volume   = safeNum(key(row, "volume") || 0);
+      if (!byUrl[url]) {
+        byUrl[url] = {
+          url,
+          kwCount:   safeNum(key(row, `${latest}_keywords_count`) || key(row, "keywords_count_difference") || 0),
+          traffic:   safeNum(key(row, `${latest}_estimated_traffic`) || key(row, "estimated_traffic_difference") || 0),
+          totalVol:  safeNum(key(row, `${latest}_volume`) || key(row, "volume") || 0),
+          avgPosRaw: safeNum(key(row, `${latest}_average`) || key(row, "average_difference") || 0),
+          keywords:  [],
+        };
+      }
+      if (position > 0) byUrl[url].keywords.push({ position, volume });
     }
-    if (position > 0) byUrl[url].keywords.push({ position, volume });
   }
+
   return Object.values(byUrl).map(u => {
-    const kws = u.keywords;
+    if (isPageLevel) {
+      return { url: u.url, kwCount: u.kwCount, top3: u.top3, top10: u.top10, opps: u.opps, avgPos: u.avgPos, traffic: u.traffic, totalVol: u.totalVol, trafficDelta: 0, format: "position_tracking" };
+    }
+    const kws   = u.keywords;
     const top3  = kws.filter(k => k.position <= 3).length;
     const top10 = kws.filter(k => k.position <= 10).length;
     const opps  = kws.filter(k => k.position >= 11 && k.position <= 20).length;
-    // Prefer computed avgPos from keywords, fallback to avgPosRaw from page-level col
     const avgPos = kws.length
       ? Math.round(kws.reduce((s, k) => s + k.position, 0) / kws.length * 10) / 10
       : u.avgPosRaw;
-    return {
-      url: u.url,
-      kwCount:  u.kwCount || kws.length,
-      top3, top10, opps, avgPos,
-      traffic:  u.traffic,
-      totalVol: u.totalVol,
-      trafficDelta: 0,
-      format: "position_tracking",
-    };
+    return { url: u.url, kwCount: u.kwCount || kws.length, top3, top10, opps, avgPos, traffic: u.traffic, totalVol: u.totalVol, trafficDelta: 0, format: "position_tracking" };
   });
 }
 
