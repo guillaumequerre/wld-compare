@@ -62,23 +62,6 @@ SITE: ${m.site.label}
     return `\n\nANALYSE COMPARATIVE (${names.join(" vs ")}):\nScores GEO-readiness: ${scores}\n\nÉcarts techniques entre sites:\n  ${deltas}\n\nComparaison KPIs:\n  ${kpis}`;
   })() : "";
 
-  // Matrice complète formatée en tableau lisible pour le LLM
-  const kpiHeaders = corrMatrix[0]?.corrs.map(c => c.kpi.label) || [];
-  const corrTableLines = [
-    `Dimension SF | ${kpiHeaders.join(" | ")}`,
-    `${"—".repeat(20)}|${kpiHeaders.map(() => "—".repeat(14)).join("|")}`,
-    ...corrMatrix.map(({ dim, corrs }) => {
-      const vals = corrs.map(c => {
-        if (c.value === null) return "  N/A  ";
-        const v = (c.value > 0 ? "+" : "") + c.value.toFixed(2);
-        const flag = Math.abs(c.value) >= 0.4 ? " ★" : Math.abs(c.value) >= 0.2 ? " ·" : "  ";
-        return `${v}${flag}`.padStart(9);
-      });
-      return `${dim.label.padEnd(28)} | ${vals.join(" | ")}`;
-    }),
-    "",
-    "★ = corrélation forte (|r|≥0.4)  · = corrélation modérée (|r|≥0.2)  r>0 = relation positive  r<0 = relation inverse",
-  ].join("\n");
 
   // Top corrélations significatives pour résumé rapide
   const topCorr = corrMatrix.flatMap(({ dim, corrs }) =>
@@ -223,7 +206,7 @@ export default function AnalyseTab({ metrics, corrMatrix, resultVals, analysis, 
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: "claude-sonnet-4-20250514",
-          max_tokens: 6000,
+          max_tokens: 8000,
           system: "Tu es un assistant d'analyse SEO/GEO. Tu réponds TOUJOURS et UNIQUEMENT avec un objet JSON valide, sans aucun texte avant ou après, sans markdown, sans backticks. Jamais de commentaires. Juste le JSON brut commençant par { et finissant par }.",
           messages: [
             { role: "user", content: prompt },
@@ -279,7 +262,7 @@ export default function AnalyseTab({ metrics, corrMatrix, resultVals, analysis, 
             .replace(/,\s*"[^"]*"\s*:\s*$/, "")           // key with no value
             .replace(/,\s*"[^"]*"\s*$/, "")                // dangling key
             .replace(/,\s*\{[^{}]*$/, "")                  // incomplete object
-            .replace(/,\s*\[[^\[\]]*$/, "");              // incomplete array
+            .replace(/,\s*\[[^\]]*$/, "");               // incomplete array
           // Close open structures
           const openBrackets = (repaired.match(/\[/g)||[]).length - (repaired.match(/\]/g)||[]).length;
           const openBraces   = (repaired.match(/\{/g)||[]).length - (repaired.match(/\}/g)||[]).length;
