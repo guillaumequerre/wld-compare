@@ -140,3 +140,63 @@ export async function sbDeletePageTypes(project_id, site_id) {
   });
   return res.ok;
 }
+
+// ── SNAPSHOTS ─────────────────────────────────────────────────────
+export async function sbSaveSnapshot(snap) {
+  const res = await fetch(`${PROXY}/rest/v1/snapshots`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
+    body: JSON.stringify(snap),
+  });
+  if (!res.ok) throw new Error(`Save snapshot failed: ${res.status}`);
+  return res.json();
+}
+
+export async function sbGetSnapshots(project_id, site_id) {
+  const q = `project_id=eq.${encodeURIComponent(project_id)}&site_id=eq.${encodeURIComponent(site_id)}&order=date_end.asc`;
+  const res = await fetch(`${PROXY}/rest/v1/snapshots?${q}`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function sbDeleteSnapshot(id) {
+  const res = await fetch(`${PROXY}/rest/v1/snapshots?id=eq.${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+  });
+  return res.ok;
+}
+
+// ── MILESTONES ────────────────────────────────────────────────────
+export async function sbSaveMilestone(m) {
+  const res = await fetch(`${PROXY}/rest/v1/milestones`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Prefer": "return=representation" },
+    body: JSON.stringify(m),
+  });
+  if (!res.ok) throw new Error(`Save milestone failed: ${res.status}`);
+  return res.json();
+}
+
+export async function sbGetMilestones(project_id) {
+  const res = await fetch(`${PROXY}/rest/v1/milestones?project_id=eq.${encodeURIComponent(project_id)}&order=milestone_date.asc`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function sbDeleteMilestone(id) {
+  const res = await fetch(`${PROXY}/rest/v1/milestones?id=eq.${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+  });
+  return res.ok;
+}
+
+export async function sbUpdateMilestone(id, patch) {
+  const res = await fetch(`${PROXY}/rest/v1/milestones?id=eq.${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  return res.ok;
+}

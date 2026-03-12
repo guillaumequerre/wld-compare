@@ -4,7 +4,8 @@ import { newProject, parseCSV, parseSemrushCSV } from "../lib/helpers";
 import { sbSaveProject, sbDeleteProject, sbDownload } from "../lib/supabase";
 import { parseSemrush } from "../lib/parsers";
 import UploadCard from "../components/UploadCard";
-import PageTypeClassifier from "../components/Pagetypeclassifier.jsx";
+import PageTypeClassifier from "../components/PageTypeClassifier";
+import SnapshotSaver from "../components/SnapshotSaver";
 import { SectionHeader } from "../components/ui";
 
 export default function ImportTab({ projects, currentProjectId, setCurrentProjectId, editingProjectName, setEditingProjectName, setProjects, sites, setSites, sfData, gscData, gaData, bingData, smData, setSfData, setGscData, setGaData, setBingData, setSmData, confirmModal, setConfirmModal, dbHistory, dbLoading, showHistory, setShowHistory, refreshHistory, pageTypes, setPageTypes }) {
@@ -222,6 +223,23 @@ export default function ImportTab({ projects, currentProjectId, setCurrentProjec
               </div>
             ))}
           </div>
+          {/* ── Snapshot savers ── */}
+          {sfData[site.id]?.length > 0 && (
+            <SnapshotSaver source="sf" rows={sfData[site.id]} filename={null} projectId={currentProjectId} siteId={site.id} />
+          )}
+          {gscData[site.id]?.length > 0 && (
+            <SnapshotSaver source="gsc" rows={gscData[site.id]} filename={null} projectId={currentProjectId} siteId={site.id} />
+          )}
+          {gaData[site.id]?.length > 0 && (
+            <SnapshotSaver source="ga" rows={gaData[site.id]} filename={null} projectId={currentProjectId} siteId={site.id} />
+          )}
+          {bingData[site.id]?.length > 0 && (
+            <SnapshotSaver source="bing" rows={bingData[site.id]} filename={null} projectId={currentProjectId} siteId={site.id} />
+          )}
+          {smData[site.id]?.length > 0 && (
+            <SnapshotSaver source="semrush" rows={smData[site.id]} filename={null} projectId={currentProjectId} siteId={site.id} />
+          )}
+
           {sfData[site.id]?.length > 0 && (
             <div style={{ marginTop: 16 }}>
               <PageTypeClassifier

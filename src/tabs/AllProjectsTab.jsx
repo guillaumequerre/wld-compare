@@ -66,7 +66,7 @@ export default function AllProjectsTab({ projects, sites, sfData, allProjectsMat
                     <td key={kpi.key} style={{ padding: "8px 10px", textAlign: "center" }}>
                       {v !== null ? (
                         <div style={{ display: "inline-block", background: bg, color: col2, borderRadius: 6, padding: "4px 8px", fontWeight: 700, fontSize: 12, minWidth: 48 }}>
-                          {v > 0 ? "+" : ""}{v}
+                          {v !== null ? (v > 0 ? "+" : "") + Math.round(v * 100) + "%" : "—"}
                           <div style={{ fontSize: 10, fontWeight: 400, opacity: 0.7 }}>n={n}</div>
                         </div>
                       ) : <span style={{ color: C.textLight, fontSize: 12 }}>—</span>}

@@ -12,6 +12,7 @@ import PagesTab from "./tabs/PagesTab";
 import SitesTab from "./tabs/SitesTab";
 import AllProjectsTab from "./tabs/AllProjectsTab";
 import SemrushTab from "./tabs/SemrushTab";
+import EvolutionTab from "./tabs/EvolutionTab";
 
 const INITIAL_PROJECT = makeInitialProject();
 const NAV_TABS = [
@@ -23,6 +24,7 @@ const NAV_TABS = [
   { key: "sites",       label: "Sites"              },
   { key: "semrush",     label: "📊 Semrush"         },
   { key: "allprojects", label: "◈ Tous les projets" },
+  { key: "evolution",    label: "📅 Évolution"        },
 ];
 
 export default function App() {
@@ -508,6 +510,13 @@ export default function App() {
             />
           )}
 
+          {tab === "evolution" && (
+            <EvolutionTab
+              projects={projects}
+              sites={currentProject?.sites || []}
+              currentProjectId={currentProjectId}
+            />
+          )}
           {tab === "allprojects" && (
             <AllProjectsTab
               projects={projects}
