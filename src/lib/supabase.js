@@ -13,7 +13,7 @@ export async function sbUpload(path, csvText) {
 export async function sbInsertImport({ project_id, site_id, source, filename, storage_path, row_count }) {
   const res = await fetch(`${PROXY}/rest/v1/imports`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "Prefer": "return=representation" },
+    headers: { "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
     body: JSON.stringify({ project_id, site_id, source, filename, storage_path, row_count }),
   });
   if (!res.ok) throw new Error(`Insert failed: ${res.status}`);
