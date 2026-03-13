@@ -16,16 +16,89 @@ import EvolutionTab from "./tabs/EvolutionTab";
 
 const INITIAL_PROJECT = makeInitialProject();
 const NAV_TABS = [
-  { key: "import",      label: "⚙️ Setup"           },
-  { key: "overview",    label: "Vue d'ensemble"     },
+  { key: "import",      label: "⚙️ Setup"      },
+  { key: "overview",    label: "Vue d'ensemble" },
+  { key: "pages",       label: "Pages"          },
+  { key: "sites",       label: "Sites"          },
+  { key: "evolution",   label: "📅 Évolution"   },
+  { key: "analyse",     label: "✦ Analyse IA"   },
+];
+
+const BURGER_TABS = [
   { key: "matrix",      label: "Matrice"            },
-  { key: "pages",       label: "Pages"              },
-  { key: "analyse",     label: "✦ Analyse IA"       },
-  { key: "sites",       label: "Sites"              },
   { key: "semrush",     label: "📊 Semrush"         },
   { key: "allprojects", label: "◈ Tous les projets" },
-  { key: "evolution",    label: "📅 Évolution"        },
 ];
+
+function NavBar({ tab, setTab }) {
+  const [burgerOpen, setBurgerOpen] = useState(false);
+  const burgerRef = useRef(null);
+  const isBurgerTab = BURGER_TABS.some(t => t.key === tab);
+
+  // Close on outside click
+  useEffect(() => {
+    if (!burgerOpen) return;
+    const handler = (e) => { if (!burgerRef.current?.contains(e.target)) setBurgerOpen(false); };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [burgerOpen]);
+
+  const tabBtn = (t) => (
+    <button key={t.key} onClick={() => { setTab(t.key); setBurgerOpen(false); }} style={{
+      padding: "6px 14px", border: "none", borderRadius: 7, cursor: "pointer", fontSize: 13, fontWeight: 500,
+      background: tab === t.key ? C.blue : "transparent",
+      color: tab === t.key ? "#fff" : C.textMid,
+      transition: "all 0.15s", whiteSpace: "nowrap",
+    }}>{t.label}</button>
+  );
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+      {NAV_TABS.map(tabBtn)}
+
+      {/* Burger */}
+      <div ref={burgerRef} style={{ position: "relative" }}>
+        <button
+          onClick={() => setBurgerOpen(o => !o)}
+          style={{
+            padding: "6px 10px", border: "none", borderRadius: 7, cursor: "pointer", fontSize: 13,
+            background: isBurgerTab || burgerOpen ? C.blue : "transparent",
+            color: isBurgerTab || burgerOpen ? "#fff" : C.textMid,
+            transition: "all 0.15s", display: "flex", alignItems: "center", gap: 5,
+          }}
+          title="Plus d'onglets"
+        >
+          <span style={{ fontSize: 15, lineHeight: 1 }}>☰</span>
+          {isBurgerTab && (
+            <span style={{ fontSize: 12 }}>{BURGER_TABS.find(t => t.key === tab)?.label}</span>
+          )}
+        </button>
+
+        {burgerOpen && (
+          <div style={{
+            position: "absolute", right: 0, top: "calc(100% + 6px)", zIndex: 300,
+            background: C.white, border: `1px solid ${C.border}`, borderRadius: 10,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.1)", padding: "6px", minWidth: 180,
+            display: "flex", flexDirection: "column", gap: 2,
+          }}>
+            {BURGER_TABS.map(t => (
+              <button key={t.key} onClick={() => { setTab(t.key); setBurgerOpen(false); }} style={{
+                padding: "8px 14px", border: "none", borderRadius: 7, cursor: "pointer",
+                fontSize: 13, fontWeight: 500, textAlign: "left",
+                background: tab === t.key ? C.blueLight : "transparent",
+                color: tab === t.key ? C.blue : C.textMid,
+                transition: "background 0.12s",
+              }}
+                onMouseEnter={e => { if (tab !== t.key) e.currentTarget.style.background = C.bg; }}
+                onMouseLeave={e => { if (tab !== t.key) e.currentTarget.style.background = "transparent"; }}
+              >{t.label}</button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export default function App() {
   // ── Projects ─────────────────────────────────────────────────────
@@ -380,18 +453,7 @@ export default function App() {
               <span style={{ fontWeight: 700, fontSize: 15, letterSpacing: -0.3 }}>CorrelDash</span>
               <span style={{ color: C.textLight, fontSize: 13 }}>· SEO × GEO</span>
             </div>
-            <div style={{ display: "flex", gap: 2 }}>
-              {NAV_TABS.map(t => (
-                <button key={t.key} onClick={() => setTab(t.key)} style={{
-                  padding: "6px 16px", border: "none", borderRadius: 7, cursor: "pointer", fontSize: 13, fontWeight: 500,
-                  background: tab === t.key ? C.blue : "transparent",
-                  color: tab === t.key ? "#fff" : C.textMid,
-                  transition: "all 0.15s",
-                }}>
-                  {t.label}
-                </button>
-              ))}
-            </div>
+            <NavBar tab={tab} setTab={setTab} />
           </div>
         </div>
 
