@@ -75,20 +75,96 @@ function tryBreadcrumbClassify(breadcrumb) {
   return null;
 }
 
-function tryDeterministicClassify(url, signals) {
-  const path = url.toLowerCase().replace(/https?:\/\/[^/]+/, "");
-  if (path === "/" || path === "" || path === "/index" || path === "/accueil") return "home";
+function tryDeterministicClassify(url, signals, sfRow) {
+  const path    = url.toLowerCase().replace(/https?:\/\/[^/]+/, "").replace(/\/$/, "") || "/";
+  const segments = path.split("/").filter(Boolean);
+  const depth   = segments.length;
+  const slug    = segments[segments.length - 1] || "";
+
+  // ── 1. Accueil ────────────────────────────────────────────────
+  if (path === "/" || path === "/index" || path === "/accueil" || path === "/home") return "home";
+
+  // ── 2. JSON-LD @type (signal le plus fiable) ──────────────────
   const fromJsonLd = tryJsonLdClassify(signals.jsonLd);
   if (fromJsonLd) return fromJsonLd;
+
+  // ── 3. Body class CSS ─────────────────────────────────────────
   const fromBody = tryBodyClassClassify(signals.bodyClass);
   if (fromBody) return fromBody;
+
+  // ── 4. Breadcrumb ─────────────────────────────────────────────
   const fromBreadcrumb = tryBreadcrumbClassify(signals.breadcrumb);
   if (fromBreadcrumb) return fromBreadcrumb;
-  if (/\/(blog|article|news|actu|guide|tuto|post)\//.test(path)) return "article";
-  if (/\/(categorie|category|collection|tag|archive|listing)\//.test(path)) return "categorie";
-  if (/\/(produit|product|shop|boutique|fiche)\//.test(path)) return "fiche";
-  if (/\/(contact|devis|quote|rdv)/.test(path)) return "contact";
-  if (/\/(about|a-propos|equipe|team|cgv|cgu|mentions|privacy|legal)/.test(path)) return "about";
+
+  // ── 5. Patterns URL — segments ────────────────────────────────
+  const anySegment = (rx) => segments.some(s => rx.test(s));
+
+  if (anySegment(/^(blog|articles?|news|actu|actualit[eé]s?|dossiers?|chroniques?|edito|editorial|insights?|ressources?|guides?|tutos?|tutoriels?|howto|posts?)$/))
+    return "article";
+
+  if (anySegment(/^(cat[eé]gorie?s?|categories|collection|collections|tag|tags|archive|archives|listing|listings|rayon|rayons|univers|thème|themes?)$/))
+    return "categorie";
+
+  if (anySegment(/^(produits?|products?|shop|boutique|fiches?|items?|p|ref|sku|catalogue)$/) && depth >= 2)
+    return "fiche";
+
+  if (anySegment(/^(lp|landing|campagnes?|promo|offre|deals?)$/) || slug.startsWith("lp-") || slug.startsWith("landing-"))
+    return "landing";
+
+  if (anySegment(/^(contact|contacts|devis|quote|rdv|rendez-vous|rappel|callback|nous-contacter|contactez)$/))
+    return "contact";
+
+  if (anySegment(/^(about|a-propos|qui-sommes-nous|notre-equipe|equipe|team|histoire|story|cgv|cgu|mentions|legal|privacy|politique|cookies|faq|aide)$/))
+    return "about";
+
+  if (anySegment(/^(comparatif|comparaison|vs|versus|top|meilleur|alternative|meilleures?|classement|avis|reviews?|benchmark)$/))
+    return "comparatif";
+
+  // ── 6. Patterns sur le slug terminal ─────────────────────────
+  // Dates dans le slug → article  (ex: mon-article-2024-03)
+  if (/\b(20[12][0-9])\b/.test(slug) && slug.split("-").length >= 4) return "article";
+
+  // Slug très long (≥7 mots séparés par tirets) → article probable
+  if (slug.split("-").length >= 7) return "article";
+
+  // Slug court à profondeur 1 avec ID/ref numérique → fiche
+  if (depth === 1 && /[0-9]{3,}/.test(slug)) return "fiche";
+
+  // Comparatifs : "X-vs-Y" ou "meilleur-X" dans le slug
+  if (/\bvs\b/.test(slug) || slug.startsWith("meilleur") || slug.startsWith("top-[0-9]") || slug.includes("-vs-")) return "comparatif";
+
+  // Contact / légal via slug terminal seul
+  if (/^(contact|devis|quote|rgpd|legal|cgu|cgv|mentions|privacy|faq|aide)$/.test(slug)) return "contact";
+  if (/^(about|equipe|team|histoire|a-propos)$/.test(slug)) return "about";
+
+  // ── 7. Signaux SF quantitatifs (si disponibles) ───────────────
+  if (sfRow) {
+    const words   = parseFloat(sfRow["nombre de mots"] || sfRow["word count"] || 0) || 0;
+    const inlinks = parseFloat(sfRow["liens entrants"] || sfRow["inlinks"] || 0) || 0;
+    const inlkUniq= parseFloat(sfRow["liens entrants uniques"] || 0) || 0;
+    const title   = (sfRow["title 1"] || sfRow["title"] || "").toLowerCase();
+    const h1      = (sfRow["h1-1"]    || sfRow["h1"]   || "").toLowerCase();
+    const combined = title + " " + h1;
+
+    // Comparatif signals dans title/H1
+    if (/\bvs\b|versus|comparatif|meilleur|top [0-9]|alternative|benchmark|classement/.test(combined)) return "comparatif";
+
+    // Contact via H1
+    if (/contact|devis|rappel|formulaire|nous [eé]crire|nous appeler/.test(h1)) return "contact";
+
+    // Article : contenu long + peu d'inlinks internes
+    if (words >= 700 && inlinks <= 8) return "article";
+
+    // Catégorie : beaucoup d'inlinks, peu de mots (hub de navigation)
+    if (inlkUniq >= 15 && words <= 350) return "categorie";
+
+    // Landing : 1 segment URL, contenu modéré
+    if (depth === 1 && words >= 150 && inlinks <= 5) return "landing";
+
+    // Fiche : depth ≥ 2, peu de mots, peu d'inlinks (fiche isolée)
+    if (depth >= 2 && words <= 250 && inlinks <= 5) return "fiche";
+  }
+
   return null;
 }
 
@@ -161,13 +237,14 @@ export default function PageTypeClassifier({ siteId, projectId, sfRows, pageType
       title:   (r["title 1"] || r["title"] || "").slice(0, 80),
       h1:      (r["h1-1"] || r["h1"] || "").slice(0, 80),
       signals: extractSignals(r),
+      sfRow:   r,
     })).filter(p => p.url);
 
     const needsAI = [];
     let detCount = 0;
 
     allPages.forEach(p => {
-      const type = tryDeterministicClassify(p.url, p.signals);
+      const type = tryDeterministicClassify(p.url, p.signals, p.sfRow);
       if (type) {
         resultsRef.current[p.url] = type;
         dbRowsRef.current.push({ project_id: projectId, site_id: siteId, url: p.url, page_type: type, confidence: "auto" });

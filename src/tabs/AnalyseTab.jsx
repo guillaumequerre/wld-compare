@@ -1,4 +1,5 @@
 import InfoCard from "../components/InfoCard";
+import TemplateAnalysis from "./TemplateAnalysis";
 import { useState, useEffect } from "react";
 import { C } from "../lib/constants";
 import { sbSaveAnalysis, sbGetLatestAnalysis, sbSaveRecommendations, sbGetRecommendations, sbUpdateRecommendation } from "../lib/supabase";
@@ -169,7 +170,7 @@ function RecCard({ rec, site, onToggle, onIceChange }) {
   );
 }
 
-export default function AnalyseTab({ metrics, corrMatrix, resultVals, analysis, setAnalysis, analysisLoading, setAnalysisLoading, analysisError, setAnalysisError, currentProjectId, sites }) {
+export default function AnalyseTab({ metrics, corrMatrix, resultVals, analysis, setAnalysis, analysisLoading, setAnalysisLoading, analysisError, setAnalysisError, currentProjectId, sites, sfData = {}, gscData = {}, smData = {}, pageTypes = {} }) {
   const [activeRoadmap, setActiveRoadmap] = useState(() => metrics[0]?.site.id || "");
   const [recs, setRecs] = useState([]);
 
@@ -206,7 +207,7 @@ export default function AnalyseTab({ metrics, corrMatrix, resultVals, analysis, 
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: "claude-sonnet-4-20250514",
-          max_tokens: 8000,
+          max_tokens: 6000,
           system: "Tu es un assistant d'analyse SEO/GEO. Tu réponds TOUJOURS et UNIQUEMENT avec un objet JSON valide, sans aucun texte avant ou après, sans markdown, sans backticks. Jamais de commentaires. Juste le JSON brut commençant par { et finissant par }.",
           messages: [
             { role: "user", content: prompt },
@@ -536,6 +537,21 @@ export default function AnalyseTab({ metrics, corrMatrix, resultVals, analysis, 
           </div>
         </div>
       )}
+
+      {/* ── Template × Succès ── */}
+      <div style={{ marginTop: 32 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+          <div style={{ width: 3, height: 20, background: C.blue, borderRadius: 2 }} />
+          <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>Analyse templates × pages à succès</div>
+        </div>
+        <TemplateAnalysis
+          sites={sites}
+          sfData={sfData}
+          gscData={gscData}
+          smData={smData}
+          pageTypes={pageTypes}
+        />
+      </div>
 
       <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
     </div>

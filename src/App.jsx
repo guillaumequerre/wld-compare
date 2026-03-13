@@ -552,6 +552,10 @@ export default function App() {
               setAnalysisError={setAnalysisError}
               currentProjectId={currentProjectId}
               sites={sites}
+              sfData={sfData}
+              gscData={gscData}
+              smData={smData}
+              pageTypes={pageTypes}
             />
           )}
 
