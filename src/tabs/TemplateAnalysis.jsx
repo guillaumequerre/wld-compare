@@ -201,11 +201,12 @@ function buildTemplateStats(urlData, ptMap, kpiKey, kpiDef) {
 
 // ── Scatter plot (multi-site) ─────────────────────────────────────
 
-function ScatterPlot({ allTemplateKeys, allSiteTemplateStats, kpiDef, hoveredUrl, onHover }) {
+function ScatterPlot({ allTemplateKeys, allSiteTemplateStats, kpiDef, hoveredUrl, hoveredSiteId, onHover }) {
+  const nSites = allSiteTemplateStats.length;
   const COL_W  = 130;
   const H      = 340;
   const PAD_T  = 16;
-  const PAD_B  = 52;
+  const PAD_B  = nSites > 1 ? 52 + nSites * 10 : 52;
   const PAD_L  = 48;
   const plotH  = H - PAD_T - PAD_B;
   const totalW = Math.max(PAD_L + allTemplateKeys.length * COL_W + 20, 400);
@@ -274,12 +275,14 @@ function ScatterPlot({ allTemplateKeys, allSiteTemplateStats, kpiDef, hoveredUrl
               {allSiteTemplateStats.map(({ site, tplStats }, si) => {
                 const tplData = tplStats.find(t => t.key === tpl.key);
                 if (!tplData || tplData.avg <= 0) return null;
-                const avgY    = yOf(tplData.avg);
-                const offset  = nSites > 1 ? (si - (nSites - 1) / 2) * 14 : 0;
+                const avgY   = yOf(tplData.avg);
+                const offset = nSites > 1 ? (si - (nSites - 1) / 2) * 14 : 0;
+                const dimmed = hoveredSiteId && hoveredSiteId !== site.id;
                 return (
                   <g key={site.id}>
                     <line x1={cx + offset - 12} x2={cx + offset + 12} y1={avgY} y2={avgY}
-                      stroke={site.color} strokeWidth={2.5} strokeLinecap="round" opacity={0.85} />
+                      stroke={site.color} strokeWidth={2.5} strokeLinecap="round"
+                      opacity={dimmed ? 0.1 : 0.85} />
                   </g>
                 );
               })}
@@ -288,36 +291,50 @@ function ScatterPlot({ allTemplateKeys, allSiteTemplateStats, kpiDef, hoveredUrl
               {allPages.map(({ p, site, isBest }, i) => {
                 const y      = yOf(p.val);
                 const isHov  = hoveredUrl === p.url;
+                const dimmed = hoveredSiteId && hoveredSiteId !== site.id;
                 const b      = Math.round(y / 7);
                 const peers  = buckets[b] || [];
                 const idx    = peers.indexOf(i);
                 const spread = (peers.length - 1) * 6;
                 const jx     = peers.length > 1 ? cx - spread / 2 + idx * 6 : cx;
                 const r      = isHov ? 7 : isBest ? 5.5 : 3.5;
+                const baseOp = isHov ? 1 : isBest ? 0.9 : 0.5;
                 return (
                   <g key={p.url + site.id} style={{ cursor: "pointer" }}
                     onMouseEnter={() => onHover(p, tpl.meta, site)}
                     onMouseLeave={() => onHover(null)}>
-                    {isBest && <circle cx={jx} cy={y} r={11} fill={site.color} opacity={0.13} />}
+                    {isBest && !dimmed && <circle cx={jx} cy={y} r={11} fill={site.color} opacity={0.13} />}
                     <circle cx={jx} cy={y} r={r}
                       fill={site.color}
-                      opacity={isHov ? 1 : isBest ? 0.9 : 0.5}
-                      stroke={isHov || isBest ? site.color : "none"}
+                      opacity={dimmed ? 0.08 : baseOp}
+                      stroke={!dimmed && (isHov || isBest) ? site.color : "none"}
                       strokeWidth={isHov ? 2 : 1.5}
                     />
                   </g>
                 );
               })}
 
-              {/* Label template */}
+              {/* Label template + comptage par site */}
               <text x={cx} y={H - PAD_B + 16} fontSize={11}
                 fill={tpl.meta.color} textAnchor="middle" fontWeight="700">
                 {tpl.meta.icon} {tpl.meta.label}
               </text>
-              <text x={cx} y={H - PAD_B + 28} fontSize={9}
-                fill={C.textLight} textAnchor="middle">
-                {allPages.length} pages
-              </text>
+              {nSites > 1
+                ? allSiteTemplateStats.map(({ site, tplStats }, si) => {
+                    const cnt = tplStats.find(t => t.key === tpl.key)?.withVal || 0;
+                    const dimmed = hoveredSiteId && hoveredSiteId !== site.id;
+                    return (
+                      <text key={site.id} x={cx} y={H - PAD_B + 28 + si * 10}
+                        fontSize={8} fill={site.color} textAnchor="middle" fontWeight="500"
+                        opacity={dimmed ? 0.3 : 1}>
+                        {site.label.slice(0, 10)}: {cnt}p
+                      </text>
+                    );
+                  })
+                : <text x={cx} y={H - PAD_B + 28} fontSize={9} fill={C.textLight} textAnchor="middle">
+                    {allPages.length} pages
+                  </text>
+              }
             </g>
           );
         })}
@@ -395,6 +412,7 @@ export default function TemplateAnalysis({ sites, sfData = {}, gscData = {}, gaD
   const [selectedSite, setSelectedSite] = useState(() => sites[0]?.id || "");
   const [selectedKpi,  setSelectedKpi]  = useState("bingCitations");
   const [hovered,      setHovered]      = useState(null);
+  const [hoveredSite,  setHoveredSite]  = useState(null); // site.id survolé dans la légende
   const [topN,         setTopN]         = useState(8);
   const [openRec,      setOpenRec]      = useState(null);   // url of open accordion
   const [refOverrides, setRefOverrides] = useState({});     // tplKey → url override
@@ -524,15 +542,6 @@ export default function TemplateAnalysis({ sites, sfData = {}, gscData = {}, gaD
 
       {/* ── Controls ── */}
       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-        {sites.length > 1 && sites.map(s => (
-          <button key={s.id} onClick={() => setSelectedSite(s.id)} style={{
-            padding: "5px 13px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer",
-            border: `2px solid ${s.color}`,
-            background: selectedSite === s.id ? s.color : "transparent",
-            color:      selectedSite === s.id ? "#fff" : s.color,
-            transition: "all 0.15s",
-          }}>{s.label}</button>
-        ))}
         <select value={selectedKpi} onChange={e => setSelectedKpi(e.target.value)} style={{
           padding: "6px 12px", border: `1px solid ${C.border}`, borderRadius: 8,
           fontSize: 12, color: C.text, background: C.white, cursor: "pointer",
@@ -590,30 +599,46 @@ export default function TemplateAnalysis({ sites, sfData = {}, gscData = {}, gaD
               </>}
             </div>
           </div>
-          <ScatterPlot
-            allTemplateKeys={allTemplateKeys}
-            allSiteTemplateStats={allSiteTemplateStats}
-            kpiDef={kpiDef}
-            hoveredUrl={hovered?.page?.url}
-            onHover={(page, tplMeta, site) => setHovered(page ? { page, tplMeta, site } : null)}
-          />
-          {/* Legend */}
-          {sites.length > 1 && (
-            <div style={{ display: "flex", gap: 18, marginTop: 14, justifyContent: "center", flexWrap: "wrap" }}>
-              {sites.map(s => (
-                <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <div style={{ width: 10, height: 10, borderRadius: "50%", background: s.color }} />
-                  <span style={{ fontSize: 11, color: C.textMid, fontWeight: 500 }}>{s.label}</span>
+          <div style={{ display: "flex", gap: 16, alignItems: "flex-start" }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <ScatterPlot
+                allTemplateKeys={allTemplateKeys}
+                allSiteTemplateStats={allSiteTemplateStats}
+                kpiDef={kpiDef}
+                hoveredUrl={hovered?.page?.url}
+                hoveredSiteId={hoveredSite}
+                onHover={(page, tplMeta, site) => setHovered(page ? { page, tplMeta, site } : null)}
+              />
+              {allTemplateKeys.length === 0 && (
+                <div style={{ textAlign: "center", padding: "20px 0", color: C.textLight, fontSize: 12, fontStyle: "italic" }}>
+                  Aucune page classifiée n'a de données pour <strong>{kpiDef.label}</strong> — essayez un autre KPI
                 </div>
-              ))}
-              <span style={{ fontSize: 10, color: C.textLight }}>· trait = moyenne · halo = best page</span>
+              )}
             </div>
-          )}
-          {allTemplateKeys.length === 0 && (
-            <div style={{ textAlign: "center", padding: "20px 0", color: C.textLight, fontSize: 12, fontStyle: "italic" }}>
-              Aucune page classifiée n'a de données pour <strong>{kpiDef.label}</strong> — essayez un autre KPI
-            </div>
-          )}
+
+            {/* Légende verticale à droite */}
+            {sites.length > 1 && (
+              <div style={{ flexShrink: 0, display: "flex", flexDirection: "column", gap: 6, paddingTop: 8 }}>
+                {sites.map(s => {
+                  const isActive = !hoveredSite || hoveredSite === s.id;
+                  return (
+                    <div
+                      key={s.id}
+                      onMouseEnter={() => setHoveredSite(s.id)}
+                      onMouseLeave={() => setHoveredSite(null)}
+                      style={{ display: "flex", alignItems: "center", gap: 7, cursor: "pointer", padding: "5px 10px", borderRadius: 8, border: `1px solid ${hoveredSite === s.id ? s.color + "55" : "transparent"}`, background: hoveredSite === s.id ? s.bg : "transparent", opacity: isActive ? 1 : 0.35, transition: "all 0.15s" }}
+                    >
+                      <div style={{ width: 10, height: 10, borderRadius: "50%", background: s.color, flexShrink: 0 }} />
+                      <span style={{ fontSize: 11, fontWeight: 600, color: s.color, whiteSpace: "nowrap" }}>{s.label}</span>
+                    </div>
+                  );
+                })}
+                <div style={{ marginTop: 8, fontSize: 9, color: C.textLight, lineHeight: 1.5 }}>
+                  — moy.<br />● best page
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Priorités d'optimisation */}
