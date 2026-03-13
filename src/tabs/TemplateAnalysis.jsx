@@ -234,16 +234,15 @@ export default function TemplateAnalysis({ sites, sfData, gscData, smData, pageT
   const [hovered,      setHovered]      = useState(null); // { page, tpl }
   const [topN,         setTopN]         = useState(5);
 
-  const site = sites.find(s => s.id === selectedSite) || sites[0];
-  if (!site) return null;
-
+  // ── All hooks BEFORE any early return ────────────────────────
+  const site   = sites.find(s => s.id === selectedSite) || sites[0];
+  const siteId = site?.id || "";
   const kpiDef = KPI_DEFS.find(k => k.key === selectedKpi) || KPI_DEFS[0];
-  const ptMap  = pageTypes[site.id] || {};
-  const classifiedCount = Object.keys(ptMap).filter(u => ptMap[u] && ptMap[u] !== "home").length;
+  const ptMap  = (site && pageTypes[siteId]) || {};
 
   const urlData = useMemo(
-    () => buildUrlData(sfData[site.id] || [], gscData[site.id] || [], smData[site.id] || []),
-    [site.id, sfData, gscData, smData] // eslint-disable-line react-hooks/exhaustive-deps
+    () => site ? buildUrlData(sfData[siteId] || [], gscData[siteId] || [], smData[siteId] || []) : {},
+    [siteId, sfData, gscData, smData] // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   const templateStats = useMemo(
@@ -259,7 +258,6 @@ export default function TemplateAnalysis({ sites, sfData, gscData, smData, pageT
       .slice(0, topN);
   }, [urlData, ptMap, selectedKpi, topN]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Pages with potential: gap >25% vs best of same template
   const recs = useMemo(() => {
     const out = [];
     templateStats.forEach(tpl => {
@@ -275,6 +273,10 @@ export default function TemplateAnalysis({ sites, sfData, gscData, smData, pageT
     return out.sort((a, b) => b.gap - a.gap).slice(0, 12);
   }, [templateStats, kpiDef]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Guards AFTER hooks ────────────────────────────────────────
+  if (!site) return null;
+
+  const classifiedCount = Object.keys(ptMap).filter(u => ptMap[u] && ptMap[u] !== "home").length;
   const hasData  = Object.keys(urlData).length > 0;
   const hasTpls  = classifiedCount > 0;
   const totalKpi = templateStats.reduce((s, t) => s + t.total, 0);
