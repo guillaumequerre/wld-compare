@@ -197,7 +197,6 @@ export default function App() {
       }));
     }
     // Load page types for all sites (use project's site list, not just those with imports)
-    const proj = setProjects.__proto__ ? null : null; // can't access state here, use latest keys + fallback
     const ptSiteIds = new Set([...Object.keys(latest)]);
     // Also get site IDs from the setProjects call above
     const ptUpdates = await Promise.all(
