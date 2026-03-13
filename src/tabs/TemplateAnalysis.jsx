@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { C, PAGE_TYPES, PAGE_TYPE_MAP } from "../lib/constants";
+import { C, PAGE_TYPE_MAP } from "../lib/constants";
 
 // ── Helpers ──────────────────────────────────────────────────────
 
