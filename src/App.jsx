@@ -13,6 +13,7 @@ import SitesTab from "./tabs/SitesTab";
 import AllProjectsTab from "./tabs/AllProjectsTab";
 import SemrushTab from "./tabs/SemrushTab";
 import EvolutionTab from "./tabs/EvolutionTab";
+import AuditGeoTab from "./tabs/AuditGeoTab";
 
 const INITIAL_PROJECT = makeInitialProject();
 const NAV_TABS = [
@@ -27,6 +28,7 @@ const NAV_TABS = [
 const BURGER_TABS = [
   { key: "matrix",      label: "Matrice"            },
   { key: "semrush",     label: "📊 Semrush"         },
+  { key: "auditgeo",   label: "📋 Audit GEO"        },
   { key: "allprojects", label: "◈ Tous les projets" },
 ];
 
@@ -611,6 +613,19 @@ export default function App() {
               currentProjectId={currentProjectId}
             />
           )}
+          {tab === "auditgeo" && (
+            <AuditGeoTab
+              metrics={metrics}
+              corrMatrix={filteredCorrMatrix}
+              resultVals={resultVals}
+              analysis={analysis}
+              sites={sites}
+              sfData={sfData}
+              bingData={bingData}
+              pageTypes={pageTypes}
+            />
+          )}
+
           {tab === "allprojects" && (
             <AllProjectsTab
               projects={projects}
