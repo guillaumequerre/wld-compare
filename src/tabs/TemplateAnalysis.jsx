@@ -202,14 +202,13 @@ function buildTemplateStats(urlData, ptMap, kpiKey, kpiDef) {
 // ── Scatter plot (multi-site) ─────────────────────────────────────
 
 function ScatterPlot({ allTemplateKeys, allSiteTemplateStats, kpiDef, hoveredUrl, onHover }) {
-  const nSites  = allSiteTemplateStats.length;
-  const COL_W   = Math.max(110, 50 + nSites * 44); // wider when more sites
-  const H       = 340;
-  const PAD_T   = 16;
-  const PAD_B   = 60;
-  const PAD_L   = 48;
-  const plotH   = H - PAD_T - PAD_B;
-  const totalW  = Math.max(PAD_L + allTemplateKeys.length * COL_W + 20, 400);
+  const COL_W  = 130;
+  const H      = 340;
+  const PAD_T  = 16;
+  const PAD_B  = 52;
+  const PAD_L  = 48;
+  const plotH  = H - PAD_T - PAD_B;
+  const totalW = Math.max(PAD_L + allTemplateKeys.length * COL_W + 20, 400);
 
   const allVals = allSiteTemplateStats.flatMap(({ tplStats }) =>
     tplStats.flatMap(t => t.pages.map(p => p.val))
@@ -244,99 +243,81 @@ function ScatterPlot({ allTemplateKeys, allSiteTemplateStats, kpiDef, hoveredUrl
           </g>
         ))}
 
-        {/* Template columns */}
+        {/* Template columns — tous les sites partagent la même abscisse */}
         {allTemplateKeys.map((tpl, ci) => {
-          const colX   = PAD_L + ci * COL_W;
-          const subW   = COL_W / nSites;
+          const cx = PAD_L + ci * COL_W + COL_W / 2;
+
+          // Fusionner toutes les pages de tous les sites pour ce template (jitter commun)
+          const allPages = allSiteTemplateStats.flatMap(({ site, tplStats }) => {
+            const tplData = tplStats.find(t => t.key === tpl.key);
+            return tplData ? tplData.pages.map(p => ({ p, site, isBest: tplData.pages[0] === p })) : [];
+          }).filter(({ p }) => p.val > 0);
+
+          // Jitter commun par bucket Y
+          const buckets = {};
+          allPages.forEach((entry, i) => {
+            const b = Math.round(yOf(entry.p.val) / 7);
+            if (!buckets[b]) buckets[b] = [];
+            buckets[b].push(i);
+          });
+
+          // Lignes de moyenne par site (légèrement décalées)
+          const nSites = allSiteTemplateStats.length;
 
           return (
             <g key={tpl.key}>
-              {/* Column left border */}
-              <line x1={colX} x2={colX} y1={PAD_T} y2={PAD_T + plotH}
-                stroke={C.border} strokeWidth={1} strokeDasharray="4,3" opacity={0.5} />
+              {/* Séparateur de colonne */}
+              <line x1={cx - COL_W / 2} x2={cx - COL_W / 2} y1={PAD_T} y2={PAD_T + plotH}
+                stroke={C.border} strokeWidth={1} strokeDasharray="4,3" opacity={0.4} />
 
-              {/* Template label */}
-              <text x={colX + COL_W / 2} y={H - PAD_B + 16}
-                fontSize={11} fill={tpl.meta.color} textAnchor="middle" fontWeight="700">
-                {tpl.meta.icon} {tpl.meta.label}
-              </text>
-
-              {/* Per-site sub-columns */}
+              {/* Lignes de moyenne par site */}
               {allSiteTemplateStats.map(({ site, tplStats }, si) => {
                 const tplData = tplStats.find(t => t.key === tpl.key);
-                if (!tplData || !tplData.pages.length) return null;
-
-                const subCx = colX + si * subW + subW / 2;
-                const avgY  = tplData.avg > 0 ? yOf(tplData.avg) : null;
-
-                // Jitter within sub-column
-                const buckets = {};
-                tplData.pages.forEach((p, pi) => {
-                  if (!p.val) return;
-                  const b = Math.round(yOf(p.val) / 7);
-                  if (!buckets[b]) buckets[b] = [];
-                  buckets[b].push(pi);
-                });
-
+                if (!tplData || tplData.avg <= 0) return null;
+                const avgY    = yOf(tplData.avg);
+                const offset  = nSites > 1 ? (si - (nSites - 1) / 2) * 14 : 0;
                 return (
                   <g key={site.id}>
-                    {/* Sub-column separator (not for first site) */}
-                    {si > 0 && (
-                      <line x1={colX + si * subW} x2={colX + si * subW}
-                        y1={PAD_T} y2={PAD_T + plotH}
-                        stroke={site.color + "22"} strokeWidth={1} />
-                    )}
-
-                    {/* Average line */}
-                    {avgY !== null && (
-                      <g>
-                        <line x1={subCx - 14} x2={subCx + 14} y1={avgY} y2={avgY}
-                          stroke={site.color} strokeWidth={2.5} strokeLinecap="round" opacity={0.8} />
-                        <text x={subCx + 17} y={avgY + 3.5} fontSize={8} fill={site.color} opacity={0.85}>
-                          ø{kpiDef.fmt(tplData.avg)}
-                        </text>
-                      </g>
-                    )}
-
-                    {/* Dots */}
-                    {tplData.pages.map((p, pi) => {
-                      if (!p.val) return null;
-                      const y      = yOf(p.val);
-                      const isBest = pi === 0;
-                      const isHov  = hoveredUrl === p.url;
-                      const b      = Math.round(y / 7);
-                      const peers  = buckets[b] || [];
-                      const idx    = peers.indexOf(pi);
-                      const spread = (peers.length - 1) * 5;
-                      const jx     = peers.length > 1 ? subCx - spread / 2 + idx * 5 : subCx;
-                      const r      = isHov ? 7 : isBest ? 5.5 : 3.5;
-                      return (
-                        <g key={p.url} style={{ cursor: "pointer" }}
-                          onMouseEnter={() => onHover(p, tpl.meta, site)}
-                          onMouseLeave={() => onHover(null)}>
-                          {isBest && <circle cx={jx} cy={y} r={11} fill={site.color} opacity={0.12} />}
-                          <circle cx={jx} cy={y} r={r}
-                            fill={site.color}
-                            opacity={isHov ? 1 : isBest ? 0.9 : 0.5}
-                            stroke={isHov || isBest ? site.color : "none"}
-                            strokeWidth={isHov ? 2 : 1.5}
-                          />
-                        </g>
-                      );
-                    })}
-
-                    {/* Site label under template label */}
-                    <text x={subCx} y={H - PAD_B + 29} fontSize={8}
-                      fill={site.color} textAnchor="middle" fontWeight="600" opacity={0.85}>
-                      {site.label.slice(0, 10)}
-                    </text>
-                    <text x={subCx} y={H - PAD_B + 41} fontSize={8}
-                      fill={C.textLight} textAnchor="middle">
-                      {tplData.withVal}p
-                    </text>
+                    <line x1={cx + offset - 12} x2={cx + offset + 12} y1={avgY} y2={avgY}
+                      stroke={site.color} strokeWidth={2.5} strokeLinecap="round" opacity={0.85} />
                   </g>
                 );
               })}
+
+              {/* Points (tous sites, jitter commun) */}
+              {allPages.map(({ p, site, isBest }, i) => {
+                const y      = yOf(p.val);
+                const isHov  = hoveredUrl === p.url;
+                const b      = Math.round(y / 7);
+                const peers  = buckets[b] || [];
+                const idx    = peers.indexOf(i);
+                const spread = (peers.length - 1) * 6;
+                const jx     = peers.length > 1 ? cx - spread / 2 + idx * 6 : cx;
+                const r      = isHov ? 7 : isBest ? 5.5 : 3.5;
+                return (
+                  <g key={p.url + site.id} style={{ cursor: "pointer" }}
+                    onMouseEnter={() => onHover(p, tpl.meta, site)}
+                    onMouseLeave={() => onHover(null)}>
+                    {isBest && <circle cx={jx} cy={y} r={11} fill={site.color} opacity={0.13} />}
+                    <circle cx={jx} cy={y} r={r}
+                      fill={site.color}
+                      opacity={isHov ? 1 : isBest ? 0.9 : 0.5}
+                      stroke={isHov || isBest ? site.color : "none"}
+                      strokeWidth={isHov ? 2 : 1.5}
+                    />
+                  </g>
+                );
+              })}
+
+              {/* Label template */}
+              <text x={cx} y={H - PAD_B + 16} fontSize={11}
+                fill={tpl.meta.color} textAnchor="middle" fontWeight="700">
+                {tpl.meta.icon} {tpl.meta.label}
+              </text>
+              <text x={cx} y={H - PAD_B + 28} fontSize={9}
+                fill={C.textLight} textAnchor="middle">
+                {allPages.length} pages
+              </text>
             </g>
           );
         })}
