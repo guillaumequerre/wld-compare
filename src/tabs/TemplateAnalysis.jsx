@@ -409,7 +409,7 @@ const ACTION_ICONS = { schema: "🔖", words: "📝", inlinks: "🔗", flesch: "
 // ── Main ──────────────────────────────────────────────────────────
 
 export default function TemplateAnalysis({ sites, sfData = {}, gscData = {}, gaData = {}, bingData = {}, smData = {}, pageTypes = {} }) {
-  const [selectedSite, setSelectedSite] = useState(() => sites[0]?.id || "");
+  const [selectedSite] = useState(() => sites[0]?.id || "");
   const [selectedKpi,  setSelectedKpi]  = useState("bingCitations");
   const [hovered,      setHovered]      = useState(null);
   const [hoveredSite,  setHoveredSite]  = useState(null); // site.id survolé dans la légende
