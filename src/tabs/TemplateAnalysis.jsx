@@ -199,18 +199,22 @@ function buildTemplateStats(urlData, ptMap, kpiKey, kpiDef) {
     .sort((a, b) => kpiDef.higher ? b.total - a.total : a.avg - b.avg);
 }
 
-// ── Scatter plot ──────────────────────────────────────────────────
+// ── Scatter plot (multi-site) ─────────────────────────────────────
 
-function ScatterPlot({ templateStats, kpiDef, hoveredUrl, onHover }) {
-  const COL_W   = 130;
-  const H       = 320;
+function ScatterPlot({ allTemplateKeys, allSiteTemplateStats, kpiDef, hoveredUrl, onHover }) {
+  const nSites  = allSiteTemplateStats.length;
+  const COL_W   = Math.max(110, 50 + nSites * 44); // wider when more sites
+  const H       = 340;
   const PAD_T   = 16;
-  const PAD_B   = 56;
+  const PAD_B   = 60;
   const PAD_L   = 48;
   const plotH   = H - PAD_T - PAD_B;
-  const totalW  = Math.max(PAD_L + templateStats.length * COL_W + 20, 400);
+  const totalW  = Math.max(PAD_L + allTemplateKeys.length * COL_W + 20, 400);
 
-  const allVals = templateStats.flatMap(t => t.pages.map(p => p.val)).filter(v => v > 0);
+  const allVals = allSiteTemplateStats.flatMap(({ tplStats }) =>
+    tplStats.flatMap(t => t.pages.map(p => p.val))
+  ).filter(v => v > 0);
+
   if (!allVals.length) return (
     <div style={{ padding: "40px 0", textAlign: "center", color: C.textLight, fontSize: 12, fontStyle: "italic" }}>
       Aucune donnée disponible pour ce KPI sur les pages classifiées
@@ -218,7 +222,7 @@ function ScatterPlot({ templateStats, kpiDef, hoveredUrl, onHover }) {
   );
 
   const maxVal = Math.max(...allVals);
-  const yOf = (val) => PAD_T + plotH * (1 - Math.min(Math.max(kpiDef.higher ? val / maxVal : (maxVal - val) / maxVal, 0), 1));
+  const yOf = val => PAD_T + plotH * (1 - Math.min(Math.max(kpiDef.higher ? val / maxVal : (maxVal - val) / maxVal, 0), 1));
 
   const ticks = [0, 0.25, 0.5, 0.75, 1].map(pct => ({
     y:   PAD_T + plotH * (1 - pct),
@@ -228,6 +232,7 @@ function ScatterPlot({ templateStats, kpiDef, hoveredUrl, onHover }) {
   return (
     <div style={{ overflowX: "auto" }}>
       <svg width={totalW} height={H} style={{ display: "block" }}>
+        {/* Y-axis grid + ticks */}
         {ticks.map((t, i) => (
           <g key={i}>
             <line x1={PAD_L} x2={totalW - 10} y1={t.y} y2={t.y}
@@ -239,69 +244,99 @@ function ScatterPlot({ templateStats, kpiDef, hoveredUrl, onHover }) {
           </g>
         ))}
 
-        {templateStats.map((tpl, ci) => {
-          const cx   = PAD_L + ci * COL_W + COL_W / 2;
-          const avgY = tpl.avg > 0 ? yOf(tpl.avg) : null;
-
-          // Bucket pages by Y to jitter overlapping points
-          const buckets = {};
-          tpl.pages.forEach((p, pi) => {
-            if (!p.val) return;
-            const b = Math.round(yOf(p.val) / 8);
-            if (!buckets[b]) buckets[b] = [];
-            buckets[b].push(pi);
-          });
+        {/* Template columns */}
+        {allTemplateKeys.map((tpl, ci) => {
+          const colX   = PAD_L + ci * COL_W;
+          const subW   = COL_W / nSites;
 
           return (
             <g key={tpl.key}>
-              <line x1={cx} x2={cx} y1={PAD_T} y2={PAD_T + plotH}
-                stroke={tpl.meta.color + "22"} strokeWidth={1} />
+              {/* Column left border */}
+              <line x1={colX} x2={colX} y1={PAD_T} y2={PAD_T + plotH}
+                stroke={C.border} strokeWidth={1} strokeDasharray="4,3" opacity={0.5} />
 
-              {avgY !== null && (
-                <g>
-                  <line x1={cx - 20} x2={cx + 20} y1={avgY} y2={avgY}
-                    stroke={tpl.meta.color} strokeWidth={2.5} strokeLinecap="round" opacity={0.65} />
-                  <text x={cx + 24} y={avgY + 3.5} fontSize={9} fill={tpl.meta.color} opacity={0.8}>
-                    ø {kpiDef.fmt(tpl.avg)}
-                  </text>
-                </g>
-              )}
+              {/* Template label */}
+              <text x={colX + COL_W / 2} y={H - PAD_B + 16}
+                fontSize={11} fill={tpl.meta.color} textAnchor="middle" fontWeight="700">
+                {tpl.meta.icon} {tpl.meta.label}
+              </text>
 
-              {tpl.pages.map((p, pi) => {
-                if (!p.val) return null;
-                const y      = yOf(p.val);
-                const isBest = pi === 0;
-                const isHov  = hoveredUrl === p.url;
-                const b      = Math.round(y / 8);
-                const peers  = buckets[b] || [];
-                const idx    = peers.indexOf(pi);
-                const spread = (peers.length - 1) * 7;
-                const jx     = peers.length > 1 ? cx - spread / 2 + idx * 7 : cx;
-                const r      = isHov ? 7 : isBest ? 6 : 4;
+              {/* Per-site sub-columns */}
+              {allSiteTemplateStats.map(({ site, tplStats }, si) => {
+                const tplData = tplStats.find(t => t.key === tpl.key);
+                if (!tplData || !tplData.pages.length) return null;
+
+                const subCx = colX + si * subW + subW / 2;
+                const avgY  = tplData.avg > 0 ? yOf(tplData.avg) : null;
+
+                // Jitter within sub-column
+                const buckets = {};
+                tplData.pages.forEach((p, pi) => {
+                  if (!p.val) return;
+                  const b = Math.round(yOf(p.val) / 7);
+                  if (!buckets[b]) buckets[b] = [];
+                  buckets[b].push(pi);
+                });
+
                 return (
-                  <g key={p.url} style={{ cursor: "pointer" }}
-                    onMouseEnter={() => onHover(p, tpl)}
-                    onMouseLeave={() => onHover(null)}>
-                    {isBest && <circle cx={jx} cy={y} r={12} fill={tpl.meta.color} opacity={0.12} />}
-                    <circle cx={jx} cy={y} r={r}
-                      fill={tpl.meta.color}
-                      opacity={isHov ? 1 : isBest ? 0.88 : 0.45}
-                      stroke={isHov || isBest ? tpl.meta.color : "none"}
-                      strokeWidth={isHov ? 2.5 : 1.5}
-                    />
+                  <g key={site.id}>
+                    {/* Sub-column separator (not for first site) */}
+                    {si > 0 && (
+                      <line x1={colX + si * subW} x2={colX + si * subW}
+                        y1={PAD_T} y2={PAD_T + plotH}
+                        stroke={site.color + "22"} strokeWidth={1} />
+                    )}
+
+                    {/* Average line */}
+                    {avgY !== null && (
+                      <g>
+                        <line x1={subCx - 14} x2={subCx + 14} y1={avgY} y2={avgY}
+                          stroke={site.color} strokeWidth={2.5} strokeLinecap="round" opacity={0.8} />
+                        <text x={subCx + 17} y={avgY + 3.5} fontSize={8} fill={site.color} opacity={0.85}>
+                          ø{kpiDef.fmt(tplData.avg)}
+                        </text>
+                      </g>
+                    )}
+
+                    {/* Dots */}
+                    {tplData.pages.map((p, pi) => {
+                      if (!p.val) return null;
+                      const y      = yOf(p.val);
+                      const isBest = pi === 0;
+                      const isHov  = hoveredUrl === p.url;
+                      const b      = Math.round(y / 7);
+                      const peers  = buckets[b] || [];
+                      const idx    = peers.indexOf(pi);
+                      const spread = (peers.length - 1) * 5;
+                      const jx     = peers.length > 1 ? subCx - spread / 2 + idx * 5 : subCx;
+                      const r      = isHov ? 7 : isBest ? 5.5 : 3.5;
+                      return (
+                        <g key={p.url} style={{ cursor: "pointer" }}
+                          onMouseEnter={() => onHover(p, tpl.meta, site)}
+                          onMouseLeave={() => onHover(null)}>
+                          {isBest && <circle cx={jx} cy={y} r={11} fill={site.color} opacity={0.12} />}
+                          <circle cx={jx} cy={y} r={r}
+                            fill={site.color}
+                            opacity={isHov ? 1 : isBest ? 0.9 : 0.5}
+                            stroke={isHov || isBest ? site.color : "none"}
+                            strokeWidth={isHov ? 2 : 1.5}
+                          />
+                        </g>
+                      );
+                    })}
+
+                    {/* Site label under template label */}
+                    <text x={subCx} y={H - PAD_B + 29} fontSize={8}
+                      fill={site.color} textAnchor="middle" fontWeight="600" opacity={0.85}>
+                      {site.label.slice(0, 10)}
+                    </text>
+                    <text x={subCx} y={H - PAD_B + 41} fontSize={8}
+                      fill={C.textLight} textAnchor="middle">
+                      {tplData.withVal}p
+                    </text>
                   </g>
                 );
               })}
-
-              <text x={cx} y={H - PAD_B + 16} fontSize={11} fill={tpl.meta.color} textAnchor="middle" fontWeight="700">
-                {tpl.meta.icon} {tpl.meta.label}
-              </text>
-              <text x={cx} y={H - PAD_B + 29} fontSize={9} fill={C.textLight} textAnchor="middle">
-                {tpl.withVal} / {tpl.pages.length} pages
-              </text>
-              <text x={cx} y={H - PAD_B + 41} fontSize={9} fill={tpl.meta.color} textAnchor="middle" fontWeight="600">
-                Σ {kpiDef.fmt(tpl.total)}
-              </text>
             </g>
           );
         })}
@@ -322,11 +357,62 @@ function EmptyState({ icon, title, sub }) {
   );
 }
 
+// ── Per-page actionable recommendations ──────────────────────────
+
+function generatePageActions(pageSfRow, refSfRow) {
+  const actions = [];
+  if (!pageSfRow && !refSfRow) return actions;
+
+  // Schema
+  const pageSchema = !!(pageSfRow?.["schema type"] || pageSfRow?.["structured data 1"] || pageSfRow?.["schema 1"]);
+  const refSchema  = !!(refSfRow?.["schema type"]  || refSfRow?.["structured data 1"]  || refSfRow?.["schema 1"]);
+  if (!pageSchema && refSchema) {
+    actions.push({ type: "schema", label: "Ajouter du balisage Schema.org", text: "Ajouter du Schema.org (présent sur la référence)" });
+  }
+
+  // Words
+  const pw = pageSfRow ? safeNum(pageSfRow["nombre de mots"] || pageSfRow["word count"] || 0) : 0;
+  const rw = refSfRow  ? safeNum(refSfRow["nombre de mots"]  || refSfRow["word count"]  || 0) : 0;
+  if (rw > 0 && pw > 0 && pw < rw * 0.75) {
+    actions.push({ type: "words", label: "Enrichir le contenu (volume de mots)", text: `Enrichir le contenu : ${pw} mots → viser ~${Math.round(rw * 0.9)} mots` });
+  }
+
+  // Inlinks
+  const pi = pageSfRow ? safeNum(pageSfRow["liens entrants uniques"] || 0) : 0;
+  const ri = refSfRow  ? safeNum(refSfRow["liens entrants uniques"]  || 0) : 0;
+  if (ri > 0 && pi < ri * 0.5) {
+    actions.push({ type: "inlinks", label: "Renforcer le maillage interne", text: `Maillage interne : ${Math.round(pi)} lien${pi > 1 ? "s" : ""} → viser ${Math.round(ri * 0.8)} (réf. : ${Math.round(ri)})` });
+  }
+
+  // Flesch
+  const pf = pageSfRow ? safeNum(pageSfRow["score lisibilité"] || pageSfRow["readability"] || 0) : 0;
+  const rf = refSfRow  ? safeNum(refSfRow["score lisibilité"]  || refSfRow["readability"]  || 0) : 0;
+  if (rf > 0 && pf > 0 && pf < rf - 15) {
+    actions.push({ type: "flesch", label: "Améliorer la lisibilité (score Flesch)", text: `Simplifier la rédaction : Flesch ${Math.round(pf)} → viser ${Math.round(rf)}` });
+  }
+
+  // Title length
+  const ptl = pageSfRow ? (safeNum(pageSfRow["longueur du title 1"] || pageSfRow["title 1 length"] || 0) || (pageSfRow["title 1"] || "").length) : 0;
+  if (ptl > 0 && ptl < 40) {
+    actions.push({ type: "title", label: "Optimiser la balise title (trop courte)", text: `Allonger le title : ${ptl} car. → viser 50–65 car.` });
+  }
+
+  // Meta description
+  const pm = pageSfRow ? (safeNum(pageSfRow["longueur de la meta description 1"] || pageSfRow["meta description 1 length"] || 0) || (pageSfRow["meta description 1"] || "").length) : 0;
+  if (pm > 0 && pm < 100) {
+    actions.push({ type: "meta", label: "Compléter la meta description", text: `Meta description : ${pm} car. → viser 140–160 car.` });
+  }
+
+  return actions;
+}
+
+const ACTION_ICONS = { schema: "🔖", words: "📝", inlinks: "🔗", flesch: "📖", title: "🏷️", meta: "📋" };
+
 // ── Main ──────────────────────────────────────────────────────────
 
 export default function TemplateAnalysis({ sites, sfData = {}, gscData = {}, gaData = {}, bingData = {}, smData = {}, pageTypes = {} }) {
   const [selectedSite, setSelectedSite] = useState(() => sites[0]?.id || "");
-  const [selectedKpi,  setSelectedKpi]  = useState("gscClicks");
+  const [selectedKpi,  setSelectedKpi]  = useState("bingCitations");
   const [hovered,      setHovered]      = useState(null);
   const [topN,         setTopN]         = useState(8);
   const [openRec,      setOpenRec]      = useState(null);   // url of open accordion
@@ -392,6 +478,49 @@ export default function TemplateAnalysis({ sites, sfData = {}, gscData = {}, gaD
     return m;
   }, [siteId, sfData]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Multi-site data for scatter ──
+  const allSiteTemplateStats = useMemo(() => {
+    return sites.map(s => {
+      const sId   = s.id;
+      const ptMap = pageTypes[sId] || {};
+      const ud    = buildUrlData(
+        sfData[sId] || [], gscData[sId] || [],
+        gaData[sId] || [], bingData[sId] || [], smData[sId] || [],
+      );
+      return { site: s, tplStats: buildTemplateStats(ud, ptMap, selectedKpi, kpiDef) };
+    });
+  }, [sites, sfData, gscData, gaData, bingData, smData, pageTypes, selectedKpi]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const allTemplateKeys = useMemo(() => {
+    const seen = new Set();
+    const out  = [];
+    allSiteTemplateStats.forEach(({ tplStats }) => {
+      tplStats.forEach(t => {
+        if (!seen.has(t.key)) { seen.add(t.key); out.push({ key: t.key, meta: t.meta }); }
+      });
+    });
+    // Sort by total KPI across all sites descending
+    return out.sort((a, b) => {
+      const totA = allSiteTemplateStats.reduce((s, { tplStats }) => s + (tplStats.find(t => t.key === a.key)?.total || 0), 0);
+      const totB = allSiteTemplateStats.reduce((s, { tplStats }) => s + (tplStats.find(t => t.key === b.key)?.total || 0), 0);
+      return totB - totA;
+    });
+  }, [allSiteTemplateStats]);
+
+  // ── Aggregated actions across all recs ──
+  const aggregatedActions = useMemo(() => {
+    const counts = {};
+    recs.forEach(r => {
+      const pageSfRow = sfByUrl[r.page.url] || sfByUrl[getPath(r.page.url)];
+      const refSfRow  = sfByUrl[r.best.url]  || sfByUrl[getPath(r.best.url)];
+      generatePageActions(pageSfRow, refSfRow).forEach(a => {
+        if (!counts[a.type]) counts[a.type] = { type: a.type, label: a.label, count: 0 };
+        counts[a.type].count++;
+      });
+    });
+    return Object.values(counts).sort((a, b) => b.count - a.count);
+  }, [recs, sfByUrl]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── Guards after hooks ──
   if (!site) return null;
 
@@ -440,56 +569,106 @@ export default function TemplateAnalysis({ sites, sfData = {}, gscData = {}, gaD
         </span>
       </div>
 
-      {/* ── Scatter plot ── */}
-      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: "20px 24px" }}>
-        {/* Header — fixed height, tooltip absolute so it never pushes layout */}
-        <div style={{ position: "relative", marginBottom: 16, minHeight: 36 }}>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>
-              Positionnement par template — {kpiDef.label} <span style={{ fontWeight: 400, color: C.textLight, fontSize: 11 }}>({kpiDef.src})</span>
+      {/* ── Scatter plot + Priorités d'optimisation ── */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 320px", gap: 20, alignItems: "start" }}>
+
+        {/* Scatter plot */}
+        <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: "20px 24px" }}>
+          <div style={{ position: "relative", marginBottom: 16, minHeight: 36 }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>
+                Positionnement par template — {kpiDef.label} <span style={{ fontWeight: 400, color: C.textLight, fontSize: 11 }}>({kpiDef.src})</span>
+              </div>
+              <div style={{ fontSize: 11, color: C.textLight, marginTop: 3 }}>
+                1 point = 1 page · trait = moyenne · halo = best page · {kpiDef.higher ? "↑ haut = mieux" : "↑ bas = mieux (position)"}
+              </div>
             </div>
-            <div style={{ fontSize: 11, color: C.textLight, marginTop: 3 }}>
-              1 point = 1 page · trait = moyenne · halo = best page · {kpiDef.higher ? "↑ haut = mieux" : "↑ bas = mieux (position)"}
+            <div style={{
+              position: "absolute", top: 0, right: 0,
+              opacity: hovered ? 1 : 0, pointerEvents: "none", transition: "opacity 0.12s",
+              background: hovered ? hovered.site.bg : C.bg,
+              border: `1px solid ${hovered ? hovered.site.color + "55" : C.border}`,
+              borderRadius: 9, padding: "10px 14px", width: 220,
+            }}>
+              {hovered && <>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                  <div style={{ width: 8, height: 8, borderRadius: "50%", background: hovered.site.color, flexShrink: 0 }} />
+                  <span style={{ fontSize: 10, fontWeight: 700, color: hovered.site.color, textTransform: "uppercase", letterSpacing: 0.6 }}>{hovered.site.label}</span>
+                  <span style={{ fontSize: 10, color: C.textLight }}>· {hovered.tplMeta.icon} {hovered.tplMeta.label}</span>
+                </div>
+                <div style={{ fontSize: 11, color: C.text, wordBreak: "break-all", marginBottom: 5 }}>
+                  {getPath(hovered.page.url)}
+                </div>
+                <div style={{ fontSize: 16, fontWeight: 800, color: hovered.site.color }}>
+                  {kpiDef.fmt(hovered.page.val)}
+                  <span style={{ fontSize: 11, fontWeight: 400, color: C.textLight, marginLeft: 5 }}>{kpiDef.label}</span>
+                </div>
+                {hovered.page.data.title && (
+                  <div style={{ fontSize: 10, color: C.textLight, marginTop: 4, fontStyle: "italic" }}>{hovered.page.data.title.slice(0, 65)}</div>
+                )}
+              </>}
             </div>
           </div>
-          {/* Tooltip — absolute, right-aligned, zero layout impact */}
-          <div style={{
-            position: "absolute", top: 0, right: 0,
-            opacity: hovered ? 1 : 0,
-            pointerEvents: "none",
-            transition: "opacity 0.12s",
-            background: hovered ? hovered.tpl.meta.bg : C.bg,
-            border: `1px solid ${hovered ? hovered.tpl.meta.color + "44" : C.border}`,
-            borderRadius: 9, padding: "10px 14px", width: 240,
-          }}>
-            {hovered && <>
-              <div style={{ fontSize: 10, fontWeight: 700, color: hovered.tpl.meta.color, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 3 }}>
-                {hovered.tpl.meta.icon} {hovered.tpl.meta.label}
-              </div>
-              <div style={{ fontSize: 11, color: C.text, wordBreak: "break-all", marginBottom: 5 }}>
-                {getPath(hovered.page.url)}
-              </div>
-              <div style={{ fontSize: 16, fontWeight: 800, color: hovered.tpl.meta.color }}>
-                {kpiDef.fmt(hovered.page.val)}
-                <span style={{ fontSize: 11, fontWeight: 400, color: C.textLight, marginLeft: 5 }}>{kpiDef.label}</span>
-              </div>
-              {hovered.page.data.title && (
-                <div style={{ fontSize: 10, color: C.textLight, marginTop: 4, fontStyle: "italic" }}>{hovered.page.data.title.slice(0, 65)}</div>
-              )}
-            </>}
-          </div>
+          <ScatterPlot
+            allTemplateKeys={allTemplateKeys}
+            allSiteTemplateStats={allSiteTemplateStats}
+            kpiDef={kpiDef}
+            hoveredUrl={hovered?.page?.url}
+            onHover={(page, tplMeta, site) => setHovered(page ? { page, tplMeta, site } : null)}
+          />
+          {/* Legend */}
+          {sites.length > 1 && (
+            <div style={{ display: "flex", gap: 18, marginTop: 14, justifyContent: "center", flexWrap: "wrap" }}>
+              {sites.map(s => (
+                <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <div style={{ width: 10, height: 10, borderRadius: "50%", background: s.color }} />
+                  <span style={{ fontSize: 11, color: C.textMid, fontWeight: 500 }}>{s.label}</span>
+                </div>
+              ))}
+              <span style={{ fontSize: 10, color: C.textLight }}>· trait = moyenne · halo = best page</span>
+            </div>
+          )}
+          {allTemplateKeys.length === 0 && (
+            <div style={{ textAlign: "center", padding: "20px 0", color: C.textLight, fontSize: 12, fontStyle: "italic" }}>
+              Aucune page classifiée n'a de données pour <strong>{kpiDef.label}</strong> — essayez un autre KPI
+            </div>
+          )}
         </div>
-        <ScatterPlot
-          templateStats={templateStats}
-          kpiDef={kpiDef}
-          hoveredUrl={hovered?.page?.url}
-          onHover={(page, tpl) => setHovered(page ? { page, tpl } : null)}
-        />
-        {templateStats.length === 0 && (
-          <div style={{ textAlign: "center", padding: "20px 0", color: C.textLight, fontSize: 12, fontStyle: "italic" }}>
-            Aucune page classifiée n'a de données pour <strong>{kpiDef.label}</strong> — essayez un autre KPI
+
+        {/* Priorités d'optimisation */}
+        <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: "20px 20px" }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 2 }}>🎯 Priorités d'optimisation</div>
+          <div style={{ fontSize: 11, color: C.textLight, marginBottom: 16 }}>
+            {recs.length > 0
+              ? `Classées par fréquence sur ${recs.length} pages à potentiel`
+              : "Aucune page à potentiel détectée pour ce KPI"}
           </div>
-        )}
+          {aggregatedActions.length === 0 && (
+            <div style={{ fontSize: 12, color: C.textLight, fontStyle: "italic", textAlign: "center", padding: "20px 0" }}>
+              Importez les données SF pour générer les recommandations
+            </div>
+          )}
+          {aggregatedActions.map((a, i) => {
+            const pct = aggregatedActions[0]?.count ? Math.round(a.count / aggregatedActions[0].count * 100) : 0;
+            const color = i === 0 ? C.red : i === 1 ? C.amber : i <= 3 ? C.blue : C.textLight;
+            return (
+              <div key={a.type} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 0", borderBottom: i < aggregatedActions.length - 1 ? `1px solid ${C.borderLight}` : "none" }}>
+                <span style={{ fontSize: 18, fontWeight: 900, color: C.textLight, minWidth: 24, lineHeight: 1.3 }}>{i + 1}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: C.text, lineHeight: 1.35, marginBottom: 4 }}>
+                    {ACTION_ICONS[a.type] || "•"} {a.label}
+                  </div>
+                  <div style={{ height: 4, background: C.bg, borderRadius: 2, overflow: "hidden" }}>
+                    <div style={{ height: "100%", width: `${pct}%`, background: color, borderRadius: 2, transition: "width 0.4s" }} />
+                  </div>
+                </div>
+                <span style={{ fontSize: 11, fontWeight: 700, color, background: `${color}18`, border: `1px solid ${color}33`, padding: "2px 8px", borderRadius: 20, flexShrink: 0 }}>
+                  ×{a.count}
+                </span>
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       {/* ── Template ranking + Top pages ── */}
@@ -708,6 +887,25 @@ export default function TemplateAnalysis({ sites, sfData = {}, gscData = {}, gaD
                                   <div style={{ fontSize: 10, color: "#DC2626" }}>potentiel</div>
                                 </div>
                               </div>
+
+                              {/* Actions recommandées */}
+                              {(() => {
+                                const actions = generatePageActions(pageSfRow, refSfRow);
+                                if (!actions.length) return null;
+                                return (
+                                  <div style={{ marginBottom: 14 }}>
+                                    <div style={{ fontSize: 10, fontWeight: 600, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>⚡ Actions recommandées</div>
+                                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                                      {actions.map((a, ai) => (
+                                        <div key={ai} style={{ display: "flex", alignItems: "center", gap: 8, background: "#ECFDF5", border: "1px solid #BBF7D0", borderRadius: 8, padding: "8px 12px" }}>
+                                          <span style={{ fontSize: 14, flexShrink: 0 }}>{ACTION_ICONS[a.type] || "•"}</span>
+                                          <span style={{ fontSize: 12, color: "#065F46", fontWeight: 500, lineHeight: 1.4 }}>{a.text}</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                );
+                              })()}
 
                               {/* SF comparison table */}
                               {sfFields.length > 0 ? (
