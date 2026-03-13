@@ -329,6 +329,8 @@ export default function TemplateAnalysis({ sites, sfData = {}, gscData = {}, gaD
   const [selectedKpi,  setSelectedKpi]  = useState("gscClicks");
   const [hovered,      setHovered]      = useState(null);
   const [topN,         setTopN]         = useState(8);
+  const [openRec,      setOpenRec]      = useState(null);   // url of open accordion
+  const [refOverrides, setRefOverrides] = useState({});     // tplKey → url override
 
   const site   = sites.find(s => s.id === selectedSite) || sites[0];
   const siteId = site?.id || "";
@@ -376,6 +378,19 @@ export default function TemplateAnalysis({ sites, sfData = {}, gscData = {}, gaD
     });
     return out.sort((a, b) => b.gap - a.gap).slice(0, 12);
   }, [templateStats, kpiDef]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── SF per-URL lookup ──
+  const sfByUrl = useMemo(() => {
+    const m = {};
+    (sfData[siteId] || []).forEach(r => {
+      const url = (r["adresse"] || r["address"] || r["url"] || "").trim();
+      if (!url) return;
+      m[url] = r;
+      // also index by path
+      try { m[new URL(url).pathname.replace(/\/+$/, "") || "/"] = r; } catch {}
+    });
+    return m;
+  }, [siteId, sfData]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Guards after hooks ──
   if (!site) return null;
@@ -427,7 +442,8 @@ export default function TemplateAnalysis({ sites, sfData = {}, gscData = {}, gaD
 
       {/* ── Scatter plot ── */}
       <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: "20px 24px" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16, gap: 16 }}>
+        {/* Header — fixed height, tooltip absolute so it never pushes layout */}
+        <div style={{ position: "relative", marginBottom: 16, minHeight: 36 }}>
           <div>
             <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>
               Positionnement par template — {kpiDef.label} <span style={{ fontWeight: 400, color: C.textLight, fontSize: 11 }}>({kpiDef.src})</span>
@@ -436,8 +452,17 @@ export default function TemplateAnalysis({ sites, sfData = {}, gscData = {}, gaD
               1 point = 1 page · trait = moyenne · halo = best page · {kpiDef.higher ? "↑ haut = mieux" : "↑ bas = mieux (position)"}
             </div>
           </div>
-          {hovered ? (
-            <div style={{ background: hovered.tpl.meta.bg, border: `1px solid ${hovered.tpl.meta.color}44`, borderRadius: 9, padding: "10px 14px", minWidth: 200, maxWidth: 280, flexShrink: 0 }}>
+          {/* Tooltip — absolute, right-aligned, zero layout impact */}
+          <div style={{
+            position: "absolute", top: 0, right: 0,
+            opacity: hovered ? 1 : 0,
+            pointerEvents: "none",
+            transition: "opacity 0.12s",
+            background: hovered ? hovered.tpl.meta.bg : C.bg,
+            border: `1px solid ${hovered ? hovered.tpl.meta.color + "44" : C.border}`,
+            borderRadius: 9, padding: "10px 14px", width: 240,
+          }}>
+            {hovered && <>
               <div style={{ fontSize: 10, fontWeight: 700, color: hovered.tpl.meta.color, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 3 }}>
                 {hovered.tpl.meta.icon} {hovered.tpl.meta.label}
               </div>
@@ -451,10 +476,8 @@ export default function TemplateAnalysis({ sites, sfData = {}, gscData = {}, gaD
               {hovered.page.data.title && (
                 <div style={{ fontSize: 10, color: C.textLight, marginTop: 4, fontStyle: "italic" }}>{hovered.page.data.title.slice(0, 65)}</div>
               )}
-            </div>
-          ) : (
-            <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic", flexShrink: 0 }}>Survolez un point</div>
-          )}
+            </>}
+          </div>
         </div>
         <ScatterPlot
           templateStats={templateStats}
@@ -556,45 +579,181 @@ export default function TemplateAnalysis({ sites, sfData = {}, gscData = {}, gaD
       )}
 
       {/* ── Recommandations ── */}
-      {recs.length > 0 && (
-        <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: "20px 24px" }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 2 }}>⚡ Pages avec potentiel inexploité</div>
-          <div style={{ fontSize: 11, color: C.textLight, marginBottom: 18 }}>
-            Pages dont le template performe mieux ailleurs — écart &gt;25% vs la meilleure page du même template
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))", gap: 10 }}>
-            {recs.map((r, i) => {
-              const gapPct = Math.round(r.gapPct * 100);
+      {recs.length > 0 && (() => {
+        // Group recs by template
+        const byTpl = {};
+        recs.forEach(r => {
+          if (!byTpl[r.tplMeta.key]) byTpl[r.tplMeta.key] = { meta: r.tplMeta, items: [], allBests: [] };
+          byTpl[r.tplMeta.key].items.push(r);
+        });
+        // Collect all candidates for ref override per template
+        templateStats.forEach(tpl => {
+          if (byTpl[tpl.key]) byTpl[tpl.key].allBests = tpl.pages.filter(p => p.val > 0);
+        });
+
+        return (
+          <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: "20px 24px" }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 2 }}>⚡ Pages avec potentiel inexploité</div>
+            <div style={{ fontSize: 11, color: C.textLight, marginBottom: 20 }}>
+              Pages dont le template performe mieux ailleurs — écart &gt;25% vs la référence du template
+            </div>
+
+            {Object.values(byTpl).map(({ meta, items, allBests }) => {
+              // Determine active reference (default = best of template, overridable)
+              const refUrl     = refOverrides[meta.key] || items[0]?.best?.url || "";
+              const refPage    = allBests.find(p => p.url === refUrl) || allBests[0];
+              const refSfRow   = refPage ? (sfByUrl[refPage.url] || sfByUrl[getPath(refPage.url)]) : null;
+
               return (
-                <div key={i} style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 16px" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 7 }}>
-                    <span style={{ fontSize: 10, background: r.tplMeta.bg, color: r.tplMeta.color, borderRadius: 4, padding: "2px 7px", fontWeight: 700 }}>
-                      {r.tplMeta.icon} {r.tplMeta.label}
+                <div key={meta.key} style={{ marginBottom: 24 }}>
+                  {/* Template group header + ref selector */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: meta.color, background: meta.bg, borderRadius: 6, padding: "3px 10px" }}>
+                      {meta.icon} {meta.label}
                     </span>
-                    <span style={{ fontSize: 11, fontWeight: 700, color: "#DC2626" }}>−{gapPct}%</span>
-                    <span style={{ fontSize: 10, color: C.textLight }}>vs meilleure</span>
+                    <span style={{ fontSize: 11, color: C.textLight }}>{items.length} page{items.length > 1 ? "s" : ""} à optimiser</span>
+                    <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ fontSize: 11, color: C.textLight, flexShrink: 0 }}>📌 Référence :</span>
+                      <select
+                        value={refUrl}
+                        onChange={e => setRefOverrides(prev => ({ ...prev, [meta.key]: e.target.value }))}
+                        style={{ fontSize: 11, padding: "4px 8px", border: `1px solid ${meta.color}55`, borderRadius: 6, color: meta.color, background: meta.bg, cursor: "pointer", maxWidth: 260 }}
+                      >
+                        {allBests.slice(0, 20).map(p => (
+                          <option key={p.url} value={p.url}>
+                            {getPath(p.url)} — {kpiDef.fmt(p.val)} {kpiDef.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
-                  <a href={r.page.url} target="_blank" rel="noreferrer"
-                    style={{ fontSize: 11, color: C.text, fontWeight: 600, display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textDecoration: "none", marginBottom: 4 }}>
-                    {getPath(r.page.url)}
-                  </a>
-                  <div style={{ fontSize: 12, color: C.textLight, marginBottom: 8 }}>
-                    {kpiDef.label} : <strong style={{ color: C.text }}>{kpiDef.fmt(r.page.val)}</strong>
-                    <span style={{ margin: "0 6px" }}>·</span>
-                    potentiel : <strong style={{ color: r.tplMeta.color }}>+{kpiDef.fmt(r.gap)}</strong>
-                  </div>
-                  <div style={{ fontSize: 10, color: C.textLight, padding: "7px 10px", background: `${r.tplMeta.color}08`, border: `1px solid ${r.tplMeta.color}1A`, borderRadius: 6 }}>
-                    📌 Référence : <a href={r.best.url} target="_blank" rel="noreferrer" style={{ color: r.tplMeta.color, textDecoration: "none" }}>
-                      {getPath(r.best.url)}
-                    </a>{" "}
-                    <strong style={{ color: r.tplMeta.color }}>({kpiDef.fmt(r.best.val)})</strong>
+
+                  {/* Rec cards */}
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {items.map((r, ri) => {
+                      const pageSfRow  = sfByUrl[r.page.url] || sfByUrl[getPath(r.page.url)];
+                      const isOpen     = openRec === (meta.key + "|" + r.page.url);
+                      const gapPct     = Math.round(r.gapPct * 100);
+                      // Recompute gap vs current refPage (may differ from r.best if overridden)
+                      const activeRef  = refPage || r.best;
+                      const activeGap  = activeRef ? (kpiDef.higher ? activeRef.val - r.page.val : r.page.val - activeRef.val) : r.gap;
+                      const activeGapPct = activeRef?.val ? Math.round(Math.abs(activeGap) / activeRef.val * 100) : gapPct;
+
+                      // SF fields to compare
+                      const sfFields = [
+                        { label: "Title",        page: pageSfRow ? (safeNum(pageSfRow["longueur du title 1"] || pageSfRow["title 1 length"] || 0) || (pageSfRow["title 1"] || "").length) : null, ref: refSfRow ? (safeNum(refSfRow["longueur du title 1"] || refSfRow["title 1 length"] || 0) || (refSfRow["title 1"] || "").length) : null, unit: "car.", lowerBetter: false },
+                        { label: "Meta desc.",   page: pageSfRow ? (safeNum(pageSfRow["longueur de la meta description 1"] || pageSfRow["meta description 1 length"] || 0) || (pageSfRow["meta description 1"] || "").length) : null, ref: refSfRow ? (safeNum(refSfRow["longueur de la meta description 1"] || refSfRow["meta description 1 length"] || 0) || (refSfRow["meta description 1"] || "").length) : null, unit: "car.", lowerBetter: false },
+                        { label: "H1",           page: pageSfRow ? (safeNum(pageSfRow["longueur du h1-1"] || pageSfRow["h1-1 length"] || 0) || (pageSfRow["h1-1"] || pageSfRow["h1"] || "").length) : null, ref: refSfRow ? (safeNum(refSfRow["longueur du h1-1"] || refSfRow["h1-1 length"] || 0) || (refSfRow["h1-1"] || refSfRow["h1"] || "").length) : null, unit: "car.", lowerBetter: false },
+                        { label: "Mots",         page: pageSfRow ? safeNum(pageSfRow["nombre de mots"] || pageSfRow["word count"] || 0) : null, ref: refSfRow ? safeNum(refSfRow["nombre de mots"] || refSfRow["word count"] || 0) : null, unit: "", lowerBetter: false },
+                        { label: "Inlinks",      page: pageSfRow ? safeNum(pageSfRow["liens entrants"] || pageSfRow["inlinks"] || 0) : null, ref: refSfRow ? safeNum(refSfRow["liens entrants"] || refSfRow["inlinks"] || 0) : null, unit: "", lowerBetter: false },
+                        { label: "Inlinks uniq.",page: pageSfRow ? safeNum(pageSfRow["liens entrants uniques"] || 0) : null, ref: refSfRow ? safeNum(refSfRow["liens entrants uniques"] || 0) : null, unit: "", lowerBetter: false },
+                        { label: "Profondeur",   page: pageSfRow ? getPath(r.page.url).split("/").filter(Boolean).length : null, ref: refPage ? getPath(refPage.url).split("/").filter(Boolean).length : null, unit: "", lowerBetter: true },
+                        { label: "Poids page",   page: pageSfRow ? Math.round(safeNum(pageSfRow["taille (octets)"] || pageSfRow["size"] || 0) / 1024) : null, ref: refSfRow ? Math.round(safeNum(refSfRow["taille (octets)"] || refSfRow["size"] || 0) / 1024) : null, unit: "KB", lowerBetter: true },
+                        { label: "Schema",       page: pageSfRow ? (pageSfRow["schema type"] || pageSfRow["structured data 1"] ? "✓" : "✗") : null, ref: refSfRow ? (refSfRow["schema type"] || refSfRow["structured data 1"] ? "✓" : "✗") : null, unit: "", lowerBetter: false, isText: true },
+                      ].filter(f => f.page !== null || f.ref !== null);
+
+                      return (
+                        <div key={r.page.url} style={{ border: `1px solid ${isOpen ? meta.color + "55" : C.border}`, borderRadius: 10, overflow: "hidden", transition: "border-color 0.15s" }}>
+                          {/* Card header — clickable */}
+                          <div
+                            onClick={() => setOpenRec(isOpen ? null : (meta.key + "|" + r.page.url))}
+                            style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 16px", background: isOpen ? meta.bg : C.white, cursor: "pointer", userSelect: "none" }}
+                          >
+                            <span style={{ fontSize: 12, color: isOpen ? meta.color : C.textLight, transition: "transform 0.15s", display: "inline-block", transform: isOpen ? "rotate(90deg)" : "none" }}>▶</span>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <a href={r.page.url} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}
+                                style={{ fontSize: 12, fontWeight: 600, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block", textDecoration: "none" }}>
+                                {getPath(r.page.url)}
+                              </a>
+                              {r.page.data.title && <div style={{ fontSize: 10, color: C.textLight, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.page.data.title}</div>}
+                            </div>
+                            <div style={{ display: "flex", gap: 12, alignItems: "center", flexShrink: 0 }}>
+                              <div style={{ textAlign: "right" }}>
+                                <div style={{ fontSize: 12, fontWeight: 700, color: C.text }}>{kpiDef.fmt(r.page.val)}</div>
+                                <div style={{ fontSize: 10, color: C.textLight }}>{kpiDef.label}</div>
+                              </div>
+                              <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 6, padding: "3px 8px", textAlign: "center" }}>
+                                <div style={{ fontSize: 12, fontWeight: 800, color: "#DC2626" }}>−{activeGapPct}%</div>
+                                <div style={{ fontSize: 9, color: "#DC2626" }}>vs réf.</div>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Accordion body */}
+                          {isOpen && (
+                            <div style={{ padding: "0 16px 16px", background: C.white, borderTop: `1px solid ${meta.color}22` }}>
+                              {/* KPI row */}
+                              <div style={{ display: "flex", gap: 8, margin: "12px 0 14px", padding: "10px 12px", background: `${meta.color}06`, borderRadius: 8 }}>
+                                <div style={{ flex: 1, textAlign: "center" }}>
+                                  <div style={{ fontSize: 10, color: C.textLight, marginBottom: 2 }}>Cette page</div>
+                                  <div style={{ fontSize: 18, fontWeight: 800, color: C.text }}>{kpiDef.fmt(r.page.val)}</div>
+                                  <div style={{ fontSize: 10, color: C.textLight }}>{kpiDef.label}</div>
+                                </div>
+                                <div style={{ width: 1, background: C.border }} />
+                                <div style={{ flex: 1, textAlign: "center" }}>
+                                  <div style={{ fontSize: 10, color: C.textLight, marginBottom: 2 }}>Référence</div>
+                                  <div style={{ fontSize: 18, fontWeight: 800, color: meta.color }}>{activeRef ? kpiDef.fmt(activeRef.val) : "—"}</div>
+                                  <div style={{ fontSize: 10, color: C.textLight }}>{kpiDef.label}</div>
+                                </div>
+                                <div style={{ width: 1, background: C.border }} />
+                                <div style={{ flex: 1, textAlign: "center" }}>
+                                  <div style={{ fontSize: 10, color: C.textLight, marginBottom: 2 }}>Écart</div>
+                                  <div style={{ fontSize: 18, fontWeight: 800, color: "#DC2626" }}>{activeGap > 0 ? "+" : ""}{kpiDef.fmt(Math.abs(activeGap))}</div>
+                                  <div style={{ fontSize: 10, color: "#DC2626" }}>potentiel</div>
+                                </div>
+                              </div>
+
+                              {/* SF comparison table */}
+                              {sfFields.length > 0 ? (
+                                <div>
+                                  <div style={{ fontSize: 10, fontWeight: 600, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>🕷️ Comparaison Screaming Frog</div>
+                                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto", gap: "0", border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden" }}>
+                                    {/* Header */}
+                                    {["Métrique", "Cette page", "Référence", "Delta"].map(h => (
+                                      <div key={h} style={{ padding: "6px 10px", background: C.bg, fontSize: 10, fontWeight: 600, color: C.textLight, borderBottom: `1px solid ${C.border}` }}>{h}</div>
+                                    ))}
+                                    {sfFields.map((f, fi) => {
+                                      const hasBoth  = f.page !== null && f.ref !== null && !f.isText;
+                                      const numPage  = hasBoth ? parseFloat(f.page) : null;
+                                      const numRef   = hasBoth ? parseFloat(f.ref)  : null;
+                                      const delta    = hasBoth ? numPage - numRef : null;
+                                      const isGood   = delta === null ? null : (f.lowerBetter ? delta < 0 : delta > 0);
+                                      const isNeutral= delta === null || delta === 0;
+                                      const even     = fi % 2 === 0;
+                                      const bg       = even ? C.white : "#FAFAFA";
+                                      return [
+                                        <div key={f.label+"l"} style={{ padding: "7px 10px", fontSize: 11, color: C.textLight, background: bg, borderBottom: `1px solid ${C.borderLight}` }}>{f.label}</div>,
+                                        <div key={f.label+"p"} style={{ padding: "7px 10px", fontSize: 12, fontWeight: 600, color: C.text, background: bg, borderBottom: `1px solid ${C.borderLight}` }}>
+                                          {f.page !== null ? `${f.page}${f.unit}` : "—"}
+                                        </div>,
+                                        <div key={f.label+"r"} style={{ padding: "7px 10px", fontSize: 12, fontWeight: 600, color: meta.color, background: bg, borderBottom: `1px solid ${C.borderLight}` }}>
+                                          {f.ref !== null ? `${f.ref}${f.unit}` : "—"}
+                                        </div>,
+                                        <div key={f.label+"d"} style={{ padding: "7px 10px", fontSize: 11, fontWeight: 700, background: bg, borderBottom: `1px solid ${C.borderLight}`,
+                                          color: isNeutral ? C.textLight : isGood ? "#16A34A" : "#DC2626" }}>
+                                          {delta === null || f.isText ? (f.page === f.ref ? "=" : f.page !== null && f.ref !== null ? "≠" : "—") : delta === 0 ? "=" : `${delta > 0 ? "+" : ""}${Math.round(delta)}${f.unit}`}
+                                        </div>,
+                                      ];
+                                    })}
+                                  </div>
+                                </div>
+                              ) : (
+                                <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic", textAlign: "center", padding: "12px 0" }}>
+                                  Pas de données SF pour ces pages — importez un CSV Screaming Frog
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               );
             })}
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
