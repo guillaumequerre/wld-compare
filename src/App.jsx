@@ -196,9 +196,12 @@ export default function App() {
         return { ...p, ...patch };
       }));
     }
-    // Load page types for all sites
+    // Load page types for all sites (use project's site list, not just those with imports)
+    const proj = setProjects.__proto__ ? null : null; // can't access state here, use latest keys + fallback
+    const ptSiteIds = new Set([...Object.keys(latest)]);
+    // Also get site IDs from the setProjects call above
     const ptUpdates = await Promise.all(
-      Object.keys(latest).map(async sid => {
+      [...ptSiteIds].map(async sid => {
         const rows = await sbGetPageTypes(pid, sid);
         if (!rows.length) return null;
         const map = {};
@@ -256,12 +259,35 @@ export default function App() {
             for (const { key, sid, rows } of valid) {
               if (siteIds.has(sid)) patch[key] = { ...(patch[key] || p[key]), [sid]: rows };
             }
-            return { ...p, ...patch };
+            // Re-apply SITE_COLORS if saved sites are missing color/bg
+            const sites = p.sites.map(s => ({
+              ...s,
+              color: s.color || DEFAULT_SITES[0].color,
+              bg:    s.bg    || DEFAULT_SITES[0].bg,
+            }));
+            return { ...p, ...patch, sites };
           });
           setProjects(loaded);
+
+          // Load page_types for all projects/sites
+          const allPt = await Promise.all(restored.flatMap(p =>
+            p.sites.map(s => sbGetPageTypes(p.id, s.id).then(rows => ({ pid: p.id, sid: s.id, rows })))
+          ));
+          const ptMap = {};
+          allPt.forEach(({ pid, sid, rows }) => {
+            if (!rows.length) return;
+            if (!ptMap[pid]) ptMap[pid] = {};
+            const map = {};
+            rows.forEach(r => { map[r.url] = r.page_type; });
+            ptMap[pid][sid] = map;
+          });
+
           // Activate the project with the most imports
           const bestId = allData.sort((a, b) => b.count - a.count)[0]?.id || restored[0].id;
           setCurrentProjectId(bestId);
+
+          // Set page_types for the active project immediately
+          if (ptMap[bestId]) setPageTypes(ptMap[bestId]);
         } else {
           await sbSaveProject(INITIAL_PROJECT);
           loadedProjectsRef.current.add(INITIAL_PROJECT.id);

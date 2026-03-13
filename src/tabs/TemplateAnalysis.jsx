@@ -661,10 +661,16 @@ export default function TemplateAnalysis({ sites, sfData = {}, gscData = {}, gaD
                           >
                             <span style={{ fontSize: 12, color: isOpen ? meta.color : C.textLight, transition: "transform 0.15s", display: "inline-block", transform: isOpen ? "rotate(90deg)" : "none" }}>▶</span>
                             <div style={{ flex: 1, minWidth: 0 }}>
-                              <a href={r.page.url} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}
-                                style={{ fontSize: 12, fontWeight: 600, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block", textDecoration: "none" }}>
-                                {getPath(r.page.url)}
-                              </a>
+                              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                <span style={{ fontSize: 12, fontWeight: 600, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                  {getPath(r.page.url)}
+                                </span>
+                                <a href={r.page.url} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}
+                                  title="Ouvrir la page"
+                                  style={{ flexShrink: 0, fontSize: 10, color: C.textLight, border: `1px solid ${C.border}`, borderRadius: 4, padding: "1px 5px", textDecoration: "none", lineHeight: 1.6, background: C.white }}>
+                                  ↗
+                                </a>
+                              </div>
                               {r.page.data.title && <div style={{ fontSize: 10, color: C.textLight, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.page.data.title}</div>}
                             </div>
                             <div style={{ display: "flex", gap: 12, alignItems: "center", flexShrink: 0 }}>

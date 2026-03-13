@@ -60,7 +60,7 @@ export async function sbSaveProject(project) {
   const res = await fetch(`${PROXY}/rest/v1/projects`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
-    body: JSON.stringify({ id: project.id, name: project.name, sites_json: JSON.stringify(project.sites), updated_at: new Date().toISOString() }),
+    body: JSON.stringify({ id: project.id, name: project.name, sites_json: JSON.stringify(project.sites.map(s => ({ id: s.id, label: s.label, color: s.color, bg: s.bg }))), updated_at: new Date().toISOString() }),
   });
   if (!res.ok) console.warn("Save project failed:", res.status);
 }
