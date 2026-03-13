@@ -170,7 +170,7 @@ function RecCard({ rec, site, onToggle, onIceChange }) {
   );
 }
 
-export default function AnalyseTab({ metrics, corrMatrix, resultVals, analysis, setAnalysis, analysisLoading, setAnalysisLoading, analysisError, setAnalysisError, currentProjectId, sites, sfData = {}, gscData = {}, smData = {}, pageTypes = {} }) {
+export default function AnalyseTab({ metrics, corrMatrix, resultVals, analysis, setAnalysis, analysisLoading, setAnalysisLoading, analysisError, setAnalysisError, currentProjectId, sites, sfData = {}, gscData = {}, gaData = {}, bingData = {}, smData = {}, pageTypes = {} }) {
   const [activeRoadmap, setActiveRoadmap] = useState(() => metrics[0]?.site.id || "");
   const [recs, setRecs] = useState([]);
 
@@ -548,6 +548,8 @@ export default function AnalyseTab({ metrics, corrMatrix, resultVals, analysis, 
           sites={sites}
           sfData={sfData}
           gscData={gscData}
+          gaData={gaData}
+          bingData={bingData}
           smData={smData}
           pageTypes={pageTypes}
         />

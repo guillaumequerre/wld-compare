@@ -554,6 +554,8 @@ export default function App() {
               sites={sites}
               sfData={sfData}
               gscData={gscData}
+              gaData={gaData}
+              bingData={bingData}
               smData={smData}
               pageTypes={pageTypes}
             />

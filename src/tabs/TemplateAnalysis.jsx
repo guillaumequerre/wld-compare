@@ -3,33 +3,47 @@ import { C, PAGE_TYPE_MAP } from "../lib/constants";
 
 // ── Helpers ──────────────────────────────────────────────────────
 
-function safeNum(v) { const n = parseFloat(v); return isNaN(n) ? 0 : n; }
-function getUrl(r)  { return (r["adresse"] || r["address"] || r["url"] || "").trim(); }
-function getPath(url) { try { return new URL(url).pathname; } catch { return url; } }
+function safeNum(v) { const n = parseFloat(String(v || "").replace("%", "")); return isNaN(n) ? 0 : n; }
 
-// ── KPI definitions ───────────────────────────────────────────────
+function normPath(raw) {
+  if (!raw) return "";
+  const s = raw.trim();
+  try { return new URL(s.startsWith("http") ? s : "https://x.com" + s).pathname.replace(/\/+$/, "") || "/"; }
+  catch { return s.replace(/\/+$/, "") || "/"; }
+}
+
+function getPath(url) {
+  try { return new URL(url).pathname.replace(/\/+$/, "") || "/"; }
+  catch { return url; }
+}
+
+// ── KPI definitions — GSC, GA4, Semrush, Bing only ───────────────
 
 const KPI_DEFS = [
-  { key: "clicks",      label: "Clics GSC",        src: "GSC",     higher: true,  unit: "",    fmt: v => v >= 1000 ? (v/1000).toFixed(1)+"k" : Math.round(v).toString() },
-  { key: "impressions", label: "Impressions GSC",   src: "GSC",     higher: true,  unit: "",    fmt: v => v >= 1000 ? (v/1000).toFixed(1)+"k" : Math.round(v).toString() },
-  { key: "position",    label: "Position moy. GSC", src: "GSC",     higher: false, unit: "",    fmt: v => v.toFixed(1) },
-  { key: "ctr",         label: "CTR GSC",           src: "GSC",     higher: true,  unit: "%",   fmt: v => v.toFixed(1)+"%" },
-  { key: "smTraffic",   label: "Trafic Semrush",    src: "Semrush", higher: true,  unit: "",    fmt: v => v >= 1000 ? (v/1000).toFixed(1)+"k" : Math.round(v).toString() },
-  { key: "smKw",        label: "Mots-clés SM",      src: "Semrush", higher: true,  unit: "",    fmt: v => Math.round(v).toString() },
-  { key: "smTop20",     label: "Top 20 SM",         src: "Semrush", higher: true,  unit: "",    fmt: v => Math.round(v).toString() },
-  { key: "words",       label: "Nb de mots",        src: "SF",      higher: true,  unit: "",    fmt: v => Math.round(v).toString() },
-  { key: "inlinksUniq", label: "Inlinks uniq.",     src: "SF",      higher: true,  unit: "",    fmt: v => Math.round(v).toString() },
-  { key: "depth",       label: "Profondeur URL",    src: "SF",      higher: false, unit: "",    fmt: v => v.toFixed(0) },
+  // GSC
+  { key: "gscClicks",      label: "Clics",            src: "GSC",     higher: true,  fmt: v => v >= 1000 ? (v/1000).toFixed(1)+"k" : String(Math.round(v)) },
+  { key: "gscImpressions", label: "Impressions",       src: "GSC",     higher: true,  fmt: v => v >= 1000 ? (v/1000).toFixed(1)+"k" : String(Math.round(v)) },
+  { key: "gscPosition",    label: "Position moy.",     src: "GSC",     higher: false, fmt: v => v.toFixed(1) },
+  { key: "gscCtr",         label: "CTR",               src: "GSC",     higher: true,  fmt: v => v.toFixed(1)+"%" },
+  // GA4
+  { key: "gaSessions",     label: "Sessions",          src: "GA4",     higher: true,  fmt: v => v >= 1000 ? (v/1000).toFixed(1)+"k" : String(Math.round(v)) },
+  { key: "gaViews",        label: "Pages vues",        src: "GA4",     higher: true,  fmt: v => v >= 1000 ? (v/1000).toFixed(1)+"k" : String(Math.round(v)) },
+  // Semrush
+  { key: "smTraffic",      label: "Trafic estimé",     src: "Semrush", higher: true,  fmt: v => v >= 1000 ? (v/1000).toFixed(1)+"k" : String(Math.round(v)) },
+  { key: "smKw",           label: "Mots-clés",         src: "Semrush", higher: true,  fmt: v => String(Math.round(v)) },
+  { key: "smTop20",        label: "Positions Top 20",  src: "Semrush", higher: true,  fmt: v => String(Math.round(v)) },
+  // Bing AI
+  { key: "bingCitations",  label: "Citations IA",      src: "Bing AI", higher: true,  fmt: v => String(Math.round(v)) },
 ];
 
-// ── Per-URL data fusion ───────────────────────────────────────────
+// ── URL data fusion ───────────────────────────────────────────────
 
-function buildUrlData(sfRows, gscRows, smRows) {
+function buildUrlData(sfRows, gscRows, gaRows, bingRows, smRows) {
   const map = {};
 
-  // SF — base
+  // ── SF — base structure (URL list only, no KPIs shown) ──────
   sfRows.forEach(r => {
-    const url = getUrl(r);
+    const url = (r["adresse"] || r["address"] || r["url"] || "").trim();
     if (!url) return;
     const ct = (r["type de contenu"] || r["content type"] || r["type"] || "").toLowerCase();
     const sc = safeNum(r["code http"] || r["status code"] || 200);
@@ -37,46 +51,120 @@ function buildUrlData(sfRows, gscRows, smRows) {
     if (!isHtml) return;
     map[url] = {
       url,
-      title:       (r["title 1"] || r["title"] || "").slice(0, 90),
-      h1:          (r["h1-1"]    || r["h1"]    || "").slice(0, 90),
-      words:       safeNum(r["nombre de mots"] || r["word count"] || 0),
-      inlinksUniq: safeNum(r["liens entrants uniques"] || r["unique inlinks"] || 0),
-      depth:       getPath(url).split("/").filter(Boolean).length || 1,
-      clicks: 0, impressions: 0, position: 0, ctr: 0,
+      title: (r["title 1"] || r["title"] || "").slice(0, 90),
+      // All KPIs start at 0
+      gscClicks: 0, gscImpressions: 0, gscPosition: 0, gscCtr: 0,
+      gaSessions: 0, gaViews: 0,
       smTraffic: 0, smKw: 0, smTop20: 0,
+      bingCitations: 0,
     };
   });
 
-  // GSC — match by pathname
+  // ── GSC — 1 row per (page × query) or 1 row per page ────────
+  // Aggregate by page path
   const gscByPath = {};
   gscRows.forEach(r => {
-    const raw = (r["page"] || r["url"] || r["adresse"] || "").trim();
+    const raw = (r["page"] || r["url"] || r["adresse"] || r["pages les plus populaires"] || "").trim();
     if (!raw) return;
-    const p = getPath(raw.startsWith("http") ? raw : "https://x" + raw);
-    if (!gscByPath[p]) gscByPath[p] = { clicks: 0, impressions: 0, posSum: 0, posCnt: 0 };
+    const p = normPath(raw);
+    if (!gscByPath[p]) gscByPath[p] = { clicks: 0, impressions: 0, posSum: 0, posCnt: 0, ctrSum: 0, ctrCnt: 0 };
     gscByPath[p].clicks      += safeNum(r["clics"] || r["clicks"] || 0);
     gscByPath[p].impressions += safeNum(r["impressions"] || 0);
     const pos = safeNum(r["position"] || 0);
     if (pos > 0) { gscByPath[p].posSum += pos; gscByPath[p].posCnt++; }
+    const ctr = safeNum(r["ctr"] || 0);
+    if (ctr > 0) { gscByPath[p].ctrSum += ctr; gscByPath[p].ctrCnt++; }
   });
 
-  Object.values(map).forEach(d => {
-    const p  = getPath(d.url);
-    const g  = gscByPath[p] || gscByPath[p + "/"] || gscByPath[p.replace(/\/$/, "")];
-    if (!g) return;
-    d.clicks      = g.clicks;
-    d.impressions = g.impressions;
-    d.position    = g.posCnt ? Math.round(g.posSum / g.posCnt * 10) / 10 : 0;
-    d.ctr         = g.impressions ? Math.round(g.clicks / g.impressions * 1000) / 10 : 0;
+  // ── GA4 — 1 row per page ────────────────────────────────────
+  const gaByPath = {};
+  gaRows.forEach(r => {
+    const raw = (r["page"] || r["url"] || r["adresse"] || r["pages les plus populaires"] || r["landing page"] || "").trim();
+    if (!raw) return;
+    const p = normPath(raw);
+    if (!gaByPath[p]) gaByPath[p] = { sessions: 0, views: 0 };
+    gaByPath[p].sessions += safeNum(r["ga4 sessions"] || r["sessions"] || r["séances"] || 0);
+    gaByPath[p].views    += safeNum(r["ga4 views"]    || r["views"]    || r["pages vues"] || 0);
   });
 
-  // Semrush — match by url
+  // ── Bing — 1 row per page ────────────────────────────────────
+  const bingByPath = {};
+  bingRows.forEach(r => {
+    const raw = (r["url"] || r["page"] || r["adresse"] || "").trim();
+    if (!raw) return;
+    const p = normPath(raw);
+    if (!bingByPath[p]) bingByPath[p] = 0;
+    bingByPath[p] += safeNum(r["citations"] || r["mentions"] || r["impressions"] || r["appearancecount"] || 0);
+  });
+
+  // ── Semrush — already parsed rows with .url ──────────────────
+  const smByUrl  = {};
+  const smByPath = {};
   smRows.forEach(r => {
-    const url = r.url || "";
-    if (!map[url]) return;
-    map[url].smTraffic = safeNum(r.traffic || 0);
-    map[url].smKw      = safeNum(r.kwCount || 0);
-    map[url].smTop20   = safeNum(r.top20   || 0);
+    if (!r.url) return;
+    smByUrl[r.url]         = r;
+    smByPath[normPath(r.url)] = r;
+  });
+
+  // ── Merge onto SF URL map ────────────────────────────────────
+  Object.values(map).forEach(d => {
+    const p = getPath(d.url);
+
+    // Try exact path, then with/without trailing slash
+    const tryPaths = [p, p + "/", p.replace(/\/$/, "")];
+
+    const g = tryPaths.map(tp => gscByPath[tp]).find(Boolean);
+    if (g) {
+      d.gscClicks      = g.clicks;
+      d.gscImpressions = g.impressions;
+      d.gscPosition    = g.posCnt ? Math.round(g.posSum / g.posCnt * 10) / 10 : 0;
+      d.gscCtr         = g.ctrCnt ? Math.round(g.ctrSum / g.ctrCnt * 10) / 10 : 0;
+      // Fallback CTR from clicks/impressions
+      if (!d.gscCtr && d.gscImpressions > 0) d.gscCtr = Math.round(d.gscClicks / d.gscImpressions * 1000) / 10;
+    }
+
+    const ga = tryPaths.map(tp => gaByPath[tp]).find(Boolean);
+    if (ga) { d.gaSessions = ga.sessions; d.gaViews = ga.views; }
+
+    const bing = tryPaths.map(tp => bingByPath[tp]).find(Boolean);
+    if (bing) d.bingCitations = bing;
+
+    const sm = smByUrl[d.url] || tryPaths.map(tp => smByPath[tp]).find(Boolean);
+    if (sm) { d.smTraffic = safeNum(sm.traffic || 0); d.smKw = safeNum(sm.kwCount || 0); d.smTop20 = safeNum(sm.top20 || 0); }
+  });
+
+  // ── Also add GSC/GA/Bing/SM pages not in SF ─────────────────
+  // So scatter works even without SF (or with partial SF)
+  const addIfMissing = (raw, fill) => {
+    const p = normPath(raw);
+    // Find if any existing entry matches this path
+    const existing = Object.keys(map).find(u => getPath(u) === p);
+    if (existing) return;
+    // Create a minimal entry
+    map["__nosf__" + p] = {
+      url: raw.startsWith("http") ? raw : raw,
+      title: "",
+      gscClicks: 0, gscImpressions: 0, gscPosition: 0, gscCtr: 0,
+      gaSessions: 0, gaViews: 0, smTraffic: 0, smKw: 0, smTop20: 0, bingCitations: 0,
+      ...fill,
+    };
+  };
+
+  Object.entries(gscByPath).forEach(([p, g]) => {
+    if (g.clicks > 0 || g.impressions > 0) addIfMissing(p, {
+      gscClicks: g.clicks, gscImpressions: g.impressions,
+      gscPosition: g.posCnt ? Math.round(g.posSum / g.posCnt * 10) / 10 : 0,
+      gscCtr: g.ctrCnt ? Math.round(g.ctrSum / g.ctrCnt * 10) / 10 : (g.impressions ? Math.round(g.clicks / g.impressions * 1000) / 10 : 0),
+    });
+  });
+  Object.entries(gaByPath).forEach(([p, ga]) => {
+    if (ga.sessions > 0 || ga.views > 0) addIfMissing(p, { gaSessions: ga.sessions, gaViews: ga.views });
+  });
+  smRows.forEach(r => {
+    if (r.url && (r.traffic > 0 || r.kwCount > 0)) addIfMissing(r.url, { smTraffic: safeNum(r.traffic), smKw: safeNum(r.kwCount), smTop20: safeNum(r.top20) });
+  });
+  Object.entries(bingByPath).forEach(([p, cnt]) => {
+    if (cnt > 0) addIfMissing(p, { bingCitations: cnt });
   });
 
   return map;
@@ -87,112 +175,109 @@ function buildUrlData(sfRows, gscRows, smRows) {
 function buildTemplateStats(urlData, ptMap, kpiKey, kpiDef) {
   const byTpl = {};
   Object.entries(urlData).forEach(([url, data]) => {
-    const tpl = ptMap[url];
+    const cleanUrl = url.startsWith("__nosf__") ? url.slice(8) : url;
+    const tpl = ptMap[cleanUrl] || ptMap[url];
     if (!tpl || tpl === "home" || tpl === "autre") return;
     if (!byTpl[tpl]) byTpl[tpl] = [];
-    byTpl[tpl].push({ url, val: data[kpiKey] ?? 0, data });
+    byTpl[tpl].push({ url: cleanUrl, val: data[kpiKey] ?? 0, data });
   });
 
   return Object.entries(byTpl).map(([key, pages]) => {
-    const sorted = [...pages].sort((a, b) => kpiDef.higher ? b.val - a.val : a.val - b.val);
+    const sorted  = [...pages].sort((a, b) => kpiDef.higher ? b.val - a.val : (a.val || 999) - (b.val || 999));
     const withVal = pages.filter(p => p.val > 0);
-    const total   = pages.reduce((s, p) => s + p.val, 0);
+    const total   = withVal.reduce((s, p) => s + p.val, 0);
     const avg     = withVal.length ? total / withVal.length : 0;
     return {
       key,
       meta:  PAGE_TYPE_MAP[key] || { label: key, color: "#64748B", bg: "#F1F5F9", icon: "❓" },
       pages: sorted,
+      withVal: withVal.length,
       total, avg,
-      best:  sorted[0] || null,
+      best: sorted.find(p => p.val > 0) || null,
     };
-  }).filter(t => t.pages.length > 0)
+  }).filter(t => t.withVal > 0)
     .sort((a, b) => kpiDef.higher ? b.total - a.total : a.avg - b.avg);
 }
 
 // ── Scatter plot ──────────────────────────────────────────────────
 
 function ScatterPlot({ templateStats, kpiDef, hoveredUrl, onHover }) {
-  const COL_W    = 130;
-  const H        = 320;
-  const PAD_TOP  = 16;
-  const PAD_BOT  = 52;
-  const PAD_L    = 44;
-  const plotH    = H - PAD_TOP - PAD_BOT;
-  const totalW   = Math.max(PAD_L + templateStats.length * COL_W + 20, 400);
+  const COL_W   = 130;
+  const H       = 320;
+  const PAD_T   = 16;
+  const PAD_B   = 56;
+  const PAD_L   = 48;
+  const plotH   = H - PAD_T - PAD_B;
+  const totalW  = Math.max(PAD_L + templateStats.length * COL_W + 20, 400);
 
-  const allVals  = templateStats.flatMap(t => t.pages.map(p => p.val)).filter(v => v > 0);
+  const allVals = templateStats.flatMap(t => t.pages.map(p => p.val)).filter(v => v > 0);
   if (!allVals.length) return (
-    <div style={{ padding: "32px 0", textAlign: "center", color: C.textLight, fontSize: 12 }}>
-      Aucune donnée pour ce KPI sur les pages classifiées
+    <div style={{ padding: "40px 0", textAlign: "center", color: C.textLight, fontSize: 12, fontStyle: "italic" }}>
+      Aucune donnée disponible pour ce KPI sur les pages classifiées
     </div>
   );
 
   const maxVal = Math.max(...allVals);
-  const minVal = 0;
-  const range  = maxVal - minVal || 1;
+  const yOf = (val) => PAD_T + plotH * (1 - Math.min(Math.max(kpiDef.higher ? val / maxVal : (maxVal - val) / maxVal, 0), 1));
 
-  const yOf = (val) => {
-    const norm = kpiDef.higher ? val / range : (maxVal - val) / range;
-    return PAD_TOP + plotH * (1 - Math.min(norm, 1));
-  };
-
-  // Y axis ticks
   const ticks = [0, 0.25, 0.5, 0.75, 1].map(pct => ({
-    pct,
-    val:  kpiDef.higher ? maxVal * pct : maxVal * (1 - pct),
-    y:    PAD_TOP + plotH * (1 - pct),
+    y:   PAD_T + plotH * (1 - pct),
+    val: kpiDef.higher ? maxVal * pct : maxVal * (1 - pct),
   }));
 
   return (
-    <div style={{ overflowX: "auto", overflowY: "hidden" }}>
-      <svg width={totalW} height={H} style={{ display: "block", minWidth: totalW }}>
-        {/* Grid lines + Y labels */}
-        {ticks.map(t => (
-          <g key={t.pct}>
-            <line x1={PAD_L} x2={totalW - 10} y1={t.y} y2={t.y} stroke={C.border} strokeWidth={t.pct === 0 || t.pct === 1 ? 1 : 0.5} strokeDasharray={t.pct === 0 || t.pct === 1 ? "none" : "3,3"} />
-            <text x={PAD_L - 5} y={t.y + 3.5} fontSize={9} fill={C.textLight} textAnchor="end">{kpiDef.fmt(t.val)}</text>
+    <div style={{ overflowX: "auto" }}>
+      <svg width={totalW} height={H} style={{ display: "block" }}>
+        {ticks.map((t, i) => (
+          <g key={i}>
+            <line x1={PAD_L} x2={totalW - 10} y1={t.y} y2={t.y}
+              stroke={C.border} strokeWidth={i === 0 || i === 4 ? 1 : 0.5}
+              strokeDasharray={i === 0 || i === 4 ? "none" : "3,3"} />
+            <text x={PAD_L - 5} y={t.y + 3.5} fontSize={9} fill={C.textLight} textAnchor="end">
+              {kpiDef.fmt(t.val)}
+            </text>
           </g>
         ))}
 
-        {/* Columns */}
         {templateStats.map((tpl, ci) => {
-          const cx = PAD_L + ci * COL_W + COL_W / 2;
+          const cx   = PAD_L + ci * COL_W + COL_W / 2;
           const avgY = tpl.avg > 0 ? yOf(tpl.avg) : null;
 
-          // Jitter x to avoid overlaps within a column
-          const jitterMap = {};
+          // Bucket pages by Y to jitter overlapping points
+          const buckets = {};
           tpl.pages.forEach((p, pi) => {
-            const yBucket = Math.round(yOf(p.val) / 6);
-            if (!jitterMap[yBucket]) jitterMap[yBucket] = [];
-            jitterMap[yBucket].push(pi);
+            if (!p.val) return;
+            const b = Math.round(yOf(p.val) / 8);
+            if (!buckets[b]) buckets[b] = [];
+            buckets[b].push(pi);
           });
 
           return (
             <g key={tpl.key}>
-              {/* Column axis */}
-              <line x1={cx} x2={cx} y1={PAD_TOP} y2={PAD_TOP + plotH} stroke={tpl.meta.color + "25"} strokeWidth={1} />
+              <line x1={cx} x2={cx} y1={PAD_T} y2={PAD_T + plotH}
+                stroke={tpl.meta.color + "22"} strokeWidth={1} />
 
-              {/* Average bar */}
               {avgY !== null && (
                 <g>
-                  <line x1={cx - 18} x2={cx + 18} y1={avgY} y2={avgY} stroke={tpl.meta.color} strokeWidth={2.5} strokeLinecap="round" opacity={0.7} />
-                  <text x={cx + 22} y={avgY + 3.5} fontSize={9} fill={tpl.meta.color} opacity={0.8}>∅ {kpiDef.fmt(tpl.avg)}</text>
+                  <line x1={cx - 20} x2={cx + 20} y1={avgY} y2={avgY}
+                    stroke={tpl.meta.color} strokeWidth={2.5} strokeLinecap="round" opacity={0.65} />
+                  <text x={cx + 24} y={avgY + 3.5} fontSize={9} fill={tpl.meta.color} opacity={0.8}>
+                    ø {kpiDef.fmt(tpl.avg)}
+                  </text>
                 </g>
               )}
 
-              {/* Points */}
               {tpl.pages.map((p, pi) => {
-                const y       = yOf(p.val);
-                const isBest  = pi === 0 && p.val > 0;
-                const isHov   = hoveredUrl === p.url;
-                // Horizontal jitter
-                const yBucket = Math.round(y / 6);
-                const peers   = jitterMap[yBucket] || [];
-                const idx     = peers.indexOf(pi);
-                const spread  = (peers.length - 1) * 7;
-                const jx      = peers.length > 1 ? cx - spread / 2 + idx * 7 : cx;
-                const r       = isHov ? 7 : isBest ? 6 : 4;
-
+                if (!p.val) return null;
+                const y      = yOf(p.val);
+                const isBest = pi === 0;
+                const isHov  = hoveredUrl === p.url;
+                const b      = Math.round(y / 8);
+                const peers  = buckets[b] || [];
+                const idx    = peers.indexOf(pi);
+                const spread = (peers.length - 1) * 7;
+                const jx     = peers.length > 1 ? cx - spread / 2 + idx * 7 : cx;
+                const r      = isHov ? 7 : isBest ? 6 : 4;
                 return (
                   <g key={p.url} style={{ cursor: "pointer" }}
                     onMouseEnter={() => onHover(p, tpl)}
@@ -200,22 +285,21 @@ function ScatterPlot({ templateStats, kpiDef, hoveredUrl, onHover }) {
                     {isBest && <circle cx={jx} cy={y} r={12} fill={tpl.meta.color} opacity={0.12} />}
                     <circle cx={jx} cy={y} r={r}
                       fill={tpl.meta.color}
-                      opacity={isHov ? 1 : isBest ? 0.85 : 0.45}
+                      opacity={isHov ? 1 : isBest ? 0.88 : 0.45}
                       stroke={isHov || isBest ? tpl.meta.color : "none"}
-                      strokeWidth={isHov ? 2 : 1.5}
+                      strokeWidth={isHov ? 2.5 : 1.5}
                     />
                   </g>
                 );
               })}
 
-              {/* Column label */}
-              <text x={cx} y={H - PAD_BOT + 16} fontSize={11} fill={tpl.meta.color} textAnchor="middle" fontWeight="700">
+              <text x={cx} y={H - PAD_B + 16} fontSize={11} fill={tpl.meta.color} textAnchor="middle" fontWeight="700">
                 {tpl.meta.icon} {tpl.meta.label}
               </text>
-              <text x={cx} y={H - PAD_BOT + 29} fontSize={9} fill={C.textLight} textAnchor="middle">
-                {tpl.pages.length} page{tpl.pages.length > 1 ? "s" : ""}
+              <text x={cx} y={H - PAD_B + 29} fontSize={9} fill={C.textLight} textAnchor="middle">
+                {tpl.withVal} / {tpl.pages.length} pages
               </text>
-              <text x={cx} y={H - PAD_BOT + 41} fontSize={9} fill={tpl.meta.color} textAnchor="middle" fontWeight="600">
+              <text x={cx} y={H - PAD_B + 41} fontSize={9} fill={tpl.meta.color} textAnchor="middle" fontWeight="600">
                 Σ {kpiDef.fmt(tpl.total)}
               </text>
             </g>
@@ -226,23 +310,40 @@ function ScatterPlot({ templateStats, kpiDef, hoveredUrl, onHover }) {
   );
 }
 
+// ── Empty state ───────────────────────────────────────────────────
+
+function EmptyState({ icon, title, sub }) {
+  return (
+    <div style={{ background: C.bg, borderRadius: 12, padding: 32, textAlign: "center" }}>
+      <div style={{ fontSize: 28, marginBottom: 8 }}>{icon}</div>
+      <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 4 }}>{title}</div>
+      <div style={{ fontSize: 12, color: C.textLight }}>{sub}</div>
+    </div>
+  );
+}
+
 // ── Main ──────────────────────────────────────────────────────────
 
-export default function TemplateAnalysis({ sites, sfData, gscData, smData, pageTypes }) {
+export default function TemplateAnalysis({ sites, sfData = {}, gscData = {}, gaData = {}, bingData = {}, smData = {}, pageTypes = {} }) {
   const [selectedSite, setSelectedSite] = useState(() => sites[0]?.id || "");
-  const [selectedKpi,  setSelectedKpi]  = useState("clicks");
-  const [hovered,      setHovered]      = useState(null); // { page, tpl }
-  const [topN,         setTopN]         = useState(5);
+  const [selectedKpi,  setSelectedKpi]  = useState("gscClicks");
+  const [hovered,      setHovered]      = useState(null);
+  const [topN,         setTopN]         = useState(8);
 
-  // ── All hooks BEFORE any early return ────────────────────────
   const site   = sites.find(s => s.id === selectedSite) || sites[0];
   const siteId = site?.id || "";
   const kpiDef = KPI_DEFS.find(k => k.key === selectedKpi) || KPI_DEFS[0];
-  const ptMap  = (site && pageTypes[siteId]) || {};
+  const ptMap  = pageTypes[siteId] || {};
 
   const urlData = useMemo(
-    () => site ? buildUrlData(sfData[siteId] || [], gscData[siteId] || [], smData[siteId] || []) : {},
-    [siteId, sfData, gscData, smData] // eslint-disable-line react-hooks/exhaustive-deps
+    () => buildUrlData(
+      sfData[siteId]   || [],
+      gscData[siteId]  || [],
+      gaData[siteId]   || [],
+      bingData[siteId] || [],
+      smData[siteId]   || [],
+    ),
+    [siteId, sfData, gscData, gaData, bingData, smData] // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   const templateStats = useMemo(
@@ -252,7 +353,10 @@ export default function TemplateAnalysis({ sites, sfData, gscData, smData, pageT
 
   const topPages = useMemo(() => {
     return Object.entries(urlData)
-      .map(([url, d]) => ({ url, val: d[selectedKpi] ?? 0, tpl: ptMap[url], data: d }))
+      .map(([rawUrl, d]) => {
+        const cleanUrl = rawUrl.startsWith("__nosf__") ? rawUrl.slice(8) : rawUrl;
+        return { url: cleanUrl, val: d[selectedKpi] ?? 0, tpl: ptMap[cleanUrl] || ptMap[rawUrl], data: d };
+      })
       .filter(p => p.tpl && p.tpl !== "home" && p.val > 0)
       .sort((a, b) => kpiDef.higher ? b.val - a.val : a.val - b.val)
       .slice(0, topN);
@@ -273,35 +377,27 @@ export default function TemplateAnalysis({ sites, sfData, gscData, smData, pageT
     return out.sort((a, b) => b.gap - a.gap).slice(0, 12);
   }, [templateStats, kpiDef]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Guards AFTER hooks ────────────────────────────────────────
+  // ── Guards after hooks ──
   if (!site) return null;
 
   const classifiedCount = Object.keys(ptMap).filter(u => ptMap[u] && ptMap[u] !== "home").length;
-  const hasData  = Object.keys(urlData).length > 0;
-  const hasTpls  = classifiedCount > 0;
-  const totalKpi = templateStats.reduce((s, t) => s + t.total, 0);
-  const winner   = templateStats[0];
+  const hasAnyData = (gscData[siteId]?.length || gaData[siteId]?.length || smData[siteId]?.length || bingData[siteId]?.length) > 0;
+  const totalKpi   = templateStats.reduce((s, t) => s + t.total, 0);
+  const winner     = templateStats[0];
 
-  if (!hasData) return (
-    <div style={{ background: C.bg, borderRadius: 12, padding: 32, textAlign: "center" }}>
-      <div style={{ fontSize: 28, marginBottom: 8 }}>🗂️</div>
-      <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 4 }}>Importez un CSV Screaming Frog</div>
-      <div style={{ fontSize: 12, color: C.textLight }}>Les données SF sont nécessaires pour cette analyse</div>
-    </div>
+  if (!hasAnyData) return (
+    <EmptyState icon="📥" title="Aucune donnée source disponible"
+      sub="Importez au moins une source : GSC, GA4, Semrush ou Bing AI Performance" />
   );
-
-  if (!hasTpls) return (
-    <div style={{ background: C.bg, borderRadius: 12, padding: 32, textAlign: "center" }}>
-      <div style={{ fontSize: 28, marginBottom: 8 }}>🏷️</div>
-      <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 4 }}>Classifiez les templates d'abord</div>
-      <div style={{ fontSize: 12, color: C.textLight }}>Lancez la classification dans l'onglet ⚙️ Setup → votre site</div>
-    </div>
+  if (!classifiedCount) return (
+    <EmptyState icon="🏷️" title="Classifiez les templates d'abord"
+      sub="Lancez la classification dans ⚙️ Setup → votre site" />
   );
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
 
-      {/* ── Controls bar ── */}
+      {/* ── Controls ── */}
       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
         {sites.length > 1 && sites.map(s => (
           <button key={s.id} onClick={() => setSelectedSite(s.id)} style={{
@@ -312,12 +408,11 @@ export default function TemplateAnalysis({ sites, sfData, gscData, smData, pageT
             transition: "all 0.15s",
           }}>{s.label}</button>
         ))}
-
         <select value={selectedKpi} onChange={e => setSelectedKpi(e.target.value)} style={{
           padding: "6px 12px", border: `1px solid ${C.border}`, borderRadius: 8,
           fontSize: 12, color: C.text, background: C.white, cursor: "pointer",
         }}>
-          {["GSC", "Semrush", "SF"].map(src => (
+          {["GSC", "GA4", "Semrush", "Bing AI"].map(src => (
             <optgroup key={src} label={src}>
               {KPI_DEFS.filter(k => k.src === src).map(k => (
                 <option key={k.key} value={k.key}>{k.label}</option>
@@ -325,39 +420,40 @@ export default function TemplateAnalysis({ sites, sfData, gscData, smData, pageT
             </optgroup>
           ))}
         </select>
-
-        <span style={{ fontSize: 11, color: C.textLight, marginLeft: 4 }}>
-          {classifiedCount} pages · {templateStats.length} templates · accueil exclu
+        <span style={{ fontSize: 11, color: C.textLight }}>
+          {classifiedCount} pages classifiées · {templateStats.length} templates · accueil & "autre" exclus
         </span>
       </div>
 
-      {/* ── Scatter plot card ── */}
+      {/* ── Scatter plot ── */}
       <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: "20px 24px" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16, gap: 16 }}>
           <div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Positionnement par template — {kpiDef.label}</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>
+              Positionnement par template — {kpiDef.label} <span style={{ fontWeight: 400, color: C.textLight, fontSize: 11 }}>({kpiDef.src})</span>
+            </div>
             <div style={{ fontSize: 11, color: C.textLight, marginTop: 3 }}>
-              1 point = 1 page · trait = moyenne du template · halo = best page · {kpiDef.higher ? "↑ haut = mieux" : "↑ bas = mieux"}
+              1 point = 1 page · trait = moyenne · halo = best page · {kpiDef.higher ? "↑ haut = mieux" : "↑ bas = mieux (position)"}
             </div>
           </div>
-          {/* Tooltip survol */}
           {hovered ? (
-            <div style={{ background: hovered.tpl.meta.bg, border: `1px solid ${hovered.tpl.meta.color}44`, borderRadius: 9, padding: "10px 14px", minWidth: 220, maxWidth: 300 }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: hovered.tpl.meta.color, marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.6 }}>
+            <div style={{ background: hovered.tpl.meta.bg, border: `1px solid ${hovered.tpl.meta.color}44`, borderRadius: 9, padding: "10px 14px", minWidth: 200, maxWidth: 280, flexShrink: 0 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: hovered.tpl.meta.color, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 3 }}>
                 {hovered.tpl.meta.icon} {hovered.tpl.meta.label}
               </div>
-              <div style={{ fontSize: 11, color: C.text, wordBreak: "break-all", marginBottom: 5 }} title={hovered.page.url}>
+              <div style={{ fontSize: 11, color: C.text, wordBreak: "break-all", marginBottom: 5 }}>
                 {getPath(hovered.page.url)}
               </div>
               <div style={{ fontSize: 16, fontWeight: 800, color: hovered.tpl.meta.color }}>
-                {kpiDef.fmt(hovered.page.val)} <span style={{ fontSize: 11, fontWeight: 400, color: C.textLight }}>{kpiDef.label}</span>
+                {kpiDef.fmt(hovered.page.val)}
+                <span style={{ fontSize: 11, fontWeight: 400, color: C.textLight, marginLeft: 5 }}>{kpiDef.label}</span>
               </div>
               {hovered.page.data.title && (
-                <div style={{ fontSize: 10, color: C.textLight, marginTop: 4, fontStyle: "italic" }}>{hovered.page.data.title.slice(0, 60)}</div>
+                <div style={{ fontSize: 10, color: C.textLight, marginTop: 4, fontStyle: "italic" }}>{hovered.page.data.title.slice(0, 65)}</div>
               )}
             </div>
           ) : (
-            <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>Survolez un point pour les détails</div>
+            <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic", flexShrink: 0 }}>Survolez un point</div>
           )}
         </div>
         <ScatterPlot
@@ -366,110 +462,109 @@ export default function TemplateAnalysis({ sites, sfData, gscData, smData, pageT
           hoveredUrl={hovered?.page?.url}
           onHover={(page, tpl) => setHovered(page ? { page, tpl } : null)}
         />
+        {templateStats.length === 0 && (
+          <div style={{ textAlign: "center", padding: "20px 0", color: C.textLight, fontSize: 12, fontStyle: "italic" }}>
+            Aucune page classifiée n'a de données pour <strong>{kpiDef.label}</strong> — essayez un autre KPI
+          </div>
+        )}
       </div>
 
-      {/* ── Templates qui rankent + Pages qui rankent ── */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+      {/* ── Template ranking + Top pages ── */}
+      {templateStats.length > 0 && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
 
-        {/* Templates ranking */}
-        <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: "20px 24px" }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 2 }}>Templates qui rankent</div>
-          <div style={{ fontSize: 11, color: C.textLight, marginBottom: 18 }}>
-            Classés par {kpiDef.higher ? "somme" : "moyenne"} de {kpiDef.label}
-          </div>
-
-          {templateStats.map((tpl, i) => {
-            const share = totalKpi ? Math.round(tpl.total / totalKpi * 100) : 0;
-            const barW  = templateStats[0].total ? tpl.total / templateStats[0].total * 100 : 0;
-            return (
-              <div key={tpl.key} style={{ marginBottom: 14 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 5 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    <span style={{ fontSize: 13, fontWeight: 800, color: C.textLight, minWidth: 18 }}>#{i + 1}</span>
-                    <span style={{ fontSize: 13 }}>{tpl.meta.icon}</span>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: tpl.meta.color }}>{tpl.meta.label}</span>
-                    <span style={{ fontSize: 10, color: C.textLight }}>{tpl.pages.length} p.</span>
-                  </div>
-                  <div style={{ textAlign: "right" }}>
-                    <span style={{ fontSize: 14, fontWeight: 800, color: C.text }}>{kpiDef.fmt(tpl.total)}</span>
-                    <span style={{ fontSize: 10, color: C.textLight, marginLeft: 5 }}>{share}%</span>
-                  </div>
-                </div>
-                <div style={{ height: 6, background: C.bg, borderRadius: 3, overflow: "hidden", marginBottom: 4 }}>
-                  <div style={{ height: "100%", width: `${barW}%`, background: tpl.meta.color, borderRadius: 3, transition: "width 0.5s ease" }} />
-                </div>
-                {tpl.best?.val > 0 && (
-                  <div style={{ fontSize: 10, color: C.textLight }}>
-                    ↗ meilleure : <a href={tpl.best.url} target="_blank" rel="noreferrer" style={{ color: tpl.meta.color, textDecoration: "none" }}>{getPath(tpl.best.url).slice(0, 45)}</a>
-                    {" "}· <strong>{kpiDef.fmt(tpl.best.val)}</strong>
-                    <span style={{ color: C.textLight }}> · moy. {kpiDef.fmt(tpl.avg)}</span>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-
-          {winner && totalKpi > 0 && (
-            <div style={{ marginTop: 16, padding: "11px 14px", background: `${winner.meta.color}0D`, border: `1px solid ${winner.meta.color}30`, borderRadius: 10, fontSize: 12 }}>
-              <span style={{ fontWeight: 700, color: winner.meta.color }}>💡 {winner.meta.icon} {winner.meta.label}</span> représente{" "}
-              <strong>{Math.round(winner.total / totalKpi * 100)}%</strong> du {kpiDef.label} total.
-              {" "}Piste prioritaire pour ce KPI — <strong>investissez ce format en priorité.</strong>
+          {/* Template ranking */}
+          <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: "20px 24px" }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 2 }}>Templates qui rankent</div>
+            <div style={{ fontSize: 11, color: C.textLight, marginBottom: 18 }}>
+              Classés par somme de {kpiDef.label} — {kpiDef.src}
             </div>
-          )}
-        </div>
-
-        {/* Top pages */}
-        <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: "20px 24px" }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 2 }}>Pages qui rankent</div>
-          <div style={{ fontSize: 11, color: C.textLight, marginBottom: 18 }}>
-            Modèles à reproduire pour les pages du même template
+            {templateStats.map((tpl, i) => {
+              const barW = templateStats[0].total ? tpl.total / templateStats[0].total * 100 : 0;
+              const share = totalKpi ? Math.round(tpl.total / totalKpi * 100) : 0;
+              return (
+                <div key={tpl.key} style={{ marginBottom: 14 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 5 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ fontSize: 13, fontWeight: 800, color: C.textLight, minWidth: 20 }}>#{i+1}</span>
+                      <span style={{ fontSize: 13 }}>{tpl.meta.icon}</span>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: tpl.meta.color }}>{tpl.meta.label}</span>
+                      <span style={{ fontSize: 10, color: C.textLight }}>{tpl.withVal} p.</span>
+                    </div>
+                    <div style={{ textAlign: "right" }}>
+                      <span style={{ fontSize: 14, fontWeight: 800, color: C.text }}>{kpiDef.fmt(tpl.total)}</span>
+                      <span style={{ fontSize: 10, color: C.textLight, marginLeft: 5 }}>{share}%</span>
+                    </div>
+                  </div>
+                  <div style={{ height: 6, background: C.bg, borderRadius: 3, overflow: "hidden", marginBottom: 4 }}>
+                    <div style={{ height: "100%", width: `${barW}%`, background: tpl.meta.color, borderRadius: 3, transition: "width 0.5s" }} />
+                  </div>
+                  {tpl.best?.val > 0 && (
+                    <div style={{ fontSize: 10, color: C.textLight }}>
+                      ↗ <a href={tpl.best.url} target="_blank" rel="noreferrer"
+                        style={{ color: tpl.meta.color, textDecoration: "none" }}>
+                        {getPath(tpl.best.url).slice(0, 45)}
+                      </a>
+                      {" "}· <strong>{kpiDef.fmt(tpl.best.val)}</strong>
+                      <span style={{ color: C.textLight }}> · moy. {kpiDef.fmt(tpl.avg)}</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            {winner && totalKpi > 0 && (
+              <div style={{ marginTop: 16, padding: "11px 14px", background: `${winner.meta.color}0D`, border: `1px solid ${winner.meta.color}28`, borderRadius: 10, fontSize: 12 }}>
+                💡 <strong style={{ color: winner.meta.color }}>{winner.meta.icon} {winner.meta.label}</strong> génère{" "}
+                {Math.round(winner.total / totalKpi * 100)}% des {kpiDef.label} totaux.{" "}
+                <strong>Investissez ce format en priorité.</strong>
+              </div>
+            )}
           </div>
 
-          {topPages.length === 0 ? (
-            <div style={{ color: C.textLight, fontSize: 12, fontStyle: "italic" }}>Aucune donnée pour ce KPI</div>
-          ) : topPages.map((p, i) => {
-            const tplMeta = PAGE_TYPE_MAP[p.tpl] || { label: p.tpl, color: "#64748B", bg: "#F1F5F9", icon: "❓" };
-            const path = getPath(p.url);
-            return (
-              <div key={p.url} style={{ display: "flex", gap: 10, alignItems: "center", padding: "9px 0", borderBottom: i < topPages.length - 1 ? `1px solid ${C.borderLight}` : "none" }}>
-                <span style={{ fontSize: 15, fontWeight: 800, color: C.textLight, minWidth: 22, textAlign: "right" }}>{i + 1}</span>
-                <span style={{ fontSize: 11, background: tplMeta.bg, color: tplMeta.color, borderRadius: 5, padding: "2px 7px", fontWeight: 600, flexShrink: 0, whiteSpace: "nowrap" }}>
-                  {tplMeta.icon} {tplMeta.label}
-                </span>
-                <a href={p.url} target="_blank" rel="noreferrer" title={p.data.title || p.url}
-                  style={{ flex: 1, fontSize: 11, color: C.blue, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textDecoration: "none" }}>
-                  {path}
-                </a>
-                <div style={{ textAlign: "right", flexShrink: 0 }}>
-                  <div style={{ fontSize: 14, fontWeight: 800, color: C.text }}>{kpiDef.fmt(p.val)}</div>
+          {/* Top pages */}
+          <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: "20px 24px" }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 2 }}>Pages qui rankent</div>
+            <div style={{ fontSize: 11, color: C.textLight, marginBottom: 18 }}>
+              Modèles à reproduire pour les pages du même template
+            </div>
+            {topPages.map((p, i) => {
+              const tplMeta = PAGE_TYPE_MAP[p.tpl] || { label: p.tpl, color: "#64748B", bg: "#F1F5F9", icon: "❓" };
+              return (
+                <div key={p.url} style={{ display: "flex", gap: 10, alignItems: "center", padding: "9px 0", borderBottom: i < topPages.length - 1 ? `1px solid ${C.borderLight}` : "none" }}>
+                  <span style={{ fontSize: 15, fontWeight: 800, color: C.textLight, minWidth: 22, textAlign: "right" }}>{i+1}</span>
+                  <span style={{ fontSize: 10, background: tplMeta.bg, color: tplMeta.color, borderRadius: 5, padding: "2px 7px", fontWeight: 600, flexShrink: 0 }}>
+                    {tplMeta.icon} {tplMeta.label}
+                  </span>
+                  <a href={p.url} target="_blank" rel="noreferrer" title={p.data.title || p.url}
+                    style={{ flex: 1, fontSize: 11, color: C.blue, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textDecoration: "none" }}>
+                    {getPath(p.url)}
+                  </a>
+                  <div style={{ fontSize: 14, fontWeight: 800, color: C.text, flexShrink: 0 }}>
+                    {kpiDef.fmt(p.val)}
+                  </div>
                 </div>
-              </div>
-            );
-          })}
-
-          {topPages.length >= topN && (
-            <button onClick={() => setTopN(n => n + 5)}
-              style={{ marginTop: 12, width: "100%", padding: "7px", border: `1px solid ${C.border}`, borderRadius: 8, background: C.white, color: C.textMid, fontSize: 11, cursor: "pointer" }}>
-              Afficher 5 de plus
-            </button>
-          )}
+              );
+            })}
+            {topPages.length >= topN && (
+              <button onClick={() => setTopN(n => n + 5)}
+                style={{ marginTop: 12, width: "100%", padding: "7px", border: `1px solid ${C.border}`, borderRadius: 8, background: C.white, color: C.textMid, fontSize: 11, cursor: "pointer" }}>
+                Afficher 5 de plus
+              </button>
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* ── Recommandations ── */}
       {recs.length > 0 && (
         <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: "20px 24px" }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 2 }}>
-            ⚡ Pages avec potentiel inexploité
-          </div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 2 }}>⚡ Pages avec potentiel inexploité</div>
           <div style={{ fontSize: 11, color: C.textLight, marginBottom: 18 }}>
-            Pages dont le template a de meilleures performances ailleurs — écart &gt;25% par rapport à la meilleure page du même template
+            Pages dont le template performe mieux ailleurs — écart &gt;25% vs la meilleure page du même template
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))", gap: 10 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))", gap: 10 }}>
             {recs.map((r, i) => {
-              const path     = getPath(r.page.url);
-              const bestPath = getPath(r.best.url);
-              const gapPct   = Math.round(r.gapPct * 100);
+              const gapPct = Math.round(r.gapPct * 100);
               return (
                 <div key={i} style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 16px" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 7 }}>
@@ -477,22 +572,22 @@ export default function TemplateAnalysis({ sites, sfData, gscData, smData, pageT
                       {r.tplMeta.icon} {r.tplMeta.label}
                     </span>
                     <span style={{ fontSize: 11, fontWeight: 700, color: "#DC2626" }}>−{gapPct}%</span>
-                    <span style={{ fontSize: 10, color: C.textLight }}>vs meilleure du template</span>
+                    <span style={{ fontSize: 10, color: C.textLight }}>vs meilleure</span>
                   </div>
                   <a href={r.page.url} target="_blank" rel="noreferrer"
-                    style={{ fontSize: 11, color: C.text, fontWeight: 600, display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textDecoration: "none", marginBottom: 4 }}
-                    title={r.page.data.title || r.page.url}>
-                    {path}
+                    style={{ fontSize: 11, color: C.text, fontWeight: 600, display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textDecoration: "none", marginBottom: 4 }}>
+                    {getPath(r.page.url)}
                   </a>
                   <div style={{ fontSize: 12, color: C.textLight, marginBottom: 8 }}>
                     {kpiDef.label} : <strong style={{ color: C.text }}>{kpiDef.fmt(r.page.val)}</strong>
                     <span style={{ margin: "0 6px" }}>·</span>
                     potentiel : <strong style={{ color: r.tplMeta.color }}>+{kpiDef.fmt(r.gap)}</strong>
                   </div>
-                  <div style={{ fontSize: 10, color: C.textLight, padding: "7px 10px", background: `${r.tplMeta.color}08`, border: `1px solid ${r.tplMeta.color}20`, borderRadius: 6 }}>
-                    📌 Référence : <a href={r.best.url} target="_blank" rel="noreferrer" style={{ color: r.tplMeta.color, textDecoration: "none" }}>{bestPath}</a>
-                    <strong style={{ color: r.tplMeta.color, marginLeft: 4 }}>({kpiDef.fmt(r.best.val)})</strong>
-                    {r.page.data.title && <div style={{ marginTop: 4, fontStyle: "italic", color: C.textLight }}>"{r.page.data.title.slice(0, 70)}"</div>}
+                  <div style={{ fontSize: 10, color: C.textLight, padding: "7px 10px", background: `${r.tplMeta.color}08`, border: `1px solid ${r.tplMeta.color}1A`, borderRadius: 6 }}>
+                    📌 Référence : <a href={r.best.url} target="_blank" rel="noreferrer" style={{ color: r.tplMeta.color, textDecoration: "none" }}>
+                      {getPath(r.best.url)}
+                    </a>{" "}
+                    <strong style={{ color: r.tplMeta.color }}>({kpiDef.fmt(r.best.val)})</strong>
                   </div>
                 </div>
               );
