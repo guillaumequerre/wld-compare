@@ -411,8 +411,18 @@ const ACTION_ICONS = { schema: "🔖", words: "📝", inlinks: "🔗", flesch: "
 export default function TemplateAnalysis({ sites, sfData = {}, gscData = {}, gaData = {}, bingData = {}, smData = {}, pageTypes = {} }) {
   const [selectedSite] = useState(() => sites[0]?.id || "");
   const [selectedKpi,  setSelectedKpi]  = useState("bingCitations");
-  const [hovered,      setHovered]      = useState(null);
-  const [hoveredSite,  setHoveredSite]  = useState(null); // site.id survolé dans la légende
+  const [hovered,        setHovered]        = useState(null);
+  const [hoveredSite,    setHoveredSite]    = useState(null);
+  const [hiddenSites,    setHiddenSites]    = useState(new Set());
+  const [activePriority, setActivePriority] = useState(null);
+
+  const toggleSite = (siteId) => {
+    setHiddenSites(prev => {
+      const next = new Set(prev);
+      if (next.has(siteId)) next.delete(siteId); else next.add(siteId);
+      return next;
+    });
+  };
   const [topN,         setTopN]         = useState(8);
   const [openRec,      setOpenRec]      = useState(null);   // url of open accordion
   const [refOverrides, setRefOverrides] = useState({});     // tplKey → url override
@@ -513,8 +523,9 @@ export default function TemplateAnalysis({ sites, sfData = {}, gscData = {}, gaD
       const pageSfRow = sfByUrl[r.page.url] || sfByUrl[getPath(r.page.url)];
       const refSfRow  = sfByUrl[r.best.url]  || sfByUrl[getPath(r.best.url)];
       generatePageActions(pageSfRow, refSfRow).forEach(a => {
-        if (!counts[a.type]) counts[a.type] = { type: a.type, label: a.label, count: 0 };
+        if (!counts[a.type]) counts[a.type] = { type: a.type, label: a.label, count: 0, pages: [] };
         counts[a.type].count++;
+        counts[a.type].pages.push({ rec: r, actionText: a.text });
       });
     });
     return Object.values(counts).sort((a, b) => b.count - a.count);
@@ -603,7 +614,7 @@ export default function TemplateAnalysis({ sites, sfData = {}, gscData = {}, gaD
             <div style={{ flex: 1, minWidth: 0 }}>
               <ScatterPlot
                 allTemplateKeys={allTemplateKeys}
-                allSiteTemplateStats={allSiteTemplateStats}
+                allSiteTemplateStats={allSiteTemplateStats.filter(({ site }) => !hiddenSites.has(site.id))}
                 kpiDef={kpiDef}
                 hoveredUrl={hovered?.page?.url}
                 hoveredSiteId={hoveredSite}
@@ -616,25 +627,28 @@ export default function TemplateAnalysis({ sites, sfData = {}, gscData = {}, gaD
               )}
             </div>
 
-            {/* Légende verticale à droite */}
+            {/* Légende verticale — toggle + hover */}
             {sites.length > 1 && (
-              <div style={{ flexShrink: 0, display: "flex", flexDirection: "column", gap: 6, paddingTop: 8 }}>
+              <div style={{ flexShrink: 0, display: "flex", flexDirection: "column", gap: 4, paddingTop: 8 }}>
                 {sites.map(s => {
-                  const isActive = !hoveredSite || hoveredSite === s.id;
+                  const isHidden = hiddenSites.has(s.id);
+                  const isDimmed = !isHidden && hoveredSite && hoveredSite !== s.id;
                   return (
                     <div
                       key={s.id}
-                      onMouseEnter={() => setHoveredSite(s.id)}
+                      onClick={() => toggleSite(s.id)}
+                      onMouseEnter={() => !isHidden && setHoveredSite(s.id)}
                       onMouseLeave={() => setHoveredSite(null)}
-                      style={{ display: "flex", alignItems: "center", gap: 7, cursor: "pointer", padding: "5px 10px", borderRadius: 8, border: `1px solid ${hoveredSite === s.id ? s.color + "55" : "transparent"}`, background: hoveredSite === s.id ? s.bg : "transparent", opacity: isActive ? 1 : 0.35, transition: "all 0.15s" }}
+                      title={isHidden ? `Afficher ${s.label}` : `Masquer ${s.label}`}
+                      style={{ display: "flex", alignItems: "center", gap: 7, cursor: "pointer", padding: "5px 10px", borderRadius: 8, border: `1px solid ${hoveredSite === s.id ? s.color + "55" : isHidden ? C.border : "transparent"}`, background: hoveredSite === s.id ? s.bg : "transparent", opacity: isDimmed || isHidden ? 0.35 : 1, transition: "all 0.15s" }}
                     >
-                      <div style={{ width: 10, height: 10, borderRadius: "50%", background: s.color, flexShrink: 0 }} />
-                      <span style={{ fontSize: 11, fontWeight: 600, color: s.color, whiteSpace: "nowrap" }}>{s.label}</span>
+                      <div style={{ width: 10, height: 10, borderRadius: "50%", background: isHidden ? "transparent" : s.color, border: `2px solid ${s.color}`, flexShrink: 0 }} />
+                      <span style={{ fontSize: 11, fontWeight: 600, color: s.color, whiteSpace: "nowrap", textDecoration: isHidden ? "line-through" : "none" }}>{s.label}</span>
                     </div>
                   );
                 })}
-                <div style={{ marginTop: 8, fontSize: 9, color: C.textLight, lineHeight: 1.5 }}>
-                  — moy.<br />● best page
+                <div style={{ marginTop: 8, fontSize: 9, color: C.textLight, lineHeight: 1.6 }}>
+                  — moy.<br />● best<br /><span style={{ opacity: 0.7 }}>clic = masquer</span>
                 </div>
               </div>
             )}
@@ -646,7 +660,7 @@ export default function TemplateAnalysis({ sites, sfData = {}, gscData = {}, gaD
           <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 2 }}>🎯 Priorités d'optimisation</div>
           <div style={{ fontSize: 11, color: C.textLight, marginBottom: 16 }}>
             {recs.length > 0
-              ? `Classées par fréquence sur ${recs.length} pages à potentiel`
+              ? `Classées par fréquence · cliquez pour voir les URLs`
               : "Aucune page à potentiel détectée pour ce KPI"}
           </div>
           {aggregatedActions.length === 0 && (
@@ -655,22 +669,57 @@ export default function TemplateAnalysis({ sites, sfData = {}, gscData = {}, gaD
             </div>
           )}
           {aggregatedActions.map((a, i) => {
-            const pct = aggregatedActions[0]?.count ? Math.round(a.count / aggregatedActions[0].count * 100) : 0;
-            const color = i === 0 ? C.red : i === 1 ? C.amber : i <= 3 ? C.blue : C.textLight;
+            const pct      = aggregatedActions[0]?.count ? Math.round(a.count / aggregatedActions[0].count * 100) : 0;
+            const color    = i === 0 ? C.red : i === 1 ? C.amber : i <= 3 ? C.blue : C.textLight;
+            const isActive = activePriority === a.type;
             return (
-              <div key={a.type} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 0", borderBottom: i < aggregatedActions.length - 1 ? `1px solid ${C.borderLight}` : "none" }}>
-                <span style={{ fontSize: 18, fontWeight: 900, color: C.textLight, minWidth: 24, lineHeight: 1.3 }}>{i + 1}</span>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: C.text, lineHeight: 1.35, marginBottom: 4 }}>
-                    {ACTION_ICONS[a.type] || "•"} {a.label}
+              <div key={a.type}>
+                <div
+                  onClick={() => setActivePriority(isActive ? null : a.type)}
+                  style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 8px", borderRadius: 8, cursor: "pointer", background: isActive ? `${color}0D` : "transparent", border: `1px solid ${isActive ? color + "33" : "transparent"}`, marginBottom: 2, transition: "all 0.15s" }}
+                >
+                  <span style={{ fontSize: 18, fontWeight: 900, color: C.textLight, minWidth: 24, lineHeight: 1.3 }}>{i + 1}</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: isActive ? color : C.text, lineHeight: 1.35, marginBottom: 4 }}>
+                      {ACTION_ICONS[a.type] || "•"} {a.label}
+                    </div>
+                    <div style={{ height: 4, background: C.bg, borderRadius: 2, overflow: "hidden" }}>
+                      <div style={{ height: "100%", width: `${pct}%`, background: color, borderRadius: 2, transition: "width 0.4s" }} />
+                    </div>
                   </div>
-                  <div style={{ height: 4, background: C.bg, borderRadius: 2, overflow: "hidden" }}>
-                    <div style={{ height: "100%", width: `${pct}%`, background: color, borderRadius: 2, transition: "width 0.4s" }} />
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2, flexShrink: 0 }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color, background: `${color}18`, border: `1px solid ${color}33`, padding: "2px 8px", borderRadius: 20 }}>
+                      ×{a.count}
+                    </span>
+                    <span style={{ fontSize: 9, color: C.textLight }}>{isActive ? "▲ fermer" : "▼ URLs"}</span>
                   </div>
                 </div>
-                <span style={{ fontSize: 11, fontWeight: 700, color, background: `${color}18`, border: `1px solid ${color}33`, padding: "2px 8px", borderRadius: 20, flexShrink: 0 }}>
-                  ×{a.count}
-                </span>
+
+                {/* Liste des URLs concernées */}
+                {isActive && (
+                  <div style={{ margin: "4px 0 10px 32px", display: "flex", flexDirection: "column", gap: 5 }}>
+                    {a.pages.map(({ rec, actionText }, pi) => {
+                      const tplMeta = rec.tplMeta;
+                      return (
+                        <div key={pi} style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, flexWrap: "wrap" }}>
+                            <span style={{ fontSize: 10, fontWeight: 600, color: tplMeta.color, background: tplMeta.bg, borderRadius: 5, padding: "1px 7px", flexShrink: 0 }}>
+                              {tplMeta.icon} {tplMeta.label}
+                            </span>
+                            <a href={rec.page.url} target="_blank" rel="noreferrer"
+                              style={{ fontSize: 11, color: C.blue, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0, textDecoration: "none" }}>
+                              {getPath(rec.page.url)}
+                            </a>
+                            <span style={{ fontSize: 10, color: "#DC2626", fontWeight: 700, flexShrink: 0 }}>
+                              −{Math.round(rec.gapPct * 100)}%
+                            </span>
+                          </div>
+                          <div style={{ fontSize: 10, color: "#065F46", lineHeight: 1.4 }}>{actionText}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             );
           })}
