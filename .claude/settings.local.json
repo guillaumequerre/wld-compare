@@ -1,7 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(cd \"E:/correlation-dashboard\" && npm run build 2>&1 | grep -E \"error|warning|Error|compiled\" | head -10)"
-    ]
-  }
-}
