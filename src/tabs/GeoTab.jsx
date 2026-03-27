@@ -102,8 +102,10 @@ async function callOpenAI({ apiKey, model, prompt, endpoint = "responses" }) {
     body: JSON.stringify(body),
   });
 
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  const text = await res.text();
+  if (text.trimStart().startsWith("<")) throw new Error("Proxy /api/openai introuvable — ajoutez openai-proxy.js dans netlify/edge-functions/");
+  const data = JSON.parse(text);
+  if (!res.ok) throw new Error(data.error?.message || data.error || `HTTP ${res.status}`);
   return data;
 }
 
@@ -460,8 +462,10 @@ function KeywordsTab({ site, projectId, apiKey, model, context, categories, setC
         headers: { "Content-Type": "application/json", "X-Openai-Key": apiKey, "X-Openai-Endpoint": "completions" },
         body: JSON.stringify({ model, messages: [{ role: "user", content: prompt }], temperature: 0.7, max_tokens: 400 }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(`OpenAI ${res.status}: ${data.error?.message || JSON.stringify(data).slice(0,150)}`);
+      const text = await res.text();
+      if (text.trimStart().startsWith("<")) throw new Error("Le proxy /api/openai est introuvable — vérifiez que openai-proxy.js est dans netlify/edge-functions/");
+      const data = JSON.parse(text);
+      if (!res.ok) throw new Error(`OpenAI ${res.status}: ${data.error?.message || text.slice(0,150)}`);
 
       const raw = (data?.choices?.[0]?.message?.content || "").trim();
       if (!raw) throw new Error(`Réponse vide. Data reçue: ${JSON.stringify(data).slice(0, 200)}`);
