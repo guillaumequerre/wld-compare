@@ -747,7 +747,8 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
       // Update URL index
       const domain_counts = {};
       (parsed.sources || []).forEach(url => {
-        if (!domain_counts[url]) domain_counts[url] = { as_source: 0, in_answer: 0 };
+        const domain = extractDomain(url);
+        if (!domain_counts[url]) domain_counts[url] = { as_source: 0, in_answer: 0, domain };
         domain_counts[url].as_source++;
       });
       await Promise.all(Object.entries(domain_counts).map(([url, counts]) =>
