@@ -234,8 +234,8 @@ function Btn({ children, onClick, disabled, color = C.blue, variant = "solid", s
 function StatusBadge({ status }) {
   const map = {
     pending:       { label: "En attente",    color: C.textLight, bg: C.bg },
-    generating_q:  { label: "Génération Q…", color: "#D97706", bg: "#FFFBEB" },
-    done_q:        { label: "Questions OK",  color: "#059669", bg: "#ECFDF5" },
+    generating_q:  { label: "⏳ Génération…",  color: "#D97706", bg: "#FFFBEB" },
+    done_q:        { label: "✓ Généré",         color: "#059669", bg: "#ECFDF5" },
     generating_r:  { label: "Appel LLM…",   color: "#7C3AED", bg: "#F5F3FF" },
     done:          { label: "Terminé",       color: "#2563EB", bg: "#EFF6FF" },
   };
@@ -401,7 +401,15 @@ function KeywordsTab({ site, projectId, apiKey, model, context, categories, setC
 
   useEffect(() => {
     if (!projectId || !site?.id) return;
-    sbGetKeywords(projectId, site.id).then(setKeywords);
+    // Load keywords + count questions per keyword
+    Promise.all([
+      sbGetKeywords(projectId, site.id),
+      sbGetQuestions(projectId, site.id),
+    ]).then(([kws, qs]) => {
+      const countByKw = {};
+      qs.forEach(q => { if (q.keyword_id) countByKw[q.keyword_id] = (countByKw[q.keyword_id] || 0) + 1; });
+      setKeywords(kws.map(k => ({ ...k, question_count: countByKw[k.id] || 0 })));
+    });
   }, [projectId, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const addKeywords = async () => {
@@ -438,29 +446,55 @@ function KeywordsTab({ site, projectId, apiKey, model, context, categories, setC
   };
 
   const generateQuestions = async (kw, axes) => {
-    if (!apiKey) { alert("Clé OpenAI manquante"); return; }
+    if (!apiKey) { alert("Clé OpenAI manquante — configure-la dans ⚙️ Setup"); return; }
     setBusy(b => ({ ...b, [kw.id]: "q" }));
     await sbUpdateKeywordStatus(kw.id, "generating_q");
     setKeywords(prev => prev.map(k => k.id === kw.id ? { ...k, status: "generating_q" } : k));
     try {
       const axesStr = (axes || ["Quoi ?", "Pourquoi ?", "Comment ?", "Comparaison", "Coût/budget"]).map((t, i) => `${i+1}. ${t}`).join("\n");
-      const prompt = `Tu es un utilisateur de ChatGPT. ${context || ""}. Tu poses des questions directes, courtes et sans fioritures.\nTransforme le mot-clé "${kw.keyword}" en 5 questions ultra-courtes pour un LLM.\nRespects ces axes :\n${axesStr}\nMaximum 12 mots par question. Langage naturel et direct.\nRéponds uniquement par les 5 questions séparées par des points-virgules (;).`;
-      const data = await callOpenAI({ apiKey, model, prompt, endpoint: "completions" });
-      const text = data.choices?.[0]?.message?.content || "";
-      const questions = text.split(";").map(s => s.trim()).filter(Boolean);
-      if (questions.length) {
-        const qRows = questions.map(q => ({
-          project_id: projectId, site_id: site.id,
-          keyword_id: kw.id, question: q, is_manual: false,
-          ...(kw.category_id ? { category_id: kw.category_id } : {}),
-        }));
-        await sbSaveQuestions(qRows);
-        onQuestionsGenerated?.();
+      const prompt = `Transforme le mot-clé "${kw.keyword}" en 5 questions courtes et naturelles pour un moteur de recherche IA.\nRespects ces axes :\n${axesStr}\nContraintes : maximum 12 mots par question, langage direct.\nRéponds UNIQUEMENT avec les 5 questions séparées par des points-virgules (;), sans numérotation, sans texte avant ou après.`;
+
+      // Direct fetch — plain text, no json_object format
+      const res = await fetch("/api/openai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Openai-Key": apiKey, "X-Openai-Endpoint": "completions" },
+        body: JSON.stringify({ model, messages: [{ role: "user", content: prompt }], temperature: 0.7, max_tokens: 400 }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(`OpenAI ${res.status}: ${data.error?.message || JSON.stringify(data).slice(0,150)}`);
+
+      const raw = (data?.choices?.[0]?.message?.content || "").trim();
+      if (!raw) throw new Error(`Réponse vide. Data reçue: ${JSON.stringify(data).slice(0, 200)}`);
+
+      const questions = raw
+        .split(/[;\n]/)
+        .map(s => s.replace(/^\s*\d+[.)\s]+/, "").trim())
+        .filter(s => s.length > 5 && s.length < 250);
+
+      if (!questions.length) throw new Error(`Parsing échoué. Reçu: "${raw.slice(0, 100)}"`);
+
+      // Save — strip category_id if column not migrated yet
+      const baseRow = (q) => ({ project_id: projectId, site_id: site.id, keyword_id: kw.id, question: q, is_manual: false });
+      let saved;
+      try {
+        const qRows = questions.map(q => kw.category_id ? { ...baseRow(q), category_id: kw.category_id } : baseRow(q));
+        saved = await sbSaveQuestions(qRows);
+      } catch(saveErr) {
+        console.warn("Retry without category_id:", saveErr.message);
+        saved = await sbSaveQuestions(questions.map(baseRow));
       }
+      const savedCount = Array.isArray(saved) ? saved.length : questions.length;
+      console.log(`✓ ${savedCount} questions saved for "${kw.keyword}"`);
+
       await sbUpdateKeywordStatus(kw.id, "done_q");
-      setKeywords(prev => prev.map(k => k.id === kw.id ? { ...k, status: "done_q" } : k));
+      setKeywords(prev => prev.map(k => k.id === kw.id
+        ? { ...k, status: "done_q", question_count: (k.question_count || 0) + savedCount }
+        : k
+      ));
+      onQuestionsGenerated?.();
     } catch(e) {
-      console.error(e);
+      console.error("generateQuestions error:", e);
+      alert(`Erreur pour "${kw.keyword}" : ${e.message}`);
       await sbUpdateKeywordStatus(kw.id, "pending");
       setKeywords(prev => prev.map(k => k.id === kw.id ? { ...k, status: "pending" } : k));
     }
@@ -541,6 +575,8 @@ function KeywordsTab({ site, projectId, apiKey, model, context, categories, setC
         <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
           <span style={{ fontSize: 11, color: C.textLight }}>
             {filtered.length} mot{filtered.length > 1 ? "s-clés" : "-clé"}
+            {" · "}<span style={{ color: "#059669", fontWeight: 600 }}>{filtered.filter(k => k.status === "done_q" || k.status === "done").length} générés</span>
+            {" · "}{filtered.reduce((s, k) => s + (k.question_count || 0), 0)} question{filtered.reduce((s, k) => s + (k.question_count || 0), 0) > 1 ? "s" : ""}
             {selected.size > 0 && <strong style={{ color: C.text }}> · {selected.size} sélectionné{selected.size > 1 ? "s" : ""}</strong>}
           </span>
 
@@ -581,19 +617,24 @@ function KeywordsTab({ site, projectId, apiKey, model, context, categories, setC
             const cat = categories.find(c => c.id === kw.category_id);
             const isSel = selected.has(kw.id);
             return (
-              <div key={kw.id} style={{ background: isSel ? "#EFF6FF" : C.white, border: `1px solid ${isSel ? "#2563EB55" : C.border}`, borderRadius: 10, padding: "10px 14px", display: "flex", alignItems: "center", gap: 10 }}>
+              <div key={kw.id} style={{ background: isSel ? "#EFF6FF" : C.white, border: `1px solid ${kw.status === "done_q" ? "#05966933" : isSel ? "#2563EB55" : C.border}`, borderRadius: 10, padding: "10px 14px", display: "flex", alignItems: "center", gap: 10, borderLeft: `3px solid ${kw.status === "done_q" ? "#059669" : kw.status === "generating_q" ? "#D97706" : "transparent"}` }}>
                 <input type="checkbox" checked={isSel} onChange={() => toggleSelect(kw.id)} style={{ cursor: "pointer", flexShrink: 0 }} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{kw.keyword}</div>
                   <div style={{ display: "flex", gap: 6, marginTop: 3, alignItems: "center" }}>
                     <StatusBadge status={kw.status} />
+                    {kw.question_count > 0 && (
+                      <span style={{ fontSize: 10, fontWeight: 700, color: "#059669", background: "#ECFDF5", border: "1px solid #059669", borderRadius: 10, padding: "1px 8px" }}>
+                        {kw.question_count} question{kw.question_count > 1 ? "s" : ""}
+                      </span>
+                    )}
                     {cat && <span style={{ fontSize: 10, fontWeight: 700, color: cat.color, background: cat.color + "18", border: `1px solid ${cat.color}44`, borderRadius: 10, padding: "1px 7px" }}>{cat.name}</span>}
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 6, flexShrink: 0, alignItems: "center" }}>
                   <CatSelect value={kw.category_id} categories={categories} onChange={v => setCatSingle(kw.id, v)} />
                   <Btn onClick={() => generateQuestions(kw, null)} disabled={!!busy[kw.id] || !apiKey} variant="outline" small color={site.color}>
-                    {busy[kw.id] === "q" ? "⏳" : "💬"}
+                    {busy[kw.id] === "q" ? "⏳" : kw.status === "done_q" ? "🔄" : "💬"}
                   </Btn>
                   <button onClick={() => deleteKw(kw.id)} style={{ padding: "3px 7px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.white, color: C.textLight, fontSize: 10, cursor: "pointer" }}>🗑</button>
                 </div>
