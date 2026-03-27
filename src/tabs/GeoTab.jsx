@@ -90,7 +90,6 @@ async function callOpenAI({ apiKey, model, prompt, endpoint = "responses" }) {
         model,
         messages: [{ role: "user", content: prompt }],
         temperature: 1,
-        response_format: { type: "json_object" }
       };
 
   const res = await fetch("/api/openai", {
@@ -1069,6 +1068,7 @@ function UrlsTab({ projectId, categories }) {
 
 export default function GeoTab({ sites, projectId, project }) {
   const [subTab, setSubTab]         = useState("keywords"); // keywords | questions | urls
+  const [questionsKey, setQuestionsKey] = useState(0); // incremented to force QuestionsTab reload
   const [selectedSite, setSelectedSite] = useState(sites[0]?.id || "");
   const [model, setModel]           = useState("gpt-4o-mini");
   const [brand, setBrand]           = useState(null);         // { brand_name, brand_aliases, competitors, context }
@@ -1270,11 +1270,12 @@ export default function GeoTab({ sites, projectId, project }) {
           context={brand?.context || ""}
           categories={categories}
           setCategories={setCategories}
-          onQuestionsGenerated={() => setSubTab("questions")}
+          onQuestionsGenerated={() => { setQuestionsKey(k => k + 1); setSubTab("questions"); }}
         />
       )}
       {subTab === "questions" && (
         <QuestionsTab
+          key={questionsKey}
           site={site}
           projectId={projectId}
           apiKey={apiKeyDec}
