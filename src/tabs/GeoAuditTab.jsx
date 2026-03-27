@@ -8,11 +8,6 @@ const ANTHROPIC_PROXY = "/api/anthropic";
 
 // ── Helpers ───────────────────────────────────────────────────────
 
-function fmt(n, unit = "") {
-  if (n === null || n === undefined) return "—";
-  if (n >= 1000) return (n / 1000).toFixed(1) + "k" + unit;
-  return String(Math.round(n)) + unit;
-}
 
 function pct(a, b) { return b ? Math.round(a / b * 100) : 0; }
 
@@ -212,7 +207,7 @@ function TrendChart({ trendDays }) {
 
 // ── AI analysis block ─────────────────────────────────────────────
 
-function AIAnalysis({ audit, brand, site, questions, results }) {
+function AIAnalysis({ audit, brand, site, questions, results, onTextReady }) {
   const [status, setStatus] = useState("idle"); // idle | loading | done | error
   const [analysis, setAnalysis] = useState("");
 
@@ -316,6 +311,7 @@ Sois très concret, évite le jargon vague. Utilise des exemples spécifiques ti
           } catch {}
         }
       }
+      onTextReady?.(text);
       setStatus("done");
     } catch(e) {
       console.error(e);
@@ -661,7 +657,7 @@ export default function GeoAuditTab({ sites, projectId }) {
 
         {/* AI analysis */}
         <Section icon="✦" title="Analyse IA détaillée" sub="Interprétation contextuelle générée par Claude sur demande">
-          <AIAnalysis audit={audit} brand={siteBrand} site={site} questions={siteQuestions} results={siteResults} />
+          <AIAnalysis audit={audit} brand={siteBrand} site={site} questions={siteQuestions} results={siteResults} onTextReady={setAiText} />
         </Section>
 
       </>)}
