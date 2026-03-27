@@ -16,7 +16,7 @@ import {
 
 const DEFAULT_AXES = [
   "Meilleur / top / recommandé",
-  "Alternative / comparatif",
+  "Pistes et approches pour utiliser / bénéficier du mot-clé",
   "Avis / fiable / fiabilité",
   "Pour atteindre un objectif lié au mot-clé",
   "Pour résoudre une problématique liée au mot-clé",
@@ -449,7 +449,28 @@ function KeywordsTab({ site, projectId, apiKey, model, axes, context, categories
     try {
       const axesStr = (axes && axes.length ? axes : DEFAULT_AXES).map((t, i) => `${i+1}. ${t}`).join("\n");
       const numQ = (axes && axes.length ? axes : DEFAULT_AXES).length;
-      const prompt = `Tu génères des questions que de vrais utilisateurs tapent dans ChatGPT ou Google.\nMot-clé : "${kw.keyword}"\n\nGénère ${numQ} questions (une par axe ci-dessous). Chaque question doit :\n- Refléter une intention réelle (informationnelle, transactionnelle ou comparative)\n- Être formulée comme un utilisateur le dirait naturellement\n- Faire maximum 12 mots\n\nAxes :\n${axesStr}\n\nRéponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgules (;), sans numérotation, sans texte avant ou après.`;
+      const axesWithInstructions = (axes && axes.length ? axes : DEFAULT_AXES).map((axe, i) => `${i+1}. [${axe}] → formule une question dont la réponse cite des entreprises, acteurs ou prestataires liés à "${kw.keyword}"`).join("\n");
+      const prompt = `Tu es un expert GEO. Ton rôle : générer des questions qui amènent ChatGPT ou Google SGE à répondre avec des NOMS D'ENTREPRISES, D'ACTEURS ou DE PRESTATAIRES — jamais des réponses génériques.
+
+Mot-clé : "${kw.keyword}"
+
+RÈGLE ABSOLUE : chaque question doit être formulée pour que la réponse naturelle soit du type :
+"Voici les meilleurs [acteurs] pour [mot-clé]..." / "Je vous recommande [entreprise]..." / "Les [acteurs] à considérer sont..."
+
+IMPORTANT sur le sens des axes :
+- "Alternative / pistes" = des façons d'utiliser ou des acteurs qui proposent le mot-clé — PAS des substituts au mot-clé
+- Exemple ✅ pour "agence SEO" : "Quelles agences SEO sont recommandées pour une startup ?"
+- Exemple ❌ pour "agence SEO" : "Quelles alternatives à une agence SEO existent ?"
+
+Génère exactement ${numQ} questions, une par axe :
+${axesWithInstructions}
+
+Contraintes :
+- Privilégier "qui", "quels", "quelle", "lesquels", "quel acteur", "quelle entreprise"
+- Maximum 15 mots
+- Ton décideur / professionnel qui cherche un prestataire ou une recommandation concrète
+
+Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgules (;), sans numérotation, sans texte avant ou après.`;
 
       // Direct fetch — plain text, no json_object format
       const res = await fetch("/api/openai", {
