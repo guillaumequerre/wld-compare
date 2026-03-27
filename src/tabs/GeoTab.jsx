@@ -445,7 +445,6 @@ function KeywordsTab({ site, projectId, apiKey, model, context, categories, setC
     setKeywords(prev => prev.map(k => k.id === kw.id ? { ...k, status: "generating_q" } : k));
     try {
       const axesStr = (axes || ["Quoi ?", "Pourquoi ?", "Comment ?", "Comparaison", "Coût/budget"]).map((t, i) => `${i+1}. ${t}`).join("\n");
-      const kwCat = categories.find(c => c.id === kw.category_id);
       const prompt = `Tu es un utilisateur de ChatGPT. ${context || ""}. Tu poses des questions directes, courtes et sans fioritures.\nTransforme le mot-clé "${kw.keyword}" en 5 questions ultra-courtes pour un LLM.\nRespects ces axes :\n${axesStr}\nMaximum 12 mots par question. Langage naturel et direct.\nRéponds uniquement par les 5 questions séparées par des points-virgules (;).`;
       const data = await callOpenAI({ apiKey, model, prompt, endpoint: "completions" });
       const text = data.choices?.[0]?.message?.content || "";
@@ -748,7 +747,6 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
       // Update URL index
       const domain_counts = {};
       (parsed.sources || []).forEach(url => {
-        const d = extractDomain(url);
         if (!domain_counts[url]) domain_counts[url] = { as_source: 0, in_answer: 0 };
         domain_counts[url].as_source++;
       });
@@ -1074,6 +1072,13 @@ export default function GeoTab({ sites, projectId, project }) {
   const [model, setModel]           = useState("gpt-4o-mini");
   const [brand, setBrand]           = useState(null);         // { brand_name, brand_aliases, competitors, context }
   const [apiKeyEnc, setApiKeyEnc]   = useState(project?.openai_key_enc || "");
+
+  // Sync enc key when project prop updates (e.g. after Supabase load on mount)
+  useEffect(() => {
+    if (project?.openai_key_enc && project.openai_key_enc !== apiKeyEnc) {
+      setApiKeyEnc(project.openai_key_enc);
+    }
+  }, [project?.openai_key_enc]); // eslint-disable-line react-hooks/exhaustive-deps
   const [apiKeyDec, setApiKeyDec]   = useState("");           // decrypted, only in memory
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [keyStatus, setKeyStatus]   = useState("idle");       // idle | saving | ok | error

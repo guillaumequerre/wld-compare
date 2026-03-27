@@ -69,7 +69,7 @@ export async function sbLoadProjects() {
   const res = await fetch(`${PROXY}/rest/v1/projects?select=*&order=created_at.asc`);
   if (!res.ok) return null;
   const rows = await res.json();
-  return rows.map(r => ({ id: r.id, name: r.name, sites: JSON.parse(r.sites_json || "[]") }));
+  return rows.map(r => ({ id: r.id, name: r.name, sites: JSON.parse(r.sites_json || "[]"), openai_key_enc: r.openai_key_enc || null }));
 }
 
 export async function sbDeleteProject(projectId) {
