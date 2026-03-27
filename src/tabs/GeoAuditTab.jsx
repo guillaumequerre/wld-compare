@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
-import { C } from "../lib/constants";
+import { C, RES_KPIS } from "../lib/constants";
 import { sbGetBrand, sbGetQuestions, sbGetGeoResults, sbGetUrlIndex } from "../lib/supabase";
 
 // ── Constants ─────────────────────────────────────────────────────
@@ -450,7 +450,7 @@ ${aiText ? `<h2>9. Analyse IA détaillée</h2><pre>${aiText}</pre>` : ""}
 
 // ── Main ─────────────────────────────────────────────────────────
 
-export default function GeoAuditTab({ sites, projectId }) {
+export default function GeoAuditTab({ sites, projectId, corrMatrix = [], metrics = [], resultVals = [] }) {
   const [selectedSite, setSelectedSite] = useState(sites[0]?.id || "");
   const [aiText, setAiText] = useState("");
   const [exporting, setExporting] = useState(false);
@@ -654,6 +654,112 @@ export default function GeoAuditTab({ sites, projectId }) {
             </div>
           ))}
         </Section>
+
+        {/* SEO + GEO KPIs par site */}
+        {metrics.length > 0 && (
+          <Section icon="📊" title="Performances SEO & GEO par site" sub="Données GSC, GA4 et Bing AI — agrégats site entier">
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                <thead>
+                  <tr style={{ background: C.bg }}>
+                    <th style={{ padding: "8px 14px", textAlign: "left", fontWeight: 600, fontSize: 11, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, borderBottom: `1px solid ${C.border}`, minWidth: 160 }}>Métrique</th>
+                    {metrics.map(({ site }) => (
+                      <th key={site.id} style={{ padding: "8px 14px", textAlign: "right", fontWeight: 700, fontSize: 12, color: site.color, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>{site.label}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {RES_KPIS.map((kpi, di) => {
+                    const vals = resultVals.map(rv => rv[kpi.key] ?? null).filter(v => v !== null && v !== undefined);
+                    const best = vals.length > 1 ? (kpi.key === "position" ? Math.min(...vals) : Math.max(...vals)) : null;
+                    const srcColors = { gsc: "#2563EB", ga: "#059669", bing: "#7C3AED" };
+                    return (
+                      <tr key={kpi.key} style={{ borderBottom: `1px solid ${C.borderLight}`, background: di % 2 === 0 ? C.white : C.bg }}>
+                        <td style={{ padding: "8px 14px", color: C.textMid, fontWeight: 500 }}>
+                          <span style={{ fontSize: 9, fontWeight: 700, color: srcColors[kpi.src] || C.textLight, background: (srcColors[kpi.src] || C.textLight) + "18", borderRadius: 4, padding: "1px 5px", marginRight: 6 }}>{kpi.src.toUpperCase()}</span>
+                          {kpi.label}
+                        </td>
+                        {resultVals.map((rv, si) => {
+                          const val = rv[kpi.key] ?? null;
+                          const isBest = val !== null && best !== null && val === best;
+                          const fmt = kpi.key === "ctr" ? v => `${v}%` : kpi.key === "position" ? v => v.toFixed ? v.toFixed(1) : v : v => typeof v === "number" && v >= 1000 ? (v/1000).toFixed(1)+"k" : String(Math.round(v));
+                          return (
+                            <td key={si} style={{ padding: "8px 14px", textAlign: "right", fontWeight: 600, color: val === null ? C.textLight : isBest ? metrics[si]?.site?.color : C.text }}>
+                              {val !== null ? fmt(val) : "—"}
+                              {isBest && vals.length > 1 && <span style={{ marginLeft: 4, fontSize: 10 }}>★</span>}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </Section>
+        )}
+
+        {/* Matrice de corrélation SF × KPIs */}
+        {corrMatrix.length > 0 && corrMatrix.some(row => row.corrs.some(c => c.value !== null)) && (
+          <Section icon="🔗" title="Matrice de corrélation SF × SEO/GEO" sub="Corrélation entre les métriques techniques Screaming Frog et les KPIs de performance">
+            <div style={{ fontSize: 11, color: C.textLight, marginBottom: 12 }}>
+              Valeur entre -1 et +1 · <span style={{ color: "#059669" }}>■ corrélation positive</span> · <span style={{ color: "#DC2626" }}>■ corrélation négative</span> · — pas assez de données
+            </div>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                <thead>
+                  <tr style={{ background: C.bg }}>
+                    <th style={{ padding: "7px 12px", textAlign: "left", fontWeight: 600, fontSize: 10, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, borderBottom: `1px solid ${C.border}`, minWidth: 140 }}>Dimension SF</th>
+                    {RES_KPIS.map(kpi => (
+                      <th key={kpi.key} style={{ padding: "7px 10px", textAlign: "center", fontWeight: 600, fontSize: 10, color: C.textLight, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap", minWidth: 80 }}>{kpi.label}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {corrMatrix.map((row, di) => (
+                    <tr key={row.dim.key} style={{ borderBottom: `1px solid ${C.borderLight}`, background: di % 2 === 0 ? C.white : C.bg }}>
+                      <td style={{ padding: "7px 12px", color: C.textMid, fontWeight: 500, fontSize: 11 }}>{row.dim.label}</td>
+                      {row.corrs.map((c, ki) => {
+                        const v = c.value;
+                        const abs = v !== null ? Math.abs(v) : 0;
+                        const bg = v === null ? "transparent"
+                          : v > 0.25 ? `rgba(5,150,105,${Math.min(0.15 + abs * 0.5, 0.7)})`
+                          : v < -0.25 ? `rgba(220,38,38,${Math.min(0.15 + abs * 0.5, 0.7)})`
+                          : C.bg;
+                        const col = v === null ? C.textLight : Math.abs(v) > 0.25 ? (v > 0 ? "#059669" : "#DC2626") : C.textLight;
+                        return (
+                          <td key={ki} style={{ padding: "7px 10px", textAlign: "center", background: bg, fontWeight: abs > 0.25 ? 700 : 400, color: col, borderRight: `1px solid ${C.borderLight}` }} title={v !== null ? `r=${v.toFixed(3)}, n=${c.n}` : "Pas de données"}>
+                            {v !== null ? v.toFixed(2) : "—"}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {/* Top correlations insight */}
+            {(() => {
+              const tops = corrMatrix.flatMap(row => row.corrs
+                .filter(c => c.value !== null && Math.abs(c.value) >= 0.4)
+                .map(c => ({ dim: row.dim.label, kpi: c.kpi.label, value: c.value, abs: Math.abs(c.value) }))
+              ).sort((a, b) => b.abs - a.abs).slice(0, 3);
+              if (!tops.length) return null;
+              return (
+                <div style={{ marginTop: 14, padding: "12px 14px", background: "#F5F3FF", borderRadius: 10, border: "1px solid #DDD6FE" }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#7C3AED", marginBottom: 8 }}>💡 Corrélations fortes détectées</div>
+                  {tops.map((t, i) => (
+                    <div key={i} style={{ fontSize: 11, color: C.textMid, marginBottom: 4 }}>
+                      <strong style={{ color: t.value > 0 ? "#059669" : "#DC2626" }}>{t.value > 0 ? "▲" : "▼"} {t.dim}</strong> × <strong>{t.kpi}</strong>
+                      {" "}— r = <strong style={{ color: t.value > 0 ? "#059669" : "#DC2626" }}>{t.value.toFixed(2)}</strong>
+                      {t.value > 0 ? " : améliorer cette métrique SF tend à améliorer la performance" : " : réduire cette métrique SF tend à améliorer la performance"}
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+          </Section>
+        )}
 
         {/* AI analysis */}
         <Section icon="✦" title="Analyse IA détaillée" sub="Interprétation contextuelle générée par Claude sur demande">

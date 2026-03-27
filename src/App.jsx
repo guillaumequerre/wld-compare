@@ -621,6 +621,9 @@ export default function App() {
             <GeoAuditTab
               sites={sites}
               projectId={currentProjectId}
+              corrMatrix={filteredCorrMatrix}
+              metrics={metrics}
+              resultVals={resultVals}
             />
           )}
           {tab === "allprojects" && (
