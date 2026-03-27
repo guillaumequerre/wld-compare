@@ -13,6 +13,7 @@ import AllProjectsTab from "./tabs/AllProjectsTab";
 import SemrushTab from "./tabs/SemrushTab";
 import EvolutionTab from "./tabs/EvolutionTab";
 import GeoTab from "./tabs/GeoTab";
+import GeoAuditTab from "./tabs/GeoAuditTab";
 
 const INITIAL_PROJECT = makeInitialProject();
 const NAV_TABS = [
@@ -27,6 +28,7 @@ const NAV_TABS = [
 const BURGER_TABS = [
   { key: "matrix",      label: "Matrice"            },
   { key: "semrush",     label: "📊 Semrush"         },
+  { key: "geo_audit",   label: "📋 Audit GEO"       },
   { key: "allprojects", label: "◈ Tous les projets" },
 ];
 
@@ -612,6 +614,13 @@ export default function App() {
                 await sbSaveGeoAxes(currentProjectId, axes);
                 setProjects(prev => prev.map(p => p.id === currentProjectId ? { ...p, geo_axes: axes } : p));
               }}
+            />
+          )}
+
+          {tab === "geo_audit" && (
+            <GeoAuditTab
+              sites={sites}
+              projectId={currentProjectId}
             />
           )}
           {tab === "allprojects" && (

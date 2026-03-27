@@ -674,6 +674,51 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
   );
 }
 
+// ── 30-day presence calendar ─────────────────────────────────────
+
+function PresenceCalendar({ results }) {
+  const days = 30;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  // Build a map of date string → {brand_mentioned}
+  const byDay = {};
+  results.forEach(r => {
+    if (!r.created_at) return;
+    const d = new Date(r.created_at);
+    d.setHours(0, 0, 0, 0);
+    const key = d.toISOString().slice(0, 10);
+    if (!byDay[key]) byDay[key] = [];
+    byDay[key].push(r.brand_mentioned);
+  });
+
+  const slots = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    const key = d.toISOString().slice(0, 10);
+    const dayResults = byDay[key];
+    let color = "#E5E7EB"; // not tested
+    let title = `${key} — non testé`;
+    if (dayResults) {
+      const present = dayResults.some(Boolean);
+      color = present ? "#059669" : "#DC2626";
+      title = `${key} — ${present ? "✓ Présent" : "✗ Absent"} (${dayResults.length} test${dayResults.length > 1 ? "s" : ""})`;
+    }
+    slots.push({ key, color, title });
+  }
+
+  return (
+    <div style={{ display: "flex", gap: 2, alignItems: "center", flexWrap: "nowrap", overflow: "hidden" }}>
+      {slots.map(s => (
+        <div key={s.key} title={s.title} style={{
+          width: 8, height: 8, borderRadius: 2, background: s.color, flexShrink: 0, cursor: "default"
+        }} />
+      ))}
+    </div>
+  );
+}
+
 // ── Result card ───────────────────────────────────────────────────
 
 function ResultCard({ result, brandName, brandAliases }) {
@@ -692,7 +737,14 @@ function ResultCard({ result, brandName, brandAliases }) {
           {result.answer_type && <Pill color={C.textLight}>{result.answer_type}</Pill>}
           {result.intent_type && <Pill color="#7C3AED">{result.intent_type}</Pill>}
         </div>
-        <span style={{ fontSize: 10, color: C.textLight, flexShrink: 0 }}>{(result.input_tokens || 0) + (result.output_tokens || 0)} tok</span>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
+          <span style={{ fontSize: 10, color: C.textLight }}>{(result.input_tokens || 0) + (result.output_tokens || 0)} tok</span>
+          {result.created_at && (
+            <span style={{ fontSize: 10, color: C.textLight }}>
+              {new Date(result.created_at).toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
+            </span>
+          )}
+        </div>
       </div>
       {open && (
         <div style={{ padding: "0 14px 14px", borderTop: `1px solid ${C.border}` }}>
@@ -743,6 +795,7 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
   const [filterCat, setFilterCat]   = useState("");
   const [running, setRunning]       = useState({});
   const [runAll, setRunAll]         = useState(false);
+  const stopAllRef = useRef(false);
   const [selected, setSelected]     = useState(new Set());
   const [bulkCat, setBulkCat]       = useState("");
   const [keywords, setKeywords]     = useState([]);
@@ -841,10 +894,12 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
   }, [apiKey, model, brand, projectId, site?.id, onResultSaved]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const runAllQuestions = async () => {
-    setRunAll(true);
     const toRun = filtered.filter(q => !(resultsByQ[q.id]?.length));
+    if (!toRun.length) return;
+    stopAllRef.current = false;
+    setRunAll(true);
     for (const q of toRun) {
-      if (!runAll) break;
+      if (stopAllRef.current) break;
       await runQuestion(q);
     }
     setRunAll(false);
@@ -899,7 +954,7 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
 
         <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
           <Btn onClick={runAllQuestions} disabled={runAll || !apiKey} color="#7C3AED">{runAll ? "⏳ En cours…" : "▶ Lancer tout"}</Btn>
-          {runAll && <Btn onClick={() => setRunAll(false)} color="#DC2626" variant="outline" small>⏹ Arrêter</Btn>}
+          {runAll && <Btn onClick={() => { stopAllRef.current = true; setRunAll(false); }} color="#DC2626" variant="outline" small>⏹ Arrêter</Btn>}
         </div>
       </div>
 
@@ -931,6 +986,12 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
                       {hasBrand && <Pill color="#059669">✓ {brand_name}</Pill>}
                       {qResults.length > 0 && <span style={{ fontSize: 10, color: C.textLight }}>{qResults.length} résultat{qResults.length > 1 ? "s" : ""}</span>}
                     </div>
+                    {qResults.length > 0 && (
+                      <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6 }}>
+                        <span style={{ fontSize: 9, color: C.textLight, flexShrink: 0 }}>30j</span>
+                        <PresenceCalendar results={qResults} />
+                      </div>
+                    )}
                   </div>
                   <div style={{ display: "flex", gap: 5, flexShrink: 0, alignItems: "center" }}>
                     <CatSelect value={q.category_id} categories={categories} onChange={v => setCatSingle(q.id, v)} />
