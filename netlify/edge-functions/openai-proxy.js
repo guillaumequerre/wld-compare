@@ -24,10 +24,17 @@ export default async function handler(request, context) {
 
   // Client sends the decrypted key in a custom header (never in body)
   const apiKey = request.headers.get("X-Openai-Key") || "";
-  if (!apiKey || !apiKey.startsWith("sk-")) {
-    return new Response(JSON.stringify({ error: "Clé OpenAI manquante ou invalide." }), {
+  if (!apiKey) {
+    return new Response(JSON.stringify({ error: "Clé OpenAI manquante dans X-Openai-Key" }), {
       status: 401,
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+    });
+  }
+  // Accept any sk- key format (sk-xxx, sk-proj-xxx, etc.)
+  if (!apiKey.startsWith("sk-") && !apiKey.startsWith("sk_")) {
+    return new Response(JSON.stringify({ error: `Format de clé invalide: commence par "${apiKey.slice(0,6)}"` }), {
+      status: 401,
+      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
     });
   }
 

@@ -464,9 +464,13 @@ function KeywordsTab({ site, projectId, apiKey, model, context, categories, setC
         body: JSON.stringify({ model, messages: [{ role: "user", content: prompt }], temperature: 0.7, max_tokens: 400 }),
       });
       const text = await res.text();
-      if (text.trimStart().startsWith("<")) throw new Error("Le proxy /api/openai est introuvable — vérifiez que openai-proxy.js est dans netlify/edge-functions/");
-      const data = JSON.parse(text);
-      if (!res.ok) throw new Error(`OpenAI ${res.status}: ${data.error?.message || text.slice(0,150)}`);
+      if (text.trimStart().startsWith("<")) throw new Error("Proxy /api/openai introuvable — copiez openai-proxy.js dans netlify/edge-functions/");
+      let data;
+      try { data = JSON.parse(text); } catch { throw new Error(`Réponse non-JSON (${res.status}): ${text.slice(0,100)}`); }
+      if (!res.ok) {
+        const msg = data?.error?.message || data?.error || text.slice(0, 200);
+        throw new Error(`OpenAI ${res.status}: ${msg}`);
+      }
 
       const raw = (data?.choices?.[0]?.message?.content || "").trim();
       if (!raw) throw new Error(`Réponse vide. Data reçue: ${JSON.stringify(data).slice(0, 200)}`);
@@ -1160,13 +1164,21 @@ export default function GeoTab({ sites, projectId, project }) {
   useEffect(() => {
     if (!apiKeyEnc || !projectId) return;
     decryptKey(apiKeyEnc, projectPassword(projectId))
-      .then(k => setApiKeyDec(k))
-      .catch(() => setApiKeyDec(""));
+      .then(k => {
+        console.log("OpenAI key decrypted, prefix:", k.slice(0, 8));
+        setApiKeyDec(k);
+        setKeyStatus("ok");
+      })
+      .catch(e => {
+        console.error("Decrypt failed:", e.message);
+        setApiKeyDec("");
+        setKeyStatus("error");
+      });
   }, [apiKeyEnc, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const saveApiKey = async () => {
     const k = apiKeyInput.trim();
-    if (!k.startsWith("sk-")) { setKeyStatus("error"); return; }
+    if (!k.startsWith("sk-") && !k.startsWith("sk_")) { setKeyStatus("error"); return; }
     setKeyStatus("saving");
     try {
       const enc = await encryptKey(k, projectPassword(projectId));
@@ -1232,7 +1244,9 @@ export default function GeoTab({ sites, projectId, project }) {
         {/* API Key */}
         <div style={{ flex: 1, minWidth: 260 }}>
           <div style={{ fontSize: 10, fontWeight: 600, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 5 }}>
-            Clé OpenAI {hasKey && <span style={{ color: "#059669", marginLeft: 4 }}>● Configurée</span>}
+            Clé OpenAI{" "}
+            {hasKey && keyStatus !== "error" && <span style={{ color: "#059669", marginLeft: 4 }}>● Configurée</span>}
+            {keyStatus === "error" && <span style={{ color: "#DC2626", marginLeft: 4 }}>● Erreur déchiffrement</span>}
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             <input
