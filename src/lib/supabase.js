@@ -328,3 +328,115 @@ export async function sbGetResultsForQuestion(question_id) {
   if (!res.ok) return [];
   return res.json();
 }
+
+// ── GEO v2 — CATEGORIES ──────────────────────────────────────────
+
+export async function sbGetCategories(project_id) {
+  const res = await fetch(`${PROXY}/rest/v1/geo_categories?project_id=eq.${encodeURIComponent(project_id)}&order=name.asc`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function sbSaveCategory({ project_id, name, color }) {
+  const res = await fetch(`${PROXY}/rest/v1/geo_categories`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
+    body: JSON.stringify({ project_id, name, color }),
+  });
+  if (!res.ok) throw new Error(`Save category failed: ${res.status}`);
+  const rows = await res.json();
+  return rows[0] || rows;
+}
+
+export async function sbDeleteCategory(id) {
+  await fetch(`${PROXY}/rest/v1/geo_categories?id=eq.${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+export async function sbSetKeywordCategory(id, category_id) {
+  await fetch(`${PROXY}/rest/v1/geo_keywords?id=eq.${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ category_id }),
+  });
+}
+
+export async function sbSetQuestionCategory(id, category_id) {
+  await fetch(`${PROXY}/rest/v1/geo_questions?id=eq.${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ category_id }),
+  });
+}
+
+export async function sbBulkSetKeywordCategory(ids, category_id) {
+  // Supabase REST: PATCH with in() filter
+  const filter = ids.map(id => encodeURIComponent(id)).join(",");
+  await fetch(`${PROXY}/rest/v1/geo_keywords?id=in.(${filter})`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ category_id }),
+  });
+}
+
+export async function sbBulkSetQuestionCategory(ids, category_id) {
+  const filter = ids.map(id => encodeURIComponent(id)).join(",");
+  await fetch(`${PROXY}/rest/v1/geo_questions?id=in.(${filter})`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ category_id }),
+  });
+}
+
+// ── GEO v2 — URL INDEX ───────────────────────────────────────────
+
+export async function sbGetUrlIndex(project_id) {
+  const res = await fetch(`${PROXY}/rest/v1/geo_url_index?project_id=eq.${encodeURIComponent(project_id)}&order=count_as_source.desc`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function sbUpsertUrl({ project_id, url, domain, count_as_source = 0, count_in_answer = 0 }) {
+  const res = await fetch(`${PROXY}/rest/v1/geo_url_index`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
+    body: JSON.stringify({ project_id, url, domain, count_as_source, count_in_answer, updated_at: new Date().toISOString() }),
+  });
+  if (!res.ok) return null;
+  const rows = await res.json();
+  return rows[0] || rows;
+}
+
+export async function sbIncrementUrlCounts(project_id, url, { as_source = 0, in_answer = 0 }) {
+  // Fetch current, then patch
+  const existing = await fetch(`${PROXY}/rest/v1/geo_url_index?project_id=eq.${encodeURIComponent(project_id)}&url=eq.${encodeURIComponent(url)}&limit=1`);
+  const rows = existing.ok ? await existing.json() : [];
+  const cur = rows[0];
+  if (!cur) {
+    return sbUpsertUrl({ project_id, url, domain: extractDomain(url), count_as_source: as_source, count_in_answer: in_answer });
+  }
+  await fetch(`${PROXY}/rest/v1/geo_url_index?id=eq.${cur.id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ count_as_source: cur.count_as_source + as_source, count_in_answer: cur.count_in_answer + in_answer, updated_at: new Date().toISOString() }),
+  });
+}
+
+export async function sbUpdateUrlMeta(id, patch) {
+  await fetch(`${PROXY}/rest/v1/geo_url_index?id=eq.${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...patch, updated_at: new Date().toISOString() }),
+  });
+}
+
+export async function sbSaveUrlQuestion({ url_id, question_id, result_id, as_source, in_answer }) {
+  await fetch(`${PROXY}/rest/v1/geo_url_question`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates" },
+    body: JSON.stringify({ url_id, question_id, result_id, as_source, in_answer }),
+  });
+}
+
+function extractDomain(url) {
+  try { return new URL(url).hostname.replace("www.", ""); } catch { return url; }
+}

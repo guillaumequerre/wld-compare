@@ -1,10 +1,14 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { C } from "../lib/constants";
 import {
   sbSaveBrand, sbGetBrand, sbSaveOpenAIKey,
   sbSaveKeywords, sbGetKeywords, sbUpdateKeywordStatus, sbDeleteKeyword,
   sbSaveQuestions, sbGetQuestions, sbUpdateQuestion, sbDeleteQuestion,
   sbSaveGeoResult, sbGetGeoResults,
+  sbGetCategories, sbSaveCategory, sbDeleteCategory,
+  sbSetKeywordCategory, sbSetQuestionCategory,
+  sbBulkSetKeywordCategory, sbBulkSetQuestionCategory,
+  sbGetUrlIndex, sbUpdateUrlMeta, sbIncrementUrlCounts,
 } from "../lib/supabase";
 
 // ── Crypto helpers (AES-GCM via WebCrypto) ───────────────────────
@@ -40,6 +44,14 @@ async function decryptKey(enc64, password) {
 
 // Derive a per-project password from the project ID (deterministic, no extra secret needed)
 function projectPassword(projectId) { return `cgeo-${projectId}-v1`; }
+
+function extractDomain(url) {
+  try { return new URL(url).hostname.replace("www.", ""); } catch { return url; }
+}
+
+function parseCSV(text) {
+  return text.split(/\r?\n/).map(l => l.split(",").map(c => c.trim().replace(/^"|"$/g, ""))).filter(r => r[0]);
+}
 
 // ── OpenAI call helpers ───────────────────────────────────────────
 
@@ -314,15 +326,80 @@ function StatsHeader({ questions, results, brandName }) {
   );
 }
 
-// ── Keywords sub-tab ─────────────────────────────────────────────
+// ── Category Manager ─────────────────────────────────────────────
 
-function KeywordsTab({ site, projectId, apiKey, model, context, onQuestionsGenerated }) {
+const CAT_COLORS = ["#2563EB","#059669","#7C3AED","#D97706","#DC2626","#0891B2","#EA580C","#64748B"];
+
+function CategoryManager({ projectId, categories, setCategories, compact }) {
+  const [newName, setNewName] = useState("");
+  const [newColor, setNewColor] = useState(CAT_COLORS[0]);
+  const [adding, setAdding] = useState(false);
+
+  const add = async () => {
+    if (!newName.trim()) return;
+    try {
+      const cat = await sbSaveCategory({ project_id: projectId, name: newName.trim(), color: newColor });
+      setCategories(prev => [...prev, cat]);
+      setNewName(""); setAdding(false);
+    } catch(e) { console.error(e); }
+  };
+
+  const del = async (id) => {
+    await sbDeleteCategory(id);
+    setCategories(prev => prev.filter(c => c.id !== id));
+  };
+
+  if (compact) return (
+    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+      {categories.map(c => (
+        <span key={c.id} style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: c.color + "18", color: c.color, border: `1px solid ${c.color}44` }}>
+          {c.name}
+          <button onClick={() => del(c.id)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 10, color: c.color, padding: 0, lineHeight: 1 }}>×</button>
+        </span>
+      ))}
+      {adding ? (
+        <span style={{ display: "inline-flex", gap: 4, alignItems: "center" }}>
+          {CAT_COLORS.map(col => (
+            <button key={col} onClick={() => setNewColor(col)} style={{ width: 14, height: 14, borderRadius: "50%", background: col, border: `2px solid ${newColor === col ? "#000" : "transparent"}`, cursor: "pointer" }} />
+          ))}
+          <input autoFocus value={newName} onChange={e => setNewName(e.target.value)} onKeyDown={e => e.key === "Enter" && add()} placeholder="Nom…" style={{ padding: "2px 6px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11, width: 100 }} />
+          <button onClick={add} style={{ padding: "2px 7px", borderRadius: 6, background: newColor, color: "#fff", border: "none", fontSize: 11, cursor: "pointer" }}>OK</button>
+          <button onClick={() => setAdding(false)} style={{ padding: "2px 6px", borderRadius: 6, background: C.bg, border: `1px solid ${C.border}`, fontSize: 11, cursor: "pointer" }}>✕</button>
+        </span>
+      ) : (
+        <button onClick={() => setAdding(true)} style={{ padding: "2px 8px", borderRadius: 12, fontSize: 11, background: C.bg, border: `1px dashed ${C.border}`, color: C.textLight, cursor: "pointer" }}>+ Catégorie</button>
+      )}
+    </div>
+  );
+
+  return null;
+}
+
+// ── Category selector dropdown ────────────────────────────────────
+
+function CatSelect({ value, categories, onChange, placeholder = "Catégorie…" }) {
+  return (
+    <select value={value || ""} onChange={e => onChange(e.target.value || null)}
+      style={{ padding: "4px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11, color: C.text, background: C.white, cursor: "pointer" }}>
+      <option value="">{placeholder}</option>
+      {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+    </select>
+  );
+}
+
+// ── Keywords sub-tab (v2) ─────────────────────────────────────────
+
+function KeywordsTab({ site, projectId, apiKey, model, context, categories, setCategories, onQuestionsGenerated }) {
   const [keywords, setKeywords] = useState([]);
   const [input, setInput]       = useState("");
   const [loading, setLoading]   = useState(false);
-  const [busy, setBusy]         = useState({}); // kwId → true
+  const [busy, setBusy]         = useState({});
+  const [runningAll, setRunningAll] = useState(false);
+  const [selected, setSelected] = useState(new Set());
+  const [bulkCat, setBulkCat]   = useState("");
+  const [filterCat, setFilterCat] = useState("");
+  const stopRef = useRef(false);
 
-  // Load from Supabase
   useEffect(() => {
     if (!projectId || !site?.id) return;
     sbGetKeywords(projectId, site.id).then(setKeywords);
@@ -337,35 +414,54 @@ function KeywordsTab({ site, projectId, apiKey, model, context, onQuestionsGener
       const saved = await sbSaveKeywords(rows);
       setKeywords(prev => [...prev, ...saved]);
       setInput("");
-    } catch (e) { console.error(e); }
+    } catch(e) { console.error(e); }
     setLoading(false);
   };
 
+  // Import CSV: col1=keyword, col2=category name
+  const importCSV = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      const rows = parseCSV(ev.target.result).filter(r => r[0]);
+      const toAdd = [];
+      for (const [keyword, catName] of rows) {
+        const cat = catName ? categories.find(c => c.name.toLowerCase() === catName.toLowerCase()) : null;
+        toAdd.push({ project_id: projectId, site_id: site.id, keyword, status: "pending", ...(cat ? { category_id: cat.id } : {}) });
+      }
+      if (!toAdd.length) return;
+      const saved = await sbSaveKeywords(toAdd);
+      setKeywords(prev => [...prev, ...saved]);
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  };
+
   const generateQuestions = async (kw, axes) => {
-    if (!apiKey) { alert("Clé OpenAI manquante — configure-la dans ⚙️ Setup"); return; }
+    if (!apiKey) { alert("Clé OpenAI manquante"); return; }
     setBusy(b => ({ ...b, [kw.id]: "q" }));
     await sbUpdateKeywordStatus(kw.id, "generating_q");
     setKeywords(prev => prev.map(k => k.id === kw.id ? { ...k, status: "generating_q" } : k));
     try {
       const axesStr = (axes || ["Quoi ?", "Pourquoi ?", "Comment ?", "Comparaison", "Coût/budget"]).map((t, i) => `${i+1}. ${t}`).join("\n");
+      const kwCat = categories.find(c => c.id === kw.category_id);
       const prompt = `Tu es un utilisateur de ChatGPT. ${context || ""}. Tu poses des questions directes, courtes et sans fioritures.\nTransforme le mot-clé "${kw.keyword}" en 5 questions ultra-courtes pour un LLM.\nRespects ces axes :\n${axesStr}\nMaximum 12 mots par question. Langage naturel et direct.\nRéponds uniquement par les 5 questions séparées par des points-virgules (;).`;
-
       const data = await callOpenAI({ apiKey, model, prompt, endpoint: "completions" });
       const text = data.choices?.[0]?.message?.content || "";
       const questions = text.split(";").map(s => s.trim()).filter(Boolean);
-
       if (questions.length) {
         const qRows = questions.map(q => ({
           project_id: projectId, site_id: site.id,
           keyword_id: kw.id, question: q, is_manual: false,
+          ...(kw.category_id ? { category_id: kw.category_id } : {}),
         }));
         await sbSaveQuestions(qRows);
         onQuestionsGenerated?.();
       }
-
       await sbUpdateKeywordStatus(kw.id, "done_q");
       setKeywords(prev => prev.map(k => k.id === kw.id ? { ...k, status: "done_q" } : k));
-    } catch (e) {
+    } catch(e) {
       console.error(e);
       await sbUpdateKeywordStatus(kw.id, "pending");
       setKeywords(prev => prev.map(k => k.id === kw.id ? { ...k, status: "pending" } : k));
@@ -376,141 +472,163 @@ function KeywordsTab({ site, projectId, apiKey, model, context, onQuestionsGener
   const deleteKw = async (id) => {
     await sbDeleteKeyword(id);
     setKeywords(prev => prev.filter(k => k.id !== id));
+    setSelected(prev => { const n = new Set(prev); n.delete(id); return n; });
   };
+
+  const generateAll = async () => {
+    if (!apiKey) { alert("Clé OpenAI manquante"); return; }
+    const toProcess = keywords.filter(kw => kw.status !== "done_q" && kw.status !== "done");
+    if (!toProcess.length) { alert("Tous les mots-clés ont déjà des questions générées."); return; }
+    setRunningAll(true);
+    stopRef.current = false;
+    for (const kw of toProcess) {
+      if (stopRef.current) break;
+      await generateQuestions(kw, null);
+    }
+    setRunningAll(false);
+    onQuestionsGenerated?.();
+  };
+
+  const toggleSelect = (id) => setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const selectAll = () => setSelected(new Set(filtered.map(k => k.id)));
+  const clearSel = () => setSelected(new Set());
+
+  const applyBulkCat = async () => {
+    if (!bulkCat || !selected.size) return;
+    const ids = [...selected];
+    await sbBulkSetKeywordCategory(ids, bulkCat || null);
+    setKeywords(prev => prev.map(k => selected.has(k.id) ? { ...k, category_id: bulkCat || null } : k));
+    clearSel(); setBulkCat("");
+  };
+
+  const setCatSingle = async (kwId, catId) => {
+    await sbSetKeywordCategory(kwId, catId || null);
+    setKeywords(prev => prev.map(k => k.id === kwId ? { ...k, category_id: catId || null } : k));
+  };
+
+  const filtered = useMemo(() => filterCat ? keywords.filter(k => k.category_id === filterCat) : keywords, [keywords, filterCat]);
 
   return (
     <div>
-      {/* Input area */}
-      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20, marginBottom: 20 }}>
-        <div style={{ fontSize: 12, fontWeight: 600, color: C.textMid, marginBottom: 8 }}>Ajouter des mots-clés</div>
-        <div style={{ fontSize: 11, color: C.textLight, marginBottom: 10 }}>Un mot-clé par ligne</div>
-        <textarea
-          value={input} onChange={e => setInput(e.target.value)}
-          placeholder={"meilleur logiciel CRM\nalternative Salesforce\ncomparer CRM PME"}
-          style={{ width: "100%", minHeight: 100, padding: "8px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, color: C.text, resize: "vertical", fontFamily: "inherit", boxSizing: "border-box" }}
-        />
-        <div style={{ marginTop: 10 }}>
-          <Btn onClick={addKeywords} disabled={loading || !input.trim()}>
-            {loading ? "Ajout…" : "➕ Ajouter"}
-          </Btn>
-        </div>
-      </div>
-
-      {/* Keywords list */}
-      {keywords.length === 0 ? (
-        <div style={{ textAlign: "center", padding: 40, color: C.textLight, fontSize: 12 }}>
-          Aucun mot-clé pour ce site — ajoutez-en ci-dessus
-        </div>
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {keywords.map(kw => (
-            <div key={kw.id} style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 16px", display: "flex", alignItems: "center", gap: 12 }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{kw.keyword}</div>
-                <div style={{ marginTop: 4 }}><StatusBadge status={kw.status} /></div>
-              </div>
-              <div style={{ display: "flex", gap: 8, flexShrink: 0, alignItems: "center" }}>
-                <Btn
-                  onClick={() => generateQuestions(kw, null)}
-                  disabled={!!busy[kw.id] || !apiKey}
-                  variant="outline" small
-                  color={site.color}
-                >
-                  {busy[kw.id] === "q" ? "⏳ Génération…" : "💬 Générer questions"}
-                </Btn>
-                <button onClick={() => deleteKw(kw.id)} style={{ padding: "4px 8px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.white, color: C.textLight, fontSize: 11, cursor: "pointer" }}>🗑</button>
-              </div>
+      {/* Input + CSV import */}
+      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20, marginBottom: 16 }}>
+        <div style={{ display: "flex", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
+          <div style={{ flex: 1, minWidth: 220 }}>
+            <div style={{ fontSize: 11, fontWeight: 600, color: C.textMid, marginBottom: 6 }}>Ajouter des mots-clés (un par ligne)</div>
+            <textarea value={input} onChange={e => setInput(e.target.value)}
+              placeholder={"meilleur logiciel CRM\nalternative Salesforce\ncomparer CRM PME"}
+              style={{ width: "100%", minHeight: 90, padding: "8px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, color: C.text, resize: "vertical", fontFamily: "inherit", boxSizing: "border-box" }} />
+            <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
+              <Btn onClick={addKeywords} disabled={loading || !input.trim()}>{loading ? "Ajout…" : "➕ Ajouter"}</Btn>
             </div>
-          ))}
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingTop: 22 }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, fontWeight: 600, color: C.textMid, cursor: "pointer", background: C.white }}>
+              📥 Importer CSV
+              <input type="file" accept=".csv,.txt" onChange={importCSV} style={{ display: "none" }} />
+            </label>
+            <div style={{ fontSize: 10, color: C.textLight }}>Col. 1 = mot-clé<br />Col. 2 = catégorie (optionnel)</div>
+          </div>
         </div>
-      )}
-    </div>
-  );
-}
-
-// ── Question result card ──────────────────────────────────────────
-
-function ResultCard({ result, brandName, brandAliases }) {
-  const [open, setOpen] = useState(false);
-  const sources = result.sources || [];
-  const comps = result.competitors_mentioned || [];
-
-  return (
-    <div style={{ marginTop: 10, background: C.bg, borderRadius: 10, border: `1px solid ${C.border}`, overflow: "hidden" }}>
-      <div onClick={() => setOpen(o => !o)} style={{ padding: "10px 14px", cursor: "pointer", display: "flex", alignItems: "center", gap: 8 }}>
-        <span style={{ fontSize: 11, color: open ? C.blue : C.textLight, transition: "transform 0.15s", display: "inline-block", transform: open ? "rotate(90deg)" : "none" }}>▶</span>
-        <div style={{ flex: 1, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <span style={{ fontSize: 11, color: C.textLight }}>{result.model}</span>
-          {result.brand_mentioned && <Pill color="#059669">✓ {brandName} #{result.brand_position || "?"}</Pill>}
-          {!result.brand_mentioned && <Pill color="#DC2626">✗ Absent</Pill>}
-          {result.brand_in_sources && <Pill color="#2563EB">🔗 Source</Pill>}
-          {result.answer_type && <Pill color={C.textLight}>{result.answer_type}</Pill>}
-          {result.intent_type && <Pill color="#7C3AED">{result.intent_type}</Pill>}
-        </div>
-        <span style={{ fontSize: 10, color: C.textLight, flexShrink: 0 }}>
-          {result.input_tokens + result.output_tokens} tok
-        </span>
       </div>
 
-      {open && (
-        <div style={{ padding: "0 14px 14px", borderTop: `1px solid ${C.border}` }}>
-          {/* Answer */}
-          <div style={{ marginTop: 12, fontSize: 12, color: C.text, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>
-            {highlightBrand(result.answer || "", brandName, brandAliases)}
+      {/* Categories */}
+      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 16px", marginBottom: 16 }}>
+        <div style={{ fontSize: 11, fontWeight: 600, color: C.textMid, marginBottom: 8 }}>Catégories du projet</div>
+        <CategoryManager projectId={projectId} categories={categories} setCategories={setCategories} compact />
+      </div>
+
+      {/* Bulk bar + filters */}
+      {keywords.length > 0 && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 11, color: C.textLight }}>
+            {filtered.length} mot{filtered.length > 1 ? "s-clés" : "-clé"}
+            {selected.size > 0 && <strong style={{ color: C.text }}> · {selected.size} sélectionné{selected.size > 1 ? "s" : ""}</strong>}
+          </span>
+
+          {/* Filter by category */}
+          <CatSelect value={filterCat} categories={[{ id: "", name: "Toutes catégories" }, ...categories]} onChange={v => setFilterCat(v || "")} placeholder="Toutes catégories" />
+
+          {/* Bulk select */}
+          <div style={{ display: "flex", gap: 4 }}>
+            <button onClick={selectAll} style={{ fontSize: 11, padding: "3px 8px", border: `1px solid ${C.border}`, borderRadius: 5, background: C.white, cursor: "pointer", color: C.textMid }}>Tout sélect.</button>
+            {selected.size > 0 && <button onClick={clearSel} style={{ fontSize: 11, padding: "3px 8px", border: `1px solid ${C.border}`, borderRadius: 5, background: C.white, cursor: "pointer", color: C.textMid }}>Désélect.</button>}
           </div>
 
-          {/* Sources */}
-          {sources.length > 0 && (
-            <div style={{ marginTop: 12 }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 6 }}>Sources</div>
-              {sources.map((url, i) => {
-                const isBrand = [brandName, ...brandAliases].some(t => url.toLowerCase().includes(t.toLowerCase()));
-                return (
-                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-                    <span style={{ fontSize: 10, color: C.textLight, minWidth: 18 }}>[{i+1}]</span>
-                    <a href={url} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: isBrand ? "#059669" : "#2563EB", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{url}</a>
-                    {isBrand && <span style={{ fontSize: 10, background: "#ECFDF5", color: "#059669", borderRadius: 4, padding: "1px 5px", flexShrink: 0 }}>marque</span>}
-                  </div>
-                );
-              })}
+          {/* Bulk categorize */}
+          {selected.size > 0 && (
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <CatSelect value={bulkCat} categories={categories} onChange={setBulkCat} placeholder="Appliquer catégorie…" />
+              <Btn onClick={applyBulkCat} disabled={!bulkCat} small color="#7C3AED">Appliquer</Btn>
             </div>
           )}
 
-          {/* Competitors */}
-          {comps.length > 0 && (
-            <div style={{ marginTop: 10 }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 6 }}>Concurrents cités</div>
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                {comps.map(c => (
-                  <span key={c.name} style={{ fontSize: 10, background: "#FEF2F2", color: "#DC2626", border: "1px solid #FECACA", borderRadius: 5, padding: "2px 8px" }}>
-                    {c.name}{c.position ? ` #${c.position}` : ""}
-                  </span>
-                ))}
+          <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+            {runningAll && <Btn onClick={() => { stopRef.current = true; setRunningAll(false); }} color="#DC2626" variant="outline" small>⏹ Arrêter</Btn>}
+            <Btn onClick={generateAll} disabled={runningAll || !apiKey} color={site.color} small>
+              {runningAll ? "⏳ Génération en cours…" : "💬 Générer toutes les questions"}
+            </Btn>
+          </div>
+        </div>
+      )}
+
+      {/* Keywords list */}
+      {filtered.length === 0 ? (
+        <div style={{ textAlign: "center", padding: 40, color: C.textLight, fontSize: 12 }}>
+          {keywords.length === 0 ? "Aucun mot-clé — ajoutez-en ci-dessus ou importez un CSV" : "Aucun mot-clé dans cette catégorie"}
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {filtered.map(kw => {
+            const cat = categories.find(c => c.id === kw.category_id);
+            const isSel = selected.has(kw.id);
+            return (
+              <div key={kw.id} style={{ background: isSel ? "#EFF6FF" : C.white, border: `1px solid ${isSel ? "#2563EB55" : C.border}`, borderRadius: 10, padding: "10px 14px", display: "flex", alignItems: "center", gap: 10 }}>
+                <input type="checkbox" checked={isSel} onChange={() => toggleSelect(kw.id)} style={{ cursor: "pointer", flexShrink: 0 }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{kw.keyword}</div>
+                  <div style={{ display: "flex", gap: 6, marginTop: 3, alignItems: "center" }}>
+                    <StatusBadge status={kw.status} />
+                    {cat && <span style={{ fontSize: 10, fontWeight: 700, color: cat.color, background: cat.color + "18", border: `1px solid ${cat.color}44`, borderRadius: 10, padding: "1px 7px" }}>{cat.name}</span>}
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 6, flexShrink: 0, alignItems: "center" }}>
+                  <CatSelect value={kw.category_id} categories={categories} onChange={v => setCatSingle(kw.id, v)} />
+                  <Btn onClick={() => generateQuestions(kw, null)} disabled={!!busy[kw.id] || !apiKey} variant="outline" small color={site.color}>
+                    {busy[kw.id] === "q" ? "⏳" : "💬"}
+                  </Btn>
+                  <button onClick={() => deleteKw(kw.id)} style={{ padding: "3px 7px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.white, color: C.textLight, fontSize: 10, cursor: "pointer" }}>🗑</button>
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })}
         </div>
       )}
     </div>
   );
 }
 
-// ── Questions sub-tab ─────────────────────────────────────────────
+// ── Questions sub-tab (v2) ────────────────────────────────────────
 
-function QuestionsTab({ site, projectId, apiKey, model, brand, allResults, onResultSaved }) {
+function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allResults, onResultSaved }) {
   const [questions, setQuestions]   = useState([]);
   const [results, setResults]       = useState(allResults || []);
   const [manualQ, setManualQ]       = useState("");
   const [filterFav, setFilterFav]   = useState(false);
   const [filterBrand, setFilterBrand] = useState(false);
-  const [running, setRunning]       = useState({}); // qId → true
+  const [filterCat, setFilterCat]   = useState("");
+  const [running, setRunning]       = useState({});
   const [runAll, setRunAll]         = useState(false);
+  const [selected, setSelected]     = useState(new Set());
+  const [bulkCat, setBulkCat]       = useState("");
+  const [keywords, setKeywords]     = useState([]);
 
   useEffect(() => { setResults(allResults || []); }, [allResults]);
 
   useEffect(() => {
     if (!projectId || !site?.id) return;
     sbGetQuestions(projectId, site.id).then(setQuestions);
+    sbGetKeywords(projectId, site.id).then(setKeywords);
   }, [projectId, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const resultsByQ = useMemo(() => {
@@ -535,67 +653,66 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, allResults, onRes
   const deleteQ = async (qId) => {
     await sbDeleteQuestion(qId);
     setQuestions(prev => prev.filter(q => q.id !== qId));
+    setSelected(prev => { const n = new Set(prev); n.delete(qId); return n; });
+  };
+
+  const setCatSingle = async (qId, catId) => {
+    await sbSetQuestionCategory(qId, catId || null);
+    setQuestions(prev => prev.map(q => q.id === qId ? { ...q, category_id: catId || null } : q));
+  };
+
+  const applyBulkCat = async () => {
+    if (!selected.size) return;
+    const ids = [...selected];
+    await sbBulkSetQuestionCategory(ids, bulkCat || null);
+    setQuestions(prev => prev.map(q => selected.has(q.id) ? { ...q, category_id: bulkCat || null } : q));
+    setSelected(new Set()); setBulkCat("");
   };
 
   const runQuestion = useCallback(async (q) => {
     if (!apiKey) { alert("Clé OpenAI manquante"); return; }
-    const { brand_name, brand_aliases = [], competitors = [], context = "" } = brand || {};
+    const { brand_name = "", brand_aliases = [], competitors = [], context = "" } = brand || {};
     setRunning(r => ({ ...r, [q.id]: true }));
-
     const prompt = [
       context ? `Contexte : "${context}"` : "",
       "Tu es ChatGPT. Réponds à la question suivante exactement comme tu le ferais dans l'interface ChatGPT avec accès au web.",
       "RÈGLE ABSOLUE : Ne pose jamais de question de clarification. Choisis l'interprétation la plus probable et réponds directement.",
-      "",
-      "ÉTAPE 1 — Recherche web puis réponse.",
-      "  • Rédige une réponse complète, naturelle et bien structurée.",
-      "  • Insère les marqueurs [1], [2]… dans le texte.",
-      "  • La liste 'sources' reprend les URLs dans l'ordre. Ne pas inventer d'URLs.",
-      "",
-      "ÉTAPE 2 — Classification (JSON uniquement).",
-      "- intent_type : Top | Informative | Conseil",
-      "- answer_type : format dominant (Définition, Liste, Comparatif, FAQ, Procédure, Conseils…)",
-      "- source_types : déduit des URLs.",
-      "",
-      "Produis UNIQUEMENT le JSON final conforme au schéma. Aucun texte avant ou après.",
-      "",
+      "ÉTAPE 1 — Recherche web puis réponse. Insère les marqueurs [1], [2]… dans le texte. La liste 'sources' reprend les URLs dans l'ordre. Ne pas inventer d'URLs.",
+      "ÉTAPE 2 — Classification JSON : intent_type (Top|Informative|Conseil), answer_type, source_types.",
+      "Produis UNIQUEMENT le JSON final. Aucun texte avant ou après.",
       `Question : ${q.question}`,
     ].filter(Boolean).join("\n");
-
     try {
       const data = await callOpenAI({ apiKey, model, prompt, endpoint: "responses" });
       const parsed = parseOpenAIResponse(data, "responses");
-      const { brandMentioned, brandPosition, brandInSources, competitorsMentioned } = detectBrand(
-        parsed.answer, parsed.sources, brand_name, brand_aliases, competitors
-      );
+      const { brandMentioned, brandPosition, brandInSources, competitorsMentioned } = detectBrand(parsed.answer, parsed.sources, brand_name, brand_aliases, competitors);
+
+      // Update URL index
+      const domain_counts = {};
+      (parsed.sources || []).forEach(url => {
+        const d = extractDomain(url);
+        if (!domain_counts[url]) domain_counts[url] = { as_source: 0, in_answer: 0 };
+        domain_counts[url].as_source++;
+      });
+      await Promise.all(Object.entries(domain_counts).map(([url, counts]) =>
+        sbIncrementUrlCounts(projectId, url, counts)
+      ));
 
       const record = {
-        question_id: q.id, project_id: projectId, site_id: site.id,
-        model,
-        answer: parsed.answer,
-        answer_type: parsed.answer_type,
-        intent_type: parsed.intent_type,
-        sources: parsed.sources,
-        source_types: parsed.source_types,
-        brand_mentioned: brandMentioned,
-        brand_position: brandPosition,
-        brand_in_sources: brandInSources,
-        competitors_mentioned: competitorsMentioned,
-        input_tokens: parsed._input_tokens,
-        output_tokens: parsed._output_tokens,
+        question_id: q.id, project_id: projectId, site_id: site.id, model,
+        answer: parsed.answer, answer_type: parsed.answer_type, intent_type: parsed.intent_type,
+        sources: parsed.sources, source_types: parsed.source_types,
+        brand_mentioned: brandMentioned, brand_position: brandPosition,
+        brand_in_sources: brandInSources, competitors_mentioned: competitorsMentioned,
+        input_tokens: parsed._input_tokens, output_tokens: parsed._output_tokens,
       };
-
       const saved = await sbSaveGeoResult(record);
       const newResult = Array.isArray(saved) ? saved[0] : saved;
       setResults(prev => [newResult, ...prev]);
       await sbUpdateQuestion(q.id, { has_result: true });
       setQuestions(prev => prev.map(qq => qq.id === q.id ? { ...qq, has_result: true } : qq));
       onResultSaved?.();
-    } catch (e) {
-      console.error("runQuestion error:", e);
-      alert("Erreur : " + e.message);
-    }
-
+    } catch(e) { console.error("runQuestion error:", e); alert("Erreur : " + e.message); }
     setRunning(r => ({ ...r, [q.id]: false }));
   }, [apiKey, model, brand, projectId, site?.id, onResultSaved]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -603,7 +720,7 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, allResults, onRes
     setRunAll(true);
     const toRun = filtered.filter(q => !(resultsByQ[q.id]?.length));
     for (const q of toRun) {
-      if (!runAll) break; // allow cancel
+      if (!runAll) break;
       await runQuestion(q);
     }
     setRunAll(false);
@@ -611,43 +728,55 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, allResults, onRes
 
   const filtered = useMemo(() => questions.filter(q => {
     if (filterFav && !q.is_favorite) return false;
+    if (filterCat && q.category_id !== filterCat) return false;
     if (filterBrand) {
-      const qResults = resultsByQ[q.id] || [];
-      if (!qResults.some(r => r.brand_mentioned)) return false;
+      const qRes = resultsByQ[q.id] || [];
+      if (!qRes.some(r => r.brand_mentioned)) return false;
     }
     return true;
-  }), [questions, filterFav, filterBrand, resultsByQ]);
+  }), [questions, filterFav, filterBrand, filterCat, resultsByQ]);
 
   const { brand_name = "", brand_aliases = [] } = brand || {};
   const totalWithBrand = questions.filter(q => (resultsByQ[q.id] || []).some(r => r.brand_mentioned)).length;
-  const totalWithResult = questions.filter(q => resultsByQ[q.id]?.length > 0).length;
 
   return (
     <div>
       {/* Manual question input */}
-      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: 18, marginBottom: 20, display: "flex", gap: 10 }}>
-        <input
-          value={manualQ} onChange={e => setManualQ(e.target.value)}
-          onKeyDown={e => e.key === "Enter" && addManual()}
+      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px", marginBottom: 16, display: "flex", gap: 10 }}>
+        <input value={manualQ} onChange={e => setManualQ(e.target.value)} onKeyDown={e => e.key === "Enter" && addManual()}
           placeholder="Ajouter une question manuellement…"
-          style={{ flex: 1, padding: "7px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, color: C.text }}
-        />
+          style={{ flex: 1, padding: "7px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, color: C.text }} />
         <Btn onClick={addManual} disabled={!manualQ.trim()}>➕ Ajouter</Btn>
       </div>
 
-      {/* Filters + actions bar */}
-      <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 16, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 12, color: C.textLight }}>
-          {questions.length} questions · {totalWithResult} interrogées · {totalWithBrand} avec {brand_name || "marque"}
+      {/* Filters + bulk actions */}
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 14, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 11, color: C.textLight }}>
+          {filtered.length} question{filtered.length > 1 ? "s" : ""}
+          {" · "}{totalWithBrand} avec {brand_name || "marque"}
+          {selected.size > 0 && <strong style={{ color: C.text }}> · {selected.size} sélectionnée{selected.size > 1 ? "s" : ""}</strong>}
         </span>
-        <div style={{ display: "flex", gap: 6, marginLeft: "auto" }}>
-          <Pill color="#F59E0B" active={filterFav} onClick={() => setFilterFav(f => !f)}>⭐ Favoris</Pill>
-          <Pill color="#059669" active={filterBrand} onClick={() => setFilterBrand(f => !f)}>✓ Marque présente</Pill>
+
+        <Pill color="#F59E0B" active={filterFav} onClick={() => setFilterFav(f => !f)}>⭐ Favoris</Pill>
+        <Pill color="#059669" active={filterBrand} onClick={() => setFilterBrand(f => !f)}>✓ Marque présente</Pill>
+        <CatSelect value={filterCat} categories={[{ id: "", name: "Toutes catégories" }, ...categories]} onChange={v => setFilterCat(v || "")} placeholder="Toutes catégories" />
+
+        {/* Bulk selection + categorization */}
+        <div style={{ display: "flex", gap: 4 }}>
+          <button onClick={() => setSelected(new Set(filtered.map(q => q.id)))} style={{ fontSize: 11, padding: "3px 8px", border: `1px solid ${C.border}`, borderRadius: 5, background: C.white, cursor: "pointer", color: C.textMid }}>Tout sélect.</button>
+          {selected.size > 0 && <button onClick={() => setSelected(new Set())} style={{ fontSize: 11, padding: "3px 8px", border: `1px solid ${C.border}`, borderRadius: 5, background: C.white, cursor: "pointer", color: C.textMid }}>Désélect.</button>}
         </div>
-        <Btn onClick={runAllQuestions} disabled={runAll || !apiKey} color="#7C3AED">
-          {runAll ? "⏳ En cours…" : "▶ Lancer tout"}
-        </Btn>
-        {runAll && <Btn onClick={() => setRunAll(false)} color="#DC2626" variant="outline" small>⏹ Arrêter</Btn>}
+        {selected.size > 0 && (
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <CatSelect value={bulkCat} categories={categories} onChange={setBulkCat} placeholder="Appliquer catégorie…" />
+            <Btn onClick={applyBulkCat} small color="#7C3AED">Appliquer</Btn>
+          </div>
+        )}
+
+        <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+          <Btn onClick={runAllQuestions} disabled={runAll || !apiKey} color="#7C3AED">{runAll ? "⏳ En cours…" : "▶ Lancer tout"}</Btn>
+          {runAll && <Btn onClick={() => setRunAll(false)} color="#DC2626" variant="outline" small>⏹ Arrêter</Btn>}
+        </div>
       </div>
 
       {/* Questions list */}
@@ -656,36 +785,36 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, allResults, onRes
           {questions.length === 0 ? "Aucune question — générez-en depuis les mots-clés ou ajoutez-en manuellement" : "Aucune question ne correspond aux filtres"}
         </div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {filtered.map(q => {
             const qResults = resultsByQ[q.id] || [];
             const hasBrand = qResults.some(r => r.brand_mentioned);
             const isRunning = running[q.id];
+            const isSel = selected.has(q.id);
+            const cat = categories.find(c => c.id === q.category_id);
+            const kwTag = keywords.find(k => k.id === q.keyword_id);
             return (
-              <div key={q.id} style={{ background: C.white, border: `1px solid ${hasBrand ? "#059669" : C.border}`, borderRadius: 12, padding: "14px 18px", borderLeft: `3px solid ${hasBrand ? "#059669" : q.is_favorite ? "#F59E0B" : C.border}` }}>
-                {/* Question header */}
-                <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
-                  <button onClick={() => toggleFav(q.id, q.is_favorite)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 16, flexShrink: 0, opacity: q.is_favorite ? 1 : 0.3, transition: "opacity 0.15s" }}>⭐</button>
+              <div key={q.id} style={{ background: isSel ? "#EFF6FF" : C.white, border: `1px solid ${hasBrand ? "#059669" : isSel ? "#2563EB55" : C.border}`, borderRadius: 12, padding: "12px 16px", borderLeft: `3px solid ${hasBrand ? "#059669" : q.is_favorite ? "#F59E0B" : isSel ? "#2563EB" : C.border}` }}>
+                <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+                  <input type="checkbox" checked={isSel} onChange={() => { setSelected(prev => { const n = new Set(prev); n.has(q.id) ? n.delete(q.id) : n.add(q.id); return n; }); }} style={{ cursor: "pointer", flexShrink: 0, marginTop: 2 }} />
+                  <button onClick={() => toggleFav(q.id, q.is_favorite)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 15, flexShrink: 0, opacity: q.is_favorite ? 1 : 0.3, transition: "opacity 0.15s" }}>⭐</button>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 13, fontWeight: 600, color: C.text, lineHeight: 1.5 }}>{q.question}</div>
-                    <div style={{ display: "flex", gap: 6, marginTop: 5, flexWrap: "wrap", alignItems: "center" }}>
+                    <div style={{ display: "flex", gap: 5, marginTop: 4, flexWrap: "wrap", alignItems: "center" }}>
+                      {kwTag && <span style={{ fontSize: 10, color: C.textLight, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: "1px 7px" }}>🔑 {kwTag.keyword}</span>}
+                      {cat && <span style={{ fontSize: 10, fontWeight: 700, color: cat.color, background: cat.color + "18", border: `1px solid ${cat.color}44`, borderRadius: 10, padding: "1px 7px" }}>{cat.name}</span>}
                       {q.is_manual && <Pill color={C.textLight}>manuel</Pill>}
                       {hasBrand && <Pill color="#059669">✓ {brand_name}</Pill>}
                       {qResults.length > 0 && <span style={{ fontSize: 10, color: C.textLight }}>{qResults.length} résultat{qResults.length > 1 ? "s" : ""}</span>}
                     </div>
                   </div>
-                  <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-                    <Btn onClick={() => runQuestion(q)} disabled={isRunning || !apiKey} color={site.color} small>
-                      {isRunning ? "⏳" : "▶ Interroger"}
-                    </Btn>
-                    <button onClick={() => deleteQ(q.id)} style={{ padding: "4px 7px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.white, color: C.textLight, fontSize: 10, cursor: "pointer" }}>🗑</button>
+                  <div style={{ display: "flex", gap: 5, flexShrink: 0, alignItems: "center" }}>
+                    <CatSelect value={q.category_id} categories={categories} onChange={v => setCatSingle(q.id, v)} />
+                    <Btn onClick={() => runQuestion(q)} disabled={isRunning || !apiKey} color={site.color} small>{isRunning ? "⏳" : "▶"}</Btn>
+                    <button onClick={() => deleteQ(q.id)} style={{ padding: "3px 7px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.white, color: C.textLight, fontSize: 10, cursor: "pointer" }}>🗑</button>
                   </div>
                 </div>
-
-                {/* Results */}
-                {qResults.map(r => (
-                  <ResultCard key={r.id} result={r} brandName={brand_name} brandAliases={brand_aliases} />
-                ))}
+                {qResults.map(r => <ResultCard key={r.id} result={r} brandName={brand_name} brandAliases={brand_aliases} />)}
               </div>
             );
           })}
@@ -695,10 +824,194 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, allResults, onRes
   );
 }
 
+// ── URL Index sub-tab ─────────────────────────────────────────────
+
+const TEMPLATE_TYPES = ["article","landing","fiche","FAQ","comparatif","forum","media","institutionnel","autre"];
+
+function UrlsTab({ projectId, categories }) {
+  const [urls, setUrls]       = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [crawling, setCrawling] = useState({}); // urlId → true
+  const [filterCat, setFilterCat] = useState("");
+  const [filterTpl, setFilterTpl] = useState("");
+  const [search, setSearch]   = useState("");
+  const [openCrawl, setOpenCrawl] = useState(null); // urlId with open crawl panel
+
+  useEffect(() => {
+    if (!projectId) return;
+    sbGetUrlIndex(projectId).then(data => { setUrls(data); setLoading(false); });
+  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const setThemeCat = async (id, catId) => {
+    await sbUpdateUrlMeta(id, { theme_category_id: catId || null });
+    setUrls(prev => prev.map(u => u.id === id ? { ...u, theme_category_id: catId || null } : u));
+  };
+
+  const setTemplate = async (id, tpl) => {
+    await sbUpdateUrlMeta(id, { template_type: tpl || null });
+    setUrls(prev => prev.map(u => u.id === id ? { ...u, template_type: tpl || null } : u));
+  };
+
+  const launchCrawl = async (urlEntry) => {
+    setCrawling(c => ({ ...c, [urlEntry.id]: true }));
+    await sbUpdateUrlMeta(urlEntry.id, { crawl_status: "pending" });
+    setUrls(prev => prev.map(u => u.id === urlEntry.id ? { ...u, crawl_status: "pending" } : u));
+    try {
+      const res = await fetch("/api/crawl", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: urlEntry.url }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || "Crawl failed");
+      const sections = data.sections || [];
+      await sbUpdateUrlMeta(urlEntry.id, { crawl_status: "done", crawl_sections: sections, crawl_at: new Date().toISOString() });
+      setUrls(prev => prev.map(u => u.id === urlEntry.id ? { ...u, crawl_status: "done", crawl_sections: sections } : u));
+      setOpenCrawl(urlEntry.id);
+    } catch(e) {
+      await sbUpdateUrlMeta(urlEntry.id, { crawl_status: "error" });
+      setUrls(prev => prev.map(u => u.id === urlEntry.id ? { ...u, crawl_status: "error" } : u));
+      alert("Crawl échoué : " + e.message);
+    }
+    setCrawling(c => ({ ...c, [urlEntry.id]: false }));
+  };
+
+  const filtered = useMemo(() => urls.filter(u => {
+    if (filterCat && u.theme_category_id !== filterCat) return false;
+    if (filterTpl && u.template_type !== filterTpl) return false;
+    if (search && !u.url.toLowerCase().includes(search.toLowerCase()) && !u.domain?.toLowerCase().includes(search.toLowerCase())) return false;
+    return true;
+  }), [urls, filterCat, filterTpl, search]);
+
+  const topDomains = useMemo(() => {
+    const m = {};
+    urls.forEach(u => { if (u.domain) m[u.domain] = (m[u.domain] || 0) + u.count_as_source + u.count_in_answer; });
+    return Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  }, [urls]);
+
+  if (loading) return <div style={{ textAlign: "center", padding: 40, color: C.textLight, fontSize: 12 }}>Chargement des URLs…</div>;
+
+  if (!urls.length) return (
+    <div style={{ textAlign: "center", padding: 60, color: C.textLight }}>
+      <div style={{ fontSize: 32, marginBottom: 12 }}>🔗</div>
+      <div style={{ fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 6 }}>Aucune URL indexée</div>
+      <div style={{ fontSize: 12 }}>Interrogez des questions pour voir apparaître les URLs citées</div>
+    </div>
+  );
+
+  return (
+    <div>
+      {/* Top domains summary */}
+      {topDomains.length > 0 && (
+        <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 20px", marginBottom: 16, display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7 }}>Top domaines</span>
+          {topDomains.map(([d, cnt]) => (
+            <div key={d} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+              <span style={{ fontSize: 12, color: "#2563EB", fontWeight: 600 }}>{d}</span>
+              <span style={{ fontSize: 11, color: C.textLight, background: C.bg, borderRadius: 10, padding: "1px 7px" }}>{cnt}×</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Filters */}
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 Rechercher une URL ou domaine…"
+          style={{ padding: "6px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, color: C.text, width: 260 }} />
+        <CatSelect value={filterCat} categories={[{ id: "", name: "Tous thèmes" }, ...categories]} onChange={v => setFilterCat(v || "")} placeholder="Tous thèmes" />
+        <select value={filterTpl} onChange={e => setFilterTpl(e.target.value)}
+          style={{ padding: "5px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11, color: C.text }}>
+          <option value="">Tous templates</option>
+          {TEMPLATE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+        </select>
+        <span style={{ fontSize: 11, color: C.textLight, marginLeft: "auto" }}>{filtered.length} URL{filtered.length > 1 ? "s" : ""}</span>
+      </div>
+
+      {/* URL list */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {filtered.map(u => {
+          const cat = categories.find(c => c.id === u.theme_category_id);
+          const isOpen = openCrawl === u.id;
+          const hasSections = u.crawl_sections?.length > 0;
+          return (
+            <div key={u.id} style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", flexWrap: "wrap" }}>
+                {/* Counts */}
+                <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, background: "#EFF6FF", color: "#2563EB", borderRadius: 5, padding: "2px 8px" }} title="Fois cité en source">📎 {u.count_as_source}</span>
+                  <span style={{ fontSize: 11, fontWeight: 700, background: "#F5F3FF", color: "#7C3AED", borderRadius: 5, padding: "2px 8px" }} title="Fois dans le texte de réponse">💬 {u.count_in_answer}</span>
+                </div>
+
+                {/* URL */}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                    <a href={u.url} target="_blank" rel="noreferrer"
+                      style={{ fontSize: 12, color: "#2563EB", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textDecoration: "none", display: "block" }}>
+                      {u.url}
+                    </a>
+                    <a href={u.url} target="_blank" rel="noreferrer" style={{ flexShrink: 0, fontSize: 10, color: C.textLight, border: `1px solid ${C.border}`, borderRadius: 4, padding: "1px 5px", textDecoration: "none" }}>↗</a>
+                  </div>
+                  <div style={{ fontSize: 11, color: C.textLight }}>{u.domain}</div>
+                </div>
+
+                {/* Category + template selectors */}
+                <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0, flexWrap: "wrap" }}>
+                  {cat && <span style={{ fontSize: 10, fontWeight: 700, color: cat.color, background: cat.color + "18", border: `1px solid ${cat.color}44`, borderRadius: 10, padding: "1px 7px" }}>{cat.name}</span>}
+                  <CatSelect value={u.theme_category_id} categories={categories} onChange={v => setThemeCat(u.id, v)} placeholder="Thème…" />
+                  <select value={u.template_type || ""} onChange={e => setTemplate(u.id, e.target.value || null)}
+                    style={{ padding: "4px 7px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11, color: u.template_type ? C.text : C.textLight }}>
+                    <option value="">Template…</option>
+                    {TEMPLATE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+
+                {/* Crawl button */}
+                <div style={{ display: "flex", gap: 5, flexShrink: 0 }}>
+                  {hasSections && (
+                    <button onClick={() => setOpenCrawl(isOpen ? null : u.id)}
+                      style={{ padding: "4px 9px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11, cursor: "pointer", background: isOpen ? C.bg : C.white, color: C.textMid }}>
+                      {isOpen ? "▲ Sections" : "▼ Sections"}
+                    </button>
+                  )}
+                  <Btn onClick={() => launchCrawl(u)} disabled={crawling[u.id]} color="#059669" small>
+                    {crawling[u.id] ? "⏳" : u.crawl_status === "done" ? "🔄 Re-crawl" : "🕷️ Crawler"}
+                  </Btn>
+                </div>
+              </div>
+
+              {/* Crawl sections panel */}
+              {isOpen && hasSections && (
+                <div style={{ borderTop: `1px solid ${C.border}`, background: C.bg, padding: "12px 14px" }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>
+                    Sections détectées · {u.crawl_sections.length}
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 8 }}>
+                    {u.crawl_sections.map((sec, i) => (
+                      <div key={i} style={{ background: C.white, border: `1px solid ${sec.used_in_llm ? "#059669" : C.border}`, borderRadius: 8, padding: "10px 12px", borderLeft: `3px solid ${sec.used_in_llm ? "#059669" : C.border}` }}>
+                        <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 4 }}>
+                          <span style={{ fontSize: 10, fontWeight: 700, color: "#7C3AED", background: "#F5F3FF", borderRadius: 4, padding: "1px 6px" }}>{sec.type}</span>
+                          {sec.used_in_llm && <span style={{ fontSize: 10, color: "#059669", fontWeight: 600 }}>✓ utilisé par LLM</span>}
+                        </div>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: C.text, marginBottom: 3 }}>{sec.title}</div>
+                        <div style={{ fontSize: 11, color: C.textLight, lineHeight: 1.5 }}>{sec.summary}</div>
+                        {sec.used_in_llm_reason && <div style={{ fontSize: 10, color: "#059669", marginTop: 4, fontStyle: "italic" }}>{sec.used_in_llm_reason}</div>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ── Main GeoTab ───────────────────────────────────────────────────
 
 export default function GeoTab({ sites, projectId, project }) {
-  const [subTab, setSubTab]         = useState("keywords"); // keywords | questions
+  const [subTab, setSubTab]         = useState("keywords"); // keywords | questions | urls
   const [selectedSite, setSelectedSite] = useState(sites[0]?.id || "");
   const [model, setModel]           = useState("gpt-4o-mini");
   const [brand, setBrand]           = useState(null);         // { brand_name, brand_aliases, competitors, context }
@@ -709,8 +1022,15 @@ export default function GeoTab({ sites, projectId, project }) {
   const [allResults, setAllResults] = useState([]);
   const [brandEditing, setBrandEditing] = useState(false);
   const [brandDraft, setBrandDraft] = useState({ brand_name: "", brand_aliases: "", competitors: "", context: "" });
+  const [categories, setCategories] = useState([]);
 
   const site = sites.find(s => s.id === selectedSite) || sites[0];
+
+  // Load categories (project-wide, once)
+  useEffect(() => {
+    if (!projectId) return;
+    sbGetCategories(projectId).then(setCategories);
+  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load brand + decrypt key + results when site changes
   useEffect(() => {
@@ -863,6 +1183,7 @@ export default function GeoTab({ sites, projectId, project }) {
         {[
           { key: "keywords",  label: "🔑 Mots-clés" },
           { key: "questions", label: "💬 Questions" },
+          { key: "urls",      label: "🔗 URLs citées" },
         ].map(t => (
           <button key={t.key} onClick={() => setSubTab(t.key)} style={{
             padding: "7px 18px", borderRadius: 7, fontSize: 13, fontWeight: subTab === t.key ? 700 : 500,
@@ -883,6 +1204,8 @@ export default function GeoTab({ sites, projectId, project }) {
           apiKey={apiKeyDec}
           model={model}
           context={brand?.context || ""}
+          categories={categories}
+          setCategories={setCategories}
           onQuestionsGenerated={() => setSubTab("questions")}
         />
       )}
@@ -893,8 +1216,15 @@ export default function GeoTab({ sites, projectId, project }) {
           apiKey={apiKeyDec}
           model={model}
           brand={brand}
+          categories={categories}
           allResults={allResults.filter(r => r.site_id === site?.id)}
           onResultSaved={() => sbGetGeoResults(projectId, site.id).then(setAllResults)}
+        />
+      )}
+      {subTab === "urls" && (
+        <UrlsTab
+          projectId={projectId}
+          categories={categories}
         />
       )}
     </div>
