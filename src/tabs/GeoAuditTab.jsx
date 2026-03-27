@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
-import { C, RES_KPIS } from "../lib/constants";
+import { C } from "../lib/constants";
 import { sbGetBrand, sbGetQuestions, sbGetGeoResults, sbGetUrlIndex } from "../lib/supabase";
 
 // ── Constants ─────────────────────────────────────────────────────
@@ -655,111 +655,219 @@ export default function GeoAuditTab({ sites, projectId, corrMatrix = [], metrics
           ))}
         </Section>
 
-        {/* SEO + GEO KPIs par site */}
-        {metrics.length > 0 && (
-          <Section icon="📊" title="Performances SEO & GEO par site" sub="Données GSC, GA4 et Bing AI — agrégats site entier">
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                <thead>
-                  <tr style={{ background: C.bg }}>
-                    <th style={{ padding: "8px 14px", textAlign: "left", fontWeight: 600, fontSize: 11, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, borderBottom: `1px solid ${C.border}`, minWidth: 160 }}>Métrique</th>
-                    {metrics.map(({ site }) => (
-                      <th key={site.id} style={{ padding: "8px 14px", textAlign: "right", fontWeight: 700, fontSize: 12, color: site.color, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>{site.label}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {RES_KPIS.map((kpi, di) => {
-                    const vals = resultVals.map(rv => rv[kpi.key] ?? null).filter(v => v !== null && v !== undefined);
-                    const best = vals.length > 1 ? (kpi.key === "position" ? Math.min(...vals) : Math.max(...vals)) : null;
-                    const srcColors = { gsc: "#2563EB", ga: "#059669", bing: "#7C3AED" };
-                    return (
-                      <tr key={kpi.key} style={{ borderBottom: `1px solid ${C.borderLight}`, background: di % 2 === 0 ? C.white : C.bg }}>
-                        <td style={{ padding: "8px 14px", color: C.textMid, fontWeight: 500 }}>
-                          <span style={{ fontSize: 9, fontWeight: 700, color: srcColors[kpi.src] || C.textLight, background: (srcColors[kpi.src] || C.textLight) + "18", borderRadius: 4, padding: "1px 5px", marginRight: 6 }}>{kpi.src.toUpperCase()}</span>
-                          {kpi.label}
-                        </td>
-                        {resultVals.map((rv, si) => {
-                          const val = rv[kpi.key] ?? null;
-                          const isBest = val !== null && best !== null && val === best;
-                          const fmt = kpi.key === "ctr" ? v => `${v}%` : kpi.key === "position" ? v => v.toFixed ? v.toFixed(1) : v : v => typeof v === "number" && v >= 1000 ? (v/1000).toFixed(1)+"k" : String(Math.round(v));
-                          return (
-                            <td key={si} style={{ padding: "8px 14px", textAlign: "right", fontWeight: 600, color: val === null ? C.textLight : isBest ? metrics[si]?.site?.color : C.text }}>
-                              {val !== null ? fmt(val) : "—"}
-                              {isBest && vals.length > 1 && <span style={{ marginLeft: 4, fontSize: 10 }}>★</span>}
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </Section>
-        )}
+        </Section>
 
-        {/* Matrice de corrélation SF × KPIs */}
-        {corrMatrix.length > 0 && corrMatrix.some(row => row.corrs.some(c => c.value !== null)) && (
-          <Section icon="🔗" title="Matrice de corrélation SF × SEO/GEO" sub="Corrélation entre les métriques techniques Screaming Frog et les KPIs de performance">
-            <div style={{ fontSize: 11, color: C.textLight, marginBottom: 12 }}>
-              Valeur entre -1 et +1 · <span style={{ color: "#059669" }}>■ corrélation positive</span> · <span style={{ color: "#DC2626" }}>■ corrélation négative</span> · — pas assez de données
-            </div>
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
-                <thead>
-                  <tr style={{ background: C.bg }}>
-                    <th style={{ padding: "7px 12px", textAlign: "left", fontWeight: 600, fontSize: 10, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, borderBottom: `1px solid ${C.border}`, minWidth: 140 }}>Dimension SF</th>
-                    {RES_KPIS.map(kpi => (
-                      <th key={kpi.key} style={{ padding: "7px 10px", textAlign: "center", fontWeight: 600, fontSize: 10, color: C.textLight, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap", minWidth: 80 }}>{kpi.label}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {corrMatrix.map((row, di) => (
-                    <tr key={row.dim.key} style={{ borderBottom: `1px solid ${C.borderLight}`, background: di % 2 === 0 ? C.white : C.bg }}>
-                      <td style={{ padding: "7px 12px", color: C.textMid, fontWeight: 500, fontSize: 11 }}>{row.dim.label}</td>
-                      {row.corrs.map((c, ki) => {
-                        const v = c.value;
-                        const abs = v !== null ? Math.abs(v) : 0;
-                        const bg = v === null ? "transparent"
-                          : v > 0.25 ? `rgba(5,150,105,${Math.min(0.15 + abs * 0.5, 0.7)})`
-                          : v < -0.25 ? `rgba(220,38,38,${Math.min(0.15 + abs * 0.5, 0.7)})`
-                          : C.bg;
-                        const col = v === null ? C.textLight : Math.abs(v) > 0.25 ? (v > 0 ? "#059669" : "#DC2626") : C.textLight;
-                        return (
-                          <td key={ki} style={{ padding: "7px 10px", textAlign: "center", background: bg, fontWeight: abs > 0.25 ? 700 : 400, color: col, borderRight: `1px solid ${C.borderLight}` }} title={v !== null ? `r=${v.toFixed(3)}, n=${c.n}` : "Pas de données"}>
-                            {v !== null ? v.toFixed(2) : "—"}
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            {/* Top correlations insight */}
-            {(() => {
-              const tops = corrMatrix.flatMap(row => row.corrs
-                .filter(c => c.value !== null && Math.abs(c.value) >= 0.4)
-                .map(c => ({ dim: row.dim.label, kpi: c.kpi.label, value: c.value, abs: Math.abs(c.value) }))
-              ).sort((a, b) => b.abs - a.abs).slice(0, 3);
-              if (!tops.length) return null;
-              return (
-                <div style={{ marginTop: 14, padding: "12px 14px", background: "#F5F3FF", borderRadius: 10, border: "1px solid #DDD6FE" }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: "#7C3AED", marginBottom: 8 }}>💡 Corrélations fortes détectées</div>
-                  {tops.map((t, i) => (
-                    <div key={i} style={{ fontSize: 11, color: C.textMid, marginBottom: 4 }}>
-                      <strong style={{ color: t.value > 0 ? "#059669" : "#DC2626" }}>{t.value > 0 ? "▲" : "▼"} {t.dim}</strong> × <strong>{t.kpi}</strong>
-                      {" "}— r = <strong style={{ color: t.value > 0 ? "#059669" : "#DC2626" }}>{t.value.toFixed(2)}</strong>
-                      {t.value > 0 ? " : améliorer cette métrique SF tend à améliorer la performance" : " : réduire cette métrique SF tend à améliorer la performance"}
-                    </div>
-                  ))}
+        {/* ── Croisements données × présence GEO ── */}
+        {(() => {
+          // Gather data for cross-analysis
+          const hasSF      = metrics.some(m => m.sf);
+          const hasGSC     = metrics.some(m => m.gsc);
+          const hasBing    = metrics.some(m => m.bing);
+          const hasCorr    = corrMatrix.length > 0 && corrMatrix.some(r => r.corrs.some(c => c.value !== null));
+          const geoPct     = audit.presenceRate;
+          const avgPos     = audit.avgPos;
+          const withSource = audit.withSources;
+          const total      = audit.total;
+
+          // Top SF correlations with GEO (bing) signals
+          const geoCorrs = hasCorr ? corrMatrix.flatMap(row =>
+            row.corrs
+              .filter(c => c.kpi.src === "bing" && c.value !== null)
+              .map(c => ({ dim: row.dim.label, kpi: c.kpi.label, value: c.value }))
+          ).sort((a, b) => Math.abs(b.value) - Math.abs(a.value)).slice(0, 5) : [];
+
+          // Top SF correlations with SEO (gsc) signals
+          const seoCorrs = hasCorr ? corrMatrix.flatMap(row =>
+            row.corrs
+              .filter(c => c.kpi.src === "gsc" && c.value !== null)
+              .map(c => ({ dim: row.dim.label, kpi: c.kpi.label, value: c.value }))
+          ).sort((a, b) => Math.abs(b.value) - Math.abs(a.value)).slice(0, 5) : [];
+
+          // Bing stats
+          const bingTotal   = metrics.reduce((s, m) => s + (m.bing?.geoMentions || 0), 0);
+          const bingPages   = metrics.reduce((s, m) => s + (m.bing?.pageCount || 0), 0);
+
+          // GSC stats
+          const gscClicks   = metrics.reduce((s, m) => s + (m.gsc?.clicks || 0), 0);
+          const gscPos      = metrics.filter(m => m.gsc?.position).map(m => m.gsc.position);
+          const gscAvgPos   = gscPos.length ? (gscPos.reduce((a,b)=>a+b,0)/gscPos.length).toFixed(1) : null;
+
+          const CrossCard = ({ icon, title, sub, children }) => (
+            <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden", marginBottom: 16 }}>
+              <div style={{ padding: "14px 20px", borderBottom: `1px solid ${C.border}`, background: C.bg, display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 18 }}>{icon}</span>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{title}</div>
+                  {sub && <div style={{ fontSize: 11, color: C.textLight, marginTop: 1 }}>{sub}</div>}
                 </div>
-              );
-            })()}
-          </Section>
-        )}
+              </div>
+              <div style={{ padding: "16px 20px" }}>{children}</div>
+            </div>
+          );
+
+          const Signal = ({ label, value, note, color = C.text }) => (
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", padding: "7px 0", borderBottom: `1px solid ${C.borderLight}` }}>
+              <span style={{ fontSize: 12, color: C.textMid }}>{label}</span>
+              <div style={{ textAlign: "right" }}>
+                <span style={{ fontSize: 14, fontWeight: 700, color }}>{value}</span>
+                {note && <div style={{ fontSize: 10, color: C.textLight }}>{note}</div>}
+              </div>
+            </div>
+          );
+
+          const Lead = ({ priority, text, color = "#7C3AED", bg = "#F5F3FF" }) => (
+            <div style={{ padding: "9px 12px", borderLeft: `3px solid ${color}`, background: bg, borderRadius: "0 8px 8px 0", marginBottom: 8 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color, marginBottom: 2 }}>{priority}</div>
+              <div style={{ fontSize: 11, color: C.textMid, lineHeight: 1.5 }}>{text}</div>
+            </div>
+          );
+
+          const CorrRow = ({ dim, kpi, value }) => {
+            const pos = value > 0;
+            const strong = Math.abs(value) >= 0.4;
+            return (
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "5px 0", borderBottom: `1px solid ${C.borderLight}` }}>
+                <span style={{ fontSize: 11, color: C.textMid }}>{dim} × {kpi}</span>
+                <span style={{ fontSize: 12, fontWeight: strong ? 700 : 500, color: pos ? "#059669" : "#DC2626", background: (pos ? "#ECFDF5" : "#FEF2F2"), borderRadius: 5, padding: "1px 8px" }}>
+                  {pos ? "▲" : "▼"} r={value.toFixed(2)}
+                </span>
+              </div>
+            );
+          };
+
+          return (<>
+
+            {/* 1. Technique × GEO */}
+            <CrossCard icon="🕷️" title="Technique (SF) × Présence GEO"
+              sub="Comment les métriques techniques influencent la citation dans les réponses LLM">
+              <div style={{ display: "grid", gridTemplateColumns: hasSF && hasCorr ? "1fr 1fr" : "1fr", gap: 20 }}>
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>État actuel</div>
+                  {hasSF ? (<>
+                    {metrics.map(({ site, sf }) => sf && (
+                      <Signal key={site.id} label={`${site.label} — Mots moy.`} value={sf.avgWords} note="par page" color={site.color} />
+                    ))}
+                    {metrics.map(({ site, sf }) => sf && (
+                      <Signal key={site.id} label={`${site.label} — Inlinks uniq.`} value={sf.avgInlinksUniq} note="moy. par page" color={site.color} />
+                    ))}
+                    {metrics.map(({ site, sf }) => sf && (
+                      <Signal key={site.id} label={`${site.label} — Schemas`} value={`${sf.schemaRate}%`} note="des pages" color={site.color} />
+                    ))}
+                    {metrics.map(({ site, sf }) => sf && (
+                      <Signal key={site.id} label={`${site.label} — Profondeur`} value={sf.avgDepth} note="niveaux moy." color={site.color} />
+                    ))}
+                  </>) : <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>Importez un CSV Screaming Frog pour ces données</div>}
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>
+                    {geoCorrs.length ? "Corrélations SF × Citations Bing" : "Pistes d'optimisation GEO technique"}
+                  </div>
+                  {geoCorrs.length ? (
+                    <>{geoCorrs.map((c, i) => <CorrRow key={i} {...c} />)}</>
+                  ) : (
+                    <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>Pas assez de données corrélées — interrogez plus de questions</div>
+                  )}
+                </div>
+              </div>
+              <div style={{ marginTop: 16 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>Pistes d'optimisation GEO technique</div>
+                <Lead priority="📝 Volume de contenu" color="#2563EB" bg="#EFF6FF"
+                  text="Les LLMs favorisent les pages avec un volume substantiel. Visez 1 000–2 500 mots pour les pages à forte intention transactionnelle. Structurez avec des H2/H3 clairs pour faciliter l'extraction sémantique." />
+                <Lead priority="🏷️ Schema JSON-LD" color="#059669" bg="#ECFDF5"
+                  text={`${metrics.some(m=>m.sf?.schemaRate<50) ? "Votre taux de schemas est faible." : "Continuez à enrichir les schemas."} Les schemas Organization, FAQ et HowTo augmentent la probabilité de citation. Priorisez les pages sans schema.`} />
+                <Lead priority="🔗 Maillage interne" color="#7C3AED" bg="#F5F3FF"
+                  text="Un fort maillage interne vers les pages cibles signale leur importance aux LLMs. Créez des hubs thématiques et reliez les pages de recommandation entre elles." />
+                <Lead priority="📐 Profondeur URL" color="#D97706" bg="#FFFBEB"
+                  text="Les pages superficielles (profondeur > 3) sont moins souvent citées. Remontez les pages importantes dans l'arborescence et réduisez les silos profonds." />
+              </div>
+            </CrossCard>
+
+            {/* 2. Bing × GEO */}
+            <CrossCard icon="🤖" title="Données Bing AI × Présence GEO"
+              sub="Corrélation entre la visibilité Bing AI et la citation dans les réponses LLM">
+              <div style={{ display: "grid", gridTemplateColumns: hasBing ? "1fr 1fr" : "1fr", gap: 20 }}>
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>État actuel</div>
+                  {hasBing ? (<>
+                    <Signal label="Citations Bing AI totales" value={bingTotal.toLocaleString()} note="toutes pages confondues" color="#7C3AED" />
+                    <Signal label="Pages citées au moins 1×" value={bingPages} color="#7C3AED" />
+                    <Signal label={`Présence GEO (fan-outs)`} value={`${geoPct}%`} note={`${audit.withBrand}/${total} résultats`} color={geoPct >= 50 ? "#059669" : "#DC2626"} />
+                    <Signal label="Cité en tant que source" value={withSource} note="résultats avec URL marque" color="#2563EB" />
+                  </>) : <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>Importez un export Bing Webmaster pour ces données</div>}
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>Interprétation</div>
+                  {hasBing ? (
+                    <div style={{ fontSize: 12, color: C.textMid, lineHeight: 1.7 }}>
+                      {bingTotal > 0 && bingPages > 0 ? (
+                        <>{bingPages} page{bingPages>1?"s":""} sont déjà reconnues par Bing AI.
+                        {geoPct >= 50 ? " La forte présence GEO confirme une bonne autorité perçue par les LLMs." :
+                          geoPct > 0 ? " La présence GEO partielle indique un potentiel à développer — ces pages citées par Bing devraient être renforcées." :
+                          " Malgré les citations Bing, la présence dans les fan-outs est faible — le contenu doit mieux répondre aux questions de recommandation."}</>
+                      ) : "Aucune citation Bing détectée — la marque n'est pas encore reconnue comme autorité par l'IA de Bing."}
+                    </div>
+                  ) : <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>—</div>}
+                </div>
+              </div>
+              <div style={{ marginTop: 16 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>Pistes d'optimisation GEO via Bing AI</div>
+                <Lead priority="🌐 Autorité de la marque" color="#7C3AED" bg="#F5F3FF"
+                  text="Bing AI s'appuie sur Bing Index et les données Copilot. Soumettez vos pages importantes via Bing Webmaster Tools, vérifiez votre profil d'entreprise sur Bing Places, et créez une page Wikipedia ou Wikidata si absente." />
+                <Lead priority="📖 Contenu de référence" color="#059669" bg="#ECFDF5"
+                  text="Les pages citées par Bing AI ont tendance à être des ressources exhaustives. Créez des pages 'guide' ou 'comparatif' qui agrègent les informations sur votre secteur — ces formats génèrent des citations naturelles." />
+                <Lead priority="🔗 Backlinks depuis les sources citées" color="#2563EB" bg="#EFF6FF"
+                  text={`Les domaines les plus cités dans vos fan-outs (${Object.keys(audit.topDomains).slice(0,3).join(", ")}) ont de l'autorité auprès des LLMs. Obtenez des liens depuis ces domaines pour transférer leur autorité vers vos pages.`} />
+                <Lead priority="📊 Structured data for AI" color="#D97706" bg="#FFFBEB"
+                  text="Bing Copilot lit les données structurées. Ajoutez les schemas SpeakableSpecification, MentionOf et RecommendedArticle pour signaler les passages à extraire dans les réponses IA." />
+              </div>
+            </CrossCard>
+
+            {/* 3. SEO × GEO */}
+            <CrossCard icon="🔍" title="Données SEO (GSC) × Présence GEO"
+              sub="Relation entre les performances SEO organiques et la visibilité générative">
+              <div style={{ display: "grid", gridTemplateColumns: hasGSC ? "1fr 1fr" : "1fr", gap: 20 }}>
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>État actuel</div>
+                  {hasGSC ? (<>
+                    <Signal label="Clics GSC totaux" value={gscClicks >= 1000 ? (gscClicks/1000).toFixed(1)+"k" : String(gscClicks)} color="#2563EB" />
+                    <Signal label="Position moy. GSC" value={gscAvgPos || "—"} note="toutes pages" color="#2563EB" />
+                    <Signal label="Présence GEO" value={`${geoPct}%`} note={`${audit.withBrand}/${total} fan-outs`} color={geoPct >= 50 ? "#059669" : "#DC2626"} />
+                    {avgPos && <Signal label="Position moy. fan-out" value={avgPos} note="dans les listes LLM" color="#7C3AED" />}
+                  </>) : <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>Importez un export GSC pour ces données</div>}
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>
+                    {seoCorrs.length ? "Corrélations SF × Clics GSC" : "Interprétation SEO/GEO"}
+                  </div>
+                  {seoCorrs.length ? (
+                    <>{seoCorrs.map((c, i) => <CorrRow key={i} {...c} />)}</>
+                  ) : hasGSC ? (
+                    <div style={{ fontSize: 12, color: C.textMid, lineHeight: 1.7 }}>
+                      {gscAvgPos && parseFloat(gscAvgPos) <= 10 && geoPct < 30 ?
+                        "Paradoxe SEO/GEO détecté : bonne position organique mais faible présence GEO. Les LLMs n'utilisent pas les mêmes signaux que Google — le contenu doit être restructuré pour répondre aux questions de recommandation." :
+                        gscAvgPos && parseFloat(gscAvgPos) <= 10 && geoPct >= 50 ?
+                        "Corrélation positive SEO/GEO : la forte autorité SEO se traduit en présence GEO. Continuez à renforcer les pages top 10 GSC." :
+                        "Positionnement organique perfectible. Améliorer le SEO on-page renforcera également la visibilité GEO via l'autorité accrue."
+                      }
+                    </div>
+                  ) : <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>—</div>}
+                </div>
+              </div>
+              <div style={{ marginTop: 16 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>Pistes d'optimisation GEO via SEO</div>
+                <Lead priority="🏆 Pages top 10 GSC → GEO" color="#2563EB" bg="#EFF6FF"
+                  text="Les pages déjà bien positionnées sur Google ont une autorité reconnue. Optimisez-les spécifiquement pour le GEO : ajoutez des sections 'Pour qui', des comparatifs et des recommandations directes pour favoriser leur citation." />
+                <Lead priority="🎯 Intention transactionnelle" color="#059669" bg="#ECFDF5"
+                  text="Les LLMs citent préférentiellement les pages à forte intention transactionnelle. Identifiez vos pages top GSC sur des requêtes de type 'meilleur X' ou 'comparatif X' et enrichissez-les avec des listes de recommandations structurées." />
+                <Lead priority="✍️ EEAT et autorité d'auteur" color="#7C3AED" bg="#F5F3FF"
+                  text="Google et les LLMs valorisent l'expertise. Ajoutez des bios d'auteurs détaillées, des sources citables, des données originales et des avis d'experts sur vos pages clés pour renforcer l'EEAT — signal fort pour le GEO." />
+                <Lead priority="🔄 Contenu frais et actualisé" color="#D97706" bg="#FFFBEB"
+                  text="Les LLMs préfèrent les contenus récents pour les recommandations. Mettez à jour régulièrement vos pages de comparatifs et de recommandations avec des dates de révision visibles et des données actualisées." />
+              </div>
+            </CrossCard>
+
+          </>);
+        })()}
 
         {/* AI analysis */}
         <Section icon="✦" title="Analyse IA détaillée" sub="Interprétation contextuelle générée par Claude sur demande">
