@@ -447,7 +447,6 @@ function KeywordsTab({ site, projectId, apiKey, model, axes, context, categories
     await sbUpdateKeywordStatus(kw.id, "generating_q");
     setKeywords(prev => prev.map(k => k.id === kw.id ? { ...k, status: "generating_q" } : k));
     try {
-      const axesStr = (axes && axes.length ? axes : DEFAULT_AXES).map((t, i) => `${i+1}. ${t}`).join("\n");
       const numQ = (axes && axes.length ? axes : DEFAULT_AXES).length;
       const axesWithInstructions = (axes && axes.length ? axes : DEFAULT_AXES).map((axe, i) => `${i+1}. [${axe}] → formule une question dont la réponse cite des entreprises, acteurs ou prestataires liés à "${kw.keyword}"`).join("\n");
       const prompt = `Tu es un expert GEO. Ton rôle : générer des questions qui amènent ChatGPT ou Google SGE à répondre avec des NOMS D'ENTREPRISES, D'ACTEURS ou DE PRESTATAIRES — jamais des réponses génériques.
