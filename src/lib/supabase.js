@@ -69,7 +69,7 @@ export async function sbLoadProjects() {
   const res = await fetch(`${PROXY}/rest/v1/projects?select=*&order=created_at.asc`);
   if (!res.ok) return null;
   const rows = await res.json();
-  return rows.map(r => ({ id: r.id, name: r.name, sites: JSON.parse(r.sites_json || "[]"), openai_key_enc: r.openai_key_enc || null, geo_axes: JSON.parse(r.geo_axes_json || "null") || ["Quoi ?","Pourquoi ?","Comment ?","Comparaison","Coût/budget"] }));
+  return rows.map(r => ({ id: r.id, name: r.name, sites: JSON.parse(r.sites_json || "[]"), openai_key_enc: r.openai_key_enc || null, geo_axes: JSON.parse(r.geo_axes_json || "null") || ["Quoi ?","Pourquoi ?","Comment ?","Comparaison","Coût/budget"], gemini_key_enc: r.gemini_key_enc || null, perplexity_key_enc: r.perplexity_key_enc || null, claude_geo_key_enc: r.claude_geo_key_enc || null }));
 }
 
 export async function sbDeleteProject(projectId) {
@@ -448,4 +448,18 @@ export async function sbSaveUrlQuestion({ url_id, question_id, result_id, as_sou
 
 function extractDomain(url) {
   try { return new URL(url).hostname.replace("www.", ""); } catch { return url; }
+}
+
+export async function sbSaveProviderKeys(project_id, keys) {
+  // keys: { gemini_key_enc, perplexity_key_enc, claude_geo_key_enc }
+  const patch = {};
+  if (keys.gemini_key_enc     !== undefined) patch.gemini_key_enc     = keys.gemini_key_enc;
+  if (keys.perplexity_key_enc !== undefined) patch.perplexity_key_enc = keys.perplexity_key_enc;
+  if (keys.claude_geo_key_enc !== undefined) patch.claude_geo_key_enc = keys.claude_geo_key_enc;
+  const res = await fetch(`${PROXY}/rest/v1/projects?id=eq.${encodeURIComponent(project_id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  return res.ok;
 }

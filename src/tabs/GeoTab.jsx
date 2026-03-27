@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { C } from "../lib/constants";
+import { sbSaveProviderKeys } from "../lib/supabase";
 import {
   sbSaveBrand, sbGetBrand, sbSaveOpenAIKey,
   sbSaveKeywords, sbGetKeywords, sbUpdateKeywordStatus, sbDeleteKeyword,
@@ -54,6 +55,53 @@ const OPENAI_MODELS = [
   { value: "gpt-4.1",           label: "GPT-4.1" },
 ];
 
+const PROVIDERS = [
+  {
+    id: "openai",
+    label: "OpenAI",
+    icon: "🟢",
+    model: "gpt-4o-mini",
+    keyField: "openai_key_enc",
+    keyPrefix: "sk-",
+    keyPlaceholder: "sk-…",
+    proxyPath: "/api/openai",
+    color: "#059669",
+  },
+  {
+    id: "gemini",
+    label: "Gemini",
+    icon: "🔵",
+    model: "gemini-2.0-flash",
+    keyField: "gemini_key_enc",
+    keyPrefix: "AIza",
+    keyPlaceholder: "AIzaSy…",
+    proxyPath: "/api/gemini",
+    color: "#2563EB",
+  },
+  {
+    id: "perplexity",
+    label: "Perplexity",
+    icon: "🟣",
+    model: "sonar",
+    keyField: "perplexity_key_enc",
+    keyPrefix: "pplx-",
+    keyPlaceholder: "pplx-…",
+    proxyPath: "/api/perplexity",
+    color: "#7C3AED",
+  },
+  {
+    id: "claude",
+    label: "Claude",
+    icon: "🟠",
+    model: "claude-haiku-4-5-20251001",
+    keyField: "claude_geo_key_enc",
+    keyPrefix: "sk-ant-",
+    keyPlaceholder: "sk-ant-…",
+    proxyPath: "/api/anthropic",
+    color: "#D97706",
+  },
+];
+
 async function callOpenAI({ apiKey, model, prompt, endpoint = "responses" }) {
   const schema = {
     type: "object",
@@ -100,6 +148,116 @@ async function callOpenAI({ apiKey, model, prompt, endpoint = "responses" }) {
   const data = JSON.parse(text);
   if (!res.ok) throw new Error(data.error?.message || data.error || `HTTP ${res.status}`);
   return data;
+}
+
+async function callProvider(provider, apiKey, prompt) {
+  if (provider.id === "openai") {
+    const res = await fetch("/api/openai", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Openai-Key": apiKey, "X-Openai-Endpoint": "responses" },
+      body: JSON.stringify({
+        model: provider.model,
+        input: prompt,
+        tools: [{ type: "web_search_preview", search_context_size: "low" }],
+        max_output_tokens: 8000,
+        text: { format: { type: "json_schema", name: "geo_answer", strict: true, schema: GEO_SCHEMA } },
+      }),
+    });
+    const raw = await res.text();
+    if (raw.trimStart().startsWith("<")) throw new Error("Proxy /api/openai introuvable");
+    const data = JSON.parse(raw);
+    if (!res.ok) throw new Error(data.error?.message || `OpenAI ${res.status}`);
+    return parseOpenAIResponse(data, "responses");
+  }
+
+  if (provider.id === "gemini") {
+    const res = await fetch("/api/gemini", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Gemini-Key": apiKey },
+      body: JSON.stringify({ model: provider.model, prompt }),
+    });
+    const raw = await res.text();
+    if (raw.trimStart().startsWith("<")) throw new Error("Proxy /api/gemini introuvable");
+    const data = JSON.parse(raw);
+    if (!res.ok) throw new Error(data.error || `Gemini ${res.status}`);
+    const text = data.choices?.[0]?.message?.content || "";
+    return parseTextResponse(text, data.usage?.prompt_tokens || 0, data.usage?.completion_tokens || 0);
+  }
+
+  if (provider.id === "perplexity") {
+    const res = await fetch("/api/perplexity", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Perplexity-Key": apiKey },
+      body: JSON.stringify({ model: provider.model, prompt }),
+    });
+    const raw = await res.text();
+    if (raw.trimStart().startsWith("<")) throw new Error("Proxy /api/perplexity introuvable");
+    const data = JSON.parse(raw);
+    if (!res.ok) throw new Error(data.error?.message || `Perplexity ${res.status}`);
+    const text = data.choices?.[0]?.message?.content || "";
+    // Perplexity returns citations separately
+    const citations = data._citations || [];
+    return parseTextResponse(text, data.usage?.prompt_tokens || 0, data.usage?.completion_tokens || 0, citations);
+  }
+
+  if (provider.id === "claude") {
+    const res = await fetch("/api/anthropic", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": apiKey },
+      body: JSON.stringify({
+        model: provider.model,
+        max_tokens: 4000,
+        messages: [{ role: "user", content: prompt }],
+      }),
+    });
+    const raw = await res.text();
+    if (raw.trimStart().startsWith("<")) throw new Error("Proxy /api/anthropic introuvable");
+    const data = JSON.parse(raw);
+    if (!res.ok) throw new Error(data.error?.message || `Claude ${res.status}`);
+    const text = data.content?.[0]?.text || "";
+    return parseTextResponse(text, data.usage?.input_tokens || 0, data.usage?.output_tokens || 0);
+  }
+
+  throw new Error(`Provider inconnu: ${provider.id}`);
+}
+
+const GEO_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    answer:       { type: "string" },
+    answer_type:  { type: "string" },
+    sources:      { type: "array", items: { type: "string" } },
+    intent_type:  { type: "string", enum: ["Top", "Informative", "Conseil"] },
+    source_types: { type: "array", items: { type: "string", enum: ["Annuaires", "Sites marchands", "Articles de blog", "Sites institutionnels", "Forums", "Médias", "Autres"] } },
+  },
+  required: ["answer", "answer_type", "sources", "intent_type", "source_types"],
+};
+
+// Parse free-text response (Gemini, Perplexity, Claude) into the standard shape
+function parseTextResponse(text, inTok, outTok, extraSources = []) {
+  // Try to extract JSON if model returned it
+  const s = text.lastIndexOf("{"); const e = text.lastIndexOf("}");
+  if (s !== -1 && e > s) {
+    try {
+      const parsed = JSON.parse(text.substring(s, e + 1));
+      if (parsed.answer) {
+        parsed._input_tokens = inTok; parsed._output_tokens = outTok;
+        parsed.sources = [...(parsed.sources || []), ...extraSources].filter(Boolean);
+        return parsed;
+      }
+    } catch {}
+  }
+  // Fallback: treat entire text as answer, extract URLs
+  const HALLUCINATION = [/exemple\d*\./i, /example\d*\./i, /site\d+\./i, /domaine\d*\./i, /placeholder/i];
+  const urlRe = /https?:\/\/[^\s\])"'>]+/g;
+  const foundUrls = [...text.matchAll(urlRe)].map(m => m[0]).filter(u => !HALLUCINATION.some(p => p.test(u)));
+  const allSources = [...new Set([...foundUrls, ...extraSources])];
+  return {
+    answer: text, answer_type: "Texte libre", intent_type: "Informative",
+    sources: allSources, source_types: [],
+    _input_tokens: inTok, _output_tokens: outTok,
+  };
 }
 
 function parseOpenAIResponse(data, endpoint = "responses") {
@@ -786,7 +944,7 @@ function ResultCard({ result, brandName, brandAliases }) {
 
 // ── Questions sub-tab (v2) ────────────────────────────────────────
 
-function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allResults, onResultSaved }) {
+function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allResults, onResultSaved, activeProviders = ["openai"], providerKeys = {}, runMode = "parallel" }) {
   const [questions, setQuestions]   = useState([]);
   const [results, setResults]       = useState(allResults || []);
   const [manualQ, setManualQ]       = useState("");
@@ -847,24 +1005,32 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
   };
 
   const runQuestion = useCallback(async (q) => {
-    if (!apiKey) return;
     const { brand_name = "", brand_aliases = [], competitors = [], context = "" } = brand || {};
     setRunning(r => ({ ...r, [q.id]: true }));
+
     const prompt = [
       context ? `Contexte : "${context}"` : "",
-      "Tu es ChatGPT. Réponds à la question suivante exactement comme tu le ferais dans l'interface ChatGPT avec accès au web.",
-      "RÈGLE ABSOLUE : Ne pose jamais de question de clarification. Choisis l'interprétation la plus probable et réponds directement.",
-      "ÉTAPE 1 — Recherche web puis réponse. Insère les marqueurs [1], [2]… dans le texte. La liste 'sources' reprend les URLs dans l'ordre. Ne pas inventer d'URLs.",
-      "ÉTAPE 2 — Classification JSON : intent_type (Top|Informative|Conseil), answer_type, source_types.",
-      "Produis UNIQUEMENT le JSON final. Aucun texte avant ou après.",
+      "Tu es un assistant IA avec accès au web. Réponds à la question avec une réponse complète et structurée.",
+      "RÈGLE ABSOLUE : Ne pose jamais de question de clarification. Réponds directement.",
+      "Insère les marqueurs [1], [2]… dans le texte pour chaque source utilisée. La liste 'sources' reprend les URLs dans l'ordre. Ne pas inventer d'URLs.",
+      "Classification JSON requise : intent_type (Top|Informative|Conseil), answer_type, source_types.",
+      "Produis UNIQUEMENT le JSON final conforme au schéma. Aucun texte avant ou après.",
       `Question : ${q.question}`,
     ].filter(Boolean).join("\n");
-    try {
-      const data = await callOpenAI({ apiKey, model, prompt, endpoint: "responses" });
-      const parsed = parseOpenAIResponse(data, "responses");
-      const { brandMentioned, brandPosition, brandInSources, competitorsMentioned } = detectBrand(parsed.answer, parsed.sources, brand_name, brand_aliases, competitors);
 
-      // Update URL index
+    // Determine which providers to call
+    const providersToCall = PROVIDERS.filter(p =>
+      activeProviders.includes(p.id) && providerKeys[p.id]?.dec
+    );
+    if (!providersToCall.length) {
+      setRunning(r => ({ ...r, [q.id]: false }));
+      return;
+    }
+
+    const saveResult = async (parsed, providerLabel) => {
+      const { brandMentioned, brandPosition, brandInSources, competitorsMentioned } = detectBrand(
+        parsed.answer, parsed.sources, brand_name, brand_aliases, competitors
+      );
       const domain_counts = {};
       (parsed.sources || []).forEach(url => {
         const domain = extractDomain(url);
@@ -874,9 +1040,9 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
       await Promise.all(Object.entries(domain_counts).map(([url, counts]) =>
         sbIncrementUrlCounts(projectId, url, counts)
       ));
-
       const record = {
-        question_id: q.id, project_id: projectId, site_id: site.id, model,
+        question_id: q.id, project_id: projectId, site_id: site.id,
+        model: providerLabel,
         answer: parsed.answer, answer_type: parsed.answer_type, intent_type: parsed.intent_type,
         sources: parsed.sources, source_types: parsed.source_types,
         brand_mentioned: brandMentioned, brand_position: brandPosition,
@@ -886,12 +1052,31 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
       const saved = await sbSaveGeoResult(record);
       const newResult = Array.isArray(saved) ? saved[0] : saved;
       setResults(prev => [newResult, ...prev]);
+      return newResult;
+    };
+
+    try {
+      if (runMode === "parallel") {
+        const promises = providersToCall.map(p =>
+          callProvider(p, providerKeys[p.id].dec, prompt)
+            .then(parsed => saveResult(parsed, `${p.label} (${p.model})`))
+            .catch(e => console.error(`${p.label} error:`, e))
+        );
+        await Promise.all(promises);
+      } else {
+        for (const p of providersToCall) {
+          try {
+            const parsed = await callProvider(p, providerKeys[p.id].dec, prompt);
+            await saveResult(parsed, `${p.label} (${p.model})`);
+          } catch(e) { console.error(`${p.label} error:`, e); }
+        }
+      }
       await sbUpdateQuestion(q.id, { has_result: true });
       setQuestions(prev => prev.map(qq => qq.id === q.id ? { ...qq, has_result: true } : qq));
       onResultSaved?.();
-    } catch(e) { console.error("runQuestion error:", e); setRunning(r => ({ ...r, [q.id]: false })); }
+    } catch(e) { console.error("runQuestion error:", e); }
     setRunning(r => ({ ...r, [q.id]: false }));
-  }, [apiKey, model, brand, projectId, site?.id, onResultSaved]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [brand, projectId, site?.id, activeProviders, providerKeys, runMode, onResultSaved]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const runAllQuestions = async () => {
     const toRun = filtered.filter(q => !(resultsByQ[q.id]?.length));
@@ -1199,17 +1384,31 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
   const [subTab, setSubTab]         = useState("keywords"); // keywords | questions | urls
   const [questionsKey, setQuestionsKey] = useState(0); // incremented to force QuestionsTab reload
   const [selectedSite, setSelectedSite] = useState(sites[0]?.id || "");
-  const [model, setModel]           = useState("gpt-4o-mini");
-  const [brand, setBrand]           = useState(null);         // { brand_name, brand_aliases, competitors, context }
-  const [apiKeyEnc, setApiKeyEnc]   = useState(project?.openai_key_enc || "");
+  const [model, setModel]           = useState("gpt-4o-mini"); // kept for variation generation
+  const [brand, setBrand]           = useState(null);
+  const [runMode, setRunMode]       = useState("parallel"); // parallel | sequential
+  const [activeProviders, setActiveProviders] = useState(["openai"]); // provider ids to use
+  // Provider key state: { id → { enc, dec, input, status } }
+  const [providerKeys, setProviderKeys] = useState({});
+  const [apiKeyEnc, setApiKeyEnc]   = useState(project?.openai_key_enc || ""); // legacy for variation gen
 
-  // Sync enc key when project prop updates (e.g. after Supabase load on mount)
+  // Sync all provider keys when project prop updates
   useEffect(() => {
+    if (!project) return;
+    const updates = {};
+    PROVIDERS.forEach(p => {
+      const enc = project[p.keyField] || "";
+      if (enc) {
+        const dec = decodeKey(enc);
+        updates[p.id] = { enc, dec, input: "", status: dec ? "ok" : "error" };
+      }
+    });
+    if (Object.keys(updates).length) setProviderKeys(prev => ({ ...prev, ...updates }));
+    // Sync legacy openai key for variation generation
     if (project?.openai_key_enc && project.openai_key_enc !== apiKeyEnc) {
-      console.log("Syncing OpenAI key from project prop");
       setApiKeyEnc(project.openai_key_enc);
     }
-  }, [project?.openai_key_enc]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [project?.openai_key_enc, project?.gemini_key_enc, project?.perplexity_key_enc, project?.claude_geo_key_enc]); // eslint-disable-line react-hooks/exhaustive-deps
   const [apiKeyDec, setApiKeyDec]   = useState("");           // decrypted, only in memory
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [keyStatus, setKeyStatus]   = useState("idle");       // idle | saving | ok | error
@@ -1291,52 +1490,106 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
         <div style={{ fontSize: 12, color: C.textLight }}>Analysez la présence de vos marques dans les réponses ChatGPT</div>
       </div>
 
-      {/* ── Config strip: site + model + API key ── */}
-      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: "16px 20px", marginBottom: 20, display: "flex", gap: 16, alignItems: "flex-start", flexWrap: "wrap" }}>
+      {/* ── Config strip: site + providers + run mode ── */}
+      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: "16px 20px", marginBottom: 20 }}>
 
-        {/* Site selector */}
-        {sites.length > 1 && (
+        {/* Row 1: site + run mode */}
+        <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap", marginBottom: 16 }}>
+          {sites.length > 1 && (
+            <div>
+              <div style={{ fontSize: 10, fontWeight: 600, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 5 }}>Site</div>
+              <div style={{ display: "flex", gap: 6 }}>
+                {sites.map(s => (
+                  <button key={s.id} onClick={() => setSelectedSite(s.id)} style={{
+                    padding: "5px 12px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer",
+                    border: `2px solid ${s.color}`,
+                    background: selectedSite === s.id ? s.color : "transparent",
+                    color: selectedSite === s.id ? "#fff" : s.color,
+                  }}>{s.label}</button>
+                ))}
+              </div>
+            </div>
+          )}
           <div>
-            <div style={{ fontSize: 10, fontWeight: 600, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 5 }}>Site</div>
-            <div style={{ display: "flex", gap: 6 }}>
-              {sites.map(s => (
-                <button key={s.id} onClick={() => setSelectedSite(s.id)} style={{
-                  padding: "5px 12px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer",
-                  border: `2px solid ${s.color}`,
-                  background: selectedSite === s.id ? s.color : "transparent",
-                  color: selectedSite === s.id ? "#fff" : s.color,
-                }}>{s.label}</button>
+            <div style={{ fontSize: 10, fontWeight: 600, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 5 }}>Mode d'exécution</div>
+            <div style={{ display: "flex", gap: 4, background: C.bg, borderRadius: 8, padding: 3 }}>
+              {[{ key: "parallel", label: "⚡ Parallèle" }, { key: "sequential", label: "▶ Séquentiel" }].map(m => (
+                <button key={m.key} onClick={() => setRunMode(m.key)} style={{
+                  padding: "4px 12px", borderRadius: 6, fontSize: 11, fontWeight: runMode === m.key ? 700 : 400,
+                  border: "none", cursor: "pointer",
+                  background: runMode === m.key ? C.white : "transparent",
+                  color: runMode === m.key ? C.text : C.textLight,
+                  boxShadow: runMode === m.key ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
+                }}>{m.label}</button>
               ))}
             </div>
           </div>
-        )}
-
-        {/* Model selector */}
-        <div>
-          <div style={{ fontSize: 10, fontWeight: 600, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 5 }}>Modèle</div>
-          <select value={model} onChange={e => setModel(e.target.value)} style={{ padding: "6px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, color: C.text }}>
-            {OPENAI_MODELS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
-          </select>
+          <div style={{ marginLeft: "auto" }}>
+            <div style={{ fontSize: 10, fontWeight: 600, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 5 }}>Providers actifs</div>
+            <div style={{ display: "flex", gap: 6 }}>
+              {PROVIDERS.map(p => {
+                const isActive = activeProviders.includes(p.id);
+                const hasKey = !!providerKeys[p.id]?.dec;
+                return (
+                  <button key={p.id} onClick={() => {
+                    if (!hasKey && !isActive) return; // can't activate without key
+                    setActiveProviders(prev => isActive ? prev.filter(id => id !== p.id) : [...prev, p.id]);
+                  }} title={!hasKey ? `Configurez la clé ${p.label} ci-dessous` : ""} style={{
+                    display: "flex", alignItems: "center", gap: 5,
+                    padding: "4px 10px", borderRadius: 7, fontSize: 11, fontWeight: 600, cursor: hasKey ? "pointer" : "not-allowed",
+                    border: `2px solid ${p.color}`,
+                    background: isActive && hasKey ? p.color : "transparent",
+                    color: isActive && hasKey ? "#fff" : hasKey ? p.color : C.textLight,
+                    opacity: hasKey ? 1 : 0.4,
+                    transition: "all 0.15s",
+                  }}>
+                    {p.icon} {p.label}
+                    {hasKey && <span style={{ fontSize: 9, opacity: 0.8 }}>●</span>}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         </div>
 
-        {/* API Key */}
-        <div style={{ flex: 1, minWidth: 260 }}>
-          <div style={{ fontSize: 10, fontWeight: 600, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 5 }}>
-            Clé OpenAI{" "}
-            {hasKey && <span style={{ color: "#059669", marginLeft: 4 }}>● Configurée ({apiKeyDec.slice(0, 10)}…)</span>}
-            {!hasKey && apiKeyEnc && <span style={{ color: "#DC2626", marginLeft: 4 }}>● Décodage échoué</span>}
-          </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <input
-              type="password" value={apiKeyInput} onChange={e => { setApiKeyInput(e.target.value); setKeyStatus("idle"); }}
-              placeholder={hasKey ? "Remplacer la clé…" : "sk-…"}
-              style={{ flex: 1, padding: "6px 10px", border: `1px solid ${keyStatus === "error" ? "#DC2626" : C.border}`, borderRadius: 8, fontSize: 12, color: C.text }}
-            />
-            <Btn onClick={saveApiKey} disabled={keyStatus === "saving" || !apiKeyInput.trim()} color="#059669" small>
-              {keyStatus === "saving" ? "…" : keyStatus === "ok" ? "✓" : "Sauvegarder"}
-            </Btn>
-          </div>
-          {keyStatus === "error" && <div style={{ fontSize: 10, color: "#DC2626", marginTop: 3 }}>Clé invalide (doit commencer par sk-)</div>}
+        {/* Row 2: API keys for each provider */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 12 }}>
+          {PROVIDERS.map(p => {
+            const pk = providerKeys[p.id] || { enc: "", dec: "", input: "", status: "idle" };
+            const hasK = !!pk.dec;
+            return (
+              <div key={p.id}>
+                <div style={{ fontSize: 10, fontWeight: 600, color: p.color, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 4 }}>
+                  {p.icon} {p.label}{hasK && <span style={{ color: "#059669", marginLeft: 4 }}>● OK</span>}
+                </div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <input
+                    type="password"
+                    value={pk.input || ""}
+                    onChange={e => setProviderKeys(prev => ({ ...prev, [p.id]: { ...prev[p.id], input: e.target.value, status: "idle" } }))}
+                    placeholder={hasK ? "Remplacer…" : p.keyPlaceholder}
+                    style={{ flex: 1, padding: "5px 8px", border: `1px solid ${pk.status === "error" ? "#DC2626" : C.border}`, borderRadius: 7, fontSize: 11, color: C.text, minWidth: 0 }}
+                  />
+                  <button
+                    disabled={!pk.input?.trim()}
+                    onClick={async () => {
+                      const k = (pk.input || "").trim();
+                      if (!k) return;
+                      const enc = encodeKey(k);
+                      const dec = decodeKey(enc);
+                      setProviderKeys(prev => ({ ...prev, [p.id]: { enc, dec, input: "", status: "ok" } }));
+                      // Also sync legacy openai key
+                      if (p.id === "openai") { setApiKeyEnc(enc); setApiKeyDec(dec); }
+                      // Save all provider keys to Supabase
+                      await sbSaveProviderKeys(projectId, { [p.keyField]: enc });
+                    }}
+                    style={{ padding: "5px 10px", borderRadius: 7, background: p.color, color: "#fff", border: "none", fontSize: 11, fontWeight: 700, cursor: pk.input?.trim() ? "pointer" : "not-allowed", opacity: pk.input?.trim() ? 1 : 0.5 }}>
+                    ✓
+                  </button>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
 
@@ -1490,6 +1743,9 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
           categories={categories}
           allResults={allResults.filter(r => r.site_id === site?.id)}
           onResultSaved={() => sbGetGeoResults(projectId, site.id).then(setAllResults)}
+          activeProviders={activeProviders}
+          providerKeys={providerKeys}
+          runMode={runMode}
         />
       )}
       {subTab === "urls" && (
