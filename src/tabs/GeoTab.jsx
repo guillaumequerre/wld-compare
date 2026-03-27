@@ -4,7 +4,7 @@ import {
   sbSaveBrand, sbGetBrand, sbSaveOpenAIKey,
   sbSaveKeywords, sbGetKeywords, sbUpdateKeywordStatus, sbDeleteKeyword,
   sbSaveQuestions, sbGetQuestions, sbUpdateQuestion, sbDeleteQuestion,
-  sbSaveGeoResult, sbGetGeoResults, sbGetResultsForQuestion,
+  sbSaveGeoResult, sbGetGeoResults,
 } from "../lib/supabase";
 
 // ── Crypto helpers (AES-GCM via WebCrypto) ───────────────────────
@@ -140,7 +140,7 @@ function detectBrand(answer, sources, brandName, brandAliases = [], competitors 
   let brandPosition = null;
   let pos = 0;
   for (const line of lines) {
-    const isListItem = /^(\d+[\.\)]|[-•*])/.test(line);
+    const isListItem = /^(\d+[.)]|[-•*])/.test(line);
     if (isListItem) {
       pos++;
       const lineLower = line.toLowerCase();
@@ -159,7 +159,7 @@ function detectBrand(answer, sources, brandName, brandAliases = [], competitors 
       let cpos = null;
       let cp = 0;
       for (const line of lines) {
-        if (/^(\d+[\.\)]|[-•*])/.test(line)) {
+        if (/^(\d+[.)]|[-•*])/.test(line)) {
           cp++;
           if (line.toLowerCase().includes(name)) { cpos = cp; break; }
         }
