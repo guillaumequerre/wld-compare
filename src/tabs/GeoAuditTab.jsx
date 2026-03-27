@@ -1,5 +1,6 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { C } from "../lib/constants";
+import { sbGetBrand, sbGetQuestions, sbGetGeoResults, sbGetUrlIndex } from "../lib/supabase";
 
 // ── Constants ─────────────────────────────────────────────────────
 
