@@ -1,5 +1,12 @@
 export default async function handler(request, context) {
   const PASSWORD = Deno.env.get("DASHBOARD_PASSWORD") || "";
+
+  // API routes have their own security (API keys) — skip Basic Auth
+  const url = new URL(request.url);
+  if (url.pathname.startsWith("/api/")) {
+    return context.next();
+  }
+
   const authHeader = request.headers.get("authorization") || "";
 
   if (authHeader.startsWith("Basic ")) {

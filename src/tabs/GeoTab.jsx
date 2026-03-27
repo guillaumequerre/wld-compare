@@ -240,6 +240,7 @@ function StatusBadge({ status }) {
     done_q:        { label: "✓ Généré",         color: "#059669", bg: "#ECFDF5" },
     generating_r:  { label: "Appel LLM…",   color: "#7C3AED", bg: "#F5F3FF" },
     done:          { label: "Terminé",       color: "#2563EB", bg: "#EFF6FF" },
+    error:         { label: "⚠ Erreur",      color: "#DC2626", bg: "#FEF2F2" },
   };
   const s = map[status] || map.pending;
   return (
@@ -448,7 +449,7 @@ function KeywordsTab({ site, projectId, apiKey, model, context, categories, setC
   };
 
   const generateQuestions = async (kw, axes) => {
-    if (!apiKey) { alert("Clé OpenAI manquante — configure-la dans ⚙️ Setup"); return; }
+    if (!apiKey) return;
     setBusy(b => ({ ...b, [kw.id]: "q" }));
     await sbUpdateKeywordStatus(kw.id, "generating_q");
     setKeywords(prev => prev.map(k => k.id === kw.id ? { ...k, status: "generating_q" } : k));
@@ -498,9 +499,8 @@ function KeywordsTab({ site, projectId, apiKey, model, context, categories, setC
       onQuestionsGenerated?.();
     } catch(e) {
       console.error("generateQuestions error:", e);
-      alert(`Erreur pour "${kw.keyword}" : ${e.message}`);
-      await sbUpdateKeywordStatus(kw.id, "pending");
-      setKeywords(prev => prev.map(k => k.id === kw.id ? { ...k, status: "pending" } : k));
+      await sbUpdateKeywordStatus(kw.id, "error");
+      setKeywords(prev => prev.map(k => k.id === kw.id ? { ...k, status: "error", error_msg: e.message } : k));
     }
     setBusy(b => ({ ...b, [kw.id]: false }));
   };
@@ -512,9 +512,9 @@ function KeywordsTab({ site, projectId, apiKey, model, context, categories, setC
   };
 
   const generateAll = async () => {
-    if (!apiKey) { alert("Clé OpenAI manquante"); return; }
-    const toProcess = keywords.filter(kw => kw.status !== "done_q" && kw.status !== "done");
-    if (!toProcess.length) { alert("Tous les mots-clés ont déjà des questions générées."); return; }
+    if (!apiKey) { setKeywords(prev => prev); return; } // apiKey missing shown in UI
+    const toProcess = keywords.filter(kw => kw.status !== "done_q" && kw.status !== "done" && kw.status !== "error");
+    if (!toProcess.length) return;
     setRunningAll(true);
     stopRef.current = false;
     for (const kw of toProcess) {
@@ -625,8 +625,13 @@ function KeywordsTab({ site, projectId, apiKey, model, context, categories, setC
                 <input type="checkbox" checked={isSel} onChange={() => toggleSelect(kw.id)} style={{ cursor: "pointer", flexShrink: 0 }} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{kw.keyword}</div>
-                  <div style={{ display: "flex", gap: 6, marginTop: 3, alignItems: "center" }}>
+                  <div style={{ display: "flex", gap: 6, marginTop: 3, alignItems: "center", flexWrap: "wrap" }}>
                     <StatusBadge status={kw.status} />
+                    {kw.error_msg && (
+                      <span style={{ fontSize: 10, color: "#DC2626", fontStyle: "italic", maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={kw.error_msg}>
+                        {kw.error_msg}
+                      </span>
+                    )}
                     {kw.question_count > 0 && (
                       <span style={{ fontSize: 10, fontWeight: 700, color: "#059669", background: "#ECFDF5", border: "1px solid #059669", borderRadius: 10, padding: "1px 8px" }}>
                         {kw.question_count} question{kw.question_count > 1 ? "s" : ""}
@@ -771,7 +776,7 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
   };
 
   const runQuestion = useCallback(async (q) => {
-    if (!apiKey) { alert("Clé OpenAI manquante"); return; }
+    if (!apiKey) return;
     const { brand_name = "", brand_aliases = [], competitors = [], context = "" } = brand || {};
     setRunning(r => ({ ...r, [q.id]: true }));
     const prompt = [
@@ -813,7 +818,7 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
       await sbUpdateQuestion(q.id, { has_result: true });
       setQuestions(prev => prev.map(qq => qq.id === q.id ? { ...qq, has_result: true } : qq));
       onResultSaved?.();
-    } catch(e) { console.error("runQuestion error:", e); alert("Erreur : " + e.message); }
+    } catch(e) { console.error("runQuestion error:", e); setRunning(r => ({ ...r, [q.id]: false })); }
     setRunning(r => ({ ...r, [q.id]: false }));
   }, [apiKey, model, brand, projectId, site?.id, onResultSaved]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -972,7 +977,7 @@ function UrlsTab({ projectId, categories }) {
     } catch(e) {
       await sbUpdateUrlMeta(urlEntry.id, { crawl_status: "error" });
       setUrls(prev => prev.map(u => u.id === urlEntry.id ? { ...u, crawl_status: "error" } : u));
-      alert("Crawl échoué : " + e.message);
+      console.error("Crawl échoué : ", e.message);
     }
     setCrawling(c => ({ ...c, [urlEntry.id]: false }));
   };
