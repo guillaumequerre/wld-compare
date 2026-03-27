@@ -14,7 +14,13 @@ import {
 
 
 
-const DEFAULT_AXES = ["Quoi ?", "Pourquoi ?", "Comment ?", "Comparaison", "Coût/budget"];
+const DEFAULT_AXES = [
+  "Meilleur / top / recommandé",
+  "Alternative / comparatif",
+  "Avis / fiable / fiabilité",
+  "Pour atteindre un objectif lié au mot-clé",
+  "Pour résoudre une problématique liée au mot-clé",
+];
 
 // ── API Key helpers — base64 obfuscation (Supabase already protected by auth) ──
 // Fallback: if stored value looks like an AES blob (not a valid sk- key after decode),
@@ -442,7 +448,8 @@ function KeywordsTab({ site, projectId, apiKey, model, axes, context, categories
     setKeywords(prev => prev.map(k => k.id === kw.id ? { ...k, status: "generating_q" } : k));
     try {
       const axesStr = (axes && axes.length ? axes : DEFAULT_AXES).map((t, i) => `${i+1}. ${t}`).join("\n");
-      const prompt = `Transforme le mot-clé "${kw.keyword}" en 5 questions courtes et naturelles pour un moteur de recherche IA.\nRespects ces axes :\n${axesStr}\nContraintes : maximum 12 mots par question, langage direct.\nRéponds UNIQUEMENT avec les 5 questions séparées par des points-virgules (;), sans numérotation, sans texte avant ou après.`;
+      const numQ = (axes && axes.length ? axes : DEFAULT_AXES).length;
+      const prompt = `Tu génères des questions que de vrais utilisateurs tapent dans ChatGPT ou Google.\nMot-clé : "${kw.keyword}"\n\nGénère ${numQ} questions (une par axe ci-dessous). Chaque question doit :\n- Refléter une intention réelle (informationnelle, transactionnelle ou comparative)\n- Être formulée comme un utilisateur le dirait naturellement\n- Faire maximum 12 mots\n\nAxes :\n${axesStr}\n\nRéponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgules (;), sans numérotation, sans texte avant ou après.`;
 
       // Direct fetch — plain text, no json_object format
       const res = await fetch("/api/openai", {
