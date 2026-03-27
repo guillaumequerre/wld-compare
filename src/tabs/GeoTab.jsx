@@ -11,39 +11,23 @@ import {
   sbGetUrlIndex, sbUpdateUrlMeta, sbIncrementUrlCounts,
 } from "../lib/supabase";
 
-// ── Crypto helpers (AES-GCM via WebCrypto) ───────────────────────
 
-const CRYPTO_SALT = "correldash-geo-v1";
 
-async function deriveKey(password) {
-  const enc = new TextEncoder();
-  const keyMat = await crypto.subtle.importKey("raw", enc.encode(password), "PBKDF2", false, ["deriveKey"]);
-  return crypto.subtle.deriveKey(
-    { name: "PBKDF2", salt: enc.encode(CRYPTO_SALT), iterations: 100000, hash: "SHA-256" },
-    keyMat, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]
-  );
+// ── API Key helpers — base64 obfuscation (Supabase already protected by auth) ──
+// Fallback: if stored value looks like an AES blob (not a valid sk- key after decode),
+// the user must re-enter the key once to migrate to the new format.
+function encodeKey(k) {
+  try { return btoa(unescape(encodeURIComponent(k))); } catch { return k; }
 }
-
-async function encryptKey(apiKey, password) {
-  const key  = await deriveKey(password);
-  const iv   = crypto.getRandomValues(new Uint8Array(12));
-  const enc  = new TextEncoder();
-  const ct   = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, enc.encode(apiKey));
-  const buf  = new Uint8Array([...iv, ...new Uint8Array(ct)]);
-  return btoa(String.fromCharCode(...buf));
+function decodeKey(enc) {
+  if (!enc) return "";
+  try {
+    const k = decodeURIComponent(escape(atob(enc)));
+    return k; // may or may not start with sk- — UI will validate
+  } catch {
+    return ""; // AES blob or corrupted — user must re-enter
+  }
 }
-
-async function decryptKey(enc64, password) {
-  const buf  = Uint8Array.from(atob(enc64), c => c.charCodeAt(0));
-  const iv   = buf.slice(0, 12);
-  const ct   = buf.slice(12);
-  const key  = await deriveKey(password);
-  const pt   = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ct);
-  return new TextDecoder().decode(pt);
-}
-
-// Derive a per-project password from the project ID (deterministic, no extra secret needed)
-function projectPassword(projectId) { return `cgeo-${projectId}-v1`; }
 
 function extractDomain(url) {
   try { return new URL(url).hostname.replace("www.", ""); } catch { return url; }
@@ -1131,6 +1115,7 @@ export default function GeoTab({ sites, projectId, project }) {
   // Sync enc key when project prop updates (e.g. after Supabase load on mount)
   useEffect(() => {
     if (project?.openai_key_enc && project.openai_key_enc !== apiKeyEnc) {
+      console.log("Syncing OpenAI key from project prop");
       setApiKeyEnc(project.openai_key_enc);
     }
   }, [project?.openai_key_enc]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1160,34 +1145,28 @@ export default function GeoTab({ sites, projectId, project }) {
     sbGetGeoResults(projectId, site.id).then(setAllResults);
   }, [projectId, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Decrypt key when enc changes
+  // Decode key when enc changes
   useEffect(() => {
-    if (!apiKeyEnc || !projectId) return;
-    decryptKey(apiKeyEnc, projectPassword(projectId))
-      .then(k => {
-        console.log("OpenAI key decrypted, prefix:", k.slice(0, 8));
-        setApiKeyDec(k);
-        setKeyStatus("ok");
-      })
-      .catch(e => {
-        console.error("Decrypt failed:", e.message);
-        setApiKeyDec("");
-        setKeyStatus("error");
-      });
-  }, [apiKeyEnc, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!apiKeyEnc) return;
+    const k = decodeKey(apiKeyEnc);
+    console.log("OpenAI key loaded, prefix:", k.slice(0, 10));
+    setApiKeyDec(k);
+    setKeyStatus(k.startsWith("sk-") ? "ok" : "error");
+  }, [apiKeyEnc]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const saveApiKey = async () => {
     const k = apiKeyInput.trim();
     if (!k.startsWith("sk-") && !k.startsWith("sk_")) { setKeyStatus("error"); return; }
     setKeyStatus("saving");
     try {
-      const enc = await encryptKey(k, projectPassword(projectId));
+      const enc = encodeKey(k);
       await sbSaveOpenAIKey(projectId, enc);
       setApiKeyEnc(enc);
       setApiKeyDec(k);
       setApiKeyInput("");
       setKeyStatus("ok");
-    } catch { setKeyStatus("error"); }
+      console.log("✓ OpenAI key saved, prefix:", k.slice(0, 10));
+    } catch(e) { console.error("saveApiKey error:", e); setKeyStatus("error"); }
   };
 
   const saveBrand = async () => {
@@ -1245,8 +1224,8 @@ export default function GeoTab({ sites, projectId, project }) {
         <div style={{ flex: 1, minWidth: 260 }}>
           <div style={{ fontSize: 10, fontWeight: 600, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 5 }}>
             Clé OpenAI{" "}
-            {hasKey && keyStatus !== "error" && <span style={{ color: "#059669", marginLeft: 4 }}>● Configurée</span>}
-            {keyStatus === "error" && <span style={{ color: "#DC2626", marginLeft: 4 }}>● Erreur déchiffrement</span>}
+            {hasKey && <span style={{ color: "#059669", marginLeft: 4 }}>● Configurée ({apiKeyDec.slice(0, 10)}…)</span>}
+            {!hasKey && apiKeyEnc && <span style={{ color: "#DC2626", marginLeft: 4 }}>● Décodage échoué</span>}
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             <input
