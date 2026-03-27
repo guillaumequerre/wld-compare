@@ -6,21 +6,18 @@ import { buildUrlMaps, buildSfPageVectors, intraCorrFast, smIntraCorr } from "./
 import { sbSaveProject, sbLoadProjects, sbGetHistory, sbGetLatest, sbDownload, sbGetPageTypes } from "./lib/supabase";
 import AnalyseTab from "./tabs/AnalyseTab";
 import ImportTab from "./tabs/ImportTab";
-import OverviewTab from "./tabs/OverviewTab";
 import MatrixTab from "./tabs/MatrixTab";
 import PagesTab from "./tabs/PagesTab";
 import SitesTab from "./tabs/SitesTab";
 import AllProjectsTab from "./tabs/AllProjectsTab";
 import SemrushTab from "./tabs/SemrushTab";
 import EvolutionTab from "./tabs/EvolutionTab";
-import AuditGeoTab from "./tabs/AuditGeoTab";
 
 const INITIAL_PROJECT = makeInitialProject();
 const NAV_TABS = [
   { key: "import",      label: "⚙️ Setup"      },
-  { key: "overview",    label: "Vue d'ensemble" },
+  { key: "sites",       label: "Vue d'ensemble" },
   { key: "pages",       label: "Pages"          },
-  { key: "sites",       label: "Sites"          },
   { key: "evolution",   label: "📅 Évolution"   },
   { key: "analyse",     label: "✦ Analyse IA"   },
 ];
@@ -28,7 +25,6 @@ const NAV_TABS = [
 const BURGER_TABS = [
   { key: "matrix",      label: "Matrice"            },
   { key: "semrush",     label: "📊 Semrush"         },
-  { key: "auditgeo",   label: "📋 Audit GEO"        },
   { key: "allprojects", label: "◈ Tous les projets" },
 ];
 
@@ -519,22 +515,6 @@ export default function App() {
             />
           )}
 
-          {tab === "overview" && (
-            <OverviewTab
-              sites={sites}
-              smData={smData}
-              pageMode={pageMode}
-              setPageMode={setPageMode}
-              radarSites={radarSites}
-              setRadarSites={setRadarSites}
-              metrics={metrics}
-              radarData={radarData}
-              pageTypes={pageTypes}
-              templateFilter={templateFilter}
-              setTemplateFilter={setTemplateFilter}
-            />
-          )}
-
           {tab === "matrix" && (
             <MatrixTab
               sites={sites}
@@ -595,6 +575,12 @@ export default function App() {
               pageMode={pageMode}
               setPageMode={setPageMode}
               metrics={metrics}
+              radarSites={radarSites}
+              setRadarSites={setRadarSites}
+              radarData={radarData}
+              pageTypes={pageTypes}
+              templateFilter={templateFilter}
+              setTemplateFilter={setTemplateFilter}
             />
           )}
 
@@ -613,19 +599,6 @@ export default function App() {
               currentProjectId={currentProjectId}
             />
           )}
-          {tab === "auditgeo" && (
-            <AuditGeoTab
-              metrics={metrics}
-              corrMatrix={filteredCorrMatrix}
-              resultVals={resultVals}
-              analysis={analysis}
-              sites={sites}
-              sfData={sfData}
-              bingData={bingData}
-              pageTypes={pageTypes}
-            />
-          )}
-
           {tab === "allprojects" && (
             <AllProjectsTab
               projects={projects}
