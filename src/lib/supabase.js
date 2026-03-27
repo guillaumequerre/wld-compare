@@ -210,3 +210,121 @@ export async function sbUpdateMilestone(id, patch) {
   });
   return res.ok;
 }
+
+// ── GEO — BRAND SETTINGS ─────────────────────────────────────────
+
+export async function sbSaveBrand({ project_id, site_id, brand_name, brand_aliases, competitors, context }) {
+  const res = await fetch(`${PROXY}/rest/v1/site_brand`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
+    body: JSON.stringify({ project_id, site_id, brand_name, brand_aliases, competitors, context, updated_at: new Date().toISOString() }),
+  });
+  if (!res.ok) throw new Error(`Save brand failed: ${res.status}`);
+  return res.json();
+}
+
+export async function sbGetBrand(project_id, site_id) {
+  const res = await fetch(`${PROXY}/rest/v1/site_brand?project_id=eq.${encodeURIComponent(project_id)}&site_id=eq.${encodeURIComponent(site_id)}&limit=1`);
+  if (!res.ok) return null;
+  const rows = await res.json();
+  return rows[0] || null;
+}
+
+// ── GEO — OPENAI KEY (encrypted) on project ──────────────────────
+
+export async function sbSaveOpenAIKey(project_id, enc) {
+  const res = await fetch(`${PROXY}/rest/v1/projects?id=eq.${encodeURIComponent(project_id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ openai_key_enc: enc }),
+  });
+  return res.ok;
+}
+
+// ── GEO — KEYWORDS ───────────────────────────────────────────────
+
+export async function sbSaveKeywords(rows) {
+  // rows: [{ project_id, site_id, keyword }]
+  const res = await fetch(`${PROXY}/rest/v1/geo_keywords`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
+    body: JSON.stringify(rows),
+  });
+  if (!res.ok) throw new Error(`Save keywords failed: ${res.status}`);
+  return res.json();
+}
+
+export async function sbGetKeywords(project_id, site_id) {
+  const res = await fetch(`${PROXY}/rest/v1/geo_keywords?project_id=eq.${encodeURIComponent(project_id)}&site_id=eq.${encodeURIComponent(site_id)}&order=created_at.asc`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function sbUpdateKeywordStatus(id, status) {
+  const res = await fetch(`${PROXY}/rest/v1/geo_keywords?id=eq.${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status }),
+  });
+  return res.ok;
+}
+
+export async function sbDeleteKeyword(id) {
+  await fetch(`${PROXY}/rest/v1/geo_keywords?id=eq.${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+// ── GEO — QUESTIONS ──────────────────────────────────────────────
+
+export async function sbSaveQuestions(rows) {
+  // rows: [{ project_id, site_id, keyword_id, question, is_manual }]
+  const res = await fetch(`${PROXY}/rest/v1/geo_questions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Prefer": "return=representation" },
+    body: JSON.stringify(rows),
+  });
+  if (!res.ok) throw new Error(`Save questions failed: ${res.status}`);
+  return res.json();
+}
+
+export async function sbGetQuestions(project_id, site_id) {
+  const res = await fetch(`${PROXY}/rest/v1/geo_questions?project_id=eq.${encodeURIComponent(project_id)}&site_id=eq.${encodeURIComponent(site_id)}&order=created_at.asc`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function sbUpdateQuestion(id, patch) {
+  const res = await fetch(`${PROXY}/rest/v1/geo_questions?id=eq.${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  return res.ok;
+}
+
+export async function sbDeleteQuestion(id) {
+  await fetch(`${PROXY}/rest/v1/geo_questions?id=eq.${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+// ── GEO — RESULTS ────────────────────────────────────────────────
+
+export async function sbSaveGeoResult(result) {
+  const res = await fetch(`${PROXY}/rest/v1/geo_results`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Prefer": "return=representation" },
+    body: JSON.stringify(result),
+  });
+  if (!res.ok) throw new Error(`Save geo result failed: ${res.status}`);
+  return res.json();
+}
+
+export async function sbGetGeoResults(project_id, site_id) {
+  const res = await fetch(`${PROXY}/rest/v1/geo_results?project_id=eq.${encodeURIComponent(project_id)}&site_id=eq.${encodeURIComponent(site_id)}&order=created_at.desc`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function sbGetResultsForQuestion(question_id) {
+  const res = await fetch(`${PROXY}/rest/v1/geo_results?question_id=eq.${encodeURIComponent(question_id)}&order=created_at.desc`);
+  if (!res.ok) return [];
+  return res.json();
+}

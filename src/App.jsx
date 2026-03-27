@@ -12,6 +12,7 @@ import SitesTab from "./tabs/SitesTab";
 import AllProjectsTab from "./tabs/AllProjectsTab";
 import SemrushTab from "./tabs/SemrushTab";
 import EvolutionTab from "./tabs/EvolutionTab";
+import GeoTab from "./tabs/GeoTab";
 
 const INITIAL_PROJECT = makeInitialProject();
 const NAV_TABS = [
@@ -19,6 +20,7 @@ const NAV_TABS = [
   { key: "sites",       label: "Vue d'ensemble" },
   { key: "pages",       label: "Pages"          },
   { key: "evolution",   label: "📅 Évolution"   },
+  { key: "geo",         label: "🔍 Fan-outs"    },
   { key: "analyse",     label: "✦ Analyse IA"   },
 ];
 
@@ -597,6 +599,14 @@ export default function App() {
               projects={projects}
               sites={currentProject?.sites || []}
               currentProjectId={currentProjectId}
+            />
+          )}
+
+          {tab === "geo" && (
+            <GeoTab
+              sites={sites}
+              projectId={currentProjectId}
+              project={currentProject}
             />
           )}
           {tab === "allprojects" && (
