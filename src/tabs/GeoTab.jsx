@@ -608,6 +608,64 @@ function KeywordsTab({ site, projectId, apiKey, model, context, categories, setC
   );
 }
 
+// ── Result card ───────────────────────────────────────────────────
+
+function ResultCard({ result, brandName, brandAliases }) {
+  const [open, setOpen] = useState(false);
+  const sources = result.sources || [];
+  const comps = result.competitors_mentioned || [];
+  return (
+    <div style={{ marginTop: 10, background: C.bg, borderRadius: 10, border: `1px solid ${C.border}`, overflow: "hidden" }}>
+      <div onClick={() => setOpen(o => !o)} style={{ padding: "10px 14px", cursor: "pointer", display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ fontSize: 11, color: open ? C.blue : C.textLight, display: "inline-block", transform: open ? "rotate(90deg)" : "none", transition: "transform 0.15s" }}>▶</span>
+        <div style={{ flex: 1, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ fontSize: 11, color: C.textLight }}>{result.model}</span>
+          {result.brand_mentioned && <Pill color="#059669">✓ {brandName} #{result.brand_position || "?"}</Pill>}
+          {!result.brand_mentioned && <Pill color="#DC2626">✗ Absent</Pill>}
+          {result.brand_in_sources && <Pill color="#2563EB">🔗 Source</Pill>}
+          {result.answer_type && <Pill color={C.textLight}>{result.answer_type}</Pill>}
+          {result.intent_type && <Pill color="#7C3AED">{result.intent_type}</Pill>}
+        </div>
+        <span style={{ fontSize: 10, color: C.textLight, flexShrink: 0 }}>{(result.input_tokens || 0) + (result.output_tokens || 0)} tok</span>
+      </div>
+      {open && (
+        <div style={{ padding: "0 14px 14px", borderTop: `1px solid ${C.border}` }}>
+          <div style={{ marginTop: 12, fontSize: 12, color: C.text, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>
+            {highlightBrand(result.answer || "", brandName, brandAliases)}
+          </div>
+          {sources.length > 0 && (
+            <div style={{ marginTop: 12 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 6 }}>Sources</div>
+              {sources.map((url, i) => {
+                const isBrand = [brandName, ...(brandAliases || [])].some(t => url.toLowerCase().includes((t || "").toLowerCase()));
+                return (
+                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                    <span style={{ fontSize: 10, color: C.textLight, minWidth: 18 }}>[{i+1}]</span>
+                    <a href={url} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: isBrand ? "#059669" : "#2563EB", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{url}</a>
+                    {isBrand && <span style={{ fontSize: 10, background: "#ECFDF5", color: "#059669", borderRadius: 4, padding: "1px 5px", flexShrink: 0 }}>marque</span>}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {comps.length > 0 && (
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 6 }}>Concurrents cités</div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {comps.map(c => (
+                  <span key={c.name} style={{ fontSize: 10, background: "#FEF2F2", color: "#DC2626", border: "1px solid #FECACA", borderRadius: 5, padding: "2px 8px" }}>
+                    {c.name}{c.position ? ` #${c.position}` : ""}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Questions sub-tab (v2) ────────────────────────────────────────
 
 function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allResults, onResultSaved }) {
