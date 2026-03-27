@@ -453,17 +453,39 @@ ${aiText ? `<h2>9. Analyse IA détaillée</h2><pre>${aiText}</pre>` : ""}
 
 // ── Main ─────────────────────────────────────────────────────────
 
-export default function GeoAuditTab({ sites, projectId, project, brand, questions, results, urlIndex }) {
+export default function GeoAuditTab({ sites, projectId }) {
   const [selectedSite, setSelectedSite] = useState(sites[0]?.id || "");
   const [aiText, setAiText] = useState("");
   const [exporting, setExporting] = useState(false);
+  const [brand, setBrand] = useState(null);
+  const [questions, setQuestions] = useState([]);
+  const [results, setResults] = useState([]);
+  const [urlIndex, setUrlIndex] = useState([]);
+  const [loading, setLoading] = useState(true);
 
   const site = sites.find(s => s.id === selectedSite) || sites[0];
   const siteBrand = brand;
 
-  const siteResults  = useMemo(() => results.filter(r => r.site_id === site?.id), [results, site?.id]);
-  const siteQuestions = useMemo(() => questions.filter(q => q.site_id === site?.id), [questions, site?.id]);
-  const siteUrls     = useMemo(() => urlIndex.filter(u => u.project_id === projectId), [urlIndex, projectId]);
+  useEffect(() => {
+    if (!projectId || !site?.id) return;
+    setLoading(true);
+    Promise.all([
+      sbGetBrand(projectId, site.id),
+      sbGetQuestions(projectId, site.id),
+      sbGetGeoResults(projectId, site.id),
+      sbGetUrlIndex(projectId),
+    ]).then(([b, q, r, u]) => {
+      setBrand(b);
+      setQuestions(q);
+      setResults(r);
+      setUrlIndex(u);
+      setLoading(false);
+    });
+  }, [projectId, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const siteResults   = useMemo(() => results.filter(r => r.site_id === site?.id), [results, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const siteQuestions = useMemo(() => questions.filter(q => q.site_id === site?.id), [questions, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const siteUrls      = useMemo(() => urlIndex.filter(u => u.project_id === projectId), [urlIndex, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const audit = useMemo(() =>
     computeAudit(siteQuestions, siteResults, siteUrls, siteBrand, site),
