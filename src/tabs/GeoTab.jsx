@@ -517,7 +517,7 @@ function KeywordsTab({ site, projectId, apiKey, model, context, categories, setC
 
   const generateAll = async () => {
     if (!apiKey) { setKeywords(prev => prev); return; } // apiKey missing shown in UI
-    const toProcess = keywords.filter(kw => kw.status !== "done_q" && kw.status !== "done" && kw.status !== "error");
+    const toProcess = keywords.filter(kw => kw.status === "pending" || kw.status === "error");
     if (!toProcess.length) return;
     setRunningAll(true);
     stopRef.current = false;
