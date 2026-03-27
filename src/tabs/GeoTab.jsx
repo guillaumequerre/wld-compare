@@ -10,8 +10,11 @@ import {
   sbBulkSetKeywordCategory, sbBulkSetQuestionCategory,
   sbGetUrlIndex, sbUpdateUrlMeta, sbIncrementUrlCounts,
 } from "../lib/supabase";
+// Note: sbSaveGeoAxes is called via onSaveAxes prop from App.jsx
 
 
+
+const DEFAULT_AXES = ["Quoi ?", "Pourquoi ?", "Comment ?", "Comparaison", "Coût/budget"];
 
 // ── API Key helpers — base64 obfuscation (Supabase already protected by auth) ──
 // Fallback: if stored value looks like an AES blob (not a valid sk- key after decode),
@@ -375,7 +378,7 @@ function CatSelect({ value, categories, onChange, placeholder = "Catégorie…" 
 
 // ── Keywords sub-tab (v2) ─────────────────────────────────────────
 
-function KeywordsTab({ site, projectId, apiKey, model, context, categories, setCategories, onQuestionsGenerated }) {
+function KeywordsTab({ site, projectId, apiKey, model, axes, context, categories, setCategories, onQuestionsGenerated }) {
   const [keywords, setKeywords] = useState([]);
   const [input, setInput]       = useState("");
   const [loading, setLoading]   = useState(false);
@@ -438,7 +441,7 @@ function KeywordsTab({ site, projectId, apiKey, model, context, categories, setC
     await sbUpdateKeywordStatus(kw.id, "generating_q");
     setKeywords(prev => prev.map(k => k.id === kw.id ? { ...k, status: "generating_q" } : k));
     try {
-      const axesStr = (axes || ["Quoi ?", "Pourquoi ?", "Comment ?", "Comparaison", "Coût/budget"]).map((t, i) => `${i+1}. ${t}`).join("\n");
+      const axesStr = (axes && axes.length ? axes : DEFAULT_AXES).map((t, i) => `${i+1}. ${t}`).join("\n");
       const prompt = `Transforme le mot-clé "${kw.keyword}" en 5 questions courtes et naturelles pour un moteur de recherche IA.\nRespects ces axes :\n${axesStr}\nContraintes : maximum 12 mots par question, langage direct.\nRéponds UNIQUEMENT avec les 5 questions séparées par des points-virgules (;), sans numérotation, sans texte avant ou après.`;
 
       // Direct fetch — plain text, no json_object format
@@ -1104,7 +1107,7 @@ function UrlsTab({ projectId, categories }) {
 
 // ── Main GeoTab ───────────────────────────────────────────────────
 
-export default function GeoTab({ sites, projectId, project }) {
+export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes }) {
   const [subTab, setSubTab]         = useState("keywords"); // keywords | questions | urls
   const [questionsKey, setQuestionsKey] = useState(0); // incremented to force QuestionsTab reload
   const [selectedSite, setSelectedSite] = useState(sites[0]?.id || "");
@@ -1126,8 +1129,16 @@ export default function GeoTab({ sites, projectId, project }) {
   const [brandEditing, setBrandEditing] = useState(false);
   const [brandDraft, setBrandDraft] = useState({ brand_name: "", brand_aliases: "", competitors: "", context: "" });
   const [categories, setCategories] = useState([]);
+  const [axes, setAxes]             = useState(geoAxes || DEFAULT_AXES);
+  const [axesEditing, setAxesEditing] = useState(false);
+  const [axesDraft, setAxesDraft]   = useState(null);
 
   const site = sites.find(s => s.id === selectedSite) || sites[0];
+
+  // Sync axes when project changes
+  useEffect(() => {
+    setAxes(geoAxes || DEFAULT_AXES);
+  }, [geoAxes]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load categories (project-wide, once)
   useEffect(() => {
@@ -1285,6 +1296,69 @@ export default function GeoTab({ sites, projectId, project }) {
       {/* ── Stats header ── */}
       <StatsHeader questions={[]} results={allResults.filter(r => r.site_id === site?.id)} brandName={brand?.brand_name || ""} />
 
+      {/* ── Axes editor ── */}
+      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: "14px 20px", marginBottom: 20 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMid, marginBottom: 2 }}>Axes de génération des questions</div>
+            {!axesEditing && (
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 4 }}>
+                {axes.map((a, i) => (
+                  <span key={i} style={{ fontSize: 11, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: "2px 9px", color: C.textMid }}>
+                    {i + 1}. {a}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+          <Btn onClick={() => { setAxesDraft([...axes]); setAxesEditing(e => !e); }} variant="outline" small color={C.blue}>
+            {axesEditing ? "Annuler" : "✏️ Modifier"}
+          </Btn>
+        </div>
+
+        {axesEditing && (
+          <div style={{ marginTop: 14 }}>
+            <div style={{ fontSize: 11, color: C.textLight, marginBottom: 10 }}>
+              Un axe par ligne · utilisé comme instruction de génération pour chaque mot-clé
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
+              {(axesDraft || axes).map((a, i) => (
+                <div key={i} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <span style={{ fontSize: 11, color: C.textLight, minWidth: 20, textAlign: "right" }}>{i + 1}.</span>
+                  <input
+                    value={a}
+                    onChange={e => setAxesDraft(prev => prev.map((v, j) => j === i ? e.target.value : v))}
+                    style={{ flex: 1, padding: "6px 10px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 12, color: C.text }}
+                  />
+                  <button
+                    onClick={() => setAxesDraft(prev => prev.filter((_, j) => j !== i))}
+                    style={{ padding: "4px 8px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.white, color: C.textLight, fontSize: 11, cursor: "pointer" }}
+                  >✕</button>
+                </div>
+              ))}
+              {(axesDraft || axes).length < 10 && (
+                <button
+                  onClick={() => setAxesDraft(prev => [...prev, ""])}
+                  style={{ marginLeft: 28, padding: "5px 12px", border: `1px dashed ${C.border}`, borderRadius: 7, background: C.white, color: C.textLight, fontSize: 11, cursor: "pointer", textAlign: "left" }}
+                >+ Ajouter un axe</button>
+              )}
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <Btn onClick={async () => {
+                const cleaned = (axesDraft || []).map(a => a.trim()).filter(Boolean);
+                if (!cleaned.length) return;
+                setAxes(cleaned);
+                setAxesEditing(false);
+                await onSaveAxes?.(cleaned);
+              }} color="#059669">💾 Sauvegarder</Btn>
+              <button onClick={() => { setAxesDraft([...DEFAULT_AXES]); }} style={{ padding: "6px 12px", border: `1px solid ${C.border}`, borderRadius: 8, background: C.white, color: C.textLight, fontSize: 12, cursor: "pointer" }}>
+                ↺ Réinitialiser
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* ── Sub-nav ── */}
       <div style={{ display: "flex", gap: 4, marginBottom: 20, background: C.bg, borderRadius: 10, padding: 4, width: "fit-content" }}>
         {[
@@ -1310,6 +1384,7 @@ export default function GeoTab({ sites, projectId, project }) {
           projectId={projectId}
           apiKey={apiKeyDec}
           model={model}
+          axes={axes}
           context={brand?.context || ""}
           categories={categories}
           setCategories={setCategories}

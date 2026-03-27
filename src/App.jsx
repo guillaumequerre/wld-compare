@@ -3,7 +3,7 @@ import { C, SF_DIMS, RES_KPIS, RADAR_DIMS, DEFAULT_SITES, SEMRUSH_DIMS } from ".
 import { emptyDataMap, makeInitialProject, parseCSV } from "./lib/helpers";
 import { extractSF, extractGSC, extractGA, extractBing, extractSemrush, parseSemrush, filterByMode } from "./lib/parsers";
 import { buildUrlMaps, buildSfPageVectors, intraCorrFast, smIntraCorr } from "./lib/correlations";
-import { sbSaveProject, sbLoadProjects, sbGetHistory, sbGetLatest, sbDownload, sbGetPageTypes } from "./lib/supabase";
+import { sbSaveProject, sbLoadProjects, sbGetHistory, sbGetLatest, sbDownload, sbGetPageTypes, sbSaveGeoAxes } from "./lib/supabase";
 import AnalyseTab from "./tabs/AnalyseTab";
 import ImportTab from "./tabs/ImportTab";
 import MatrixTab from "./tabs/MatrixTab";
@@ -607,6 +607,11 @@ export default function App() {
               sites={sites}
               projectId={currentProjectId}
               project={currentProject}
+              geoAxes={currentProject?.geo_axes || null}
+              onSaveAxes={async (axes) => {
+                await sbSaveGeoAxes(currentProjectId, axes);
+                setProjects(prev => prev.map(p => p.id === currentProjectId ? { ...p, geo_axes: axes } : p));
+              }}
             />
           )}
           {tab === "allprojects" && (
