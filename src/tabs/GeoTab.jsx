@@ -49,11 +49,6 @@ function parseCSV(text) {
 
 // ── OpenAI call helpers ───────────────────────────────────────────
 
-const OPENAI_MODELS = [
-  { value: "gpt-4o-mini",       label: "GPT-4o Mini (rapide, peu cher)" },
-  { value: "gpt-4o",            label: "GPT-4o (précis)" },
-  { value: "gpt-4.1",           label: "GPT-4.1" },
-];
 
 const PROVIDERS = [
   {
@@ -102,53 +97,6 @@ const PROVIDERS = [
   },
 ];
 
-async function callOpenAI({ apiKey, model, prompt, endpoint = "responses" }) {
-  const schema = {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      answer:       { type: "string" },
-      answer_type:  { type: "string" },
-      sources:      { type: "array", items: { type: "string" } },
-      intent_type:  { type: "string", enum: ["Top", "Informative", "Conseil"] },
-      source_types: {
-        type: "array",
-        items: { type: "string", enum: ["Annuaires", "Sites marchands", "Articles de blog", "Sites institutionnels", "Forums", "Médias", "Autres"] }
-      }
-    },
-    required: ["answer", "answer_type", "sources", "intent_type", "source_types"]
-  };
-
-  const body = endpoint === "responses"
-    ? {
-        model,
-        input: prompt,
-        tools: [{ type: "web_search_preview", search_context_size: "low" }],
-        max_output_tokens: 10000,
-        text: { format: { type: "json_schema", name: "geo_answer", strict: true, schema } }
-      }
-    : {
-        model,
-        messages: [{ role: "user", content: prompt }],
-        temperature: 1,
-      };
-
-  const res = await fetch("/api/openai", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Openai-Key": apiKey,
-      "X-Openai-Endpoint": endpoint,
-    },
-    body: JSON.stringify(body),
-  });
-
-  const text = await res.text();
-  if (text.trimStart().startsWith("<")) throw new Error("Proxy /api/openai introuvable — ajoutez openai-proxy.js dans netlify/edge-functions/");
-  const data = JSON.parse(text);
-  if (!res.ok) throw new Error(data.error?.message || data.error || `HTTP ${res.status}`);
-  return data;
-}
 
 async function callProvider(provider, apiKey, prompt) {
   if (provider.id === "openai") {
@@ -1384,7 +1332,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
   const [subTab, setSubTab]         = useState("keywords"); // keywords | questions | urls
   const [questionsKey, setQuestionsKey] = useState(0); // incremented to force QuestionsTab reload
   const [selectedSite, setSelectedSite] = useState(sites[0]?.id || "");
-  const [model, setModel]           = useState("gpt-4o-mini"); // kept for variation generation
+  const [model] = useState("gpt-4o-mini"); // kept for variation generation (OpenAI completions endpoint)
   const [brand, setBrand]           = useState(null);
   const [runMode, setRunMode]       = useState("parallel"); // parallel | sequential
   const [activeProviders, setActiveProviders] = useState(["openai"]); // provider ids to use
@@ -1411,7 +1359,6 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
   }, [project?.openai_key_enc, project?.gemini_key_enc, project?.perplexity_key_enc, project?.claude_geo_key_enc]); // eslint-disable-line react-hooks/exhaustive-deps
   const [apiKeyDec, setApiKeyDec]   = useState("");           // decrypted, only in memory
   const [apiKeyInput, setApiKeyInput] = useState("");
-  const [keyStatus, setKeyStatus]   = useState("idle");       // idle | saving | ok | error
   const [allResults, setAllResults] = useState([]);
   const [brandEditing, setBrandEditing] = useState(false);
   const [brandDraft, setBrandDraft] = useState({ brand_name: "", brand_aliases: "", competitors: "", context: "" });
@@ -1452,20 +1399,6 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
     setKeyStatus(k.startsWith("sk-") ? "ok" : "error");
   }, [apiKeyEnc]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const saveApiKey = async () => {
-    const k = apiKeyInput.trim();
-    if (!k.startsWith("sk-") && !k.startsWith("sk_")) { setKeyStatus("error"); return; }
-    setKeyStatus("saving");
-    try {
-      const enc = encodeKey(k);
-      await sbSaveOpenAIKey(projectId, enc);
-      setApiKeyEnc(enc);
-      setApiKeyDec(k);
-      setApiKeyInput("");
-      setKeyStatus("ok");
-      console.log("✓ OpenAI key saved, prefix:", k.slice(0, 10));
-    } catch(e) { console.error("saveApiKey error:", e); setKeyStatus("error"); }
-  };
 
   const saveBrand = async () => {
     const b = {
@@ -1480,7 +1413,6 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
     setBrandEditing(false);
   };
 
-  const hasKey = !!apiKeyDec;
 
   return (
     <div>
