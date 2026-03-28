@@ -149,9 +149,9 @@ async function callProvider(provider, apiKey, prompt) {
   }
 
   if (provider.id === "claude") {
-    const res = await fetch("/api/anthropic", {
+    const res = await fetch("/api/claude-geo", {
       method: "POST",
-      headers: { "Content-Type": "application/json", "x-api-key": apiKey },
+      headers: { "Content-Type": "application/json", "X-Claude-Key": apiKey },
       body: JSON.stringify({
         model: provider.model,
         max_tokens: 4000,
@@ -159,7 +159,7 @@ async function callProvider(provider, apiKey, prompt) {
       }),
     });
     const raw = await res.text();
-    if (raw.trimStart().startsWith("<")) throw new Error("Proxy /api/anthropic introuvable");
+    if (raw.trimStart().startsWith("<")) throw new Error("Proxy /api/claude-geo introuvable — ajoutez claude-geo-proxy.js dans netlify/edge-functions/");
     const data = JSON.parse(raw);
     if (!res.ok) throw new Error(data.error?.message || `Claude ${res.status}`);
     const text = data.content?.[0]?.text || "";
@@ -956,15 +956,31 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
     const { brand_name = "", brand_aliases = [], competitors = [], context = "" } = brand || {};
     setRunning(r => ({ ...r, [q.id]: true }));
 
-    const prompt = [
-      context ? `Contexte : "${context}"` : "",
+    // Build prompt — adapted per provider capability
+    const baseContext = context ? `Contexte : "${context}"\n` : "";
+    const question = `Question : ${q.question}`;
+
+    // Claude doesn't have web access — use knowledge-based prompt
+    const promptForClaude = `${baseContext}Tu es un expert en recommandation d'entreprises et prestataires. Réponds à la question suivante en te basant sur tes connaissances pour donner une liste de vrais acteurs, entreprises ou prestataires du marché.
+RÈGLE : Ne dis jamais que tu n'as pas accès au web ou aux avis récents. Donne directement des recommandations concrètes avec les vrais noms d'entreprises que tu connais.
+Réponds en texte libre structuré. Liste les acteurs avec une courte description de chacun.
+${question}`;
+
+    // Web-capable providers (OpenAI Responses API, Perplexity with real-time search)
+    const promptForWeb = [
+      baseContext,
       "Tu es un assistant IA avec accès au web. Réponds à la question avec une réponse complète et structurée.",
       "RÈGLE ABSOLUE : Ne pose jamais de question de clarification. Réponds directement.",
       "Insère les marqueurs [1], [2]… dans le texte pour chaque source utilisée. La liste 'sources' reprend les URLs dans l'ordre. Ne pas inventer d'URLs.",
       "Classification JSON requise : intent_type (Top|Informative|Conseil), answer_type, source_types.",
       "Produis UNIQUEMENT le JSON final conforme au schéma. Aucun texte avant ou après.",
-      `Question : ${q.question}`,
+      question,
     ].filter(Boolean).join("\n");
+
+    // Gemini — web search via API but free text response
+    const promptForGemini = `${baseContext}Tu es un assistant IA. Réponds à la question suivante avec des recommandations concrètes d'entreprises, d'agences ou de prestataires réels.
+RÈGLE : Donne une liste de vrais acteurs du marché avec leurs caractéristiques principales. Sois direct et factuel.
+${question}`;
 
     // Determine which providers to call
     const providersToCall = PROVIDERS.filter(p =>
@@ -1003,10 +1019,16 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
       return newResult;
     };
 
+    const getPrompt = (p) => {
+      if (p.id === "claude")     return promptForClaude;
+      if (p.id === "gemini")     return promptForGemini;
+      return promptForWeb; // openai, perplexity
+    };
+
     try {
       if (runMode === "parallel") {
         const promises = providersToCall.map(p =>
-          callProvider(p, providerKeys[p.id].dec, prompt)
+          callProvider(p, providerKeys[p.id].dec, getPrompt(p))
             .then(parsed => saveResult(parsed, `${p.label} (${p.model})`))
             .catch(e => console.error(`${p.label} error:`, e))
         );
@@ -1014,7 +1036,7 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
       } else {
         for (const p of providersToCall) {
           try {
-            const parsed = await callProvider(p, providerKeys[p.id].dec, prompt);
+            const parsed = await callProvider(p, providerKeys[p.id].dec, getPrompt(p));
             await saveResult(parsed, `${p.label} (${p.model})`);
           } catch(e) { console.error(`${p.label} error:`, e); }
         }
