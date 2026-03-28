@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { C } from "../lib/constants";
 import { sbSaveProviderKeys } from "../lib/supabase";
 import {
-  sbSaveBrand, sbGetBrand, sbSaveOpenAIKey,
+  sbSaveBrand, sbGetBrand,
   sbSaveKeywords, sbGetKeywords, sbUpdateKeywordStatus, sbDeleteKeyword,
   sbSaveQuestions, sbGetQuestions, sbUpdateQuestion, sbDeleteQuestion,
   sbSaveGeoResult, sbGetGeoResults,
@@ -1358,7 +1358,6 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
     }
   }, [project?.openai_key_enc, project?.gemini_key_enc, project?.perplexity_key_enc, project?.claude_geo_key_enc]); // eslint-disable-line react-hooks/exhaustive-deps
   const [apiKeyDec, setApiKeyDec]   = useState("");           // decrypted, only in memory
-  const [apiKeyInput, setApiKeyInput] = useState("");
   const [allResults, setAllResults] = useState([]);
   const [brandEditing, setBrandEditing] = useState(false);
   const [brandDraft, setBrandDraft] = useState({ brand_name: "", brand_aliases: "", competitors: "", context: "" });
