@@ -655,8 +655,6 @@ export default function GeoAuditTab({ sites, projectId, corrMatrix = [], metrics
           ))}
         </Section>
 
-        </Section>
-
         {/* ── Croisements données × présence GEO ── */}
         {(() => {
           // Gather data for cross-analysis
