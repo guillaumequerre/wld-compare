@@ -1144,7 +1144,6 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
 
 // ── URL Index sub-tab ─────────────────────────────────────────────
 
-const TEMPLATE_TYPES = ["article","landing","fiche","FAQ","comparatif","forum","media","institutionnel","autre"];
 
 function UrlsTab({ projectId, categories, brand, allResults }) {
   const [urls, setUrls]         = useState([]);
