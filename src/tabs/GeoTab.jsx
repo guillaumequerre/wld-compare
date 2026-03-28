@@ -1146,19 +1146,88 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
 
 const TEMPLATE_TYPES = ["article","landing","fiche","FAQ","comparatif","forum","media","institutionnel","autre"];
 
-function UrlsTab({ projectId, categories }) {
-  const [urls, setUrls]       = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [crawling, setCrawling] = useState({}); // urlId → true
-  const [filterCat, setFilterCat] = useState("");
-  const [filterTpl, setFilterTpl] = useState("");
-  const [search, setSearch]   = useState("");
-  const [openCrawl, setOpenCrawl] = useState(null); // urlId with open crawl panel
+function UrlsTab({ projectId, categories, brand, allResults }) {
+  const [urls, setUrls]         = useState([]);
+  const [loading, setLoading]   = useState(true);
+  const [error, setError]       = useState(false);
+  const [crawling, setCrawling] = useState({});
+  const [filterType, setFilterType] = useState("all"); // all | brand | competitor | other
+  const [filterTpl, setFilterTpl]   = useState("");
+  const [search, setSearch]         = useState("");
+  const [view, setView]             = useState("urls"); // urls | domains
+  const [openCrawl, setOpenCrawl]   = useState(null);
+
+  const brandName    = brand?.brand_name || "";
+  const brandAliases = brand?.brand_aliases || [];
+  const competitors  = brand?.competitors  || [];
 
   useEffect(() => {
     if (!projectId) return;
-    sbGetUrlIndex(projectId).then(data => { setUrls(data); setLoading(false); });
+    setLoading(true);
+    setError(false);
+    sbGetUrlIndex(projectId)
+      .then(data => { setUrls(Array.isArray(data) ? data : []); setLoading(false); })
+      .catch(() => { setUrls([]); setLoading(false); setError(true); });
   }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Classify a URL
+  const classifyUrl = (u) => {
+    const d = (u.domain || "").toLowerCase();
+    const allBrand = [brandName, ...brandAliases].filter(Boolean).map(t => t.toLowerCase());
+    const knownComps = competitors.filter(Boolean).map(t => t.toLowerCase());
+
+    if (allBrand.some(t => d.includes(t))) return "brand";
+
+    // Identified competitors from results
+    const compNames = new Set();
+    allResults.forEach(r => (r.competitors_mentioned || []).forEach(c => { if (c.name) compNames.add(c.name.toLowerCase()); }));
+    const identifiedComps = [...compNames];
+
+    if (knownComps.some(t => d.includes(t))) return "competitor_known";
+    if (identifiedComps.some(t => d.includes(t) || t.includes(d.split(".")[0]))) return "competitor_identified";
+    return "other";
+  };
+
+  const classColors = {
+    brand:                 { color: "#059669", bg: "#ECFDF5", border: "#059669", label: `✓ ${brandName || "Marque"}` },
+    competitor_known:      { color: "#DC2626", bg: "#FEF2F2", border: "#DC2626", label: "⚔️ Concurrent déclaré" },
+    competitor_identified: { color: "#EA580C", bg: "#FFF7ED", border: "#EA580C", label: "🔍 Concurrent identifié" },
+    other:                 { color: "#64748B", bg: "#F8FAFC", border: "#E2E8F0", label: "🔗 Autre source" },
+  };
+
+  const TEMPLATE_TYPES = ["article","landing","fiche","FAQ","comparatif","forum","media","institutionnel","autre"];
+
+  const filtered = useMemo(() => urls.filter(u => {
+    if (search && !u.url?.toLowerCase().includes(search.toLowerCase()) && !u.domain?.toLowerCase().includes(search.toLowerCase())) return false;
+    if (filterTpl && u.template_type !== filterTpl) return false;
+    if (filterType !== "all") {
+      const cls = classifyUrl(u);
+      if (filterType === "brand" && cls !== "brand") return false;
+      if (filterType === "competitor" && !cls.startsWith("competitor")) return false;
+      if (filterType === "other" && cls !== "other") return false;
+    }
+    return true;
+  }), [urls, search, filterTpl, filterType, brandName, brandAliases, competitors, allResults]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Domain aggregation
+  const domains = useMemo(() => {
+    const m = {};
+    urls.forEach(u => {
+      if (!u.domain) return;
+      if (!m[u.domain]) m[u.domain] = { domain: u.domain, count_as_source: 0, count_in_answer: 0, urls: [] };
+      m[u.domain].count_as_source += u.count_as_source || 0;
+      m[u.domain].count_in_answer += u.count_in_answer || 0;
+      m[u.domain].urls.push(u);
+    });
+    return Object.values(m).sort((a, b) => (b.count_as_source + b.count_in_answer) - (a.count_as_source + a.count_in_answer));
+  }, [urls]);
+
+  // Counts per class
+  const classCounts = useMemo(() => {
+    const c = { brand: 0, competitor_known: 0, competitor_identified: 0, other: 0 };
+    urls.forEach(u => { c[classifyUrl(u)]++; });
+    return c;
+  }, [urls, brandName, brandAliases, competitors, allResults]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const setThemeCat = async (id, catId) => {
     await sbUpdateUrlMeta(id, { theme_category_id: catId || null });
@@ -1189,139 +1258,187 @@ function UrlsTab({ projectId, categories }) {
     } catch(e) {
       await sbUpdateUrlMeta(urlEntry.id, { crawl_status: "error" });
       setUrls(prev => prev.map(u => u.id === urlEntry.id ? { ...u, crawl_status: "error" } : u));
-      console.error("Crawl échoué : ", e.message);
+      console.error("Crawl échoué:", e.message);
     }
     setCrawling(c => ({ ...c, [urlEntry.id]: false }));
   };
 
-  const filtered = useMemo(() => urls.filter(u => {
-    if (filterCat && u.theme_category_id !== filterCat) return false;
-    if (filterTpl && u.template_type !== filterTpl) return false;
-    if (search && !u.url.toLowerCase().includes(search.toLowerCase()) && !u.domain?.toLowerCase().includes(search.toLowerCase())) return false;
-    return true;
-  }), [urls, filterCat, filterTpl, search]);
+  if (loading) return (
+    <div style={{ textAlign: "center", padding: 40, color: C.textLight, fontSize: 12 }}>
+      Chargement des sources citées…
+    </div>
+  );
 
-  const topDomains = useMemo(() => {
-    const m = {};
-    urls.forEach(u => { if (u.domain) m[u.domain] = (m[u.domain] || 0) + u.count_as_source + u.count_in_answer; });
-    return Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, 5);
-  }, [urls]);
-
-  if (loading) return <div style={{ textAlign: "center", padding: 40, color: C.textLight, fontSize: 12 }}>Chargement des URLs…</div>;
-
-  if (!urls.length) return (
+  if (error || (!loading && urls.length === 0)) return (
     <div style={{ textAlign: "center", padding: 60, color: C.textLight }}>
       <div style={{ fontSize: 32, marginBottom: 12 }}>🔗</div>
-      <div style={{ fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 6 }}>Aucune URL indexée</div>
-      <div style={{ fontSize: 12 }}>Interrogez des questions pour voir apparaître les URLs citées</div>
+      <div style={{ fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 6 }}>
+        {error ? "Table non disponible" : "Aucune source indexée"}
+      </div>
+      <div style={{ fontSize: 12 }}>
+        {error
+          ? "Exécutez migration-geo-v2.sql dans Supabase, puis interrogez des questions."
+          : "Interrogez des questions pour voir apparaître les URLs citées."}
+      </div>
     </div>
   );
 
   return (
     <div>
-      {/* Top domains summary */}
-      {topDomains.length > 0 && (
-        <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 20px", marginBottom: 16, display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
-          <span style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7 }}>Top domaines</span>
-          {topDomains.map(([d, cnt]) => (
-            <div key={d} style={{ display: "flex", alignItems: "center", gap: 5 }}>
-              <span style={{ fontSize: 12, color: "#2563EB", fontWeight: 600 }}>{d}</span>
-              <span style={{ fontSize: 11, color: C.textLight, background: C.bg, borderRadius: 10, padding: "1px 7px" }}>{cnt}×</span>
-            </div>
-          ))}
-        </div>
-      )}
+      {/* ── Legend strip ── */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+        {Object.entries(classColors).map(([cls, meta]) => (
+          <button key={cls} onClick={() => setFilterType(filterType === cls ? "all" : cls)}
+            style={{
+              display: "flex", alignItems: "center", gap: 6, padding: "5px 12px",
+              borderRadius: 20, fontSize: 11, fontWeight: 600, cursor: "pointer",
+              border: `2px solid ${filterType === cls ? meta.color : meta.border}`,
+              background: filterType === cls ? meta.color : meta.bg,
+              color: filterType === cls ? "#fff" : meta.color,
+              transition: "all 0.15s",
+            }}>
+            {meta.label}
+            <span style={{ opacity: 0.75, fontWeight: 400 }}>({classCounts[cls]})</span>
+          </button>
+        ))}
+      </div>
 
-      {/* Filters */}
-      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
-        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 Rechercher une URL ou domaine…"
-          style={{ padding: "6px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, color: C.text, width: 260 }} />
-        <CatSelect value={filterCat} categories={[{ id: "", name: "Tous thèmes" }, ...categories]} onChange={v => setFilterCat(v || "")} placeholder="Tous thèmes" />
+      {/* ── Filters + view toggle ── */}
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 14, flexWrap: "wrap" }}>
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 Rechercher…"
+          style={{ padding: "6px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, color: C.text, width: 220 }} />
         <select value={filterTpl} onChange={e => setFilterTpl(e.target.value)}
           style={{ padding: "5px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11, color: C.text }}>
           <option value="">Tous templates</option>
           {TEMPLATE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
         </select>
-        <span style={{ fontSize: 11, color: C.textLight, marginLeft: "auto" }}>{filtered.length} URL{filtered.length > 1 ? "s" : ""}</span>
+        <span style={{ fontSize: 11, color: C.textLight }}>{filtered.length} URL{filtered.length > 1 ? "s" : ""} · {domains.length} domaine{domains.length > 1 ? "s" : ""}</span>
+
+        {/* View toggle */}
+        <div style={{ marginLeft: "auto", display: "flex", gap: 3, background: C.bg, borderRadius: 8, padding: 3 }}>
+          {[{ key: "urls", label: "🔗 URLs" }, { key: "domains", label: "🌐 Domaines" }].map(v => (
+            <button key={v.key} onClick={() => setView(v.key)} style={{
+              padding: "4px 14px", borderRadius: 6, fontSize: 12, fontWeight: view === v.key ? 700 : 400,
+              border: "none", cursor: "pointer",
+              background: view === v.key ? C.white : "transparent",
+              color: view === v.key ? C.text : C.textLight,
+              boxShadow: view === v.key ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
+            }}>{v.label}</button>
+          ))}
+        </div>
       </div>
 
-      {/* URL list */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        {filtered.map(u => {
-          const cat = categories.find(c => c.id === u.theme_category_id);
-          const isOpen = openCrawl === u.id;
-          const hasSections = u.crawl_sections?.length > 0;
-          return (
-            <div key={u.id} style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", flexWrap: "wrap" }}>
-                {/* Counts */}
-                <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-                  <span style={{ fontSize: 11, fontWeight: 700, background: "#EFF6FF", color: "#2563EB", borderRadius: 5, padding: "2px 8px" }} title="Fois cité en source">📎 {u.count_as_source}</span>
-                  <span style={{ fontSize: 11, fontWeight: 700, background: "#F5F3FF", color: "#7C3AED", borderRadius: 5, padding: "2px 8px" }} title="Fois dans le texte de réponse">💬 {u.count_in_answer}</span>
-                </div>
-
-                {/* URL */}
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                    <a href={u.url} target="_blank" rel="noreferrer"
-                      style={{ fontSize: 12, color: "#2563EB", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textDecoration: "none", display: "block" }}>
-                      {u.url}
-                    </a>
-                    <a href={u.url} target="_blank" rel="noreferrer" style={{ flexShrink: 0, fontSize: 10, color: C.textLight, border: `1px solid ${C.border}`, borderRadius: 4, padding: "1px 5px", textDecoration: "none" }}>↗</a>
+      {/* ── URLs view ── */}
+      {view === "urls" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+          {filtered.map(u => {
+            const cls  = classifyUrl(u);
+            const meta = classColors[cls];
+            const isOpen = openCrawl === u.id;
+            const hasSections = u.crawl_sections?.length > 0;
+            const cat = categories.find(c => c.id === u.theme_category_id);
+            return (
+              <div key={u.id} style={{ background: meta.bg, border: `1.5px solid ${meta.border}33`, borderLeft: `4px solid ${meta.color}`, borderRadius: 10, overflow: "hidden" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 14px", flexWrap: "wrap" }}>
+                  {/* Counts */}
+                  <div style={{ display: "flex", gap: 5, flexShrink: 0 }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, background: `${meta.color}22`, color: meta.color, borderRadius: 5, padding: "2px 7px" }} title="Source">📎 {u.count_as_source}</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, background: "#F5F3FF", color: "#7C3AED", borderRadius: 5, padding: "2px 7px" }} title="Dans réponse">💬 {u.count_in_answer}</span>
                   </div>
-                  <div style={{ fontSize: 11, color: C.textLight }}>{u.domain}</div>
-                </div>
-
-                {/* Category + template selectors */}
-                <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0, flexWrap: "wrap" }}>
-                  {cat && <span style={{ fontSize: 10, fontWeight: 700, color: cat.color, background: cat.color + "18", border: `1px solid ${cat.color}44`, borderRadius: 10, padding: "1px 7px" }}>{cat.name}</span>}
-                  <CatSelect value={u.theme_category_id} categories={categories} onChange={v => setThemeCat(u.id, v)} placeholder="Thème…" />
-                  <select value={u.template_type || ""} onChange={e => setTemplate(u.id, e.target.value || null)}
-                    style={{ padding: "4px 7px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11, color: u.template_type ? C.text : C.textLight }}>
-                    <option value="">Template…</option>
-                    {TEMPLATE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-                  </select>
-                </div>
-
-                {/* Crawl button */}
-                <div style={{ display: "flex", gap: 5, flexShrink: 0 }}>
-                  {hasSections && (
-                    <button onClick={() => setOpenCrawl(isOpen ? null : u.id)}
-                      style={{ padding: "4px 9px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11, cursor: "pointer", background: isOpen ? C.bg : C.white, color: C.textMid }}>
-                      {isOpen ? "▲ Sections" : "▼ Sections"}
+                  {/* Class badge */}
+                  <span style={{ fontSize: 10, fontWeight: 700, color: meta.color, background: meta.bg, border: `1px solid ${meta.color}44`, borderRadius: 10, padding: "1px 8px", flexShrink: 0 }}>
+                    {meta.label}
+                  </span>
+                  {/* URL */}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                      <span style={{ fontSize: 12, color: meta.color, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{u.url}</span>
+                      <a href={u.url} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}
+                        style={{ flexShrink: 0, fontSize: 10, color: C.textLight, border: `1px solid ${C.border}`, borderRadius: 4, padding: "1px 5px", textDecoration: "none" }}>↗</a>
+                    </div>
+                    <div style={{ fontSize: 10, color: C.textLight }}>{u.domain}</div>
+                  </div>
+                  {/* Selectors */}
+                  <div style={{ display: "flex", gap: 5, flexShrink: 0, flexWrap: "wrap" }}>
+                    {cat && <span style={{ fontSize: 10, fontWeight: 700, color: cat.color, background: cat.color+"18", borderRadius: 10, padding: "1px 7px" }}>{cat.name}</span>}
+                    <CatSelect value={u.theme_category_id} categories={categories} onChange={v => setThemeCat(u.id, v)} placeholder="Thème…" />
+                    <select value={u.template_type || ""} onChange={e => setTemplate(u.id, e.target.value || null)}
+                      style={{ padding: "3px 6px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 10, color: u.template_type ? C.text : C.textLight }}>
+                      <option value="">Template…</option>
+                      {TEMPLATE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                    </select>
+                  </div>
+                  {/* Crawl button */}
+                  <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                    {hasSections && (
+                      <button onClick={() => setOpenCrawl(isOpen ? null : u.id)}
+                        style={{ padding: "3px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 10, cursor: "pointer", background: isOpen ? C.bg : C.white, color: C.textMid }}>
+                        {isOpen ? "▲" : "▼"} Sections
+                      </button>
+                    )}
+                    <button onClick={() => launchCrawl(u)} disabled={crawling[u.id]}
+                      style={{ padding: "3px 8px", border: `1px solid ${meta.color}`, borderRadius: 6, fontSize: 10, cursor: crawling[u.id] ? "wait" : "pointer", background: meta.bg, color: meta.color, fontWeight: 600 }}>
+                      {crawling[u.id] ? "⏳" : u.crawl_status === "done" ? "🔄" : "🕷️"}
                     </button>
-                  )}
-                  <Btn onClick={() => launchCrawl(u)} disabled={crawling[u.id]} color="#059669" small>
-                    {crawling[u.id] ? "⏳" : u.crawl_status === "done" ? "🔄 Re-crawl" : "🕷️ Crawler"}
-                  </Btn>
+                  </div>
+                </div>
+                {/* Crawl sections */}
+                {isOpen && hasSections && (
+                  <div style={{ borderTop: `1px solid ${meta.border}33`, background: C.bg, padding: "10px 14px" }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>Sections · {u.crawl_sections.length}</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 7 }}>
+                      {u.crawl_sections.map((sec, i) => (
+                        <div key={i} style={{ background: C.white, border: `1px solid ${sec.used_in_llm ? "#059669" : C.border}`, borderRadius: 7, padding: "8px 10px", borderLeft: `3px solid ${sec.used_in_llm ? "#059669" : C.border}` }}>
+                          <div style={{ display: "flex", gap: 5, alignItems: "center", marginBottom: 3 }}>
+                            <span style={{ fontSize: 9, fontWeight: 700, color: "#7C3AED", background: "#F5F3FF", borderRadius: 4, padding: "1px 5px" }}>{sec.type}</span>
+                            {sec.used_in_llm && <span style={{ fontSize: 9, color: "#059669", fontWeight: 600 }}>✓ LLM</span>}
+                          </div>
+                          <div style={{ fontSize: 11, fontWeight: 600, color: C.text, marginBottom: 2 }}>{sec.title}</div>
+                          <div style={{ fontSize: 10, color: C.textLight, lineHeight: 1.4 }}>{sec.summary}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ── Domains view ── */}
+      {view === "domains" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {domains.map((d, i) => {
+            const cls  = classifyUrl({ domain: d.domain });
+            const meta = classColors[cls];
+            const total = d.count_as_source + d.count_in_answer;
+            const maxTotal = domains[0] ? domains[0].count_as_source + domains[0].count_in_answer : 1;
+            return (
+              <div key={d.domain} style={{ background: meta.bg, border: `1.5px solid ${meta.border}33`, borderLeft: `4px solid ${meta.color}`, borderRadius: 10, padding: "10px 16px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ fontSize: 14, fontWeight: 800, color: C.textLight, minWidth: 28 }}>#{i+1}</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 4 }}>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: meta.color }}>{d.domain}</span>
+                      <span style={{ fontSize: 10, fontWeight: 700, color: meta.color, background: meta.bg, border: `1px solid ${meta.color}44`, borderRadius: 10, padding: "1px 7px" }}>{meta.label}</span>
+                      <span style={{ fontSize: 10, color: C.textLight }}>{d.urls.length} URL{d.urls.length > 1 ? "s" : ""}</span>
+                    </div>
+                    {/* Bar */}
+                    <div style={{ height: 5, background: `${meta.color}22`, borderRadius: 3, overflow: "hidden", marginBottom: 4 }}>
+                      <div style={{ height: "100%", width: `${(total / maxTotal) * 100}%`, background: meta.color, borderRadius: 3, transition: "width 0.4s" }} />
+                    </div>
+                    <div style={{ display: "flex", gap: 10, fontSize: 11, color: C.textLight }}>
+                      <span>📎 {d.count_as_source} source{d.count_as_source > 1 ? "s" : ""}</span>
+                      <span>💬 {d.count_in_answer} dans réponse</span>
+                    </div>
+                  </div>
                 </div>
               </div>
-
-              {/* Crawl sections panel */}
-              {isOpen && hasSections && (
-                <div style={{ borderTop: `1px solid ${C.border}`, background: C.bg, padding: "12px 14px" }}>
-                  <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>
-                    Sections détectées · {u.crawl_sections.length}
-                  </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 8 }}>
-                    {u.crawl_sections.map((sec, i) => (
-                      <div key={i} style={{ background: C.white, border: `1px solid ${sec.used_in_llm ? "#059669" : C.border}`, borderRadius: 8, padding: "10px 12px", borderLeft: `3px solid ${sec.used_in_llm ? "#059669" : C.border}` }}>
-                        <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 4 }}>
-                          <span style={{ fontSize: 10, fontWeight: 700, color: "#7C3AED", background: "#F5F3FF", borderRadius: 4, padding: "1px 6px" }}>{sec.type}</span>
-                          {sec.used_in_llm && <span style={{ fontSize: 10, color: "#059669", fontWeight: 600 }}>✓ utilisé par LLM</span>}
-                        </div>
-                        <div style={{ fontSize: 12, fontWeight: 600, color: C.text, marginBottom: 3 }}>{sec.title}</div>
-                        <div style={{ fontSize: 11, color: C.textLight, lineHeight: 1.5 }}>{sec.summary}</div>
-                        {sec.used_in_llm_reason && <div style={{ fontSize: 10, color: "#059669", marginTop: 4, fontStyle: "italic" }}>{sec.used_in_llm_reason}</div>}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -1635,7 +1752,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
         {[
           { key: "keywords",  label: "🔑 Mots-clés" },
           { key: "questions", label: "💬 Questions" },
-          { key: "urls",      label: "🔗 URLs citées" },
+          { key: "urls",      label: "🔗 Sources citées" },
         ].map(t => (
           <button key={t.key} onClick={() => setSubTab(t.key)} style={{
             padding: "7px 18px", borderRadius: 7, fontSize: 13, fontWeight: subTab === t.key ? 700 : 500,
@@ -1682,6 +1799,8 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
         <UrlsTab
           projectId={projectId}
           categories={categories}
+          brand={brand}
+          allResults={allResults.filter(r => r.site_id === site?.id)}
         />
       )}
     </div>
