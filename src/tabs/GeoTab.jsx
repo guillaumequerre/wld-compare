@@ -1396,7 +1396,6 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
     const k = decodeKey(apiKeyEnc);
     console.log("OpenAI key loaded, prefix:", k.slice(0, 10));
     setApiKeyDec(k);
-    setKeyStatus(k.startsWith("sk-") ? "ok" : "error");
   }, [apiKeyEnc]); // eslint-disable-line react-hooks/exhaustive-deps
 
 
