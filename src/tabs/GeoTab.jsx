@@ -902,13 +902,7 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
             {new Date(result.created_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
           </span>
         )}
-        {result ? (
-          hasBrand
-            ? <span style={{ fontSize: 9, fontWeight: 700, color: '#059669', background: '#ECFDF5', border: '1px solid #059669', borderRadius: 8, padding: '1px 6px', flexShrink: 0 }}>✓ #{result.brand_position||'?'}</span>
-            : <span style={{ fontSize: 9, fontWeight: 700, color: '#DC2626', background: '#FEF2F2', border: '1px solid #DC2626', borderRadius: 8, padding: '1px 6px', flexShrink: 0 }}>✗</span>
-        ) : (
-          <span style={{ fontSize: 9, color: C.textLight, fontStyle: 'italic' }}>—</span>
-        )}
+
         {hasKey && (
           <button onClick={onRun} disabled={isRunning} title={`Interroger ${p.label}`}
             style={{ width: 22, height: 22, borderRadius: '50%', border: 'none', cursor: isRunning ? 'wait' : 'pointer', background: isRunning ? C.bg : '#059669', color: isRunning ? C.textLight : '#fff', fontSize: 11, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, opacity: isRunning ? 0.6 : 1 }}>
@@ -1399,7 +1393,16 @@ ${question}`;
                     <button onClick={() => setEditingQ(editingQ?.id === q.id ? null : { id: q.id, text: q.question })}
                       style={{ padding: "3px 7px", border: `1px solid ${C.border}`, borderRadius: 6, background: editingQ?.id === q.id ? "#EFF6FF" : C.white, color: "#2563EB", fontSize: 11, cursor: "pointer" }}
                       title="Modifier la question">✏️</button>
-                    <Btn onClick={() => runQuestion(q)} disabled={isRunning} color={site.color} small>{isRunning ? "⏳" : "▶ Tous"}</Btn>
+                    <button
+                      onClick={() => {
+                        const configured = PROVIDERS.filter(p => providerKeysRef.current[p.id]?.dec);
+                        configured.forEach(p => runProvider(q, p));
+                      }}
+                      disabled={isRunning}
+                      title="Lancer tous les providers configurés"
+                      style={{ padding: "3px 10px", border: `1px solid ${site.color}`, borderRadius: 6, background: site.color, color: "#fff", fontSize: 11, fontWeight: 700, cursor: isRunning ? "wait" : "pointer", opacity: isRunning ? 0.6 : 1 }}>
+                      {isRunning ? "⏳" : "▶ Tous"}
+                    </button>
                     <button onClick={() => deleteQ(q.id)} style={{ padding: "3px 7px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.white, color: C.textLight, fontSize: 10, cursor: "pointer" }}>🗑</button>
                   </div>
                 </div>
