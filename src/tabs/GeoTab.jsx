@@ -865,17 +865,21 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
   // 1. From persisted history (reliable, survives upsert)
   (history || []).forEach(h => {
     if (!h.test_date) return;
-    const key = h.test_date; // already YYYY-MM-DD
+    const key = String(h.test_date).slice(0, 10); // normalize to YYYY-MM-DD
     if (!byDay[key]) byDay[key] = [];
     byDay[key].push(h.brand_mentioned === true || h.brand_mentioned === 1);
   });
-  // 2. Augment with current results (optimistic, for today)
+  // 2. Augment with current results (for today — covers optimistic updates before DB sync)
+  const todayKey = dayKey(today);
   (results || []).forEach(r => {
-    if (!r.created_at) return;
-    const d = new Date(r.created_at); d.setHours(0,0,0,0);
+    const d = r.created_at ? new Date(r.created_at) : new Date();
+    d.setHours(0,0,0,0);
     const key = dayKey(d);
-    // Only add if not already in history for today
-    if (!byDay[key]) {
+    // Always update today's slot from latest result (may be more recent than history)
+    if (key === todayKey) {
+      byDay[key] = byDay[key] || [];
+      byDay[key].push(isBrandPresent(r));
+    } else if (!byDay[key]) {
       byDay[key] = [isBrandPresent(r)];
     }
   });
@@ -1175,7 +1179,10 @@ ${question}`;
         return [newResult, ...prev];
       });
       // Save presence history record (builds 30-day calendar)
-      const prov = PROVIDERS.find(p => `${p.label} (${p.model})` === providerLabel);
+      const prov = PROVIDERS.find(p =>
+        providerLabel.toLowerCase().includes(p.label.toLowerCase()) ||
+        providerLabel.toLowerCase().includes(p.id)
+      );
       if (prov) {
         const presenceRow = {
           question_id: q.id, project_id: projectId, site_id: site.id,
@@ -1183,12 +1190,18 @@ ${question}`;
           brand_mentioned: brandMentioned, brand_position: brandPosition,
           brand_in_sources: brandInSources,
         };
-        sbSavePresence(presenceRow).then(saved => {
-          if (saved) setPresenceHistory(prev => ({
-            ...prev,
-            [q.id]: [...(prev[q.id] || []), saved],
-          }));
-        }).catch(() => {});
+        // Add to presence history immediately (optimistic, normalized)
+        const todayEntry = {
+          question_id: q.id, provider_id: prov.id,
+          test_date: new Date().toISOString().slice(0, 10),
+          brand_mentioned: brandMentioned,
+        };
+        setPresenceHistory(prev => ({
+          ...prev,
+          [q.id]: [...(prev[q.id] || []), todayEntry],
+        }));
+        // Also persist to DB (best effort)
+        sbSavePresence(presenceRow).catch(() => {});
       }
 
       // Cache last + best answer on question
@@ -1297,14 +1310,18 @@ ${question}`;
         brand_mentioned: brandMentioned, brand_position: brandPosition,
         brand_in_sources: brandInSources,
       };
-      sbSavePresence(presenceRow).then(saved => {
-        if (saved) {
-          setPresenceHistory(prev => {
-            const existing = prev[q.id] || [];
-            return { ...prev, [q.id]: [...existing, saved] };
-          });
-        }
-      }).catch(() => {});
+      // Add to presence history immediately (optimistic, normalized)
+      const todayEntry = {
+        question_id: q.id, provider_id: provider.id,
+        test_date: new Date().toISOString().slice(0, 10),
+        brand_mentioned: brandMentioned,
+      };
+      setPresenceHistory(prev => ({
+        ...prev,
+        [q.id]: [...(prev[q.id] || []), todayEntry],
+      }));
+      // Also persist to DB (best effort)
+      sbSavePresence(presenceRow).catch(() => {});
 
       // Update cached answers on question
       const cachePatch = { has_result: true, last_answer: parsed.answer, last_model: record.model, last_date: now };
@@ -1351,6 +1368,20 @@ ${question}`;
   const { brand_name = "", brand_aliases = [] } = brand || {};
   const totalWithBrand = questions.filter(q => (resultsByQ[q.id] || []).some(r => r.brand_mentioned === true || r.brand_mentioned === 1)).length;
 
+  // Count questions to generate for "Lancer tout" indicator
+  const toRunCount = useMemo(() => {
+    const configuredProviders = PROVIDERS.filter(p =>
+      activeProviders.includes(p.id) && providerKeys[p.id]?.dec
+    );
+    if (!configuredProviders.length) return 0;
+    return filtered.filter(q => {
+      const qResults = resultsByQ[q.id] || [];
+      return configuredProviders.some(p =>
+        !qResults.some(r => r.model?.toLowerCase().includes(p.label.toLowerCase()))
+      );
+    }).length;
+  }, [filtered, resultsByQ, activeProviders, providerKeys]); // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
     <div>
       {/* Manual question input */}
@@ -1391,7 +1422,7 @@ ${question}`;
             style={{ padding: "5px 10px", border: `1px solid ${C.border}`, borderRadius: 7, background: C.white, color: C.textLight, fontSize: 11, cursor: "pointer" }}>
             🔄
           </button>
-          <Btn onClick={runAllQuestions} disabled={runAll} color="#7C3AED">{runAll ? "⏳ En cours…" : "▶ Lancer tout"}</Btn>
+          <Btn onClick={runAllQuestions} disabled={runAll || toRunCount === 0} color="#7C3AED">{runAll ? "⏳ En cours…" : toRunCount > 0 ? `▶ Lancer tout (${toRunCount})` : "✓ Tout généré"}</Btn>
           {runAll && <Btn onClick={() => { stopAllRef.current = true; setRunAll(false); }} color="#DC2626" variant="outline" small>⏹ Arrêter</Btn>}
         </div>
       </div>
