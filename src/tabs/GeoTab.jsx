@@ -958,22 +958,16 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
   const [bulkCat, setBulkCat]       = useState("");
   const [keywords, setKeywords]     = useState([]);
 
-  // Sync from parent only on initial load or site change — not on every allResults update
-  // to avoid overwriting optimistic local updates from runProvider
-  const initializedRef = useRef(false);
+  // Sync results from parent prop — but don't overwrite optimistic updates.
+  // Track last loaded siteId to detect site changes vs normal re-renders.
+  const lastSiteRef = useRef(null);
   useEffect(() => {
-    if (!initializedRef.current) {
+    const siteChanged = lastSiteRef.current !== site?.id;
+    if (siteChanged) {
+      lastSiteRef.current = site?.id || null;
       setResults(allResults || []);
-      initializedRef.current = true;
     }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Re-sync when site changes (full reload needed)
-  useEffect(() => {
-    initializedRef.current = false;
-    setResults(allResults || []);
-    setTimeout(() => { initializedRef.current = true; }, 100);
-  }, [site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [site?.id, allResults]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!projectId || !site?.id) return;
