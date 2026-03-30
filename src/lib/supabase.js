@@ -232,15 +232,6 @@ export async function sbGetBrand(project_id, site_id) {
 
 // ── GEO — OPENAI KEY (encrypted) on project ──────────────────────
 
-export async function sbSaveOpenAIKey(project_id, enc) {
-  const res = await fetch(`${PROXY}/rest/v1/projects?id=eq.${encodeURIComponent(project_id)}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ openai_key_enc: enc }),
-  });
-  return res.ok;
-}
-
 export async function sbSaveGeoAxes(project_id, axes) {
   const res = await fetch(`${PROXY}/rest/v1/projects?id=eq.${encodeURIComponent(project_id)}`, {
     method: "PATCH",
@@ -317,10 +308,25 @@ export async function sbDeleteQuestion(id) {
 // ── GEO — RESULTS ────────────────────────────────────────────────
 
 export async function sbSaveGeoResult(result) {
+  // Derive provider_id from model label for upsert deduplication
+  const model = result.model || "";
+  let provider_id = "other";
+  if (model.toLowerCase().includes("openai") || model.toLowerCase().includes("gpt")) provider_id = "openai";
+  else if (model.toLowerCase().includes("gemini")) provider_id = "gemini";
+  else if (model.toLowerCase().includes("perplexity") || model.toLowerCase().includes("sonar")) provider_id = "perplexity";
+  else if (model.toLowerCase().includes("claude")) provider_id = "claude";
+
+  const row = { ...result, provider_id, updated_at: new Date().toISOString() };
+
   const res = await fetch(`${PROXY}/rest/v1/geo_results`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "Prefer": "return=representation" },
-    body: JSON.stringify(result),
+    headers: {
+      "Content-Type": "application/json",
+      // Upsert on (question_id, provider_id) — updates existing card instead of creating new
+      "Prefer": "return=representation,resolution=merge-duplicates",
+      "on-conflict": "question_id,provider_id",
+    },
+    body: JSON.stringify(row),
   });
   if (!res.ok) throw new Error(`Save geo result failed: ${res.status}`);
   return res.json();

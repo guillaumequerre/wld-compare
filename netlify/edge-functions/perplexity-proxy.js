@@ -31,12 +31,20 @@ export default async function handler(request, context) {
       },
       body: JSON.stringify({
         model,
-        messages: [{ role: "user", content: prompt }],
+        messages: [
+          {
+            role: "system",
+            content: "Tu es un assistant de recherche web. Tu dois toujours citer des entreprises, agences et prestataires réels avec leurs URLs. Tes réponses sont basées sur une recherche web en temps réel.",
+          },
+          { role: "user", content: prompt },
+        ],
         max_tokens: 4096,
-        temperature: 0.7,
+        temperature: 0.2, // lower = more factual for recommendations
         return_citations: true,
         return_images: false,
         search_recency_filter: "month",
+        search_domain_filter: [], // no restrictions
+        web_search_options: { search_context_size: "high" },
       }),
     });
 

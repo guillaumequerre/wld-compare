@@ -66,7 +66,7 @@ const PROVIDERS = [
     id: "gemini",
     label: "Gemini",
     icon: "🔵",
-    model: "gemini-2.0-flash",
+    model: "gemini-2.0-flash",   // supports Google Search grounding (real-time web)
     keyField: "gemini_key_enc",
     keyPrefix: "AIza",
     keyPlaceholder: "AIzaSy…",
@@ -77,7 +77,7 @@ const PROVIDERS = [
     id: "perplexity",
     label: "Perplexity",
     icon: "🟣",
-    model: "sonar",
+    model: "sonar",              // real-time web search + citations
     keyField: "perplexity_key_enc",
     keyPrefix: "pplx-",
     keyPlaceholder: "pplx-…",
@@ -88,15 +88,24 @@ const PROVIDERS = [
     id: "claude",
     label: "Claude",
     icon: "🟠",
-    model: "claude-haiku-4-5-20251001",
+    model: "claude-haiku-4-5-20251001", // knowledge-based (no web access)
     keyField: "claude_geo_key_enc",
     keyPrefix: "sk-ant-",
     keyPlaceholder: "sk-ant-…",
-    proxyPath: "/api/anthropic",
+    proxyPath: "/api/claude-geo",
     color: "#D97706",
   },
 ];
 
+
+function getProviderId(model) {
+  const m = (model || "").toLowerCase();
+  if (m.includes("openai") || m.includes("gpt")) return "openai";
+  if (m.includes("gemini")) return "gemini";
+  if (m.includes("perplexity") || m.includes("sonar")) return "perplexity";
+  if (m.includes("claude")) return "claude";
+  return "other";
+}
 
 async function callProvider(provider, apiKey, prompt) {
   if (provider.id === "openai") {
@@ -129,7 +138,8 @@ async function callProvider(provider, apiKey, prompt) {
     const data = JSON.parse(raw);
     if (!res.ok) throw new Error(data.error || `Gemini ${res.status}`);
     const text = data.choices?.[0]?.message?.content || "";
-    return parseTextResponse(text, data.usage?.prompt_tokens || 0, data.usage?.completion_tokens || 0);
+    const groundingSources = data._sources || []; // real URLs from Google Search
+    return parseTextResponse(text, data.usage?.prompt_tokens || 0, data.usage?.completion_tokens || 0, groundingSources);
   }
 
   if (provider.id === "perplexity") {
@@ -782,52 +792,64 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
 
 // ── 30-day presence calendar ─────────────────────────────────────
 
-function PresenceCalendar({ results }) {
+function PresenceCalendarByProvider({ results, activeProviders, providerKeys }) {
   const days = 30;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  const today = new Date(); today.setHours(0,0,0,0);
 
-  // Build a map of date string → {brand_mentioned}
-  const byDay = {};
-  results.forEach(r => {
-    if (!r.created_at) return;
-    const d = new Date(r.created_at);
-    d.setHours(0, 0, 0, 0);
-    const key = d.toISOString().slice(0, 10);
-    if (!byDay[key]) byDay[key] = [];
-    byDay[key].push(r.brand_mentioned);
-  });
+  // Determine which providers have results
+  const providersWithResults = PROVIDERS.filter(p => results.some(r => r.model?.toLowerCase().includes(p.label.toLowerCase())));
+  const showProviders = providersWithResults.length > 0 ? providersWithResults : PROVIDERS.filter(p => activeProviders.includes(p.id) && providerKeys[p.id]?.dec);
 
-  const slots = [];
-  for (let i = days - 1; i >= 0; i--) {
-    const d = new Date(today);
-    d.setDate(d.getDate() - i);
-    const key = d.toISOString().slice(0, 10);
-    const dayResults = byDay[key];
-    let color = "#E5E7EB"; // not tested
-    let title = `${key} — non testé`;
-    if (dayResults) {
-      const present = dayResults.some(Boolean);
-      color = present ? "#059669" : "#DC2626";
-      title = `${key} — ${present ? "✓ Présent" : "✗ Absent"} (${dayResults.length} test${dayResults.length > 1 ? "s" : ""})`;
-    }
-    slots.push({ key, color, title });
-  }
+  if (!showProviders.length) return null;
 
   return (
-    <div style={{ display: "flex", gap: 2, alignItems: "center", flexWrap: "nowrap", overflow: "hidden" }}>
-      {slots.map(s => (
-        <div key={s.key} title={s.title} style={{
-          width: 8, height: 8, borderRadius: 2, background: s.color, flexShrink: 0, cursor: "default"
-        }} />
-      ))}
+    <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 8 }}>
+      {showProviders.map(p => {
+        const pResults = results.filter(r => r.model?.toLowerCase().includes(p.label.toLowerCase()));
+        const byDay = {};
+        pResults.forEach(r => {
+          if (!r.created_at) return;
+          const d = new Date(r.created_at); d.setHours(0,0,0,0);
+          const key = d.toISOString().slice(0,10);
+          if (!byDay[key]) byDay[key] = [];
+          byDay[key].push(r.brand_mentioned);
+        });
+        const slots = [];
+        for (let i = days-1; i >= 0; i--) {
+          const d = new Date(today); d.setDate(d.getDate() - i);
+          const key = d.toISOString().slice(0,10);
+          const dayR = byDay[key];
+          const color = !dayR ? "#E5E7EB" : dayR.some(Boolean) ? "#059669" : "#DC2626";
+          const title = !dayR ? `${key} — non testé` : `${key} — ${dayR.some(Boolean) ? "✓ Présent" : "✗ Absent"} (${dayR.length} test)`;
+          slots.push({ key, color, title });
+        }
+        const lastResult = pResults.sort((a,b) => new Date(b.created_at||0) - new Date(a.created_at||0))[0];
+        const hasBrand = pResults.some(r => r.brand_mentioned);
+        return (
+          <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontSize: 10, fontWeight: 700, color: p.color, minWidth: 64, flexShrink: 0 }}>{p.icon} {p.label}</span>
+            <div style={{ display: "flex", gap: 2, flex: 1, overflow: "hidden" }}>
+              {slots.map(s => (
+                <div key={s.key} title={s.title} style={{ width: 8, height: 8, borderRadius: 2, background: s.color, flexShrink: 0 }} />
+              ))}
+            </div>
+            {lastResult && (
+              <span style={{ fontSize: 9, color: C.textLight, flexShrink: 0 }}>
+                {new Date(lastResult.created_at).toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit" })}
+              </span>
+            )}
+            {pResults.length === 0 && <span style={{ fontSize: 9, color: C.textLight, fontStyle: "italic" }}>—</span>}
+            {pResults.length > 0 && <span style={{ fontSize: 9, fontWeight: 700, color: hasBrand ? "#059669" : "#DC2626" }}>{hasBrand ? "✓" : "✗"}</span>}
+          </div>
+        );
+      })}
     </div>
   );
 }
 
 // ── Result card ───────────────────────────────────────────────────
 
-function ResultCard({ result, brandName, brandAliases }) {
+function ResultCard({ result, brandName, brandAliases, onRerun }) {
   const [open, setOpen] = useState(false);
   const sources = result.sources || [];
   const comps = result.competitors_mentioned || [];
@@ -849,6 +871,13 @@ function ResultCard({ result, brandName, brandAliases }) {
             <span style={{ fontSize: 10, color: C.textLight }}>
               {new Date(result.created_at).toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
             </span>
+          )}
+          {onRerun && (
+            <button onClick={e => { e.stopPropagation(); onRerun(); }}
+              title="Relancer ce provider"
+              style={{ padding: "2px 7px", border: `1px solid ${C.border}`, borderRadius: 5, background: C.white, color: C.textMid, fontSize: 10, cursor: "pointer" }}>
+              🔄
+            </button>
           )}
         </div>
       </div>
@@ -896,6 +925,7 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
   const [questions, setQuestions]   = useState([]);
   const [results, setResults]       = useState(allResults || []);
   const [manualQ, setManualQ]       = useState("");
+  const [editingQ, setEditingQ]     = useState(null); // { id, text } — question being edited
   const [filterFav, setFilterFav]   = useState(false);
   const [filterBrand, setFilterBrand] = useState(false);
   const [filterCat, setFilterCat]   = useState("");
@@ -919,6 +949,13 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
     results.forEach(r => { if (!m[r.question_id]) m[r.question_id] = []; m[r.question_id].push(r); });
     return m;
   }, [results]);
+
+  const saveEdit = async () => {
+    if (!editingQ?.text?.trim()) return;
+    await sbUpdateQuestion(editingQ.id, { question: editingQ.text.trim() });
+    setQuestions(prev => prev.map(q => q.id === editingQ.id ? { ...q, question: editingQ.text.trim() } : q));
+    setEditingQ(null);
+  };
 
   const addManual = async () => {
     const q = manualQ.trim();
@@ -977,9 +1014,10 @@ ${question}`;
       question,
     ].filter(Boolean).join("\n");
 
-    // Gemini — web search via API but free text response
-    const promptForGemini = `${baseContext}Tu es un assistant IA. Réponds à la question suivante avec des recommandations concrètes d'entreprises, d'agences ou de prestataires réels.
-RÈGLE : Donne une liste de vrais acteurs du marché avec leurs caractéristiques principales. Sois direct et factuel.
+    // Gemini — has Google Search grounding for real-time results
+    const promptForGemini = `${baseContext}Tu as accès à Google Search en temps réel. Utilise-le pour trouver les meilleurs acteurs, entreprises et prestataires actuels.
+Réponds avec une liste de vrais acteurs du marché, leurs sites web et leurs caractéristiques principales.
+Sois direct et factuel. Cite les sources que tu as consultées.
 ${question}`;
 
     // Determine which providers to call
@@ -1015,7 +1053,23 @@ ${question}`;
       };
       const saved = await sbSaveGeoResult(record);
       const newResult = Array.isArray(saved) ? saved[0] : saved;
-      setResults(prev => [newResult, ...prev]);
+      const pid = getProviderId(providerLabel);
+      // Upsert in local state — replace existing card for this provider if present
+      setResults(prev => {
+        const existing = prev.findIndex(r => r.question_id === q.id && getProviderId(r.model) === pid);
+        if (existing >= 0) {
+          const updated = [...prev];
+          updated[existing] = { ...updated[existing], ...newResult };
+          return updated;
+        }
+        return [newResult, ...prev];
+      });
+      // Cache last + best answer on question
+      const now = new Date().toISOString();
+      const cachePatch = { has_result: true, last_answer: parsed.answer, last_model: providerLabel, last_date: now };
+      if (brandMentioned) Object.assign(cachePatch, { best_answer: parsed.answer, best_model: providerLabel, best_date: now });
+      sbUpdateQuestion(q.id, cachePatch).catch(() => {});
+      setQuestions(prev => prev.map(qq => qq.id === q.id ? { ...qq, ...cachePatch } : qq));
       return newResult;
     };
 
@@ -1048,8 +1102,78 @@ ${question}`;
     setRunning(r => ({ ...r, [q.id]: false }));
   }, [brand, projectId, site?.id, activeProviders, providerKeys, runMode, onResultSaved]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Run a single provider on a single question
+  const runProvider = useCallback(async (q, provider) => {
+    const pk = providerKeys[provider.id];
+    if (!pk?.dec) return;
+    setRunning(r => ({ ...r, [`${q.id}-${provider.id}`]: true }));
+    const { brand_name = "", brand_aliases = [], competitors = [], context = "" } = brand || {};
+    const baseContext = context ? `Contexte : "${context}"
+` : "";
+    const question = `Question : ${q.question}`;
+    const promptForClaude = `${baseContext}Tu es un expert en recommandation d'entreprises et prestataires. Réponds à la question suivante en te basant sur tes connaissances pour donner une liste de vrais acteurs, entreprises ou prestataires du marché.
+RÈGLE : Ne dis jamais que tu n'as pas accès au web ou aux avis récents. Donne directement des recommandations concrètes avec les vrais noms d'entreprises que tu connais.
+Réponds en texte libre structuré. Liste les acteurs avec une courte description de chacun.
+${question}`;
+    const promptForGemini = `${baseContext}Tu as accès à Google Search en temps réel. Utilise-le pour trouver les meilleurs acteurs, entreprises et prestataires actuels.
+Réponds avec une liste de vrais acteurs du marché, leurs sites web et leurs caractéristiques principales.
+Sois direct et factuel. Cite les sources que tu as consultées.
+${question}`;
+    const promptForWeb = [baseContext, "Tu es un assistant IA avec accès au web. Réponds à la question avec une réponse complète et structurée.", "RÈGLE ABSOLUE : Ne pose jamais de question de clarification. Réponds directement.", "Insère les marqueurs [1], [2]… dans le texte pour chaque source utilisée. La liste 'sources' reprend les URLs dans l'ordre. Ne pas inventer d'URLs.", "Classification JSON requise : intent_type (Top|Informative|Conseil), answer_type, source_types.", "Produis UNIQUEMENT le JSON final conforme au schéma. Aucun texte avant ou après.", question].filter(Boolean).join("
+");
+    const prompt = provider.id === "claude" ? promptForClaude : provider.id === "gemini" ? promptForGemini : promptForWeb;
+    try {
+      const parsed = await callProvider(provider, pk.dec, prompt);
+      const { brandMentioned, brandPosition, brandInSources, competitorsMentioned } = detectBrand(parsed.answer, parsed.sources, brand_name, brand_aliases, competitors);
+      const domain_counts = {};
+      (parsed.sources || []).forEach(url => {
+        if (!domain_counts[url]) domain_counts[url] = { as_source: 0, in_answer: 0, domain: extractDomain(url) };
+        domain_counts[url].as_source++;
+      });
+      await Promise.all(Object.entries(domain_counts).map(([url, counts]) => sbIncrementUrlCounts(projectId, url, counts)));
+      const record = {
+        question_id: q.id, project_id: projectId, site_id: site.id,
+        model: `${provider.label} (${provider.model})`,
+        answer: parsed.answer, answer_type: parsed.answer_type, intent_type: parsed.intent_type,
+        sources: parsed.sources, source_types: parsed.source_types,
+        brand_mentioned: brandMentioned, brand_position: brandPosition,
+        brand_in_sources: brandInSources, competitors_mentioned: competitorsMentioned,
+        input_tokens: parsed._input_tokens, output_tokens: parsed._output_tokens,
+      };
+      const saved = await sbSaveGeoResult(record);
+      const newResult = Array.isArray(saved) ? saved[0] : saved;
+      const pid = getProviderId(record.model);
+      // Upsert in local state — replace existing card for this provider
+      setResults(prev => {
+        const existing = prev.findIndex(r => r.question_id === q.id && getProviderId(r.model) === pid);
+        if (existing >= 0) {
+          const updated = [...prev];
+          updated[existing] = { ...updated[existing], ...newResult };
+          return updated;
+        }
+        return [newResult, ...prev];
+      });
+      // Update cached answers on question
+      const now = new Date().toISOString();
+      const cachePatch = { has_result: true, last_answer: parsed.answer, last_model: record.model, last_date: now };
+      if (brandMentioned) Object.assign(cachePatch, { best_answer: parsed.answer, best_model: record.model, best_date: now });
+      await sbUpdateQuestion(q.id, cachePatch);
+      setQuestions(prev => prev.map(qq => qq.id === q.id ? { ...qq, ...cachePatch } : qq));
+      onResultSaved?.();
+    } catch(e) { console.error(`runProvider ${provider.id} error:`, e); }
+    setRunning(r => ({ ...r, [`${q.id}-${provider.id}`]: false }));
+  }, [brand, projectId, site?.id, providerKeys, onResultSaved]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const runAllQuestions = async () => {
-    const toRun = filtered.filter(q => !(resultsByQ[q.id]?.length));
+    // Only run questions that have no result for at least one active+configured provider
+    const configuredProviders = PROVIDERS.filter(p => activeProviders.includes(p.id) && providerKeys[p.id]?.dec);
+    const toRun = filtered.filter(q => {
+      const qResults = resultsByQ[q.id] || [];
+      // Run if any active provider has no result yet
+      return configuredProviders.some(p =>
+        !qResults.some(r => r.model?.toLowerCase().includes(p.label.toLowerCase()))
+      );
+    });
     if (!toRun.length) return;
     stopAllRef.current = false;
     setRunAll(true);
@@ -1133,7 +1257,22 @@ ${question}`;
                   <input type="checkbox" checked={isSel} onChange={() => { setSelected(prev => { const n = new Set(prev); n.has(q.id) ? n.delete(q.id) : n.add(q.id); return n; }); }} style={{ cursor: "pointer", flexShrink: 0, marginTop: 2 }} />
                   <button onClick={() => toggleFav(q.id, q.is_favorite)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 15, flexShrink: 0, opacity: q.is_favorite ? 1 : 0.3, transition: "opacity 0.15s" }}>⭐</button>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: C.text, lineHeight: 1.5 }}>{q.question}</div>
+                    {/* Question text — edit mode or display */}
+                    {editingQ?.id === q.id ? (
+                      <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 6 }}>
+                        <input
+                          autoFocus
+                          value={editingQ.text}
+                          onChange={e => setEditingQ(prev => ({ ...prev, text: e.target.value }))}
+                          onKeyDown={e => { if (e.key === "Enter") saveEdit(); if (e.key === "Escape") setEditingQ(null); }}
+                          style={{ flex: 1, padding: "5px 10px", border: `1px solid #2563EB`, borderRadius: 7, fontSize: 13, fontWeight: 600, color: C.text }}
+                        />
+                        <button onClick={saveEdit} style={{ padding: "4px 10px", background: "#2563EB", color: "#fff", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>✓</button>
+                        <button onClick={() => setEditingQ(null)} style={{ padding: "4px 8px", background: C.bg, color: C.textLight, border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11, cursor: "pointer" }}>✕</button>
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: 13, fontWeight: 600, color: C.text, lineHeight: 1.5 }}>{q.question}</div>
+                    )}
                     <div style={{ display: "flex", gap: 5, marginTop: 4, flexWrap: "wrap", alignItems: "center" }}>
                       {kwTag && <span style={{ fontSize: 10, color: C.textLight, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: "1px 7px" }}>🔑 {kwTag.keyword}</span>}
                       {cat && <span style={{ fontSize: 10, fontWeight: 700, color: cat.color, background: cat.color + "18", border: `1px solid ${cat.color}44`, borderRadius: 10, padding: "1px 7px" }}>{cat.name}</span>}
@@ -1141,20 +1280,43 @@ ${question}`;
                       {hasBrand && <Pill color="#059669">✓ {brand_name}</Pill>}
                       {qResults.length > 0 && <span style={{ fontSize: 10, color: C.textLight }}>{qResults.length} résultat{qResults.length > 1 ? "s" : ""}</span>}
                     </div>
-                    {qResults.length > 0 && (
-                      <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6 }}>
-                        <span style={{ fontSize: 9, color: C.textLight, flexShrink: 0 }}>30j</span>
-                        <PresenceCalendar results={qResults} />
-                      </div>
-                    )}
+                    {/* Per-provider 30-day calendar */}
+                    <PresenceCalendarByProvider results={qResults} activeProviders={activeProviders} providerKeys={providerKeys} />
                   </div>
-                  <div style={{ display: "flex", gap: 5, flexShrink: 0, alignItems: "center" }}>
+                  <div style={{ display: "flex", gap: 5, flexShrink: 0, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
                     <CatSelect value={q.category_id} categories={categories} onChange={v => setCatSingle(q.id, v)} />
-                    <Btn onClick={() => runQuestion(q)} disabled={isRunning || !apiKey} color={site.color} small>{isRunning ? "⏳" : "▶"}</Btn>
+                    <button onClick={() => setEditingQ(editingQ?.id === q.id ? null : { id: q.id, text: q.question })}
+                      style={{ padding: "3px 7px", border: `1px solid ${C.border}`, borderRadius: 6, background: editingQ?.id === q.id ? "#EFF6FF" : C.white, color: "#2563EB", fontSize: 11, cursor: "pointer" }}
+                      title="Modifier la question">✏️</button>
+                    <Btn onClick={() => runQuestion(q)} disabled={isRunning} color={site.color} small>{isRunning ? "⏳" : "▶ Tous"}</Btn>
                     <button onClick={() => deleteQ(q.id)} style={{ padding: "3px 7px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.white, color: C.textLight, fontSize: 10, cursor: "pointer" }}>🗑</button>
                   </div>
                 </div>
-                {qResults.map(r => <ResultCard key={r.id} result={r} brandName={brand_name} brandAliases={brand_aliases} />)}
+                {/* One fixed card per provider */}
+                <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+                  {PROVIDERS.map(p => {
+                    const result = qResults.find(r => getProviderId(r.model) === p.id);
+                    const hasKey = !!providerKeys[p.id]?.dec;
+                    const isActive = activeProviders.includes(p.id);
+                    const isRunningThis = !!running[`${q.id}-${p.id}`] || (isRunning && isActive);
+                    if (!hasKey && !result) return null; // hide unconfigured providers with no data
+                    return result ? (
+                      <ResultCard key={p.id} result={result} brandName={brand_name} brandAliases={brand_aliases}
+                        onRerun={hasKey ? () => runProvider(q, p) : undefined} />
+                    ) : (
+                      <div key={p.id} style={{ marginTop: 4, background: C.bg, borderRadius: 8, border: `1px dashed ${p.color}44`, padding: "8px 14px", display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ fontSize: 12, color: p.color, fontWeight: 600 }}>{p.icon} {p.label}</span>
+                        <span style={{ fontSize: 11, color: C.textLight, flex: 1, fontStyle: "italic" }}>Pas encore interrogé</span>
+                        <button
+                          disabled={isRunningThis}
+                          onClick={() => runProvider(q, p)}
+                          style={{ padding: "3px 10px", border: `1px solid ${p.color}`, borderRadius: 6, background: "transparent", color: p.color, fontSize: 10, fontWeight: 600, cursor: "pointer", opacity: isRunningThis ? 0.5 : 1 }}>
+                          {isRunningThis ? "⏳" : "▶ Lancer"}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             );
           })}

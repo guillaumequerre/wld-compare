@@ -26,6 +26,7 @@ export default async function handler(request, context) {
 
     const body = {
       contents: [{ parts: [{ text: prompt }] }],
+      tools: [{ google_search: {} }], // Google Search grounding — real-time web
       generationConfig: { temperature: 0.7, maxOutputTokens: 4096 },
     };
 
@@ -42,14 +43,23 @@ export default async function handler(request, context) {
       });
     }
 
-    // Normalize to OpenAI-like response
-    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    // Extract text (may be in multiple parts)
+    const text = data?.candidates?.[0]?.content?.parts
+      ?.filter(p => p.text)
+      ?.map(p => p.text)
+      ?.join("") || "";
+
+    // Extract grounding sources from Google Search
+    const groundingChunks = data?.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+    const sources = groundingChunks.map(c => c?.web?.uri).filter(Boolean);
+
     const inTok = data?.usageMetadata?.promptTokenCount || 0;
     const outTok = data?.usageMetadata?.candidatesTokenCount || 0;
 
     return new Response(JSON.stringify({
       choices: [{ message: { content: text } }],
       usage: { prompt_tokens: inTok, completion_tokens: outTok },
+      _sources: sources, // real URLs from Google Search grounding
       _raw: data,
     }), {
       status: 200,
