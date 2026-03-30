@@ -363,7 +363,7 @@ function StatusBadge({ status }) {
 
 function StatsHeader({ questions, results, brandName }) {
   const total       = results.length;
-  const withBrand   = results.filter(r => r.brand_mentioned).length;
+  const withBrand   = results.filter(r => r.brand_mentioned === true || r.brand_mentioned === 1).length;
   const withSources = results.filter(r => r.brand_in_sources).length;
   const positions   = results.filter(r => r.brand_position).map(r => r.brand_position);
   const avgPos      = positions.length ? (positions.reduce((a, b) => a + b, 0) / positions.length).toFixed(1) : "—";
@@ -796,35 +796,39 @@ function PresenceCalendarByProvider({ results, activeProviders, providerKeys }) 
   const days = 30;
   const today = new Date(); today.setHours(0,0,0,0);
 
-  // Determine which providers have results
-  const providersWithResults = PROVIDERS.filter(p => results.some(r => r.model?.toLowerCase().includes(p.label.toLowerCase())));
-  const showProviders = providersWithResults.length > 0 ? providersWithResults : PROVIDERS.filter(p => activeProviders.includes(p.id) && providerKeys[p.id]?.dec);
+  // Use getProviderId for reliable matching (not label string match)
+  const providersWithResults = PROVIDERS.filter(p => results.some(r => getProviderId(r.model) === p.id));
+  const showProviders = providersWithResults.length > 0
+    ? providersWithResults
+    : PROVIDERS.filter(p => activeProviders.includes(p.id) && providerKeys[p.id]?.dec);
 
   if (!showProviders.length) return null;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 8 }}>
       {showProviders.map(p => {
-        const pResults = results.filter(r => r.model?.toLowerCase().includes(p.label.toLowerCase()));
+        // Match by provider_id (reliable) with fallback to label match
+        const pResults = results.filter(r => getProviderId(r.model) === p.id);
         const byDay = {};
         pResults.forEach(r => {
           if (!r.created_at) return;
           const d = new Date(r.created_at); d.setHours(0,0,0,0);
           const key = d.toISOString().slice(0,10);
           if (!byDay[key]) byDay[key] = [];
-          byDay[key].push(r.brand_mentioned);
+          // Normalize: treat null/0/false all as absent, only true/1 as present
+          byDay[key].push(r.brand_mentioned === true || r.brand_mentioned === 1);
         });
         const slots = [];
         for (let i = days-1; i >= 0; i--) {
           const d = new Date(today); d.setDate(d.getDate() - i);
           const key = d.toISOString().slice(0,10);
           const dayR = byDay[key];
-          const color = !dayR ? "#E5E7EB" : dayR.some(Boolean) ? "#059669" : "#DC2626";
-          const title = !dayR ? `${key} — non testé` : `${key} — ${dayR.some(Boolean) ? "✓ Présent" : "✗ Absent"} (${dayR.length} test)`;
+          const color = !dayR ? "#E5E7EB" : dayR.some(v => v === true) ? "#059669" : "#DC2626";
+          const title = !dayR ? `${key} — non testé` : `${key} — ${dayR.some(v => v === true) ? "✓ Présent" : "✗ Absent"} (${dayR.length} test)`;
           slots.push({ key, color, title });
         }
-        const lastResult = pResults.sort((a,b) => new Date(b.created_at||0) - new Date(a.created_at||0))[0];
-        const hasBrand = pResults.some(r => r.brand_mentioned);
+        const lastResult = [...pResults].sort((a,b) => new Date(b.created_at||0) - new Date(a.created_at||0))[0];
+        const hasBrand = pResults.some(r => r.brand_mentioned === true || r.brand_mentioned === 1);
         return (
           <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <span style={{ fontSize: 10, fontWeight: 700, color: p.color, minWidth: 64, flexShrink: 0 }}>{p.icon} {p.label}</span>
@@ -853,7 +857,7 @@ function ProviderCard({ provider, result, brandName, brandAliases, hasKey, isRun
   const [open, setOpen] = useState(false);
   const sources = result?.sources || [];
   const comps   = result?.competitors_mentioned || [];
-  const hasBrand = result?.brand_mentioned;
+  const hasBrand = result?.brand_mentioned === true || result?.brand_mentioned === 1;
   const p = provider;
 
   return (
@@ -1254,13 +1258,13 @@ ${question}`;
     if (filterCat && q.category_id !== filterCat) return false;
     if (filterBrand) {
       const qRes = resultsByQ[q.id] || [];
-      if (!qRes.some(r => r.brand_mentioned)) return false;
+      if (!qRes.some(r => r.brand_mentioned === true || r.brand_mentioned === 1)) return false;
     }
     return true;
   }), [questions, filterFav, filterBrand, filterCat, resultsByQ]);
 
   const { brand_name = "", brand_aliases = [] } = brand || {};
-  const totalWithBrand = questions.filter(q => (resultsByQ[q.id] || []).some(r => r.brand_mentioned)).length;
+  const totalWithBrand = questions.filter(q => (resultsByQ[q.id] || []).some(r => r.brand_mentioned === true || r.brand_mentioned === 1)).length;
 
   return (
     <div>
@@ -1311,7 +1315,7 @@ ${question}`;
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {filtered.map(q => {
             const qResults = resultsByQ[q.id] || [];
-            const hasBrand = qResults.some(r => r.brand_mentioned);
+            const hasBrand = qResults.some(r => r.brand_mentioned === true || r.brand_mentioned === 1);
             const isRunning = running[q.id];
             const isSel = selected.has(q.id);
             const cat = categories.find(c => c.id === q.category_id);
