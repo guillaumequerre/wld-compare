@@ -801,7 +801,7 @@ function dayKey(d) {
 }
 
 function isBrandPresent(r) {
-  return r.brand_mentioned === true || r.brand_mentioned === 1;
+  return !!r && (r.brand_mentioned === true || r.brand_mentioned === 1);
 }
 
 // ── ProviderRow — calendar + info + accordion + run button ────────
@@ -1205,12 +1205,21 @@ ${question}`;
     setRunning(r => ({ ...r, [`${q.id}-${provider.id}`]: false }));
   }, [brand, projectId, site?.id, providerKeys, onResultSaved]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const filtered = useMemo(() => questions.filter(q => {
+    if (filterFav && !q.is_favorite) return false;
+    if (filterCat && q.category_id !== filterCat) return false;
+    if (filterBrand) {
+      const qRes = resultsByQ[q.id] || [];
+      if (!qRes.some(r => r.brand_mentioned === true || r.brand_mentioned === 1)) return false;
+    }
+    return true;
+  }), [questions, filterFav, filterBrand, filterCat, resultsByQ]);
+
   const runAllQuestions = async () => {
     // Only run questions that have no result for at least one active+configured provider
     const configuredProviders = PROVIDERS.filter(p => activeProviders.includes(p.id) && providerKeys[p.id]?.dec);
     const toRun = filtered.filter(q => {
       const qResults = resultsByQ[q.id] || [];
-      // Run if any active provider has no result yet
       return configuredProviders.some(p =>
         !qResults.some(r => r.model?.toLowerCase().includes(p.label.toLowerCase()))
       );
@@ -1224,16 +1233,6 @@ ${question}`;
     }
     setRunAll(false);
   };
-
-  const filtered = useMemo(() => questions.filter(q => {
-    if (filterFav && !q.is_favorite) return false;
-    if (filterCat && q.category_id !== filterCat) return false;
-    if (filterBrand) {
-      const qRes = resultsByQ[q.id] || [];
-      if (!qRes.some(r => r.brand_mentioned === true || r.brand_mentioned === 1)) return false;
-    }
-    return true;
-  }), [questions, filterFav, filterBrand, filterCat, resultsByQ]);
 
   const { brand_name = "", brand_aliases = [] } = brand || {};
   const totalWithBrand = questions.filter(q => (resultsByQ[q.id] || []).some(r => r.brand_mentioned === true || r.brand_mentioned === 1)).length;
