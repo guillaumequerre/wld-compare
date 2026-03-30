@@ -976,7 +976,22 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
   const [bulkCat, setBulkCat]       = useState("");
   const [keywords, setKeywords]     = useState([]);
 
-  useEffect(() => { setResults(allResults || []); }, [allResults]);
+  // Sync from parent only on initial load or site change — not on every allResults update
+  // to avoid overwriting optimistic local updates from runProvider
+  const initializedRef = useRef(false);
+  useEffect(() => {
+    if (!initializedRef.current) {
+      setResults(allResults || []);
+      initializedRef.current = true;
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Re-sync when site changes (full reload needed)
+  useEffect(() => {
+    initializedRef.current = false;
+    setResults(allResults || []);
+    setTimeout(() => { initializedRef.current = true; }, 100);
+  }, [site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!projectId || !site?.id) return;
@@ -1169,6 +1184,7 @@ ${question}`;
         domain_counts[url].as_source++;
       });
       await Promise.all(Object.entries(domain_counts).map(([url, counts]) => sbIncrementUrlCounts(projectId, url, counts)));
+      const now = new Date().toISOString();
       const record = {
         question_id: q.id, project_id: projectId, site_id: site.id,
         model: `${provider.label} (${provider.model})`,
@@ -1177,26 +1193,37 @@ ${question}`;
         brand_mentioned: brandMentioned, brand_position: brandPosition,
         brand_in_sources: brandInSources, competitors_mentioned: competitorsMentioned,
         input_tokens: parsed._input_tokens, output_tokens: parsed._output_tokens,
+        created_at: now,
       };
-      const saved = await sbSaveGeoResult(record);
-      const newResult = Array.isArray(saved) ? saved[0] : saved;
+      // Optimistic local update — immediately update the card
       const pid = getProviderId(record.model);
-      // Upsert in local state — replace existing card for this provider
+      const optimisticResult = { ...record, id: `tmp-${pid}-${q.id}`, provider_id: pid };
       setResults(prev => {
         const existing = prev.findIndex(r => r.question_id === q.id && getProviderId(r.model) === pid);
         if (existing >= 0) {
           const updated = [...prev];
-          updated[existing] = { ...updated[existing], ...newResult };
+          updated[existing] = { ...updated[existing], ...optimisticResult };
           return updated;
         }
-        return [newResult, ...prev];
+        return [optimisticResult, ...prev];
       });
+
+      // Persist to Supabase in background — update with real id when done
+      sbSaveGeoResult(record).then(saved => {
+        const real = Array.isArray(saved) ? saved[0] : saved;
+        if (real?.id) {
+          setResults(prev => prev.map(r =>
+            r.id === optimisticResult.id ? { ...r, ...real } : r
+          ));
+        }
+      }).catch(e => console.error("sbSaveGeoResult error:", e));
+
       // Update cached answers on question
-      const now = new Date().toISOString();
       const cachePatch = { has_result: true, last_answer: parsed.answer, last_model: record.model, last_date: now };
       if (brandMentioned) Object.assign(cachePatch, { best_answer: parsed.answer, best_model: record.model, best_date: now });
-      await sbUpdateQuestion(q.id, cachePatch);
+      sbUpdateQuestion(q.id, cachePatch).catch(() => {});
       setQuestions(prev => prev.map(qq => qq.id === q.id ? { ...qq, ...cachePatch } : qq));
+      // Notify parent for global stats (non-blocking)
       onResultSaved?.();
     } catch(e) { console.error(`runProvider ${provider.id} error:`, e); }
     setRunning(r => ({ ...r, [`${q.id}-${provider.id}`]: false }));
