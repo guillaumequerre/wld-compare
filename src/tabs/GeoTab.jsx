@@ -792,154 +792,131 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
 
 // ── 30-day presence calendar ─────────────────────────────────────
 
-function PresenceCalendarByProvider({ results, activeProviders, providerKeys }) {
-  const days = 30;
-  const today = new Date(); today.setHours(0,0,0,0);
-
-  // Use getProviderId for reliable matching (not label string match)
-  const providersWithResults = PROVIDERS.filter(p => results.some(r => getProviderId(r.model) === p.id));
-  const showProviders = providersWithResults.length > 0
-    ? providersWithResults
-    : PROVIDERS.filter(p => activeProviders.includes(p.id) && providerKeys[p.id]?.dec);
-
-  if (!showProviders.length) return null;
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 8 }}>
-      {showProviders.map(p => {
-        // Match by provider_id (reliable) with fallback to label match
-        const pResults = results.filter(r => getProviderId(r.model) === p.id);
-        const byDay = {};
-        pResults.forEach(r => {
-          if (!r.created_at) return;
-          const d = new Date(r.created_at); d.setHours(0,0,0,0);
-          const key = d.toISOString().slice(0,10);
-          if (!byDay[key]) byDay[key] = [];
-          // Normalize: treat null/0/false all as absent, only true/1 as present
-          byDay[key].push(r.brand_mentioned === true || r.brand_mentioned === 1);
-        });
-        const slots = [];
-        for (let i = days-1; i >= 0; i--) {
-          const d = new Date(today); d.setDate(d.getDate() - i);
-          const key = d.toISOString().slice(0,10);
-          const dayR = byDay[key];
-          const color = !dayR ? "#E5E7EB" : dayR.some(v => v === true) ? "#059669" : "#DC2626";
-          const title = !dayR ? `${key} — non testé` : `${key} — ${dayR.some(v => v === true) ? "✓ Présent" : "✗ Absent"} (${dayR.length} test)`;
-          slots.push({ key, color, title });
-        }
-        const lastResult = [...pResults].sort((a,b) => new Date(b.created_at||0) - new Date(a.created_at||0))[0];
-        const hasBrand = pResults.some(r => r.brand_mentioned === true || r.brand_mentioned === 1);
-        return (
-          <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={{ fontSize: 10, fontWeight: 700, color: p.color, minWidth: 64, flexShrink: 0 }}>{p.icon} {p.label}</span>
-            <div style={{ display: "flex", gap: 2, flex: 1, overflow: "hidden" }}>
-              {slots.map(s => (
-                <div key={s.key} title={s.title} style={{ width: 8, height: 8, borderRadius: 2, background: s.color, flexShrink: 0 }} />
-              ))}
-            </div>
-            {lastResult && (
-              <span style={{ fontSize: 9, color: C.textLight, flexShrink: 0 }}>
-                {new Date(lastResult.created_at).toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit" })}
-              </span>
-            )}
-            {pResults.length === 0 && <span style={{ fontSize: 9, color: C.textLight, fontStyle: "italic" }}>—</span>}
-            {pResults.length > 0 && <span style={{ fontSize: 9, fontWeight: 700, color: hasBrand ? "#059669" : "#DC2626" }}>{hasBrand ? "✓" : "✗"}</span>}
-          </div>
-        );
-      })}
-    </div>
-  );
+function dayKey(d) {
+  // Use local date (not UTC) to match the user's timezone
+  const y = d.getFullYear();
+  const m = String(d.getMonth()+1).padStart(2,'0');
+  const dd = String(d.getDate()).padStart(2,'0');
+  return `${y}-${m}-${dd}`;
 }
 
-// ── Provider card — one per provider per question ─────────────────
+function isBrandPresent(r) {
+  return r.brand_mentioned === true || r.brand_mentioned === 1;
+}
 
-function ProviderCard({ provider, result, brandName, brandAliases, hasKey, isRunning, onRun }) {
+// ── ProviderRow — calendar + info + accordion + run button ────────
+
+function ProviderRow({ provider, results, allProviderResults, brandName, brandAliases, hasKey, isRunning, onRun }) {
   const [open, setOpen] = useState(false);
-  const sources = result?.sources || [];
-  const comps   = result?.competitors_mentioned || [];
-  const hasBrand = result?.brand_mentioned === true || result?.brand_mentioned === 1;
   const p = provider;
 
-  return (
-    <div style={{
-      background: result ? (hasBrand ? "#F0FDF4" : "#FFF") : C.bg,
-      border: `1.5px solid ${result ? (hasBrand ? "#059669" : C.border) : p.color + "33"}`,
-      borderLeft: `4px solid ${result ? (hasBrand ? "#059669" : p.color) : p.color + "55"}`,
-      borderRadius: 10, overflow: "hidden",
-    }}>
-      {/* Header row */}
-      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px" }}>
-        {/* Provider label */}
-        <span style={{ fontSize: 11, fontWeight: 700, color: p.color, minWidth: 80, flexShrink: 0 }}>
-          {p.icon} {p.label}
-        </span>
+  // Most recent result for this provider
+  const result = [...(results || [])].sort((a,b) => new Date(b.created_at||0) - new Date(a.created_at||0))[0] || null;
+  const hasBrand = isBrandPresent(result);
+  const sources = result?.sources || [];
+  const comps   = result?.competitors_mentioned || [];
 
-        {/* Status */}
-        {result ? (
-          <>
-            {hasBrand
-              ? <span style={{ fontSize: 10, fontWeight: 700, color: "#059669", background: "#ECFDF5", border: "1px solid #059669", borderRadius: 10, padding: "1px 8px" }}>✓ {brandName} #{result.brand_position || "?"}</span>
-              : <span style={{ fontSize: 10, fontWeight: 700, color: "#DC2626", background: "#FEF2F2", border: "1px solid #DC2626", borderRadius: 10, padding: "1px 8px" }}>✗ Absent</span>
-            }
-            {result.brand_in_sources && <span style={{ fontSize: 10, background: "#EFF6FF", color: "#2563EB", borderRadius: 10, padding: "1px 8px" }}>🔗 Source</span>}
-            {result.intent_type && <span style={{ fontSize: 10, color: C.textLight, background: C.bg, borderRadius: 10, padding: "1px 8px" }}>{result.intent_type}</span>}
-          </>
-        ) : (
-          <span style={{ fontSize: 11, color: C.textLight, fontStyle: "italic", flex: 1 }}>Pas encore interrogé</span>
+  // 30-day presence calendar
+  const DAYS = 30;
+  const today = new Date(); today.setHours(0,0,0,0);
+  const byDay = {};
+  (results || []).forEach(r => {
+    if (!r.created_at) return;
+    const d = new Date(r.created_at); d.setHours(0,0,0,0);
+    const key = dayKey(d);
+    if (!byDay[key]) byDay[key] = [];
+    byDay[key].push(isBrandPresent(r));
+  });
+  const slots = [];
+  for (let i = DAYS-1; i >= 0; i--) {
+    const d = new Date(today); d.setDate(d.getDate() - i);
+    const key = dayKey(d);
+    const dayR = byDay[key];
+    const color = !dayR ? '#E5E7EB' : dayR.some(v => v) ? '#059669' : '#DC2626';
+    const lbl   = !dayR ? 'non testé' : dayR.some(v=>v) ? '✓ Présent' : '✗ Absent';
+    slots.push({ key, color, title: `${key} — ${lbl}` });
+  }
+
+  return (
+    <div style={{ border: `1px solid ${result ? (hasBrand ? '#059669' : C.border) : p.color+'33'}`, borderLeft: `3px solid ${hasBrand ? '#059669' : p.color}`, borderRadius: 9, overflow: 'hidden', background: hasBrand ? '#F0FDF4' : C.white }}>
+
+      {/* ── Row ── */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px', minHeight: 36 }}>
+
+        {/* Provider name */}
+        <span style={{ fontSize: 10, fontWeight: 800, color: p.color, minWidth: 68, flexShrink: 0 }}>{p.icon} {p.label}</span>
+
+        {/* Calendar dots */}
+        <div style={{ display: 'flex', gap: 2, flexShrink: 0 }}>
+          {slots.map(s => (
+            <div key={s.key} title={s.title} style={{ width: 7, height: 7, borderRadius: 2, background: s.color, flexShrink: 0 }} />
+          ))}
+        </div>
+
+        {/* Source badge */}
+        {result?.brand_in_sources && (
+          <span style={{ fontSize: 9, fontWeight: 700, color: '#2563EB', background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 8, padding: '1px 6px', flexShrink: 0 }}>🔗 Source</span>
+        )}
+
+        {/* Intent / answer type */}
+        {result?.intent_type && (
+          <span style={{ fontSize: 9, color: '#7C3AED', background: '#F5F3FF', border: '1px solid #DDD6FE', borderRadius: 8, padding: '1px 6px', flexShrink: 0 }}>{result.intent_type}</span>
+        )}
+
+        {/* Accordion toggle */}
+        {result && (
+          <button onClick={() => setOpen(o => !o)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.textLight, fontSize: 11, padding: '0 4px', flexShrink: 0 }} title="Voir la réponse">
+            {open ? '▲' : '▼'}
+          </button>
         )}
 
         {/* Spacer */}
         <div style={{ flex: 1 }} />
 
-        {/* Meta: tokens + date */}
+        {/* Right side: tokens · date+heure · brand · run */}
         {result && (
-          <span style={{ fontSize: 10, color: C.textLight, flexShrink: 0 }}>
-            {(result.input_tokens || 0) + (result.output_tokens || 0)} tok
-            {result.created_at && " · " + new Date(result.created_at).toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
+          <span style={{ fontSize: 9, color: C.textLight, flexShrink: 0 }}>
+            {(result.input_tokens||0)+(result.output_tokens||0)} tok
           </span>
         )}
-
-        {/* Expand button (only if result) */}
-        {result && (
-          <button onClick={() => setOpen(o => !o)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: C.textLight, padding: "0 4px", flexShrink: 0 }}>
-            {open ? "▲" : "▼"}
-          </button>
+        {result?.created_at && (
+          <span style={{ fontSize: 9, color: C.textLight, flexShrink: 0 }}>
+            {new Date(result.created_at).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' })}
+            {' '}
+            {new Date(result.created_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+          </span>
         )}
-
-        {/* ▶ Run button */}
+        {result ? (
+          hasBrand
+            ? <span style={{ fontSize: 9, fontWeight: 700, color: '#059669', background: '#ECFDF5', border: '1px solid #059669', borderRadius: 8, padding: '1px 6px', flexShrink: 0 }}>✓ #{result.brand_position||'?'}</span>
+            : <span style={{ fontSize: 9, fontWeight: 700, color: '#DC2626', background: '#FEF2F2', border: '1px solid #DC2626', borderRadius: 8, padding: '1px 6px', flexShrink: 0 }}>✗</span>
+        ) : (
+          <span style={{ fontSize: 9, color: C.textLight, fontStyle: 'italic' }}>—</span>
+        )}
         {hasKey && (
-          <button
-            onClick={onRun}
-            disabled={isRunning}
-            title={result ? `Relancer ${p.label}` : `Interroger ${p.label}`}
-            style={{
-              width: 26, height: 26, borderRadius: "50%", border: "none", cursor: isRunning ? "wait" : "pointer",
-              background: isRunning ? C.bg : "#059669",
-              color: isRunning ? C.textLight : "#fff",
-              fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center",
-              flexShrink: 0, transition: "all 0.15s", opacity: isRunning ? 0.6 : 1,
-            }}>
-            {isRunning ? "⏳" : "▶"}
+          <button onClick={onRun} disabled={isRunning} title={`Interroger ${p.label}`}
+            style={{ width: 22, height: 22, borderRadius: '50%', border: 'none', cursor: isRunning ? 'wait' : 'pointer', background: isRunning ? C.bg : '#059669', color: isRunning ? C.textLight : '#fff', fontSize: 11, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, opacity: isRunning ? 0.6 : 1 }}>
+            {isRunning ? '⏳' : '▶'}
           </button>
         )}
       </div>
 
-      {/* Expanded content */}
+      {/* ── Accordion: answer + sources + competitors ── */}
       {open && result && (
-        <div style={{ padding: "0 12px 12px", borderTop: `1px solid ${C.border}` }}>
-          <div style={{ marginTop: 10, fontSize: 12, color: C.text, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>
-            {highlightBrand(result.answer || "", brandName, brandAliases)}
+        <div style={{ borderTop: `1px solid ${C.border}`, padding: '10px 12px', background: C.bg }}>
+          <div style={{ fontSize: 12, color: C.text, lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
+            {highlightBrand(result.answer || '', brandName, brandAliases)}
           </div>
           {sources.length > 0 && (
             <div style={{ marginTop: 10 }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 5 }}>Sources</div>
+              <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: 'uppercase', letterSpacing: 0.7, marginBottom: 5 }}>Sources</div>
               {sources.map((url, i) => {
-                const isBrand = [brandName, ...(brandAliases || [])].some(t => url.toLowerCase().includes((t || "").toLowerCase()));
+                const ib = [brandName, ...(brandAliases||[])].some(t => url.toLowerCase().includes((t||'').toLowerCase()));
                 return (
-                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 3 }}>
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 3 }}>
                     <span style={{ fontSize: 10, color: C.textLight, minWidth: 18 }}>[{i+1}]</span>
-                    <a href={url} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: isBrand ? "#059669" : "#2563EB", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{url}</a>
-                    {isBrand && <span style={{ fontSize: 9, background: "#ECFDF5", color: "#059669", borderRadius: 4, padding: "1px 4px", flexShrink: 0 }}>marque</span>}
+                    <a href={url} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: ib ? '#059669' : '#2563EB', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{url}</a>
+                    {ib && <span style={{ fontSize: 9, background: '#ECFDF5', color: '#059669', borderRadius: 4, padding: '1px 4px', flexShrink: 0 }}>marque</span>}
                   </div>
                 );
               })}
@@ -947,11 +924,11 @@ function ProviderCard({ provider, result, brandName, brandAliases, hasKey, isRun
           )}
           {comps.length > 0 && (
             <div style={{ marginTop: 8 }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 5 }}>Concurrents cités</div>
-              <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: 'uppercase', letterSpacing: 0.7, marginBottom: 5 }}>Concurrents</div>
+              <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
                 {comps.map(c => (
-                  <span key={c.name} style={{ fontSize: 10, background: "#FEF2F2", color: "#DC2626", border: "1px solid #FECACA", borderRadius: 5, padding: "2px 7px" }}>
-                    {c.name}{c.position ? ` #${c.position}` : ""}
+                  <span key={c.name} style={{ fontSize: 10, background: '#FEF2F2', color: '#DC2626', border: '1px solid #FECACA', borderRadius: 5, padding: '2px 7px' }}>
+                    {c.name}{c.position ? ` #${c.position}` : ''}
                   </span>
                 ))}
               </div>
@@ -962,6 +939,7 @@ function ProviderCard({ provider, result, brandName, brandAliases, hasKey, isRun
     </div>
   );
 }
+
 
 // ── Questions sub-tab (v2) ────────────────────────────────────────
 
@@ -1350,7 +1328,7 @@ ${question}`;
                       {qResults.length > 0 && <span style={{ fontSize: 10, color: C.textLight }}>{qResults.length} résultat{qResults.length > 1 ? "s" : ""}</span>}
                     </div>
                     {/* Per-provider 30-day calendar */}
-                    <PresenceCalendarByProvider results={qResults} activeProviders={activeProviders} providerKeys={providerKeys} />
+
                   </div>
                   <div style={{ display: "flex", gap: 5, flexShrink: 0, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
                     <CatSelect value={q.category_id} categories={categories} onChange={v => setCatSingle(q.id, v)} />
@@ -1361,17 +1339,18 @@ ${question}`;
                     <button onClick={() => deleteQ(q.id)} style={{ padding: "3px 7px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.white, color: C.textLight, fontSize: 10, cursor: "pointer" }}>🗑</button>
                   </div>
                 </div>
-                {/* One fixed card per provider */}
-                <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+                {/* One row per provider — calendar + info + accordion + run */}
+                <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 5 }}>
                   {PROVIDERS.map(p => {
-                    const result = qResults.find(r => getProviderId(r.model) === p.id);
+                    const pResults = qResults.filter(r => getProviderId(r.model) === p.id);
                     const hasKey = !!providerKeys[p.id]?.dec;
-                    if (!hasKey && !result) return null;
+                    if (!hasKey && !pResults.length) return null;
                     return (
-                      <ProviderCard
+                      <ProviderRow
                         key={p.id}
                         provider={p}
-                        result={result}
+                        results={pResults}
+                        allProviderResults={qResults}
                         brandName={brand_name}
                         brandAliases={brand_aliases}
                         hasKey={hasKey}
