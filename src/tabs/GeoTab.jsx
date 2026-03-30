@@ -1006,6 +1006,11 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
   const [running, setRunning]       = useState({});
   const [runAll, setRunAll]         = useState(false);
   const stopAllRef = useRef(false);
+  // Refs so callbacks always read current values without stale closure issues
+  const activeProvidersRef = useRef(activeProviders);
+  const providerKeysRef    = useRef(providerKeys);
+  useEffect(() => { activeProvidersRef.current = activeProviders; }, [activeProviders]);
+  useEffect(() => { providerKeysRef.current = providerKeys; }, [providerKeys]);
   const [selected, setSelected]     = useState(new Set());
   const [bulkCat, setBulkCat]       = useState("");
   const [keywords, setKeywords]     = useState([]);
@@ -1121,13 +1126,15 @@ Réponds avec une liste de vrais acteurs du marché, leurs sites web et leurs ca
 Sois direct et factuel. Cite les sources que tu as consultées.
 ${question}`;
 
-    // Determine which providers to call
+    // Read fresh values via refs (avoids stale closure from useCallback deps)
+    const currentProviders = activeProvidersRef.current;
+    const currentKeys = providerKeysRef.current;
     const providersToCall = PROVIDERS.filter(p =>
-      activeProviders.includes(p.id) && providerKeys[p.id]?.dec
+      currentProviders.includes(p.id) && currentKeys[p.id]?.dec
     );
-    console.log("runQuestion — active:", activeProviders, "configured:", Object.keys(providerKeys), "toCall:", providersToCall.map(p=>p.id));
+    console.log("runQuestion — active:", currentProviders, "keys:", Object.keys(currentKeys), "toCall:", providersToCall.map(p=>p.id));
     if (!providersToCall.length) {
-      console.warn("No providers configured — check API keys in setup");
+      console.warn("No providers configured — check API keys in ⚙️ Setup");
       setRunning(r => ({ ...r, [q.id]: false }));
       return;
     }
@@ -1202,7 +1209,7 @@ ${question}`;
     try {
       if (runMode === "parallel") {
         const promises = providersToCall.map(p =>
-          callProvider(p, providerKeys[p.id].dec, getPrompt(p))
+          callProvider(p, currentKeys[p.id].dec, getPrompt(p))
             .then(parsed => saveResult(parsed, `${p.label} (${p.model})`))
             .catch(e => console.error(`${p.label} error:`, e))
         );
@@ -1210,7 +1217,7 @@ ${question}`;
       } else {
         for (const p of providersToCall) {
           try {
-            const parsed = await callProvider(p, providerKeys[p.id].dec, getPrompt(p));
+            const parsed = await callProvider(p, currentKeys[p.id].dec, getPrompt(p));
             await saveResult(parsed, `${p.label} (${p.model})`);
           } catch(e) { console.error(`${p.label} error:`, e); }
         }
@@ -1224,8 +1231,8 @@ ${question}`;
 
   // Run a single provider on a single question
   const runProvider = useCallback(async (q, provider) => {
-    const pk = providerKeys[provider.id];
-    if (!pk?.dec) return;
+    const pk = providerKeysRef.current[provider.id];
+    if (!pk?.dec) { console.warn("No key for provider", provider.id); return; }
     setRunning(r => ({ ...r, [`${q.id}-${provider.id}`]: true }));
     const { brand_name = "", brand_aliases = [], competitors = [], context = "" } = brand || {};
     const baseContext = context ? `Contexte : "${context}"\n` : "";
@@ -1321,8 +1328,10 @@ ${question}`;
   }), [questions, filterFav, filterBrand, filterCat, resultsByQ]);
 
   const runAllQuestions = async () => {
-    // Only run questions that have no result for at least one active+configured provider
-    const configuredProviders = PROVIDERS.filter(p => activeProviders.includes(p.id) && providerKeys[p.id]?.dec);
+    const currentProviders = activeProvidersRef.current;
+    const currentKeys = providerKeysRef.current;
+    console.log("runAll — active:", currentProviders, "keys:", Object.keys(currentKeys));
+    const configuredProviders = PROVIDERS.filter(p => currentProviders.includes(p.id) && currentKeys[p.id]?.dec);
     const toRun = filtered.filter(q => {
       const qResults = resultsByQ[q.id] || [];
       return configuredProviders.some(p =>
@@ -1782,7 +1791,14 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
   const [model] = useState("gpt-4o-mini"); // kept for variation generation (OpenAI completions endpoint)
   const [brand, setBrand]           = useState(null);
   const [runMode, setRunMode]       = useState("parallel"); // parallel | sequential
-  const [activeProviders, setActiveProviders] = useState(["openai"]); // provider ids to use
+  const [activeProviders, setActiveProviders] = useState(() => {
+    // Start with all providers that have keys configured
+    if (project) {
+      const withKeys = PROVIDERS.filter(p => project[p.keyField]).map(p => p.id);
+      if (withKeys.length) return withKeys;
+    }
+    return ["openai"];
+  });
   // Provider key state: { id → { enc, dec, input, status } }
   const [providerKeys, setProviderKeys] = useState(() => {
     // Initialize synchronously from project prop so keys are available immediately
