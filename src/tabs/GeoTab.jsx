@@ -1037,9 +1037,18 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
 
   const saveEdit = async () => {
     if (!editingQ?.text?.trim()) return;
-    await sbUpdateQuestion(editingQ.id, { question: editingQ.text.trim() });
-    setQuestions(prev => prev.map(q => q.id === editingQ.id ? { ...q, question: editingQ.text.trim() } : q));
+    const newText = editingQ.text.trim();
+    const qId = editingQ.id;
+    // Optimistic update immediately
+    setQuestions(prev => prev.map(q => q.id === qId ? { ...q, question: newText } : q));
     setEditingQ(null);
+    // Persist to Supabase
+    const ok = await sbUpdateQuestion(qId, { question: newText });
+    if (!ok) {
+      // Revert on failure
+      console.error("saveEdit failed — reverting");
+      setQuestions(prev => prev.map(q => q.id === qId ? { ...q, question: editingQ.text } : q));
+    }
   };
 
   const addManual = async () => {
@@ -1325,6 +1334,11 @@ ${question}`;
         )}
 
         <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+          <button onClick={() => sbGetQuestions(projectId, site.id).then(setQuestions)}
+            title="Recharger les questions depuis la base"
+            style={{ padding: "5px 10px", border: `1px solid ${C.border}`, borderRadius: 7, background: C.white, color: C.textLight, fontSize: 11, cursor: "pointer" }}>
+            🔄
+          </button>
           <Btn onClick={runAllQuestions} disabled={runAll} color="#7C3AED">{runAll ? "⏳ En cours…" : "▶ Lancer tout"}</Btn>
           {runAll && <Btn onClick={() => { stopAllRef.current = true; setRunAll(false); }} color="#DC2626" variant="outline" small>⏹ Arrêter</Btn>}
         </div>

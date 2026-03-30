@@ -277,28 +277,40 @@ export async function sbDeleteKeyword(id) {
 
 export async function sbSaveQuestions(rows) {
   // rows: [{ project_id, site_id, keyword_id, question, is_manual }]
+  // Upsert on (project_id, site_id, question) to avoid duplicates on re-generation
   const res = await fetch(`${PROXY}/rest/v1/geo_questions`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "Prefer": "return=representation" },
+    headers: {
+      "Content-Type": "application/json",
+      "Prefer": "return=representation,resolution=ignore-duplicates",
+    },
     body: JSON.stringify(rows),
   });
-  if (!res.ok) throw new Error(`Save questions failed: ${res.status}`);
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Save questions failed: ${res.status} — ${errText.slice(0, 200)}`);
+  }
   return res.json();
 }
 
 export async function sbGetQuestions(project_id, site_id) {
-  const res = await fetch(`${PROXY}/rest/v1/geo_questions?project_id=eq.${encodeURIComponent(project_id)}&site_id=eq.${encodeURIComponent(site_id)}&order=created_at.asc`);
+  const res = await fetch(`${PROXY}/rest/v1/geo_questions?project_id=eq.${encodeURIComponent(project_id)}&site_id=eq.${encodeURIComponent(site_id)}&order=created_at.asc&select=*`);
   if (!res.ok) return [];
   return res.json();
 }
 
 export async function sbUpdateQuestion(id, patch) {
+  if (!id || id.startsWith("tmp-")) return false; // skip optimistic/temp IDs
   const res = await fetch(`${PROXY}/rest/v1/geo_questions?id=eq.${encodeURIComponent(id)}`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "Prefer": "return=representation" },
     body: JSON.stringify(patch),
   });
-  return res.ok;
+  if (!res.ok) {
+    console.error("sbUpdateQuestion failed:", res.status, id, patch);
+    return false;
+  }
+  return res.json();
 }
 
 export async function sbDeleteQuestion(id) {
