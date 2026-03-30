@@ -115,9 +115,9 @@ async function callProvider(provider, apiKey, prompt) {
       body: JSON.stringify({
         model: provider.model,
         input: prompt,
-        tools: [{ type: "web_search_preview", search_context_size: "low" }],
+        tools: [{ type: "web_search_preview", search_context_size: "high" }],
         max_output_tokens: 8000,
-        text: { format: { type: "json_schema", name: "geo_answer", strict: true, schema: GEO_SCHEMA } },
+        // No JSON schema — free text response so web search annotations contain real URLs
       }),
     });
     const raw = await res.text();
@@ -218,31 +218,80 @@ function parseTextResponse(text, inTok, outTok, extraSources = []) {
   };
 }
 
+function extractOpenAIUrls(data) {
+  // Extract real URLs from annotations (url_citation type) in Responses API
+  const urls = [];
+  const seen = new Set();
+  for (const item of data.output || []) {
+    if (item.type !== "message") continue;
+    for (const part of item.content || []) {
+      // annotations array contains url_citation objects
+      for (const ann of part.annotations || []) {
+        if (ann.type === "url_citation" && ann.url && !seen.has(ann.url)) {
+          seen.add(ann.url);
+          urls.push(ann.url);
+        }
+      }
+    }
+  }
+  return urls;
+}
+
 function parseOpenAIResponse(data, endpoint = "responses") {
   const usage = data.usage || {};
   const inTok = usage.input_tokens || usage.prompt_tokens || 0;
   const outTok = usage.output_tokens || usage.completion_tokens || 0;
 
-  let text = "";
+  let rawText = "";
   if (endpoint === "responses") {
     for (const item of data.output || []) {
       if (item.type !== "message") continue;
       for (const part of item.content || []) {
-        if (part.type === "output_text") text += part.text;
+        if (part.type === "output_text") rawText += part.text;
       }
     }
   } else {
-    text = data.choices?.[0]?.message?.content || "";
+    rawText = data.choices?.[0]?.message?.content || "";
   }
 
-  // Extract JSON
-  const s = text.lastIndexOf("{");
-  const e = text.lastIndexOf("}");
-  if (s !== -1 && e > s) text = text.substring(s, e + 1);
+  // Extract real URLs from annotations FIRST (before parsing JSON)
+  const realUrls = extractOpenAIUrls(data);
 
-  const HALLUCINATION = [/exemple\d*\./i, /example\d*\./i, /site\d+\./i, /domaine\d*\./i, /placeholder/i];
-  const parsed = JSON.parse(text);
-  parsed.sources = (parsed.sources || []).filter(u => !HALLUCINATION.some(p => p.test(u)));
+  // Also extract URLs directly from the answer text (markdown links + plain URLs)
+  const urlRe = /https?:\/\/[^\s\])"'>]+/g;
+  const HALLUCINATION = [/exemple\d*\./i, /example\d*\./i, /site\d+\./i, /domaine\d*\./i, /placeholder/i, /turn\d+search/i];
+  const textUrls = [...rawText.matchAll(urlRe)]
+    .map(m => m[0].replace(/[.,;:)]+$/, "")) // strip trailing punctuation
+    .filter(u => !HALLUCINATION.some(p => p.test(u)));
+
+  // Merge: annotations first (most reliable), then text URLs
+  const allUrls = [...new Set([...realUrls, ...textUrls])];
+
+  // Try to parse JSON schema response
+  let parsed = { answer: rawText, answer_type: "Texte libre", intent_type: "Informative", sources: [], source_types: [] };
+  const s = rawText.lastIndexOf("{");
+  const e = rawText.lastIndexOf("}");
+  if (s !== -1 && e > s) {
+    try {
+      const jsonParsed = JSON.parse(rawText.substring(s, e + 1));
+      if (jsonParsed.answer) {
+        parsed = jsonParsed;
+        // Replace turn0searchX sources with real URLs
+        const fakeSources = (parsed.sources || []).filter(u => /turn\d+search/i.test(u) || !u.startsWith("http"));
+        if (fakeSources.length > 0 || allUrls.length > 0) {
+          parsed.sources = allUrls;
+        }
+      }
+    } catch {}
+  }
+
+  // If answer is still the raw JSON text, extract readable answer
+  if (parsed.answer && parsed.answer.startsWith("{")) {
+    parsed.answer = rawText; // use raw text as answer
+  }
+
+  // Final URL dedup and hallucination filter
+  parsed.sources = [...new Set(allUrls)].filter(u => !HALLUCINATION.some(p => p.test(u)));
   parsed._input_tokens = inTok;
   parsed._output_tokens = outTok;
   return parsed;
@@ -254,19 +303,24 @@ function detectBrand(answer, sources, brandName, brandAliases = [], competitors 
   const allBrandTerms = [brandName, ...brandAliases].filter(Boolean).map(t => t.toLowerCase().trim());
   const allCompetitors = competitors.filter(Boolean).map(t => t.toLowerCase().trim());
 
-  const answerLower = answer.toLowerCase();
+  const answerLower = (answer || "").toLowerCase();
 
-  // Find brand mention position in fan-out (numbered list detection)
-  // Fan-out = numbered items like "1. Brand\n2. Other..."
-  const lines = answer.split("\n").map(l => l.trim()).filter(Boolean);
+  // Also extract URLs directly from answer text (covers sources listed at bottom of response)
+  const urlRe = /https?:\/\/[^\s\])"'>]+/g;
+  const answerUrls = [...(answer || "").matchAll(urlRe)].map(m => m[0].toLowerCase());
+  // Merge sources array with URLs found in text
+  const allSources = [...new Set([...(sources || []).map(s => s.toLowerCase()), ...answerUrls])];
+
+  // Find brand position in numbered/bulleted list
+  const lines = (answer || "").split("
+").map(l => l.trim()).filter(Boolean);
   let brandPosition = null;
   let pos = 0;
   for (const line of lines) {
-    const isListItem = /^(\d+[.)]|[-•*])/.test(line);
+    const isListItem = /^(\d+[.)]|[-•*]|\*\*)/.test(line);
     if (isListItem) {
       pos++;
-      const lineLower = line.toLowerCase();
-      if (allBrandTerms.some(t => lineLower.includes(t))) {
+      if (allBrandTerms.some(t => line.toLowerCase().includes(t))) {
         brandPosition = pos;
         break;
       }
@@ -274,14 +328,14 @@ function detectBrand(answer, sources, brandName, brandAliases = [], competitors 
   }
 
   const brandMentioned = allBrandTerms.some(t => answerLower.includes(t));
-  const brandInSources = sources.some(s => allBrandTerms.some(t => s.toLowerCase().includes(t)));
+  // Check sources: both the sources array AND URLs found in answer text
+  const brandInSources = allBrandTerms.some(t => allSources.some(s => s.includes(t)));
 
   const competitorsMentioned = allCompetitors
     .map(name => {
-      let cpos = null;
-      let cp = 0;
+      let cpos = null; let cp = 0;
       for (const line of lines) {
-        if (/^(\d+[.)]|[-•*])/.test(line)) {
+        if (/^(\d+[.)]|[-•*]|\*\*)/.test(line)) {
           cp++;
           if (line.toLowerCase().includes(name)) { cpos = cp; break; }
         }
@@ -290,7 +344,7 @@ function detectBrand(answer, sources, brandName, brandAliases = [], competitors 
         name,
         mentioned: answerLower.includes(name),
         position: cpos,
-        in_sources: sources.some(s => s.toLowerCase().includes(name)),
+        in_sources: allSources.some(s => s.includes(name)),
       };
     })
     .filter(c => c.mentioned);
@@ -1037,11 +1091,10 @@ ${question}`;
     // Web-capable providers (OpenAI Responses API, Perplexity with real-time search)
     const promptForWeb = [
       baseContext,
-      "Tu es un assistant IA avec accès au web. Réponds à la question avec une réponse complète et structurée.",
-      "RÈGLE ABSOLUE : Ne pose jamais de question de clarification. Réponds directement.",
-      "Insère les marqueurs [1], [2]… dans le texte pour chaque source utilisée. La liste 'sources' reprend les URLs dans l'ordre. Ne pas inventer d'URLs.",
-      "Classification JSON requise : intent_type (Top|Informative|Conseil), answer_type, source_types.",
-      "Produis UNIQUEMENT le JSON final conforme au schéma. Aucun texte avant ou après.",
+      "Tu es un assistant IA avec accès au web. Réponds directement et complètement à la question.",
+      "RÈGLE ABSOLUE : Ne pose jamais de question de clarification. Donne directement une liste de recommandations concrètes.",
+      "Pour chaque acteur recommandé : donne le nom, le site web, et une description courte.",
+      "Sois factuel, précis, et cite tes sources.",
       question,
     ].filter(Boolean).join("\n");
 
@@ -1149,7 +1202,7 @@ ${question}`;
 Réponds avec une liste de vrais acteurs du marché, leurs sites web et leurs caractéristiques principales.
 Sois direct et factuel. Cite les sources que tu as consultées.
 ${question}`;
-    const promptForWeb = [baseContext, "Tu es un assistant IA avec accès au web. Réponds à la question avec une réponse complète et structurée.", "RÈGLE ABSOLUE : Ne pose jamais de question de clarification. Réponds directement.", "Insère les marqueurs [1], [2]… dans le texte pour chaque source utilisée. La liste 'sources' reprend les URLs dans l'ordre. Ne pas inventer d'URLs.", "Classification JSON requise : intent_type (Top|Informative|Conseil), answer_type, source_types.", "Produis UNIQUEMENT le JSON final conforme au schéma. Aucun texte avant ou après.", question].filter(Boolean).join("\n");
+    const promptForWeb = [baseContext, "Tu es un assistant IA avec accès au web. Réponds directement et complètement à la question.", "RÈGLE ABSOLUE : Ne pose jamais de question de clarification. Donne directement une liste de recommandations concrètes.", "Pour chaque acteur recommandé : donne le nom, le site web, et une description courte.", "Sois factuel, précis, et cite tes sources.", question].filter(Boolean).join("\n");
     const prompt = provider.id === "claude" ? promptForClaude : provider.id === "gemini" ? promptForGemini : promptForWeb;
     try {
       const parsed = await callProvider(provider, pk.dec, prompt);
