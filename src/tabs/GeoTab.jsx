@@ -312,8 +312,7 @@ function detectBrand(answer, sources, brandName, brandAliases = [], competitors 
   const allSources = [...new Set([...(sources || []).map(s => s.toLowerCase()), ...answerUrls])];
 
   // Find brand position in numbered/bulleted list
-  const lines = (answer || "").split("
-").map(l => l.trim()).filter(Boolean);
+  const lines = (answer || "").split("\n").map(l => l.trim()).filter(Boolean);
   let brandPosition = null;
   let pos = 0;
   for (const line of lines) {
