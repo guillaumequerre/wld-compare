@@ -179,18 +179,6 @@ async function callProvider(provider, apiKey, prompt) {
   throw new Error(`Provider inconnu: ${provider.id}`);
 }
 
-const GEO_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    answer:       { type: "string" },
-    answer_type:  { type: "string" },
-    sources:      { type: "array", items: { type: "string" } },
-    intent_type:  { type: "string", enum: ["Top", "Informative", "Conseil"] },
-    source_types: { type: "array", items: { type: "string", enum: ["Annuaires", "Sites marchands", "Articles de blog", "Sites institutionnels", "Forums", "Médias", "Autres"] } },
-  },
-  required: ["answer", "answer_type", "sources", "intent_type", "source_types"],
-};
 
 // Parse free-text response (Gemini, Perplexity, Claude) into the standard shape
 function parseTextResponse(text, inTok, outTok, extraSources = []) {
