@@ -958,9 +958,12 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
   const [results, setResults]       = useState(allResults || []);
   const [manualQ, setManualQ]       = useState("");
   const [editingQ, setEditingQ]     = useState(null); // { id, text } — question being edited
-  const [filterFav, setFilterFav]   = useState(false);
-  const [filterBrand, setFilterBrand] = useState(false);
-  const [filterCat, setFilterCat]   = useState("");
+  const [filterFav, setFilterFav]       = useState(false);
+  const [filterBrand, setFilterBrand]   = useState(false);
+  const [filterCat, setFilterCat]       = useState("");
+  const [filterKeyword, setFilterKeyword] = useState("");     // keyword_id filter
+  const [filterSearch, setFilterSearch]  = useState("");     // regex/text on question
+  const [filterProviders, setFilterProviders] = useState([]); // [] = all
   const [running, setRunning]       = useState({});
   const [runAll, setRunAll]         = useState(false);
   const stopAllRef = useRef(false);
@@ -1253,12 +1256,23 @@ ${question}`;
   const filtered = useMemo(() => questions.filter(q => {
     if (filterFav && !q.is_favorite) return false;
     if (filterCat && q.category_id !== filterCat) return false;
+    if (filterKeyword && q.keyword_id !== filterKeyword) return false;
+    if (filterSearch) {
+      try {
+        const rx = new RegExp(filterSearch, 'i');
+        if (!rx.test(q.question)) return false;
+      } catch { if (!q.question.toLowerCase().includes(filterSearch.toLowerCase())) return false; }
+    }
     if (filterBrand) {
       const qRes = resultsByQ[q.id] || [];
       if (!qRes.some(r => r.brand_mentioned === true || r.brand_mentioned === 1)) return false;
     }
+    if (filterProviders.length > 0) {
+      const qRes = resultsByQ[q.id] || [];
+      if (!qRes.some(r => filterProviders.includes(getProviderId(r.model)))) return false;
+    }
     return true;
-  }), [questions, filterFav, filterBrand, filterCat, resultsByQ]);
+  }), [questions, filterFav, filterBrand, filterCat, filterKeyword, filterSearch, filterProviders, resultsByQ]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const runAllQuestions = async () => {
     const currentProviders = activeProvidersRef.current;
@@ -1282,6 +1296,16 @@ ${question}`;
 
   const { brand_name = "", brand_aliases = [] } = brand || {};
   const totalWithBrand = questions.filter(q => (resultsByQ[q.id] || []).some(r => r.brand_mentioned === true || r.brand_mentioned === 1)).length;
+
+  // Results for filtered questions, filtered by provider selection
+  const filteredResults = useMemo(() => {
+    const qIds = new Set(filtered.map(q => q.id));
+    return results.filter(r => {
+      if (!qIds.has(r.question_id)) return false;
+      if (filterProviders.length > 0 && !filterProviders.includes(getProviderId(r.model))) return false;
+      return true;
+    });
+  }, [filtered, results, filterProviders]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Count questions to generate for "Lancer tout" indicator
   const toRunCount = useMemo(() => {
@@ -1307,38 +1331,71 @@ ${question}`;
         <Btn onClick={addManual} disabled={!manualQ.trim()}>➕ Ajouter</Btn>
       </div>
 
-      {/* Filters + bulk actions */}
-      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 14, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 11, color: C.textLight }}>
-          {filtered.length} question{filtered.length > 1 ? "s" : ""}
-          {" · "}{totalWithBrand} avec {brand_name || "marque"}
-          {selected.size > 0 && <strong style={{ color: C.text }}> · {selected.size} sélectionnée{selected.size > 1 ? "s" : ""}</strong>}
-        </span>
+      {/* ── Stats header (filtered) ── */}
+      <StatsHeader questions={filtered} results={filteredResults} brandName={brand_name} />
 
-        <Pill color="#F59E0B" active={filterFav} onClick={() => setFilterFav(f => !f)}>⭐ Favoris</Pill>
-        <Pill color="#059669" active={filterBrand} onClick={() => setFilterBrand(f => !f)}>✓ Marque présente</Pill>
-        <CatSelect value={filterCat} categories={[{ id: "", name: "Toutes catégories" }, ...categories]} onChange={v => setFilterCat(v || "")} placeholder="Toutes catégories" />
-
-        {/* Bulk selection + categorization */}
-        <div style={{ display: "flex", gap: 4 }}>
-          <button onClick={() => setSelected(new Set(filtered.map(q => q.id)))} style={{ fontSize: 11, padding: "3px 8px", border: `1px solid ${C.border}`, borderRadius: 5, background: C.white, cursor: "pointer", color: C.textMid }}>Tout sélect.</button>
-          {selected.size > 0 && <button onClick={() => setSelected(new Set())} style={{ fontSize: 11, padding: "3px 8px", border: `1px solid ${C.border}`, borderRadius: 5, background: C.white, cursor: "pointer", color: C.textMid }}>Désélect.</button>}
+      {/* ── Filters ── */}
+      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 16px", marginBottom: 14 }}>
+        {/* Row 1: search + category + keyword + fav + brand */}
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
+          <input
+            value={filterSearch} onChange={e => setFilterSearch(e.target.value)}
+            placeholder="🔍 Regex / texte sur les questions…"
+            style={{ padding: "5px 10px", border: `1px solid ${filterSearch ? "#2563EB" : C.border}`, borderRadius: 7, fontSize: 11, color: C.text, width: 230 }}
+          />
+          <CatSelect value={filterCat} categories={[{ id: "", name: "Toutes catégories" }, ...categories]} onChange={v => setFilterCat(v || "")} placeholder="Toutes catégories" />
+          <select value={filterKeyword} onChange={e => setFilterKeyword(e.target.value)}
+            style={{ padding: "5px 8px", border: `1px solid ${filterKeyword ? "#2563EB" : C.border}`, borderRadius: 7, fontSize: 11, color: C.text }}>
+            <option value="">Tous les mots-clés</option>
+            {keywords.map(k => <option key={k.id} value={k.id}>{k.keyword}</option>)}
+          </select>
+          <Pill color="#F59E0B" active={filterFav} onClick={() => setFilterFav(f => !f)}>⭐ Favoris</Pill>
+          <Pill color="#059669" active={filterBrand} onClick={() => setFilterBrand(f => !f)}>✓ Marque</Pill>
+          {(filterSearch || filterCat || filterKeyword || filterFav || filterBrand || filterProviders.length > 0) && (
+            <button onClick={() => { setFilterSearch(""); setFilterCat(""); setFilterKeyword(""); setFilterFav(false); setFilterBrand(false); setFilterProviders([]); }}
+              style={{ fontSize: 11, padding: "3px 8px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.bg, cursor: "pointer", color: C.textMid }}>
+              ✕ Réinitialiser
+            </button>
+          )}
         </div>
-        {selected.size > 0 && (
-          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <CatSelect value={bulkCat} categories={categories} onChange={setBulkCat} placeholder="Appliquer catégorie…" />
-            <Btn onClick={applyBulkCat} small color="#7C3AED">Appliquer</Btn>
-          </div>
-        )}
 
-        <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-          <button onClick={() => sbGetQuestions(projectId, site.id).then(setQuestions)}
-            title="Recharger les questions depuis la base"
-            style={{ padding: "5px 10px", border: `1px solid ${C.border}`, borderRadius: 7, background: C.white, color: C.textLight, fontSize: 11, cursor: "pointer" }}>
-            🔄
-          </button>
-          <Btn onClick={runAllQuestions} disabled={runAll || toRunCount === 0} color="#7C3AED">{runAll ? "⏳ En cours…" : toRunCount > 0 ? `▶ Lancer tout (${toRunCount})` : "✓ Tout généré"}</Btn>
-          {runAll && <Btn onClick={() => { stopAllRef.current = true; setRunAll(false); }} color="#DC2626" variant="outline" small>⏹ Arrêter</Btn>}
+        {/* Row 2: providers multi-select + counters + actions */}
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ fontSize: 10, fontWeight: 600, color: C.textLight, flexShrink: 0 }}>Providers :</span>
+          {PROVIDERS.map(p => {
+            const active = filterProviders.includes(p.id);
+            const hasKey = !!providerKeys[p.id]?.dec;
+            return (
+              <button key={p.id} onClick={() => setFilterProviders(prev => active ? prev.filter(id => id !== p.id) : [...prev, p.id])}
+                style={{ padding: "2px 10px", border: `2px solid ${p.color}`, borderRadius: 10, fontSize: 10, fontWeight: 600, cursor: "pointer",
+                  background: active ? p.color : "transparent", color: active ? "#fff" : hasKey ? p.color : C.textLight, opacity: hasKey ? 1 : 0.4 }}>
+                {p.icon} {p.label}
+              </button>
+            );
+          })}
+
+          <span style={{ fontSize: 11, color: C.textLight, marginLeft: 8 }}>
+            {filtered.length} question{filtered.length > 1 ? "s" : ""}
+            {selected.size > 0 && <strong style={{ color: C.text }}> · {selected.size} sél.</strong>}
+          </span>
+
+          <div style={{ display: "flex", gap: 4, marginLeft: 4 }}>
+            <button onClick={() => setSelected(new Set(filtered.map(q => q.id)))} style={{ fontSize: 10, padding: "2px 7px", border: `1px solid ${C.border}`, borderRadius: 5, background: C.white, cursor: "pointer", color: C.textMid }}>Tout sélect.</button>
+            {selected.size > 0 && <button onClick={() => setSelected(new Set())} style={{ fontSize: 10, padding: "2px 7px", border: `1px solid ${C.border}`, borderRadius: 5, background: C.white, cursor: "pointer", color: C.textMid }}>Désélect.</button>}
+            {selected.size > 0 && (
+              <>
+                <CatSelect value={bulkCat} categories={categories} onChange={setBulkCat} placeholder="Catégoriser…" />
+                <Btn onClick={applyBulkCat} small color="#7C3AED">Appliquer</Btn>
+              </>
+            )}
+          </div>
+
+          <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+            <button onClick={() => sbGetQuestions(projectId, site.id).then(setQuestions)}
+              title="Recharger les questions" style={{ padding: "4px 8px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.white, color: C.textLight, fontSize: 11, cursor: "pointer" }}>🔄</button>
+            <Btn onClick={runAllQuestions} disabled={runAll || toRunCount === 0} color="#7C3AED">{runAll ? "⏳ En cours…" : toRunCount > 0 ? `▶ Lancer tout (${toRunCount})` : "✓ Tout généré"}</Btn>
+            {runAll && <Btn onClick={() => { stopAllRef.current = true; setRunAll(false); }} color="#DC2626" variant="outline" small>⏹ Arrêter</Btn>}
+          </div>
         </div>
       </div>
 
@@ -1994,9 +2051,6 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
           </div>
         )}
       </div>
-
-      {/* ── Stats header ── */}
-      <StatsHeader questions={[]} results={allResults.filter(r => r.site_id === site?.id)} brandName={brand?.brand_name || ""} />
 
       {/* ── Axes editor ── */}
       <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: "14px 20px", marginBottom: 20 }}>
