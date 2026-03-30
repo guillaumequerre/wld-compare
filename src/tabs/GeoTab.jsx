@@ -1119,8 +1119,7 @@ ${question}`;
 Réponds avec une liste de vrais acteurs du marché, leurs sites web et leurs caractéristiques principales.
 Sois direct et factuel. Cite les sources que tu as consultées.
 ${question}`;
-    const promptForWeb = [baseContext, "Tu es un assistant IA avec accès au web. Réponds à la question avec une réponse complète et structurée.", "RÈGLE ABSOLUE : Ne pose jamais de question de clarification. Réponds directement.", "Insère les marqueurs [1], [2]… dans le texte pour chaque source utilisée. La liste 'sources' reprend les URLs dans l'ordre. Ne pas inventer d'URLs.", "Classification JSON requise : intent_type (Top|Informative|Conseil), answer_type, source_types.", "Produis UNIQUEMENT le JSON final conforme au schéma. Aucun texte avant ou après.", question].filter(Boolean).join("
-");
+    const promptForWeb = [baseContext, "Tu es un assistant IA avec accès au web. Réponds à la question avec une réponse complète et structurée.", "RÈGLE ABSOLUE : Ne pose jamais de question de clarification. Réponds directement.", "Insère les marqueurs [1], [2]… dans le texte pour chaque source utilisée. La liste 'sources' reprend les URLs dans l'ordre. Ne pas inventer d'URLs.", "Classification JSON requise : intent_type (Top|Informative|Conseil), answer_type, source_types.", "Produis UNIQUEMENT le JSON final conforme au schéma. Aucun texte avant ou après.", question].filter(Boolean).join("\n");
     const prompt = provider.id === "claude" ? promptForClaude : provider.id === "gemini" ? promptForGemini : promptForWeb;
     try {
       const parsed = await callProvider(provider, pk.dec, prompt);
