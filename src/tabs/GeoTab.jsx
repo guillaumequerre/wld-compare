@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { C } from "../lib/constants";
+import PresenceCalendar from "../components/PresenceCalendar";
 import { sbSaveProviderKeys } from "../lib/supabase";
 import {
   sbSaveBrand, sbGetBrand,
@@ -10,7 +11,6 @@ import {
   sbSetKeywordCategory, sbSetQuestionCategory,
   sbBulkSetKeywordCategory, sbBulkSetQuestionCategory,
   sbGetUrlIndex, sbUpdateUrlMeta, sbIncrementUrlCounts,
-  sbSavePresence, sbGetPresenceHistoryBatch,
 } from "../lib/supabase";
 // Note: sbSaveGeoAxes is called via onSaveAxes prop from App.jsx
 
@@ -51,7 +51,7 @@ function parseCSV(text) {
 // ── OpenAI call helpers ───────────────────────────────────────────
 
 
-const PROVIDERS = [
+export const PROVIDERS = [
   {
     id: "openai",
     label: "OpenAI",
@@ -846,9 +846,12 @@ function isBrandPresent(r) {
   return !!r && (r.brand_mentioned === true || r.brand_mentioned === 1);
 }
 
+// history: [{ test_date: "YYYY-MM-DD", brand_mentioned: bool }]
+// results: current geo_results for this provider (for today's optimistic update)
+
 // ── ProviderRow — calendar + info + accordion + run button ────────
 
-function ProviderRow({ provider, results, allProviderResults, brandName, brandAliases, hasKey, isRunning, onRun, history = [] }) {
+function ProviderRow({ provider, results, allProviderResults, brandName, brandAliases, hasKey, isRunning, onRun, questionId, newCalEntry = null }) {
   const [open, setOpen] = useState(false);
   const p = provider;
 
@@ -858,40 +861,7 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
   const sources = result?.sources || [];
   const comps   = result?.competitors_mentioned || [];
 
-  // 30-day presence calendar — use DB history (persisted) + current results as fallback
-  const DAYS = 30;
-  const today = new Date(); today.setHours(0,0,0,0);
-  const byDay = {};
-  // 1. From persisted history (reliable, survives upsert)
-  (history || []).forEach(h => {
-    if (!h.test_date) return;
-    const key = String(h.test_date).slice(0, 10); // normalize to YYYY-MM-DD
-    if (!byDay[key]) byDay[key] = [];
-    byDay[key].push(h.brand_mentioned === true || h.brand_mentioned === 1);
-  });
-  // 2. Augment with current results (for today — covers optimistic updates before DB sync)
-  const todayKey = dayKey(today);
-  (results || []).forEach(r => {
-    const d = r.created_at ? new Date(r.created_at) : new Date();
-    d.setHours(0,0,0,0);
-    const key = dayKey(d);
-    // Always update today's slot from latest result (may be more recent than history)
-    if (key === todayKey) {
-      byDay[key] = byDay[key] || [];
-      byDay[key].push(isBrandPresent(r));
-    } else if (!byDay[key]) {
-      byDay[key] = [isBrandPresent(r)];
-    }
-  });
-  const slots = [];
-  for (let i = DAYS-1; i >= 0; i--) {
-    const d = new Date(today); d.setDate(d.getDate() - i);
-    const key = dayKey(d);
-    const dayR = byDay[key];
-    const color = !dayR ? '#E5E7EB' : dayR.some(v => v) ? '#059669' : '#DC2626';
-    const lbl   = !dayR ? 'non testé' : dayR.some(v=>v) ? '✓ Présent' : '✗ Absent';
-    slots.push({ key, color, title: `${key} — ${lbl}` });
-  }
+
 
   return (
     <div style={{ border: `1px solid ${result ? (hasBrand ? '#059669' : C.border) : p.color+'33'}`, borderLeft: `3px solid ${hasBrand ? '#059669' : p.color}`, borderRadius: 9, overflow: 'hidden', background: hasBrand ? '#F0FDF4' : C.white }}>
@@ -902,12 +872,8 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
         {/* Provider name */}
         <span style={{ fontSize: 10, fontWeight: 800, color: p.color, minWidth: 68, flexShrink: 0 }}>{p.icon} {p.label}</span>
 
-        {/* Calendar dots */}
-        <div style={{ display: 'flex', gap: 2, flexShrink: 0 }}>
-          {slots.map(s => (
-            <div key={s.key} title={s.title} style={{ width: 7, height: 7, borderRadius: 2, background: s.color, flexShrink: 0 }} />
-          ))}
-        </div>
+        {/* Calendar */}
+        <PresenceCalendar questionId={questionId} providers={[provider]} newEntry={newCalEntry} />
 
         {/* Source badge */}
         {result?.brand_in_sources && (
@@ -1018,7 +984,7 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
   const [selected, setSelected]     = useState(new Set());
   const [bulkCat, setBulkCat]       = useState("");
   const [keywords, setKeywords]     = useState([]);
-  const [presenceHistory, setPresenceHistory] = useState({}); // { question_id → [{ provider_id, test_date, brand_mentioned }] }
+  const [newCalEntries, setNewCalEntries] = useState({}); // { `${q.id}|${p.id}` → last newEntry for PresenceCalendar }
 
   // Sync results from parent prop — but don't overwrite optimistic updates.
   // Track last loaded siteId to detect site changes vs normal re-renders.
@@ -1035,15 +1001,7 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
     if (!projectId || !site?.id) return;
     sbGetQuestions(projectId, site.id).then(setQuestions);
     sbGetKeywords(projectId, site.id).then(setKeywords);
-    // Load presence history for calendar (last 30 days, all questions at once)
-    sbGetPresenceHistoryBatch(projectId, site.id).then(rows => {
-      const byQ = {};
-      rows.forEach(r => {
-        if (!byQ[r.question_id]) byQ[r.question_id] = [];
-        byQ[r.question_id].push(r);
-      });
-      setPresenceHistory(byQ);
-    });
+
   }, [projectId, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const resultsByQ = useMemo(() => {
@@ -1190,18 +1148,11 @@ ${question}`;
           brand_mentioned: brandMentioned, brand_position: brandPosition,
           brand_in_sources: brandInSources,
         };
-        // Add to presence history immediately (optimistic, normalized)
-        const todayEntry = {
-          question_id: q.id, provider_id: prov.id,
-          test_date: new Date().toISOString().slice(0, 10),
-          brand_mentioned: brandMentioned,
-        };
-        setPresenceHistory(prev => ({
-          ...prev,
-          [q.id]: [...(prev[q.id] || []), todayEntry],
-        }));
-        // Also persist to DB (best effort)
-        sbSavePresence(presenceRow).catch(() => {});
+        // Add to calendar immediately (optimistic)
+        // Signal PresenceCalendar to add today's entry
+        setNewCalEntries(prev => ({ ...prev, [`${q.id}|${prov.id}`]: { provider_id: prov.id, brand_present: brandMentioned } }));
+        // Persist to DB (best effort)
+        sbAddCalendarEntry(q.id, prov.id, brandMentioned).catch(() => {});
       }
 
       // Cache last + best answer on question
@@ -1310,18 +1261,11 @@ ${question}`;
         brand_mentioned: brandMentioned, brand_position: brandPosition,
         brand_in_sources: brandInSources,
       };
-      // Add to presence history immediately (optimistic, normalized)
-      const todayEntry = {
-        question_id: q.id, provider_id: provider.id,
-        test_date: new Date().toISOString().slice(0, 10),
-        brand_mentioned: brandMentioned,
-      };
-      setPresenceHistory(prev => ({
-        ...prev,
-        [q.id]: [...(prev[q.id] || []), todayEntry],
-      }));
-      // Also persist to DB (best effort)
-      sbSavePresence(presenceRow).catch(() => {});
+      // Add to calendar immediately (optimistic)
+      // Signal PresenceCalendar to add today's entry
+      setNewCalEntries(prev => ({ ...prev, [`${q.id}|${provider.id}`]: { provider_id: provider.id, brand_present: brandMentioned } }));
+      // Persist to DB (best effort)
+      sbAddCalendarEntry(q.id, provider.id, brandMentioned).catch(() => {});
 
       // Update cached answers on question
       const cachePatch = { has_result: true, last_answer: parsed.answer, last_model: record.model, last_date: now };
@@ -1499,7 +1443,8 @@ ${question}`;
                         hasKey={hasKey}
                         isRunning={!!running[`${q.id}-${p.id}`]}
                         onRun={() => runProvider(q, p)}
-                        history={(presenceHistory[q.id] || []).filter(h => h.provider_id === p.id)}
+                        questionId={q.id}
+                        newCalEntry={newCalEntries[`${q.id}|${p.id}`] || null}
                       />
                     );
                   })}

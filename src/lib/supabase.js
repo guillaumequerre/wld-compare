@@ -525,3 +525,37 @@ export async function sbGetPresenceHistoryBatch(project_id, site_id) {
     return res.json();
   } catch { return []; }
 }
+
+// ── GEO — CALENDAR ENTRIES ──────────────────────────────────────
+// Single table: geo_calendar_dates
+// Columns: id, question_id, provider_id, brand_present, test_date, created_at
+
+export async function sbAddCalendarEntry(question_id, provider_id, brand_present) {
+  try {
+    const res = await fetch(`${PROXY}/rest/v1/geo_calendar_dates`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Prefer": "return=representation" },
+      body: JSON.stringify({
+        question_id,
+        provider_id,
+        brand_present: brand_present === true || brand_present === 1,
+        test_date: new Date().toISOString().slice(0, 10),
+      }),
+    });
+    if (!res.ok) { console.warn("sbAddCalendarEntry failed:", res.status); return null; }
+    const data = await res.json();
+    return Array.isArray(data) ? data[0] : data;
+  } catch(e) { console.warn("sbAddCalendarEntry error:", e.message); return null; }
+}
+
+export async function sbGetCalendarEntries(question_id) {
+  try {
+    const since = new Date(); since.setDate(since.getDate() - 30);
+    const sinceStr = since.toISOString().slice(0, 10);
+    const res = await fetch(
+      `${PROXY}/rest/v1/geo_calendar_dates?question_id=eq.${encodeURIComponent(question_id)}&test_date=gte.${sinceStr}&order=test_date.asc&select=provider_id,test_date,brand_present`
+    );
+    if (!res.ok) return [];
+    return res.json();
+  } catch { return []; }
+}
