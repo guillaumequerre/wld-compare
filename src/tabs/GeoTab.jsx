@@ -847,66 +847,106 @@ function PresenceCalendarByProvider({ results, activeProviders, providerKeys }) 
   );
 }
 
-// ── Result card ───────────────────────────────────────────────────
+// ── Provider card — one per provider per question ─────────────────
 
-function ResultCard({ result, brandName, brandAliases, onRerun }) {
+function ProviderCard({ provider, result, brandName, brandAliases, hasKey, isRunning, onRun }) {
   const [open, setOpen] = useState(false);
-  const sources = result.sources || [];
-  const comps = result.competitors_mentioned || [];
+  const sources = result?.sources || [];
+  const comps   = result?.competitors_mentioned || [];
+  const hasBrand = result?.brand_mentioned;
+  const p = provider;
+
   return (
-    <div style={{ marginTop: 10, background: C.bg, borderRadius: 10, border: `1px solid ${C.border}`, overflow: "hidden" }}>
-      <div onClick={() => setOpen(o => !o)} style={{ padding: "10px 14px", cursor: "pointer", display: "flex", alignItems: "center", gap: 8 }}>
-        <span style={{ fontSize: 11, color: open ? C.blue : C.textLight, display: "inline-block", transform: open ? "rotate(90deg)" : "none", transition: "transform 0.15s" }}>▶</span>
-        <div style={{ flex: 1, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <span style={{ fontSize: 11, color: C.textLight }}>{result.model}</span>
-          {result.brand_mentioned && <Pill color="#059669">✓ {brandName} #{result.brand_position || "?"}</Pill>}
-          {!result.brand_mentioned && <Pill color="#DC2626">✗ Absent</Pill>}
-          {result.brand_in_sources && <Pill color="#2563EB">🔗 Source</Pill>}
-          {result.answer_type && <Pill color={C.textLight}>{result.answer_type}</Pill>}
-          {result.intent_type && <Pill color="#7C3AED">{result.intent_type}</Pill>}
-        </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
-          <span style={{ fontSize: 10, color: C.textLight }}>{(result.input_tokens || 0) + (result.output_tokens || 0)} tok</span>
-          {result.created_at && (
-            <span style={{ fontSize: 10, color: C.textLight }}>
-              {new Date(result.created_at).toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
-            </span>
-          )}
-          {onRerun && (
-            <button onClick={e => { e.stopPropagation(); onRerun(); }}
-              title="Relancer ce provider"
-              style={{ padding: "2px 7px", border: `1px solid ${C.border}`, borderRadius: 5, background: C.white, color: C.textMid, fontSize: 10, cursor: "pointer" }}>
-              🔄
-            </button>
-          )}
-        </div>
+    <div style={{
+      background: result ? (hasBrand ? "#F0FDF4" : "#FFF") : C.bg,
+      border: `1.5px solid ${result ? (hasBrand ? "#059669" : C.border) : p.color + "33"}`,
+      borderLeft: `4px solid ${result ? (hasBrand ? "#059669" : p.color) : p.color + "55"}`,
+      borderRadius: 10, overflow: "hidden",
+    }}>
+      {/* Header row */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px" }}>
+        {/* Provider label */}
+        <span style={{ fontSize: 11, fontWeight: 700, color: p.color, minWidth: 80, flexShrink: 0 }}>
+          {p.icon} {p.label}
+        </span>
+
+        {/* Status */}
+        {result ? (
+          <>
+            {hasBrand
+              ? <span style={{ fontSize: 10, fontWeight: 700, color: "#059669", background: "#ECFDF5", border: "1px solid #059669", borderRadius: 10, padding: "1px 8px" }}>✓ {brandName} #{result.brand_position || "?"}</span>
+              : <span style={{ fontSize: 10, fontWeight: 700, color: "#DC2626", background: "#FEF2F2", border: "1px solid #DC2626", borderRadius: 10, padding: "1px 8px" }}>✗ Absent</span>
+            }
+            {result.brand_in_sources && <span style={{ fontSize: 10, background: "#EFF6FF", color: "#2563EB", borderRadius: 10, padding: "1px 8px" }}>🔗 Source</span>}
+            {result.intent_type && <span style={{ fontSize: 10, color: C.textLight, background: C.bg, borderRadius: 10, padding: "1px 8px" }}>{result.intent_type}</span>}
+          </>
+        ) : (
+          <span style={{ fontSize: 11, color: C.textLight, fontStyle: "italic", flex: 1 }}>Pas encore interrogé</span>
+        )}
+
+        {/* Spacer */}
+        <div style={{ flex: 1 }} />
+
+        {/* Meta: tokens + date */}
+        {result && (
+          <span style={{ fontSize: 10, color: C.textLight, flexShrink: 0 }}>
+            {(result.input_tokens || 0) + (result.output_tokens || 0)} tok
+            {result.created_at && " · " + new Date(result.created_at).toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
+          </span>
+        )}
+
+        {/* Expand button (only if result) */}
+        {result && (
+          <button onClick={() => setOpen(o => !o)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: C.textLight, padding: "0 4px", flexShrink: 0 }}>
+            {open ? "▲" : "▼"}
+          </button>
+        )}
+
+        {/* ▶ Run button */}
+        {hasKey && (
+          <button
+            onClick={onRun}
+            disabled={isRunning}
+            title={result ? `Relancer ${p.label}` : `Interroger ${p.label}`}
+            style={{
+              width: 26, height: 26, borderRadius: "50%", border: "none", cursor: isRunning ? "wait" : "pointer",
+              background: isRunning ? C.bg : "#059669",
+              color: isRunning ? C.textLight : "#fff",
+              fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center",
+              flexShrink: 0, transition: "all 0.15s", opacity: isRunning ? 0.6 : 1,
+            }}>
+            {isRunning ? "⏳" : "▶"}
+          </button>
+        )}
       </div>
-      {open && (
-        <div style={{ padding: "0 14px 14px", borderTop: `1px solid ${C.border}` }}>
-          <div style={{ marginTop: 12, fontSize: 12, color: C.text, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>
+
+      {/* Expanded content */}
+      {open && result && (
+        <div style={{ padding: "0 12px 12px", borderTop: `1px solid ${C.border}` }}>
+          <div style={{ marginTop: 10, fontSize: 12, color: C.text, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>
             {highlightBrand(result.answer || "", brandName, brandAliases)}
           </div>
           {sources.length > 0 && (
-            <div style={{ marginTop: 12 }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 6 }}>Sources</div>
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 5 }}>Sources</div>
               {sources.map((url, i) => {
                 const isBrand = [brandName, ...(brandAliases || [])].some(t => url.toLowerCase().includes((t || "").toLowerCase()));
                 return (
-                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 3 }}>
                     <span style={{ fontSize: 10, color: C.textLight, minWidth: 18 }}>[{i+1}]</span>
                     <a href={url} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: isBrand ? "#059669" : "#2563EB", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{url}</a>
-                    {isBrand && <span style={{ fontSize: 10, background: "#ECFDF5", color: "#059669", borderRadius: 4, padding: "1px 5px", flexShrink: 0 }}>marque</span>}
+                    {isBrand && <span style={{ fontSize: 9, background: "#ECFDF5", color: "#059669", borderRadius: 4, padding: "1px 4px", flexShrink: 0 }}>marque</span>}
                   </div>
                 );
               })}
             </div>
           )}
           {comps.length > 0 && (
-            <div style={{ marginTop: 10 }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 6 }}>Concurrents cités</div>
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <div style={{ marginTop: 8 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 5 }}>Concurrents cités</div>
+              <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
                 {comps.map(c => (
-                  <span key={c.name} style={{ fontSize: 10, background: "#FEF2F2", color: "#DC2626", border: "1px solid #FECACA", borderRadius: 5, padding: "2px 8px" }}>
+                  <span key={c.name} style={{ fontSize: 10, background: "#FEF2F2", color: "#DC2626", border: "1px solid #FECACA", borderRadius: 5, padding: "2px 7px" }}>
                     {c.name}{c.position ? ` #${c.position}` : ""}
                   </span>
                 ))}
@@ -1108,8 +1148,7 @@ ${question}`;
     if (!pk?.dec) return;
     setRunning(r => ({ ...r, [`${q.id}-${provider.id}`]: true }));
     const { brand_name = "", brand_aliases = [], competitors = [], context = "" } = brand || {};
-    const baseContext = context ? `Contexte : "${context}"
-` : "";
+    const baseContext = context ? `Contexte : "${context}"\n` : "";
     const question = `Question : ${q.question}`;
     const promptForClaude = `${baseContext}Tu es un expert en recommandation d'entreprises et prestataires. Réponds à la question suivante en te basant sur tes connaissances pour donner une liste de vrais acteurs, entreprises ou prestataires du marché.
 RÈGLE : Ne dis jamais que tu n'as pas accès au web ou aux avis récents. Donne directement des recommandations concrètes avec les vrais noms d'entreprises que tu connais.
@@ -1231,7 +1270,7 @@ ${question}`;
         )}
 
         <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-          <Btn onClick={runAllQuestions} disabled={runAll || !apiKey} color="#7C3AED">{runAll ? "⏳ En cours…" : "▶ Lancer tout"}</Btn>
+          <Btn onClick={runAllQuestions} disabled={runAll} color="#7C3AED">{runAll ? "⏳ En cours…" : "▶ Lancer tout"}</Btn>
           {runAll && <Btn onClick={() => { stopAllRef.current = true; setRunAll(false); }} color="#DC2626" variant="outline" small>⏹ Arrêter</Btn>}
         </div>
       </div>
@@ -1296,23 +1335,18 @@ ${question}`;
                   {PROVIDERS.map(p => {
                     const result = qResults.find(r => getProviderId(r.model) === p.id);
                     const hasKey = !!providerKeys[p.id]?.dec;
-                    const isActive = activeProviders.includes(p.id);
-                    const isRunningThis = !!running[`${q.id}-${p.id}`] || (isRunning && isActive);
-                    if (!hasKey && !result) return null; // hide unconfigured providers with no data
-                    return result ? (
-                      <ResultCard key={p.id} result={result} brandName={brand_name} brandAliases={brand_aliases}
-                        onRerun={hasKey ? () => runProvider(q, p) : undefined} />
-                    ) : (
-                      <div key={p.id} style={{ marginTop: 4, background: C.bg, borderRadius: 8, border: `1px dashed ${p.color}44`, padding: "8px 14px", display: "flex", alignItems: "center", gap: 8 }}>
-                        <span style={{ fontSize: 12, color: p.color, fontWeight: 600 }}>{p.icon} {p.label}</span>
-                        <span style={{ fontSize: 11, color: C.textLight, flex: 1, fontStyle: "italic" }}>Pas encore interrogé</span>
-                        <button
-                          disabled={isRunningThis}
-                          onClick={() => runProvider(q, p)}
-                          style={{ padding: "3px 10px", border: `1px solid ${p.color}`, borderRadius: 6, background: "transparent", color: p.color, fontSize: 10, fontWeight: 600, cursor: "pointer", opacity: isRunningThis ? 0.5 : 1 }}>
-                          {isRunningThis ? "⏳" : "▶ Lancer"}
-                        </button>
-                      </div>
+                    if (!hasKey && !result) return null;
+                    return (
+                      <ProviderCard
+                        key={p.id}
+                        provider={p}
+                        result={result}
+                        brandName={brand_name}
+                        brandAliases={brand_aliases}
+                        hasKey={hasKey}
+                        isRunning={!!running[`${q.id}-${p.id}`]}
+                        onRun={() => runProvider(q, p)}
+                      />
                     );
                   })}
                 </div>
