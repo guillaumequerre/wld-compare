@@ -1295,7 +1295,6 @@ ${question}`;
   };
 
   const { brand_name = "", brand_aliases = [] } = brand || {};
-  const totalWithBrand = questions.filter(q => (resultsByQ[q.id] || []).some(r => r.brand_mentioned === true || r.brand_mentioned === 1)).length;
 
   // Results for filtered questions, filtered by provider selection
   const filteredResults = useMemo(() => {
