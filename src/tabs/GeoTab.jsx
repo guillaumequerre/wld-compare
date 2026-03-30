@@ -11,6 +11,7 @@ import {
   sbSetKeywordCategory, sbSetQuestionCategory,
   sbBulkSetKeywordCategory, sbBulkSetQuestionCategory,
   sbGetUrlIndex, sbUpdateUrlMeta, sbIncrementUrlCounts,
+  sbAddCalendarEntry,
 } from "../lib/supabase";
 // Note: sbSaveGeoAxes is called via onSaveAxes prop from App.jsx
 
@@ -834,13 +835,6 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
 
 // ── 30-day presence calendar ─────────────────────────────────────
 
-function dayKey(d) {
-  // Use local date (not UTC) to match the user's timezone
-  const y = d.getFullYear();
-  const m = String(d.getMonth()+1).padStart(2,'0');
-  const dd = String(d.getDate()).padStart(2,'0');
-  return `${y}-${m}-${dd}`;
-}
 
 function isBrandPresent(r) {
   return !!r && (r.brand_mentioned === true || r.brand_mentioned === 1);
@@ -1094,7 +1088,6 @@ ${question}`;
     const providersToCall = PROVIDERS.filter(p =>
       currentProviders.includes(p.id) && currentKeys[p.id]?.dec
     );
-    console.log("runQuestion — active:", currentProviders, "keys:", Object.keys(currentKeys), "toCall:", providersToCall.map(p=>p.id));
     if (!providersToCall.length) {
       console.warn("No providers configured — check API keys in ⚙️ Setup");
       setRunning(r => ({ ...r, [q.id]: false }));
@@ -1291,7 +1284,6 @@ ${question}`;
   const runAllQuestions = async () => {
     const currentProviders = activeProvidersRef.current;
     const currentKeys = providerKeysRef.current;
-    console.log("runAll — active:", currentProviders, "keys:", Object.keys(currentKeys));
     const configuredProviders = PROVIDERS.filter(p => currentProviders.includes(p.id) && currentKeys[p.id]?.dec);
     const toRun = filtered.filter(q => {
       const qResults = resultsByQ[q.id] || [];
@@ -1845,7 +1837,6 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
   useEffect(() => {
     if (!apiKeyEnc) return;
     const k = decodeKey(apiKeyEnc);
-    console.log("OpenAI key loaded, prefix:", k.slice(0, 10));
     setApiKeyDec(k);
   }, [apiKeyEnc]); // eslint-disable-line react-hooks/exhaustive-deps
 
