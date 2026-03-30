@@ -1,5 +1,4 @@
 import { useState, useEffect } from "react";
-import { C } from "../lib/constants";
 import { sbGetCalendarEntries, sbAddCalendarEntry } from "../lib/supabase";
 
 // PROVIDERS is passed as prop to avoid circular import

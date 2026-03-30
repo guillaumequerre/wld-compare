@@ -1135,14 +1135,7 @@ ${question}`;
         providerLabel.toLowerCase().includes(p.id)
       );
       if (prov) {
-        const presenceRow = {
-          question_id: q.id, project_id: projectId, site_id: site.id,
-          provider_id: prov.id, model: providerLabel,
-          brand_mentioned: brandMentioned, brand_position: brandPosition,
-          brand_in_sources: brandInSources,
-        };
         // Add to calendar immediately (optimistic)
-        // Signal PresenceCalendar to add today's entry
         setNewCalEntries(prev => ({ ...prev, [`${q.id}|${prov.id}`]: { provider_id: prov.id, brand_present: brandMentioned } }));
         // Persist to DB (best effort)
         sbAddCalendarEntry(q.id, prov.id, brandMentioned).catch(() => {});
@@ -1247,15 +1240,7 @@ ${question}`;
         }
       }).catch(e => console.error("sbSaveGeoResult error:", e));
 
-      // Save presence history record (never overwritten — builds the 30-day calendar)
-      const presenceRow = {
-        question_id: q.id, project_id: projectId, site_id: site.id,
-        provider_id: provider.id, model: record.model,
-        brand_mentioned: brandMentioned, brand_position: brandPosition,
-        brand_in_sources: brandInSources,
-      };
-      // Add to calendar immediately (optimistic)
-      // Signal PresenceCalendar to add today's entry
+      // Add to calendar (optimistic + persist)
       setNewCalEntries(prev => ({ ...prev, [`${q.id}|${provider.id}`]: { provider_id: provider.id, brand_present: brandMentioned } }));
       // Persist to DB (best effort)
       sbAddCalendarEntry(q.id, provider.id, brandMentioned).catch(() => {});
