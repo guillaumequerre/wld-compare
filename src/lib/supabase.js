@@ -276,8 +276,7 @@ export async function sbDeleteKeyword(id) {
 // ── GEO — QUESTIONS ──────────────────────────────────────────────
 
 export async function sbSaveQuestions(rows) {
-  // rows: [{ project_id, site_id, keyword_id, question, is_manual }]
-  // Upsert on (project_id, site_id, question) to avoid duplicates on re-generation
+  if (!rows.length) return [];
   const res = await fetch(`${PROXY}/rest/v1/geo_questions`, {
     method: "POST",
     headers: {
@@ -290,7 +289,17 @@ export async function sbSaveQuestions(rows) {
     const errText = await res.text();
     throw new Error(`Save questions failed: ${res.status} — ${errText.slice(0, 200)}`);
   }
-  return res.json();
+  const saved = await res.json();
+  // ignore-duplicates returns [] for existing rows — fetch them back
+  if (Array.isArray(saved) && saved.length === 0 && rows.length > 0) {
+    const pid = rows[0].project_id;
+    const sid = rows[0].site_id;
+    const texts = rows.map(r => r.question);
+    const qs = encodeURIComponent("(" + texts.map(t => `"${t.replace(/"/g, '\\"')}"`).join(",") + ")");
+    const res2 = await fetch(`${PROXY}/rest/v1/geo_questions?project_id=eq.${encodeURIComponent(pid)}&site_id=eq.${encodeURIComponent(sid)}&question=in.${qs}&select=*`);
+    if (res2.ok) return res2.json();
+  }
+  return saved;
 }
 
 export async function sbGetQuestions(project_id, site_id) {
@@ -485,15 +494,20 @@ export async function sbSaveProviderKeys(project_id, keys) {
 // ── GEO — PRESENCE HISTORY ───────────────────────────────────────
 
 export async function sbSavePresence(row) {
-  // row: { question_id, project_id, site_id, provider_id, model, brand_mentioned, brand_position, brand_in_sources }
-  const res = await fetch(`${PROXY}/rest/v1/geo_presence_history`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "Prefer": "return=representation" },
-    body: JSON.stringify({ ...row, test_date: new Date().toISOString().slice(0, 10) }),
-  });
-  if (!res.ok) { console.error("sbSavePresence failed:", res.status); return null; }
-  const data = await res.json();
-  return Array.isArray(data) ? data[0] : data;
+  try {
+    const res = await fetch(`${PROXY}/rest/v1/geo_presence_history`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Prefer": "return=representation" },
+      body: JSON.stringify({ ...row, test_date: new Date().toISOString().slice(0, 10) }),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      console.warn("sbSavePresence failed:", res.status, err.slice(0,100));
+      return null;
+    }
+    const data = await res.json();
+    return Array.isArray(data) ? data[0] : data;
+  } catch(e) { console.warn("sbSavePresence error:", e.message); return null; }
 }
 
 export async function sbGetPresenceHistory(question_id) {
@@ -503,10 +517,11 @@ export async function sbGetPresenceHistory(question_id) {
 }
 
 export async function sbGetPresenceHistoryBatch(project_id, site_id) {
-  // Fetch all presence history for a project/site in one call
-  const since = new Date(); since.setDate(since.getDate() - 30);
-  const sinceStr = since.toISOString().slice(0, 10);
-  const res = await fetch(`${PROXY}/rest/v1/geo_presence_history?project_id=eq.${encodeURIComponent(project_id)}&site_id=eq.${encodeURIComponent(site_id)}&test_date=gte.${sinceStr}&order=test_date.asc&select=question_id,provider_id,test_date,brand_mentioned`);
-  if (!res.ok) return [];
-  return res.json();
+  try {
+    const since = new Date(); since.setDate(since.getDate() - 30);
+    const sinceStr = since.toISOString().slice(0, 10);
+    const res = await fetch(`${PROXY}/rest/v1/geo_presence_history?project_id=eq.${encodeURIComponent(project_id)}&site_id=eq.${encodeURIComponent(site_id)}&test_date=gte.${sinceStr}&order=test_date.asc&select=question_id,provider_id,test_date,brand_mentioned`);
+    if (!res.ok) return []; // table may not exist yet
+    return res.json();
+  } catch { return []; }
 }

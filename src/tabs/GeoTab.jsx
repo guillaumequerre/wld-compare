@@ -1125,7 +1125,9 @@ ${question}`;
     const providersToCall = PROVIDERS.filter(p =>
       activeProviders.includes(p.id) && providerKeys[p.id]?.dec
     );
+    console.log("runQuestion — active:", activeProviders, "configured:", Object.keys(providerKeys), "toCall:", providersToCall.map(p=>p.id));
     if (!providersToCall.length) {
+      console.warn("No providers configured — check API keys in setup");
       setRunning(r => ({ ...r, [q.id]: false }));
       return;
     }
@@ -1782,7 +1784,20 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
   const [runMode, setRunMode]       = useState("parallel"); // parallel | sequential
   const [activeProviders, setActiveProviders] = useState(["openai"]); // provider ids to use
   // Provider key state: { id → { enc, dec, input, status } }
-  const [providerKeys, setProviderKeys] = useState({});
+  const [providerKeys, setProviderKeys] = useState(() => {
+    // Initialize synchronously from project prop so keys are available immediately
+    const init = {};
+    if (project) {
+      PROVIDERS.forEach(p => {
+        const enc = project[p.keyField] || "";
+        if (enc) {
+          const dec = decodeKey(enc);
+          if (dec) init[p.id] = { enc, dec, input: "", status: "ok" };
+        }
+      });
+    }
+    return init;
+  });
   const [apiKeyEnc, setApiKeyEnc]   = useState(project?.openai_key_enc || ""); // legacy for variation gen
 
   // Sync all provider keys when project prop updates
