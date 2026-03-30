@@ -481,3 +481,32 @@ export async function sbSaveProviderKeys(project_id, keys) {
   });
   return res.ok;
 }
+
+// ── GEO — PRESENCE HISTORY ───────────────────────────────────────
+
+export async function sbSavePresence(row) {
+  // row: { question_id, project_id, site_id, provider_id, model, brand_mentioned, brand_position, brand_in_sources }
+  const res = await fetch(`${PROXY}/rest/v1/geo_presence_history`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Prefer": "return=representation" },
+    body: JSON.stringify({ ...row, test_date: new Date().toISOString().slice(0, 10) }),
+  });
+  if (!res.ok) { console.error("sbSavePresence failed:", res.status); return null; }
+  const data = await res.json();
+  return Array.isArray(data) ? data[0] : data;
+}
+
+export async function sbGetPresenceHistory(question_id) {
+  const res = await fetch(`${PROXY}/rest/v1/geo_presence_history?question_id=eq.${encodeURIComponent(question_id)}&order=test_date.asc&select=provider_id,test_date,brand_mentioned,brand_position,brand_in_sources`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function sbGetPresenceHistoryBatch(project_id, site_id) {
+  // Fetch all presence history for a project/site in one call
+  const since = new Date(); since.setDate(since.getDate() - 30);
+  const sinceStr = since.toISOString().slice(0, 10);
+  const res = await fetch(`${PROXY}/rest/v1/geo_presence_history?project_id=eq.${encodeURIComponent(project_id)}&site_id=eq.${encodeURIComponent(site_id)}&test_date=gte.${sinceStr}&order=test_date.asc&select=question_id,provider_id,test_date,brand_mentioned`);
+  if (!res.ok) return [];
+  return res.json();
+}

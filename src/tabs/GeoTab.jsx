@@ -10,6 +10,7 @@ import {
   sbSetKeywordCategory, sbSetQuestionCategory,
   sbBulkSetKeywordCategory, sbBulkSetQuestionCategory,
   sbGetUrlIndex, sbUpdateUrlMeta, sbIncrementUrlCounts,
+  sbSavePresence, sbGetPresenceHistoryBatch,
 } from "../lib/supabase";
 // Note: sbSaveGeoAxes is called via onSaveAxes prop from App.jsx
 
@@ -847,7 +848,7 @@ function isBrandPresent(r) {
 
 // ── ProviderRow — calendar + info + accordion + run button ────────
 
-function ProviderRow({ provider, results, allProviderResults, brandName, brandAliases, hasKey, isRunning, onRun }) {
+function ProviderRow({ provider, results, allProviderResults, brandName, brandAliases, hasKey, isRunning, onRun, history = [] }) {
   const [open, setOpen] = useState(false);
   const p = provider;
 
@@ -857,16 +858,26 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
   const sources = result?.sources || [];
   const comps   = result?.competitors_mentioned || [];
 
-  // 30-day presence calendar
+  // 30-day presence calendar — use DB history (persisted) + current results as fallback
   const DAYS = 30;
   const today = new Date(); today.setHours(0,0,0,0);
   const byDay = {};
+  // 1. From persisted history (reliable, survives upsert)
+  (history || []).forEach(h => {
+    if (!h.test_date) return;
+    const key = h.test_date; // already YYYY-MM-DD
+    if (!byDay[key]) byDay[key] = [];
+    byDay[key].push(h.brand_mentioned === true || h.brand_mentioned === 1);
+  });
+  // 2. Augment with current results (optimistic, for today)
   (results || []).forEach(r => {
     if (!r.created_at) return;
     const d = new Date(r.created_at); d.setHours(0,0,0,0);
     const key = dayKey(d);
-    if (!byDay[key]) byDay[key] = [];
-    byDay[key].push(isBrandPresent(r));
+    // Only add if not already in history for today
+    if (!byDay[key]) {
+      byDay[key] = [isBrandPresent(r)];
+    }
   });
   const slots = [];
   for (let i = DAYS-1; i >= 0; i--) {
@@ -998,6 +1009,7 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
   const [selected, setSelected]     = useState(new Set());
   const [bulkCat, setBulkCat]       = useState("");
   const [keywords, setKeywords]     = useState([]);
+  const [presenceHistory, setPresenceHistory] = useState({}); // { question_id → [{ provider_id, test_date, brand_mentioned }] }
 
   // Sync results from parent prop — but don't overwrite optimistic updates.
   // Track last loaded siteId to detect site changes vs normal re-renders.
@@ -1014,6 +1026,15 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
     if (!projectId || !site?.id) return;
     sbGetQuestions(projectId, site.id).then(setQuestions);
     sbGetKeywords(projectId, site.id).then(setKeywords);
+    // Load presence history for calendar (last 30 days, all questions at once)
+    sbGetPresenceHistoryBatch(projectId, site.id).then(rows => {
+      const byQ = {};
+      rows.forEach(r => {
+        if (!byQ[r.question_id]) byQ[r.question_id] = [];
+        byQ[r.question_id].push(r);
+      });
+      setPresenceHistory(byQ);
+    });
   }, [projectId, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const resultsByQ = useMemo(() => {
@@ -1144,6 +1165,23 @@ ${question}`;
         }
         return [newResult, ...prev];
       });
+      // Save presence history record (builds 30-day calendar)
+      const prov = PROVIDERS.find(p => `${p.label} (${p.model})` === providerLabel);
+      if (prov) {
+        const presenceRow = {
+          question_id: q.id, project_id: projectId, site_id: site.id,
+          provider_id: prov.id, model: providerLabel,
+          brand_mentioned: brandMentioned, brand_position: brandPosition,
+          brand_in_sources: brandInSources,
+        };
+        sbSavePresence(presenceRow).then(saved => {
+          if (saved) setPresenceHistory(prev => ({
+            ...prev,
+            [q.id]: [...(prev[q.id] || []), saved],
+          }));
+        }).catch(() => {});
+      }
+
       // Cache last + best answer on question
       const now = new Date().toISOString();
       const cachePatch = { has_result: true, last_answer: parsed.answer, last_model: providerLabel, last_date: now };
@@ -1242,6 +1280,22 @@ ${question}`;
           ));
         }
       }).catch(e => console.error("sbSaveGeoResult error:", e));
+
+      // Save presence history record (never overwritten — builds the 30-day calendar)
+      const presenceRow = {
+        question_id: q.id, project_id: projectId, site_id: site.id,
+        provider_id: provider.id, model: record.model,
+        brand_mentioned: brandMentioned, brand_position: brandPosition,
+        brand_in_sources: brandInSources,
+      };
+      sbSavePresence(presenceRow).then(saved => {
+        if (saved) {
+          setPresenceHistory(prev => {
+            const existing = prev[q.id] || [];
+            return { ...prev, [q.id]: [...existing, saved] };
+          });
+        }
+      }).catch(() => {});
 
       // Update cached answers on question
       const cachePatch = { has_result: true, last_answer: parsed.answer, last_model: record.model, last_date: now };
@@ -1403,6 +1457,7 @@ ${question}`;
                         hasKey={hasKey}
                         isRunning={!!running[`${q.id}-${p.id}`]}
                         onRun={() => runProvider(q, p)}
+                        history={(presenceHistory[q.id] || []).filter(h => h.provider_id === p.id)}
                       />
                     );
                   })}
