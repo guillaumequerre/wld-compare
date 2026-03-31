@@ -84,7 +84,7 @@ export default function ImportTab({ projects, currentProjectId, setCurrentProjec
                   )}
                 </button>
               ))}
-              {projects.length < 5 && (
+              {projects.length < 20 && (
                 <button onClick={() => {
                   const p = newProject(`Projet ${projects.length + 1}`, [{ id: `site-${Date.now()}`, label: "Nouveau site", ...SITE_PALETTE[0] }]);
                   setProjects(prev => [...prev, p]);

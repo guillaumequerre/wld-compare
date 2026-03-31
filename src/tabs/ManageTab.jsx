@@ -1,0 +1,185 @@
+import { useState, useEffect } from "react";
+import { C } from "../lib/constants";
+import { authLogin, authLogout, isSuperAdmin, sbGetProjectMembers, sbAddProjectMember, sbRemoveProjectMember } from "../lib/auth";
+
+function Section({ title, children }) {
+  return (
+    <div style={{ background: "#fff", border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden", marginBottom: 20 }}>
+      <div style={{ padding: "14px 20px", borderBottom: `1px solid ${C.border}`, background: C.bg }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{title}</div>
+      </div>
+      <div style={{ padding: "18px 20px" }}>{children}</div>
+    </div>
+  );
+}
+
+// ── Login card (when not connected) ──────────────────────────────
+function LoginCard({ onLogin }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setLoading(true); setError("");
+    try { const u = await authLogin(email.trim(), password); onLogin(u); }
+    catch(err) { setError(err.message); }
+    finally { setLoading(false); }
+  };
+
+  return (
+    <Section title="🔐 Connexion">
+      {error && <div style={{ background: "#FEF2F2", border: "1px solid #DC262633", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#DC2626", marginBottom: 12 }}>{error}</div>}
+      <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 10, maxWidth: 360 }}>
+        <input type="email" value={email} onChange={e => setEmail(e.target.value)} required placeholder="Email" style={{ padding: "8px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13 }} />
+        <input type="password" value={password} onChange={e => setPassword(e.target.value)} required placeholder="Mot de passe" style={{ padding: "8px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13 }} />
+        <button type="submit" disabled={loading} style={{ padding: "9px", background: "#7C3AED", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+          {loading ? "Connexion…" : "Se connecter"}
+        </button>
+      </form>
+    </Section>
+  );
+}
+
+// ── Project members manager ───────────────────────────────────────
+function ProjectMembers({ project, ownerEmail }) {
+  const [members, setMembers] = useState([]);
+  const [newEmail, setNewEmail] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!project?.id) return;
+    setLoading(true);
+    sbGetProjectMembers(project.id).then(m => { setMembers(m); setLoading(false); }).catch(() => setLoading(false));
+  }, [project?.id]);
+
+  const add = async () => {
+    const email = newEmail.trim().toLowerCase();
+    if (!email || !email.includes("@")) return;
+    setSaving(true); setError("");
+    const ok = await sbAddProjectMember(project.id, email, ownerEmail);
+    if (ok) {
+      setMembers(prev => [...prev, { user_email: email, role: "member" }]);
+      setNewEmail("");
+    } else { setError("Erreur lors de l'ajout"); }
+    setSaving(false);
+  };
+
+  const remove = async (email) => {
+    await sbRemoveProjectMember(project.id, email);
+    setMembers(prev => prev.filter(m => m.user_email !== email));
+  };
+
+  if (!project) return <div style={{ fontSize: 12, color: C.textLight }}>Sélectionnez un projet</div>;
+
+  return (
+    <div>
+      {/* Owner */}
+      <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>Propriétaire</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", background: "#F0FDF4", borderRadius: 8, marginBottom: 16 }}>
+        <span style={{ fontSize: 12, color: "#059669", fontWeight: 600 }}>{project.owner_email || ownerEmail || "—"}</span>
+        <span style={{ fontSize: 10, background: "#ECFDF5", color: "#059669", borderRadius: 4, padding: "1px 6px" }}>propriétaire</span>
+      </div>
+
+      {/* Members */}
+      <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>Membres ({members.length})</div>
+      {loading ? <div style={{ fontSize: 12, color: C.textLight }}>Chargement…</div> : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 16 }}>
+          {members.length === 0 && <div style={{ fontSize: 12, color: C.textLight, fontStyle: "italic" }}>Aucun membre invité</div>}
+          {members.map(m => (
+            <div key={m.user_email} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", background: C.bg, borderRadius: 8, border: `1px solid ${C.border}` }}>
+              <span style={{ fontSize: 12, color: C.text }}>{m.user_email}</span>
+              <button onClick={() => remove(m.user_email)} style={{ fontSize: 11, color: "#DC2626", background: "none", border: "none", cursor: "pointer" }}>✕ Retirer</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Add member */}
+      <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>Inviter un utilisateur</div>
+      {error && <div style={{ fontSize: 12, color: "#DC2626", marginBottom: 8 }}>{error}</div>}
+      <div style={{ display: "flex", gap: 8 }}>
+        <input type="email" value={newEmail} onChange={e => setNewEmail(e.target.value)}
+          onKeyDown={e => e.key === "Enter" && add()}
+          placeholder="email@exemple.com"
+          style={{ flex: 1, padding: "8px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} />
+        <button onClick={add} disabled={saving || !newEmail.includes("@")}
+          style={{ padding: "8px 16px", background: saving ? C.bg : "#7C3AED", color: saving ? C.textLight : "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+          {saving ? "…" : "Inviter"}
+        </button>
+      </div>
+      <div style={{ fontSize: 11, color: C.textLight, marginTop: 6 }}>
+        L'utilisateur invité doit avoir un compte pour accéder au projet.
+      </div>
+    </div>
+  );
+}
+
+// ── ManageTab ─────────────────────────────────────────────────────
+export default function ManageTab({ user, projects, currentProjectId, setCurrentProjectId, onLogin, onLogout }) {
+  const [selectedProjectId, setSelectedProjectId] = useState(currentProjectId);
+  const selectedProject = projects.find(p => p.id === selectedProjectId) || projects[0];
+  const isAdmin = user && isSuperAdmin(user);
+
+  if (!user) return (
+    <div style={{ maxWidth: 480, margin: "0 auto", paddingTop: 40 }}>
+      <LoginCard onLogin={onLogin} />
+    </div>
+  );
+
+  return (
+    <div style={{ maxWidth: 860, margin: "0 auto" }}>
+      <div style={{ marginBottom: 24 }}>
+        <div style={{ fontSize: 20, fontWeight: 800, color: C.text, marginBottom: 4 }}>👤 Compte & projets</div>
+        <div style={{ fontSize: 12, color: C.textLight }}>Gérez votre compte et les accès à vos projets</div>
+      </div>
+
+      {/* Account info */}
+      <Section title="Votre compte">
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{user.email}</div>
+            <div style={{ fontSize: 11, color: C.textLight, marginTop: 3 }}>
+              Connecté
+              {isAdmin && <span style={{ marginLeft: 8, fontSize: 10, background: "#F5F3FF", color: "#7C3AED", borderRadius: 4, padding: "1px 6px", fontWeight: 700 }}>SUPER ADMIN</span>}
+            </div>
+          </div>
+          <button onClick={onLogout} style={{ padding: "7px 16px", border: `1px solid ${C.border}`, borderRadius: 8, background: "#fff", color: "#DC2626", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+            Déconnexion
+          </button>
+        </div>
+      </Section>
+
+      {/* Project access */}
+      <Section title="Accès aux projets">
+        {/* Project selector */}
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>Projet</div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {projects.map(p => (
+              <button key={p.id} onClick={() => { setSelectedProjectId(p.id); setCurrentProjectId(p.id); }}
+                style={{ padding: "6px 14px", border: `2px solid ${p.id === selectedProjectId ? "#7C3AED" : C.border}`, borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", background: p.id === selectedProjectId ? "#F5F3FF" : "#fff", color: p.id === selectedProjectId ? "#7C3AED" : C.text }}>
+                {p.name}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <ProjectMembers project={selectedProject} ownerEmail={user.email} />
+      </Section>
+
+      {/* Superadmin info */}
+      {isAdmin && (
+        <Section title="⚡ Super admin">
+          <div style={{ fontSize: 12, color: C.textLight }}>
+            Vous avez accès à tous les projets de la plateforme.
+            Les super admins sont définis dans la configuration serveur.
+          </div>
+        </Section>
+      )}
+    </div>
+  );
+}

@@ -4,6 +4,7 @@ import { emptyDataMap, makeInitialProject, parseCSV } from "./lib/helpers";
 import { extractSF, extractGSC, extractGA, extractBing, extractSemrush, parseSemrush, filterByMode } from "./lib/parsers";
 import { buildUrlMaps, buildSfPageVectors, intraCorrFast, smIntraCorr } from "./lib/correlations";
 import { sbSaveProject, sbLoadProjects, sbGetHistory, sbGetLatest, sbDownload, sbGetPageTypes, sbSaveGeoAxes } from "./lib/supabase";
+import { sbLoadAccessibleProjects } from "./lib/auth";
 import AnalyseTab from "./tabs/AnalyseTab";
 import ImportTab from "./tabs/ImportTab";
 import MatrixTab from "./tabs/MatrixTab";
@@ -14,30 +15,34 @@ import SemrushTab from "./tabs/SemrushTab";
 import EvolutionTab from "./tabs/EvolutionTab";
 import GeoTab from "./tabs/GeoTab";
 import GeoAuditTab from "./tabs/GeoAuditTab";
+import HomeTab from "./tabs/HomeTab";
+import ManageTab from "./tabs/ManageTab";
+import { getCurrentUser, authLogout } from "./lib/auth";
 
 const INITIAL_PROJECT = makeInitialProject();
 const NAV_TABS = [
-  { key: "import",      label: "⚙️ Setup"      },
-  { key: "sites",       label: "Vue d'ensemble" },
-  { key: "pages",       label: "Pages"          },
-  { key: "evolution",   label: "📅 Évolution"   },
-  { key: "geo",         label: "🔍 Fan-outs"    },
-  { key: "analyse",     label: "✦ Analyse IA"   },
+  { key: "geo",         label: "🔍 Fan-outs"       },
+  { key: "geo_audit",   label: "📋 Audit GEO"       },
+  { key: "pages",       label: "Vue par page"        },
+  { key: "sites",       label: "Vue par site"        },
 ];
 
 const BURGER_TABS = [
-  { key: "matrix",      label: "Matrice"            },
-  { key: "semrush",     label: "📊 Semrush"         },
-  { key: "geo_audit",   label: "📋 Audit GEO"       },
-  { key: "allprojects", label: "◈ Tous les projets" },
+  { key: "import",      label: "⚙️ Setup"           },
+  { key: "manage",      label: "👤 Compte & projets" },
+  { key: "analyse",     label: "✦ Analyse IA"        },
+  { key: "home",        label: "🏠 Accueil"          },
+  { key: "evolution",   label: "📅 Évolution"        },
+  { key: "matrix",      label: "Matrice"             },
+  { key: "semrush",     label: "📊 Semrush"          },
+  { key: "allprojects", label: "◈ Tous les projets"  },
 ];
 
-function NavBar({ tab, setTab }) {
+function NavBar({ tab, setTab, user, onLogout }) {
   const [burgerOpen, setBurgerOpen] = useState(false);
   const burgerRef = useRef(null);
   const isBurgerTab = BURGER_TABS.some(t => t.key === tab);
 
-  // Close on outside click
   useEffect(() => {
     if (!burgerOpen) return;
     const handler = (e) => { if (!burgerRef.current?.contains(e.target)) setBurgerOpen(false); };
@@ -47,54 +52,94 @@ function NavBar({ tab, setTab }) {
 
   const tabBtn = (t) => (
     <button key={t.key} onClick={() => { setTab(t.key); setBurgerOpen(false); }} style={{
-      padding: "6px 14px", border: "none", borderRadius: 7, cursor: "pointer", fontSize: 13, fontWeight: 500,
+      padding: "6px 14px", border: "none", borderRadius: 7, cursor: "pointer", fontSize: 13, fontWeight: 600,
       background: tab === t.key ? C.blue : "transparent",
       color: tab === t.key ? "#fff" : C.textMid,
       transition: "all 0.15s", whiteSpace: "nowrap",
     }}>{t.label}</button>
   );
 
+  const burgerItems = BURGER_TABS.slice(0, 3); // Setup, Compte, Analyse IA — top 3 in burger
+  const moreTabs = BURGER_TABS.slice(3);       // rest in a sub-section
+
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
       {NAV_TABS.map(tabBtn)}
 
       {/* Burger */}
       <div ref={burgerRef} style={{ position: "relative" }}>
-        <button
-          onClick={() => setBurgerOpen(o => !o)}
-          style={{
-            padding: "6px 10px", border: "none", borderRadius: 7, cursor: "pointer", fontSize: 13,
-            background: isBurgerTab || burgerOpen ? C.blue : "transparent",
-            color: isBurgerTab || burgerOpen ? "#fff" : C.textMid,
-            transition: "all 0.15s", display: "flex", alignItems: "center", gap: 5,
-          }}
-          title="Plus d'onglets"
-        >
+        <button onClick={() => setBurgerOpen(o => !o)} style={{
+          padding: "6px 10px", border: "none", borderRadius: 7, cursor: "pointer", fontSize: 13,
+          background: isBurgerTab || burgerOpen ? C.blue : "transparent",
+          color: isBurgerTab || burgerOpen ? "#fff" : C.textMid,
+          transition: "all 0.15s", display: "flex", alignItems: "center", gap: 5,
+        }}>
           <span style={{ fontSize: 15, lineHeight: 1 }}>☰</span>
-          {isBurgerTab && (
-            <span style={{ fontSize: 12 }}>{BURGER_TABS.find(t => t.key === tab)?.label}</span>
-          )}
+          {isBurgerTab && <span style={{ fontSize: 12 }}>{BURGER_TABS.find(t => t.key === tab)?.label}</span>}
         </button>
 
         {burgerOpen && (
           <div style={{
             position: "absolute", right: 0, top: "calc(100% + 6px)", zIndex: 300,
             background: C.white, border: `1px solid ${C.border}`, borderRadius: 10,
-            boxShadow: "0 8px 24px rgba(0,0,0,0.1)", padding: "6px", minWidth: 180,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.1)", padding: "6px", minWidth: 200,
             display: "flex", flexDirection: "column", gap: 2,
           }}>
-            {BURGER_TABS.map(t => (
+            {/* Primary burger items */}
+            {burgerItems.map(t => (
               <button key={t.key} onClick={() => { setTab(t.key); setBurgerOpen(false); }} style={{
-                padding: "8px 14px", border: "none", borderRadius: 7, cursor: "pointer",
-                fontSize: 13, fontWeight: 500, textAlign: "left",
+                padding: "9px 14px", border: "none", borderRadius: 7, cursor: "pointer",
+                fontSize: 13, fontWeight: 600, textAlign: "left",
                 background: tab === t.key ? C.blueLight : "transparent",
-                color: tab === t.key ? C.blue : C.textMid,
-                transition: "background 0.12s",
+                color: tab === t.key ? C.blue : C.text,
               }}
                 onMouseEnter={e => { if (tab !== t.key) e.currentTarget.style.background = C.bg; }}
                 onMouseLeave={e => { if (tab !== t.key) e.currentTarget.style.background = "transparent"; }}
               >{t.label}</button>
             ))}
+            {/* Separator + more tabs */}
+            <div style={{ height: 1, background: C.border, margin: "4px 6px" }} />
+            {moreTabs.map(t => (
+              <button key={t.key} onClick={() => { setTab(t.key); setBurgerOpen(false); }} style={{
+                padding: "7px 14px", border: "none", borderRadius: 7, cursor: "pointer",
+                fontSize: 12, fontWeight: 500, textAlign: "left",
+                background: tab === t.key ? C.blueLight : "transparent",
+                color: tab === t.key ? C.blue : C.textMid,
+              }}
+                onMouseEnter={e => { if (tab !== t.key) e.currentTarget.style.background = C.bg; }}
+                onMouseLeave={e => { if (tab !== t.key) e.currentTarget.style.background = "transparent"; }}
+              >{t.label}</button>
+            ))}
+            {/* User section */}
+            {user && (
+              <>
+                <div style={{ height: 1, background: C.border, margin: "4px 6px" }} />
+                <div style={{ padding: "6px 14px", fontSize: 11, color: C.textLight }}>
+                  {user.email}
+                </div>
+                <button onClick={() => { onLogout(); setBurgerOpen(false); }} style={{
+                  padding: "7px 14px", border: "none", borderRadius: 7, cursor: "pointer",
+                  fontSize: 12, fontWeight: 500, textAlign: "left",
+                  background: "transparent", color: "#DC2626",
+                }}
+                  onMouseEnter={e => e.currentTarget.style.background = "#FEF2F2"}
+                  onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                >Déconnexion</button>
+              </>
+            )}
+            {!user && (
+              <>
+                <div style={{ height: 1, background: C.border, margin: "4px 6px" }} />
+                <button onClick={() => { setTab("home"); setBurgerOpen(false); }} style={{
+                  padding: "7px 14px", border: "none", borderRadius: 7, cursor: "pointer",
+                  fontSize: 12, fontWeight: 600, textAlign: "left",
+                  background: "transparent", color: "#7C3AED",
+                }}
+                  onMouseEnter={e => e.currentTarget.style.background = "#F5F3FF"}
+                  onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                >🔐 Se connecter</button>
+              </>
+            )}
           </div>
         )}
       </div>
@@ -107,6 +152,7 @@ export default function App() {
   const [projects, setProjects]             = useState([INITIAL_PROJECT]);
   const [currentProjectId, setCurrentProjectId] = useState(INITIAL_PROJECT.id);
   const [editingProjectName, setEditingProjectName] = useState(null);
+  const [user, setUser] = useState(() => getCurrentUser());
 
   const currentProject = projects.find(p => p.id === currentProjectId) || projects[0];
 
@@ -136,7 +182,7 @@ export default function App() {
 
   // ── UI state ─────────────────────────────────────────────────────
   const [confirmModal, setConfirmModal] = useState(null);
-  const [tab, setTab]                   = useState("import");
+  const [tab, setTab]                   = useState("geo");
   const [pageMode, setPageMode]         = useState("all");
   const [templateFilter, setTemplateFilter] = useState([]); // [] = all types, array for multi-select
   const [pageTypes, setPageTypes]           = useState({}); // { siteId: { urlPath: type } }
@@ -225,7 +271,10 @@ export default function App() {
     (async () => {
       setDbLoading(true);
       try {
-        const savedProjects = await sbLoadProjects();
+        const currentUser = getCurrentUser();
+        const savedProjects = currentUser
+          ? await sbLoadAccessibleProjects(currentUser.email).catch(() => sbLoadProjects())
+          : await sbLoadProjects();
           if (savedProjects && savedProjects.length > 0) {
           const restored = savedProjects.map(p => ({
             ...p,
@@ -480,12 +529,29 @@ export default function App() {
               <span style={{ fontWeight: 700, fontSize: 15, letterSpacing: -0.3 }}>CorrelDash</span>
               <span style={{ color: C.textLight, fontSize: 13 }}>· SEO × GEO</span>
             </div>
-            <NavBar tab={tab} setTab={setTab} />
+            <NavBar tab={tab} setTab={setTab} user={user} onLogout={() => { authLogout(); setUser(null); }} />
           </div>
         </div>
 
         {/* ── CONTENT ── */}
         <div style={{ maxWidth: 1400, margin: "0 auto", padding: "32px 28px" }}>
+
+          {tab === "home" && (
+            <HomeTab
+              user={user}
+              projects={projects}
+              currentProjectId={currentProjectId}
+              onLogin={(u) => { setUser(u); }}
+              onLogout={() => { authLogout(); setUser(null); }}
+              onSelectProject={(id) => { setCurrentProjectId(id); setTab("geo"); }}
+              onCreateProject={() => {
+                const p = makeInitialProject();
+                setProjects(prev => [...prev, p]);
+                setCurrentProjectId(p.id);
+                setTab("import");
+              }}
+            />
+          )}
 
           {tab === "import" && (
             <ImportTab
@@ -627,6 +693,17 @@ export default function App() {
               resultVals={resultVals}
             />
           )}
+          {tab === "manage" && (
+            <ManageTab
+              user={user}
+              projects={projects}
+              currentProjectId={currentProjectId}
+              setCurrentProjectId={setCurrentProjectId}
+              onLogin={(u) => setUser(u)}
+              onLogout={() => { authLogout(); setUser(null); }}
+            />
+          )}
+
           {tab === "allprojects" && (
             <AllProjectsTab
               projects={projects}
