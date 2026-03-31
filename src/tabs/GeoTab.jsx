@@ -912,12 +912,9 @@ Si aucune page pertinente de ${brandDomain} → recommande quel contenu créer e
         .trim();
       // Strip common AI preambles before showing
       const cleaned = (text || "")
-        .replace(/^(Je vais|En effectuant|Je recherche|D'accord[,.]?|Bien sûr[,.]?|Voici|Permettez)[^
-]*/gim, "")
-        .replace(/^(I will|Let me|Sure[,.]?)[^
-]*/gim, "")
-        .replace(/^\s*
-/gm, "")
+        .replace(/^(Je vais|En effectuant|Je recherche|D'accord[,.]?|Bien s[uû]r[,.]?|Voici|Permettez)[^\n]*/gim, "")
+        .replace(/^(I will|Let me|Sure[,.]?)[^\n]*/gim, "")
+        .replace(/^\s*\n/gm, "")
         .trim();
       setHint(cleaned || "Aucune recommandation générée.");
       setStatus("done");
