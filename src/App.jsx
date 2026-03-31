@@ -153,8 +153,11 @@ export default function App() {
   const [editingProjectName, setEditingProjectName] = useState(null);
   const [user, setUser] = useState(() => getCurrentUser());
 
-  const EMPTY_PROJECT = { sites: [], sfData: {}, gscData: {}, gaData: {}, bingData: {}, smData: {} };
-  const currentProject = projects.find(p => p.id === currentProjectId) || projects[0] || EMPTY_PROJECT;
+  const EMPTY_PROJECT = useMemo(() => ({ sites: [], sfData: {}, gscData: {}, gaData: {}, bingData: {}, smData: {} }), []);
+  const currentProject = useMemo(
+    () => projects.find(p => p.id === currentProjectId) || projects[0] || EMPTY_PROJECT,
+    [projects, currentProjectId, EMPTY_PROJECT]
+  );
 
   const currentProjectIdRef = useRef(currentProjectId);
   useEffect(() => { currentProjectIdRef.current = currentProjectId; }, [currentProjectId]);
@@ -166,12 +169,12 @@ export default function App() {
     []
   );
 
-  const sites    = currentProject.sites    || [];
-  const sfData   = currentProject.sfData   || {};
-  const gscData  = currentProject.gscData  || {};
-  const gaData   = currentProject.gaData   || {};
-  const bingData = currentProject.bingData || {};
-  const smData   = currentProject.smData   || {};
+  const sites    = useMemo(() => currentProject.sites    || [], [currentProject]);
+  const sfData   = useMemo(() => currentProject.sfData   || {}, [currentProject]);
+  const gscData  = useMemo(() => currentProject.gscData  || {}, [currentProject]);
+  const gaData   = useMemo(() => currentProject.gaData   || {}, [currentProject]);
+  const bingData = useMemo(() => currentProject.bingData || {}, [currentProject]);
+  const smData   = useMemo(() => currentProject.smData   || {}, [currentProject]);
 
   const setSfData   = useCallback((fn) => updateProject(p => ({ sfData:   typeof fn === "function" ? fn(p.sfData)   : fn })), [updateProject]);
   const setGscData  = useCallback((fn) => updateProject(p => ({ gscData:  typeof fn === "function" ? fn(p.gscData)  : fn })), [updateProject]);
