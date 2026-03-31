@@ -24,7 +24,6 @@ export default function PagesTab({ sites, sfData, gscData, bingData, pageMode, s
     });
     return m;
   }, [geoUrlIndex]); // eslint-disable-line react-hooks/exhaustive-deps
-  const hasGeoData = geoUrlIndex.length > 0;
 
   return (
   <div>
