@@ -547,7 +547,7 @@ function CatSelect({ value, categories, onChange, placeholder = "Catégorie…" 
 
 // ── Keywords sub-tab (v2) ─────────────────────────────────────────
 
-function KeywordsTab({ site, projectId, apiKey, model, axes, context, categories, setCategories, onQuestionsGenerated }) {
+function KeywordsTab({ site, projectId, apiKey, model, axes, context, categories, setCategories, onSaveAxes, onAxesChange, onQuestionsGenerated }) {
   const [keywords, setKeywords] = useState([]);
   const [input, setInput]       = useState("");
   const [loading, setLoading]   = useState(false);
@@ -725,8 +725,57 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
 
   const filtered = useMemo(() => filterCat ? keywords.filter(k => k.category_id === filterCat) : keywords, [keywords, filterCat]);
 
+  const [axesOpen, setAxesOpen] = useState(false);
+
   return (
     <div>
+      {/* ── Axes de génération (editable accordion) ── */}
+      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, marginBottom: 14, overflow: "hidden" }}>
+        <button onClick={() => setAxesOpen(o => !o)}
+          style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", background: "none", border: "none", cursor: "pointer" }}>
+          <div>
+            <span style={{ fontSize: 12, fontWeight: 700, color: C.textMid }}>🎯 Axes de génération des questions</span>
+            {!axesOpen && (
+              <span style={{ fontSize: 11, color: C.textLight, marginLeft: 8 }}>
+                {(axes || []).length} axe{(axes || []).length > 1 ? "s" : ""} configuré{(axes || []).length > 1 ? "s" : ""}
+              </span>
+            )}
+          </div>
+          <span style={{ fontSize: 12, color: C.textLight }}>{axesOpen ? "▲" : "▼"}</span>
+        </button>
+        {axesOpen && (
+          <div style={{ padding: "0 16px 16px", borderTop: `1px solid ${C.border}` }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
+              {(axes || []).map((a, i) => (
+                <div key={i} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <span style={{ fontSize: 11, color: C.textLight, minWidth: 18 }}>{i + 1}.</span>
+                  <input value={a} onChange={e => {
+                    const updated = [...(axes || [])];
+                    updated[i] = e.target.value;
+                    onAxesChange?.(updated);
+                  }}
+                    style={{ flex: 1, padding: "5px 9px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 12, color: C.text }} />
+                  <button onClick={() => {
+                    const updated = (axes || []).filter((_, j) => j !== i);
+                    onAxesChange?.(updated);
+                  }} style={{ fontSize: 11, color: C.textLight, background: "none", border: "none", cursor: "pointer", padding: "0 4px" }}>✕</button>
+                </div>
+              ))}
+              <button onClick={() => onAxesChange?.([...(axes || []), ""])}
+                style={{ fontSize: 11, color: "#2563EB", background: "none", border: `1px dashed ${C.border}`, borderRadius: 7, padding: "5px 12px", cursor: "pointer", textAlign: "left" }}>
+                + Ajouter un axe
+              </button>
+            </div>
+            <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end" }}>
+              <button onClick={async () => { if (onSaveAxes) { await onSaveAxes(axes); setAxesOpen(false); } }}
+                style={{ padding: "6px 16px", background: "#2563EB", color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                💾 Sauvegarder les axes
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* Input + CSV import */}
       <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20, marginBottom: 16 }}>
         <div style={{ display: "flex", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
@@ -1746,6 +1795,7 @@ function UrlsTab({ projectId, categories, brand, allResults }) {
   const [crawling, setCrawling] = useState({});
   const [filterType, setFilterType] = useState("all"); // all | brand | competitor | other
   const [filterTpl, setFilterTpl]   = useState("");
+  const [sortBy, setSortBy]         = useState("citations"); // citations | domain | alpha
   const [search, setSearch]         = useState("");
   const [view, setView]             = useState("urls"); // urls | domains
   const [openCrawl, setOpenCrawl]   = useState(null);
@@ -1780,12 +1830,13 @@ function UrlsTab({ projectId, categories, brand, allResults }) {
     if (identifiedComps.some(t => d.includes(t) || t.includes(d.split(".")[0]))) return "competitor_identified";
     return "other";
   };
+  // Map detailed class to display class
+  const mapCls = (c) => c.startsWith("competitor") ? "competitor" : c;
 
   const classColors = {
-    brand:                 { color: "#059669", bg: "#ECFDF5", border: "#059669", label: `✓ ${brandName || "Marque"}` },
-    competitor_known:      { color: "#DC2626", bg: "#FEF2F2", border: "#DC2626", label: "⚔️ Concurrent déclaré" },
-    competitor_identified: { color: "#EA580C", bg: "#FFF7ED", border: "#EA580C", label: "🔍 Concurrent identifié" },
-    other:                 { color: "#64748B", bg: "#F8FAFC", border: "#E2E8F0", label: "🔗 Autre source" },
+    brand:      { color: "#059669", bg: "#ECFDF5", border: "#059669", label: `✓ ${brandName || "Marque"}`,     filterKey: "brand" },
+    competitor: { color: "#DC2626", bg: "#FEF2F2", border: "#DC2626", label: "⚔️ Concurrents",                filterKey: "competitor" },
+    other:      { color: "#64748B", bg: "#F8FAFC", border: "#E2E8F0", label: "🔗 Autre source",               filterKey: "other" },
   };
 
   const TEMPLATE_TYPES = ["article","landing","fiche","FAQ","comparatif","forum","media","institutionnel","autre"];
@@ -1800,7 +1851,12 @@ function UrlsTab({ projectId, categories, brand, allResults }) {
       if (filterType === "other" && cls !== "other") return false;
     }
     return true;
-  }), [urls, search, filterTpl, filterType, brandName, brandAliases, competitors, allResults]); // eslint-disable-line react-hooks/exhaustive-deps
+  }).sort((a, b) => {
+    if (sortBy === "citations") return (b.count_as_source + b.count_in_answer) - (a.count_as_source + a.count_in_answer);
+    if (sortBy === "domain") return (a.domain || "").localeCompare(b.domain || "");
+    if (sortBy === "alpha") return (a.url || "").localeCompare(b.url || "");
+    return 0;
+  }), [urls, search, filterTpl, filterType, sortBy, brandName, brandAliases, competitors, allResults]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Domain aggregation
   const domains = useMemo(() => {
@@ -1817,8 +1873,8 @@ function UrlsTab({ projectId, categories, brand, allResults }) {
 
   // Counts per class
   const classCounts = useMemo(() => {
-    const c = { brand: 0, competitor_known: 0, competitor_identified: 0, other: 0 };
-    urls.forEach(u => { c[classifyUrl(u)]++; });
+    const c = { brand: 0, competitor: 0, other: 0 };
+    urls.forEach(u => { const cls = mapCls(classifyUrl(u)); if (c[cls] !== undefined) c[cls]++; });
     return c;
   }, [urls, brandName, brandAliases, competitors, allResults]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1880,20 +1936,32 @@ function UrlsTab({ projectId, categories, brand, allResults }) {
     <div>
       {/* ── Legend strip ── */}
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-        {Object.entries(classColors).map(([cls, meta]) => (
-          <button key={cls} onClick={() => setFilterType(filterType === cls ? "all" : cls)}
-            style={{
-              display: "flex", alignItems: "center", gap: 6, padding: "5px 12px",
-              borderRadius: 20, fontSize: 11, fontWeight: 600, cursor: "pointer",
-              border: `2px solid ${filterType === cls ? meta.color : meta.border}`,
-              background: filterType === cls ? meta.color : meta.bg,
-              color: filterType === cls ? "#fff" : meta.color,
-              transition: "all 0.15s",
-            }}>
-            {meta.label}
-            <span style={{ opacity: 0.75, fontWeight: 400 }}>({classCounts[cls]})</span>
+        {Object.entries(classColors).map(([cls, meta]) => {
+          const fk = meta.filterKey;
+          const active = filterType === fk;
+          const count = classCounts[cls] ?? 0;
+          return (
+            <button key={cls} onClick={() => setFilterType(active ? "all" : fk)}
+              style={{
+                display: "flex", alignItems: "center", gap: 6, padding: "6px 14px",
+                borderRadius: 20, fontSize: 11, fontWeight: 700, cursor: "pointer",
+                border: `2px solid ${active ? meta.color : meta.border}`,
+                background: active ? meta.color : meta.bg,
+                color: active ? "#fff" : meta.color,
+                transition: "all 0.15s",
+              }}>
+              {meta.label}
+              <span style={{ opacity: 0.75, fontWeight: 500 }}>({count})</span>
+            </button>
+          );
+        })}
+        {/* "Tout" reset */}
+        {filterType !== "all" && (
+          <button onClick={() => setFilterType("all")}
+            style={{ padding: "6px 12px", borderRadius: 20, fontSize: 11, fontWeight: 600, cursor: "pointer", border: `1px solid ${C.border}`, background: C.bg, color: C.textMid }}>
+            ✕ Tout afficher
           </button>
-        ))}
+        )}
       </div>
 
       {/* ── Filters + view toggle ── */}
@@ -1904,6 +1972,12 @@ function UrlsTab({ projectId, categories, brand, allResults }) {
           style={{ padding: "5px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11, color: C.text }}>
           <option value="">Tous templates</option>
           {TEMPLATE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+        </select>
+        <select value={sortBy} onChange={e => setSortBy(e.target.value)}
+          style={{ padding: "5px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11, color: C.text }}>
+          <option value="citations">Trier : + citées</option>
+          <option value="domain">Trier : domaine</option>
+          <option value="alpha">Trier : URL A→Z</option>
         </select>
         <span style={{ fontSize: 11, color: C.textLight }}>{filtered.length} URL{filtered.length > 1 ? "s" : ""} · {domains.length} domaine{domains.length > 1 ? "s" : ""}</span>
 
@@ -1925,7 +1999,7 @@ function UrlsTab({ projectId, categories, brand, allResults }) {
       {view === "urls" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
           {filtered.map(u => {
-            const cls  = classifyUrl(u);
+            const cls  = mapCls(classifyUrl(u));
             const meta = classColors[cls];
             const isOpen = openCrawl === u.id;
             const hasSections = u.crawl_sections?.length > 0;
@@ -2003,7 +2077,7 @@ function UrlsTab({ projectId, categories, brand, allResults }) {
       {view === "domains" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {domains.map((d, i) => {
-            const cls  = classifyUrl({ domain: d.domain });
+            const cls  = mapCls(classifyUrl({ domain: d.domain }));
             const meta = classColors[cls];
             const total = d.count_as_source + d.count_in_answer;
             const maxTotal = domains[0] ? domains[0].count_as_source + domains[0].count_in_answer : 1;
@@ -2045,6 +2119,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
   const [model] = useState("gpt-4o-mini"); // kept for variation generation (OpenAI completions endpoint)
   const [brand, setBrand]           = useState(null);
   const [runMode, setRunMode]       = useState("parallel"); // parallel | sequential
+  const [providerConfigOpen, setProviderConfigOpen] = useState(false);
   const [activeProviders, setActiveProviders] = useState(() => {
     // Start with all providers that have keys configured
     if (project) {
@@ -2150,8 +2225,15 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
         <div style={{ fontSize: 12, color: C.textLight }}>Analysez la présence de vos marques dans les réponses ChatGPT</div>
       </div>
 
-      {/* ── Config strip: site + providers + run mode ── */}
-      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: "16px 20px", marginBottom: 20 }}>
+      {/* ── Config strip: Providers (collapsible) ── */}
+      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, marginBottom: 20, overflow: "hidden" }}>
+        <button onClick={() => setProviderConfigOpen(o => !o)}
+          style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 20px", background: "none", border: "none", cursor: "pointer", textAlign: "left" }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>⚙️ Gestion des Providers</span>
+          <span style={{ fontSize: 13, color: C.textLight }}>{providerConfigOpen ? "▲" : "▼"}</span>
+        </button>
+        {providerConfigOpen && (
+        <div style={{ padding: "0 20px 20px", borderTop: `1px solid ${C.border}` }}>
 
         {/* Row 1: site + run mode */}
         <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap", marginBottom: 16 }}>
@@ -2251,6 +2333,9 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
             );
           })}
         </div>
+        </div>
+        </div>
+        )}
       </div>
 
       {/* ── Brand config (per site) ── */}
@@ -2295,83 +2380,20 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
         )}
       </div>
 
-      {/* ── Axes editor ── */}
-      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: "14px 20px", marginBottom: 20 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div>
-            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMid, marginBottom: 2 }}>Axes de génération des questions</div>
-            {!axesEditing && (
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 4 }}>
-                {axes.map((a, i) => (
-                  <span key={i} style={{ fontSize: 11, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: "2px 9px", color: C.textMid }}>
-                    {i + 1}. {a}
-                  </span>
-                ))}
-              </div>
-            )}
-          </div>
-          <Btn onClick={() => { setAxesDraft([...axes]); setAxesEditing(e => !e); }} variant="outline" small color={C.blue}>
-            {axesEditing ? "Annuler" : "✏️ Modifier"}
-          </Btn>
-        </div>
-
-        {axesEditing && (
-          <div style={{ marginTop: 14 }}>
-            <div style={{ fontSize: 11, color: C.textLight, marginBottom: 10 }}>
-              Un axe par ligne · utilisé comme instruction de génération pour chaque mot-clé
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
-              {(axesDraft || axes).map((a, i) => (
-                <div key={i} style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  <span style={{ fontSize: 11, color: C.textLight, minWidth: 20, textAlign: "right" }}>{i + 1}.</span>
-                  <input
-                    value={a}
-                    onChange={e => setAxesDraft(prev => prev.map((v, j) => j === i ? e.target.value : v))}
-                    style={{ flex: 1, padding: "6px 10px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 12, color: C.text }}
-                  />
-                  <button
-                    onClick={() => setAxesDraft(prev => prev.filter((_, j) => j !== i))}
-                    style={{ padding: "4px 8px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.white, color: C.textLight, fontSize: 11, cursor: "pointer" }}
-                  >✕</button>
-                </div>
-              ))}
-              {(axesDraft || axes).length < 10 && (
-                <button
-                  onClick={() => setAxesDraft(prev => [...prev, ""])}
-                  style={{ marginLeft: 28, padding: "5px 12px", border: `1px dashed ${C.border}`, borderRadius: 7, background: C.white, color: C.textLight, fontSize: 11, cursor: "pointer", textAlign: "left" }}
-                >+ Ajouter un axe</button>
-              )}
-            </div>
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <Btn onClick={async () => {
-                const cleaned = (axesDraft || []).map(a => a.trim()).filter(Boolean);
-                if (!cleaned.length) return;
-                setAxes(cleaned);
-                setAxesEditing(false);
-                await onSaveAxes?.(cleaned);
-              }} color="#059669">💾 Sauvegarder</Btn>
-              <button onClick={() => { setAxesDraft([...DEFAULT_AXES]); }} style={{ padding: "6px 12px", border: `1px solid ${C.border}`, borderRadius: 8, background: C.white, color: C.textLight, fontSize: 12, cursor: "pointer" }}>
-                ↺ Réinitialiser
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-
       {/* ── Sub-nav ── */}
-      <div style={{ display: "flex", gap: 4, marginBottom: 20, background: C.bg, borderRadius: 10, padding: 4, width: "fit-content" }}>
+      <div style={{ display: "flex", gap: 6, marginBottom: 20 }}>
         {[
-          { key: "keywords",  label: "🔑 Mots-clés",     color: "#D97706" },
-          { key: "questions", label: "💬 Questions",      color: "#7C3AED" },
-          { key: "urls",      label: "🔗 Sources citées", color: "#2563EB" },
+          { key: "keywords",  label: "🔑 Mots-clés",         color: "#D97706", count: allResults.filter(r => r.site_id === site?.id).length > 0 ? null : null },
+          { key: "questions", label: "💬 Questions",          color: "#7C3AED" },
+          { key: "urls",      label: "🔗 Sources & Mentions", color: "#2563EB" },
         ].map(t => (
           <button key={t.key} onClick={() => setSubTab(t.key)} style={{
-            padding: "8px 20px", borderRadius: 8, fontSize: 13, fontWeight: 700,
-            border: subTab === t.key ? `2px solid ${t.color}` : `2px solid transparent`,
+            flex: 1, padding: "12px 16px", borderRadius: 10, fontSize: 14, fontWeight: 800,
+            border: "2px solid " + (subTab === t.key ? t.color : t.color + "44"),
             cursor: "pointer",
-            background: subTab === t.key ? t.color : "transparent",
-            color: subTab === t.key ? "#fff" : C.textLight,
-            boxShadow: subTab === t.key ? `0 2px 8px ${t.color}44` : "none",
+            background: subTab === t.key ? t.color : "#fff",
+            color: subTab === t.key ? "#fff" : t.color,
+            boxShadow: subTab === t.key ? "0 4px 14px " + t.color + "44" : "0 1px 3px rgba(0,0,0,0.05)",
             transition: "all 0.15s",
           }}>{t.label}</button>
         ))}
@@ -2388,6 +2410,8 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
           context={brand?.context || ""}
           categories={categories}
           setCategories={setCategories}
+          onSaveAxes={onSaveAxes}
+          onAxesChange={(a) => setAxes(a)}
           onQuestionsGenerated={() => { setQuestionsKey(k => k + 1); setSubTab("questions"); }}
         />
       )}
