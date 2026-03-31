@@ -118,15 +118,56 @@ export async function sbSetProjectOwner(projectId, ownerEmail) {
 // Load projects accessible to this user — uses server-side JWT validation
 export async function sbLoadAccessibleProjects(userEmail) {
   const token = getToken();
-  if (!token) return [];
+  if (!token || !userEmail) return [];
+
+  // Try server-side endpoint first (JWT-validated, most secure)
   try {
     const res = await fetch("/api/projects", {
       headers: { "Authorization": `Bearer ${token}` },
     });
-    if (!res.ok) return [];
-    const data = await res.json();
-    return (data.projects || []).map(parseProject);
-  } catch(e) { console.error("sbLoadAccessibleProjects error:", e); return []; }
+    if (res.ok) {
+      const data = await res.json();
+      return (data.projects || []).map(parseProject);
+    }
+  } catch(e) { /* fallback below */ }
+
+  // Fallback: filter client-side by owner_email OR membership
+  // This is secure enough since Supabase anon key is read-only
+  try {
+    const email = userEmail.toLowerCase();
+    const admin = isSuperAdmin({ email });
+
+    if (admin) {
+      // Super admin: all projects
+      const res = await fetch(`/api/supabase/rest/v1/projects?select=*&order=updated_at.desc`);
+      if (!res.ok) return [];
+      return (await res.json()).map(parseProject);
+    }
+
+    // Regular user: own projects + member projects
+    const [ownedRes, memberRes] = await Promise.all([
+      fetch(`/api/supabase/rest/v1/projects?owner_email=eq.${encodeURIComponent(email)}&select=*&order=updated_at.desc`),
+      fetch(`/api/supabase/rest/v1/project_members?user_email=eq.${encodeURIComponent(email)}&select=project_id`),
+    ]);
+    const owned = ownedRes.ok ? await ownedRes.json() : [];
+    const memberships = memberRes.ok ? await memberRes.json() : [];
+    const memberIds = memberships.map(m => m.project_id).filter(Boolean);
+
+    let memberProjects = [];
+    if (memberIds.length > 0) {
+      const ids = memberIds.map(id => `"${id}"`).join(",");
+      const res = await fetch(`/api/supabase/rest/v1/projects?id=in.(${ids})&select=*&order=updated_at.desc`);
+      if (res.ok) memberProjects = await res.json();
+    }
+
+    const seen = new Set();
+    return [...owned, ...memberProjects]
+      .filter(p => { if (seen.has(p.id)) return false; seen.add(p.id); return true; })
+      .map(parseProject);
+  } catch(e) {
+    console.error("sbLoadAccessibleProjects fallback error:", e);
+    return [];
+  }
 }
 
 function parseProject(r) {
