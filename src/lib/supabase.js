@@ -492,10 +492,6 @@ export async function sbSaveProviderKeys(project_id, keys) {
 }
 
 // ── GEO — PRESENCE HISTORY ───────────────────────────────────────
-    const data = await res.json();
-    return Array.isArray(data) ? data[0] : data;
-  } catch(e) { console.warn("sbSavePresence error:", e.message); return null; }
-}
 
 export async function sbGetPresenceHistory(question_id) {
   const res = await fetch(`${PROXY}/rest/v1/geo_presence_history?question_id=eq.${encodeURIComponent(question_id)}&order=test_date.asc&select=provider_id,test_date,brand_mentioned,brand_position,brand_in_sources`);
