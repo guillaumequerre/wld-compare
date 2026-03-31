@@ -153,7 +153,8 @@ export default function App() {
   const [editingProjectName, setEditingProjectName] = useState(null);
   const [user, setUser] = useState(() => getCurrentUser());
 
-  const currentProject = projects.find(p => p.id === currentProjectId) || projects[0];
+  const EMPTY_PROJECT = { sites: [], sfData: {}, gscData: {}, gaData: {}, bingData: {}, smData: {} };
+  const currentProject = projects.find(p => p.id === currentProjectId) || projects[0] || EMPTY_PROJECT;
 
   const currentProjectIdRef = useRef(currentProjectId);
   useEffect(() => { currentProjectIdRef.current = currentProjectId; }, [currentProjectId]);
@@ -165,12 +166,12 @@ export default function App() {
     []
   );
 
-  const sites    = currentProject.sites;
-  const sfData   = currentProject.sfData;
-  const gscData  = currentProject.gscData;
-  const gaData   = currentProject.gaData;
-  const bingData = currentProject.bingData;
-  const smData   = currentProject.smData;
+  const sites    = currentProject.sites    || [];
+  const sfData   = currentProject.sfData   || {};
+  const gscData  = currentProject.gscData  || {};
+  const gaData   = currentProject.gaData   || {};
+  const bingData = currentProject.bingData || {};
+  const smData   = currentProject.smData   || {};
 
   const setSfData   = useCallback((fn) => updateProject(p => ({ sfData:   typeof fn === "function" ? fn(p.sfData)   : fn })), [updateProject]);
   const setGscData  = useCallback((fn) => updateProject(p => ({ gscData:  typeof fn === "function" ? fn(p.gscData)  : fn })), [updateProject]);
@@ -199,9 +200,8 @@ export default function App() {
 
   // Sync selection states when project or sites change
   useEffect(() => {
-    const ids = sites.map(s => s.id);
-    setMatrixSites(ids);
-    setRadarSites(ids);
+    const ids = (sites || []).map(s => s.id);
+    if (ids.length) { setMatrixSites(ids); setRadarSites(ids); }
     setAnalysis(null);
     setAnalysisError(null);
     setTemplateFilter([]);
@@ -209,7 +209,8 @@ export default function App() {
   }, [currentProjectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    const ids = sites.map(s => s.id);
+    const ids = (sites || []).map(s => s.id);
+    if (!ids.length) return;
     setMatrixSites(prev => { const kept = prev.filter(id => ids.includes(id)); return kept.length ? kept : ids; });
     setRadarSites(prev  => { const kept = prev.filter(id => ids.includes(id)); return kept.length ? kept : ids; });
   }, [sites]); // eslint-disable-line react-hooks/exhaustive-deps
