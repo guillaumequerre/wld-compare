@@ -2168,8 +2168,6 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
   const [brandDraft, setBrandDraft] = useState({ brand_name: "", brand_domain: "", brand_aliases: "", competitors: "", context: "" });
   const [categories, setCategories] = useState([]);
   const [axes, setAxes]             = useState(geoAxes || DEFAULT_AXES);
-  const [axesEditing, setAxesEditing] = useState(false);
-  const [axesDraft, setAxesDraft]   = useState(null);
 
   const site = sites.find(s => s.id === selectedSite) || sites[0];
 
