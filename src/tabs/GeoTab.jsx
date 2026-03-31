@@ -2334,7 +2334,6 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
           })}
         </div>
         </div>
-        </div>
         )}
       </div>
 
