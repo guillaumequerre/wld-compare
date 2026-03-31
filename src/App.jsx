@@ -19,16 +19,15 @@ import HomeTab from "./tabs/HomeTab";
 import ManageTab from "./tabs/ManageTab";
 import { getCurrentUser, authLogout } from "./lib/auth";
 
-const INITIAL_PROJECT = makeInitialProject();
 const NAV_TABS = [
-  { key: "geo",         label: "🔍 Fan-outs"       },
-  { key: "geo_audit",   label: "📋 Audit GEO"       },
-  { key: "pages",       label: "Vue par page"        },
-  { key: "sites",       label: "Vue par site"        },
+  { key: "import",      label: "⚙️ Setup"            },
+  { key: "geo",         label: "🔍 Fan-outs"         },
+  { key: "geo_audit",   label: "📋 Audit GEO"        },
+  { key: "pages",       label: "Vue par page"         },
+  { key: "sites",       label: "Vue par site"         },
 ];
 
 const BURGER_TABS = [
-  { key: "import",      label: "⚙️ Setup"           },
   { key: "manage",      label: "👤 Compte & projets" },
   { key: "analyse",     label: "✦ Analyse IA"        },
   { key: "home",        label: "🏠 Accueil"          },
@@ -149,8 +148,8 @@ function NavBar({ tab, setTab, user, onLogout }) {
 
 export default function App() {
   // ── Projects ─────────────────────────────────────────────────────
-  const [projects, setProjects]             = useState([INITIAL_PROJECT]);
-  const [currentProjectId, setCurrentProjectId] = useState(INITIAL_PROJECT.id);
+  const [projects, setProjects]             = useState([]);
+  const [currentProjectId, setCurrentProjectId] = useState(null);
   const [editingProjectName, setEditingProjectName] = useState(null);
   const [user, setUser] = useState(() => getCurrentUser());
 
@@ -347,10 +346,9 @@ export default function App() {
           // Set page_types for the active project immediately
           if (ptMap[bestId]) setPageTypes(ptMap[bestId]);
         } else {
-          await sbSaveProject(INITIAL_PROJECT);
-          loadedProjectsRef.current.add(INITIAL_PROJECT.id);
-          const history = await sbGetHistory(INITIAL_PROJECT.id);
-          setDbHistory(history);
+          // No projects yet — leave state empty, user will create via UI
+          setProjects([]);
+          setCurrentProjectId(null);
         }
       } catch (e) { console.warn("Supabase init error", e); }
       finally { setDbLoading(false); }
@@ -571,19 +569,21 @@ export default function App() {
               onLogout={() => { authLogout(); setUser(null); }}
               onSelectProject={(id) => { setCurrentProjectId(id); setTab("geo"); }}
               onCreateProject={() => {
-                const p = { ...makeInitialProject(), owner_email: user?.email || null };
+                const p = makeInitialProject(user?.email || null);
                 setProjects(prev => [...prev, p]);
                 setCurrentProjectId(p.id);
+                sbSaveProject(p).catch(() => {});
                 goTo("import");
               }}
             />
           )}
 
-          {tab === "import" && (
+          {tab === "import" && user && (
             <ImportTab
               projects={projects}
               currentProjectId={currentProjectId}
               setCurrentProjectId={setCurrentProjectId}
+              ownerEmail={user?.email || null}
               editingProjectName={editingProjectName}
               setEditingProjectName={setEditingProjectName}
               setProjects={setProjects}
@@ -696,7 +696,7 @@ export default function App() {
             />
           )}
 
-          {tab === "geo" && (
+          {tab === "geo" && user && (
             <GeoTab
               sites={sites}
               projectId={currentProjectId}
@@ -709,7 +709,7 @@ export default function App() {
             />
           )}
 
-          {tab === "geo_audit" && (
+          {tab === "geo_audit" && user && (
             <GeoAuditTab
               sites={sites}
               projectId={currentProjectId}
@@ -717,6 +717,7 @@ export default function App() {
               corrMatrix={filteredCorrMatrix}
               metrics={metrics}
               resultVals={resultVals}
+              bingData={bingData}
             />
           )}
           {tab === "manage" && (

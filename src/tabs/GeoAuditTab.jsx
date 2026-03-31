@@ -658,7 +658,7 @@ RÈGLES : Commence directement par ## 🔍. Pas d'introduction. Chiffres précis
   );
 }
 
-export default function GeoAuditTab({ sites, projectId, project = null, corrMatrix = [], metrics = [], resultVals = [] }) {
+export default function GeoAuditTab({ sites, projectId, project = null, corrMatrix = [], metrics = [], resultVals = [], bingData = {} }) {
   const [selectedSite, setSelectedSite] = useState(sites[0]?.id || "");
   const [aiText, setAiText] = useState("");
   const [exporting, setExporting] = useState(false);
@@ -1042,44 +1042,124 @@ export default function GeoAuditTab({ sites, projectId, project = null, corrMatr
               </div>
             </CrossCard>
 
-            {/* 2. Bing × GEO */}
-            <CrossCard icon="🤖" title="Données Bing AI × Présence GEO"
-              sub="Corrélation entre la visibilité Bing AI et la citation dans les réponses LLM">
-              <div style={{ display: "grid", gridTemplateColumns: hasBing ? "1fr 1fr" : "1fr", gap: 20 }}>
-                <div>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>État actuel</div>
-                  {hasBing ? (<>
-                    <Signal label="Citations Bing AI totales" value={bingTotal.toLocaleString()} note="toutes pages confondues" color="#7C3AED" />
-                    <Signal label="Pages citées au moins 1×" value={bingPages} color="#7C3AED" />
-                    <Signal label={`Présence GEO (fan-outs)`} value={`${geoPct}%`} note={`${audit.withBrand}/${total} résultats`} color={geoPct >= 50 ? "#059669" : "#DC2626"} />
-                    <Signal label="Cité en tant que source" value={withSource} note="résultats avec URL marque" color="#2563EB" />
-                  </>) : <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>Importez un export Bing Webmaster pour ces données</div>}
-                </div>
-                <div>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>Interprétation</div>
-                  {hasBing ? (
-                    <div style={{ fontSize: 12, color: C.textMid, lineHeight: 1.7 }}>
-                      {bingTotal > 0 && bingPages > 0 ? (
-                        <>{bingPages} page{bingPages>1?"s":""} sont déjà reconnues par Bing AI.
-                        {geoPct >= 50 ? " La forte présence GEO confirme une bonne autorité perçue par les LLMs." :
-                          geoPct > 0 ? " La présence GEO partielle indique un potentiel à développer — ces pages citées par Bing devraient être renforcées." :
-                          " Malgré les citations Bing, la présence dans les fan-outs est faible — le contenu doit mieux répondre aux questions de recommandation."}</>
-                      ) : "Aucune citation Bing détectée — la marque n'est pas encore reconnue comme autorité par l'IA de Bing."}
+            {/* 2. Bing AI Performance × Fan-outs */}
+            <CrossCard icon="🤖" title="Bing AI Performance × Fan-outs"
+              sub="Croisement entre les pages reconnues par Bing AI et la présence dans les LLMs">
+              {(() => {
+                // Build URL-level Bing data for this site
+                const siteId = site?.id;
+                const bingRows = (bingData[siteId] || []);
+                const bingByUrl = {};
+                bingRows.forEach(r => {
+                  const url = (r["url"] || r["adresse"] || r["address"] || "").trim().toLowerCase();
+                  if (!url) return;
+                  const cits = Number(r["citations"] || r["mentions"] || r["appearancecount"] || 0);
+                  if (!bingByUrl[url]) bingByUrl[url] = { url, citations: 0 };
+                  bingByUrl[url].citations += cits;
+                });
+                const bingUrlsSorted = Object.values(bingByUrl).sort((a,b) => b.citations - a.citations);
+
+                // Cross with Fan-out URL index
+                const fanoutUrlSet = new Set(urlIndex.map(u => (u.url || "").toLowerCase()));
+                const bingAlsoInFanout = bingUrlsSorted.filter(b => fanoutUrlSet.has(b.url));
+                const bingOnlyBing    = bingUrlsSorted.filter(b => !fanoutUrlSet.has(b.url));
+                const fanoutNotInBing = urlIndex.filter(u => !bingByUrl[(u.url||"").toLowerCase()]);
+
+                // Gap score: 0-100 (how aligned Bing citations and LLM citations are)
+                const alignScore = bingUrlsSorted.length > 0
+                  ? Math.round((bingAlsoInFanout.length / Math.min(bingUrlsSorted.length, urlIndex.length + 1)) * 100)
+                  : null;
+
+                const scoreColor = alignScore === null ? C.textLight : alignScore >= 60 ? "#059669" : alignScore >= 30 ? "#D97706" : "#DC2626";
+                const scoreLabel = alignScore === null ? "—" : alignScore >= 60 ? "Bonne cohérence" : alignScore >= 30 ? "Cohérence partielle" : "Faible cohérence";
+
+                return (
+                  <div>
+                    {/* KPI row */}
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginBottom: 20 }}>
+                      {[
+                        { label: "Citations Bing AI", value: bingTotal.toLocaleString(), sub: `${bingPages} pages indexées`, color: "#7C3AED" },
+                        { label: "Présence Fan-outs", value: `${geoPct}%`, sub: `${audit.withBrand}/${total} résultats`, color: geoPct >= 50 ? "#059669" : "#DC2626" },
+                        { label: "Cité en source LLM", value: withSource, sub: "URLs marque en source", color: "#2563EB" },
+                        { label: "Alignement Bing × LLM", value: alignScore !== null ? `${alignScore}%` : "—", sub: scoreLabel, color: scoreColor },
+                      ].map(k => (
+                        <div key={k.label} style={{ background: C.bg, borderRadius: 10, padding: "12px 14px", border: `1px solid ${C.border}` }}>
+                          <div style={{ fontSize: 10, color: C.textLight, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 4 }}>{k.label}</div>
+                          <div style={{ fontSize: 20, fontWeight: 800, color: k.color }}>{k.value}</div>
+                          <div style={{ fontSize: 10, color: C.textLight, marginTop: 2 }}>{k.sub}</div>
+                        </div>
+                      ))}
                     </div>
-                  ) : <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>—</div>}
-                </div>
-              </div>
-              <div style={{ marginTop: 16 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>Pistes d'optimisation GEO via Bing AI</div>
-                <Lead priority="🌐 Autorité de la marque" color="#7C3AED" bg="#F5F3FF"
-                  text="Bing AI s'appuie sur Bing Index et les données Copilot. Soumettez vos pages importantes via Bing Webmaster Tools, vérifiez votre profil d'entreprise sur Bing Places, et créez une page Wikipedia ou Wikidata si absente." />
-                <Lead priority="📖 Contenu de référence" color="#059669" bg="#ECFDF5"
-                  text="Les pages citées par Bing AI ont tendance à être des ressources exhaustives. Créez des pages 'guide' ou 'comparatif' qui agrègent les informations sur votre secteur — ces formats génèrent des citations naturelles." />
-                <Lead priority="🔗 Backlinks depuis les sources citées" color="#2563EB" bg="#EFF6FF"
-                  text={`Les domaines les plus cités dans vos fan-outs (${Object.keys(audit.topDomains).slice(0,3).join(", ")}) ont de l'autorité auprès des LLMs. Obtenez des liens depuis ces domaines pour transférer leur autorité vers vos pages.`} />
-                <Lead priority="📊 Structured data for AI" color="#D97706" bg="#FFFBEB"
-                  text="Bing Copilot lit les données structurées. Ajoutez les schemas SpeakableSpecification, MentionOf et RecommendedArticle pour signaler les passages à extraire dans les réponses IA." />
-              </div>
+
+                    {hasBing ? (
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, marginBottom: 20 }}>
+                        {/* Col 1: Pages Bing + LLM (double force) */}
+                        <div>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: "#059669", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>
+                            ✓ Citées Bing ET LLM ({bingAlsoInFanout.length})
+                          </div>
+                          {bingAlsoInFanout.length === 0
+                            ? <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>Aucun recoupement</div>
+                            : bingAlsoInFanout.slice(0, 5).map((u, i) => (
+                              <div key={i} style={{ padding: "5px 0", borderBottom: `1px solid ${C.borderLight}` }}>
+                                <div style={{ fontSize: 11, color: "#059669", fontWeight: 600, wordBreak: "break-all" }}>{u.url.replace(/^https?:\/\/[^/]+/, "")}</div>
+                                <div style={{ fontSize: 10, color: C.textLight }}>{u.citations} cit. Bing</div>
+                              </div>
+                            ))
+                          }
+                        </div>
+                        {/* Col 2: Pages Bing seulement (gap LLM) */}
+                        <div>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: "#D97706", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>
+                            ⚡ Bing seulement ({bingOnlyBing.length})
+                          </div>
+                          <div style={{ fontSize: 10, color: C.textLight, marginBottom: 6 }}>Reconnues par Bing, absentes des fan-outs → priorité d'optimisation</div>
+                          {bingOnlyBing.slice(0, 5).map((u, i) => (
+                            <div key={i} style={{ padding: "5px 0", borderBottom: `1px solid ${C.borderLight}` }}>
+                              <div style={{ fontSize: 11, color: "#D97706", fontWeight: 600, wordBreak: "break-all" }}>{u.url.replace(/^https?:\/\/[^/]+/, "")}</div>
+                              <div style={{ fontSize: 10, color: C.textLight }}>{u.citations} cit. Bing · absente LLM</div>
+                            </div>
+                          ))}
+                        </div>
+                        {/* Col 3: Pages LLM seulement (non indexées Bing) */}
+                        <div>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: "#2563EB", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>
+                            🔗 LLM seulement ({fanoutNotInBing.length})
+                          </div>
+                          <div style={{ fontSize: 10, color: C.textLight, marginBottom: 6 }}>Citées par les LLMs mais non reconnues par Bing → soumettre à Bing Webmaster</div>
+                          {fanoutNotInBing.slice(0, 5).map((u, i) => (
+                            <div key={i} style={{ padding: "5px 0", borderBottom: `1px solid ${C.borderLight}` }}>
+                              <div style={{ fontSize: 11, color: "#2563EB", fontWeight: 600, wordBreak: "break-all" }}>{(u.url||"").replace(/^https?:\/\/[^/]+/, "")}</div>
+                              <div style={{ fontSize: 10, color: C.textLight }}>{(u.count_as_source||0)+(u.count_in_answer||0)} cit. LLM · absente Bing</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{ background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 10, padding: "12px 16px", marginBottom: 20, fontSize: 12, color: "#92400E" }}>
+                        Importez un export Bing Webmaster Tools pour débloquer l'analyse croisée URL par URL.
+                      </div>
+                    )}
+
+                    {/* Pistes actionnables */}
+                    <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>Pistes actionnables</div>
+                    {bingOnlyBing.length > 0 && (
+                      <Lead priority={`⚡ ${bingOnlyBing.length} page${bingOnlyBing.length>1?"s":""} Bing non citées par les LLMs`} color="#D97706" bg="#FFFBEB"
+                        text={`Ces pages sont reconnues par Bing AI mais absentes des réponses LLM. Renforcez leur contenu : ajoutez des listes de recommandation, répondez explicitement à des questions ("Quel est le meilleur…?"), et insérez des données structurées FAQ.`} />
+                    )}
+                    {fanoutNotInBing.length > 0 && (
+                      <Lead priority={`🔗 ${fanoutNotInBing.length} page${fanoutNotInBing.length>1?"s":""} LLM non indexées par Bing`} color="#2563EB" bg="#EFF6FF"
+                        text="Soumettez ces URLs via Bing Webmaster Tools → IndexNow pour accélérer leur indexation. Une page déjà citée par les LLMs et reconnue par Bing cumule les signaux d'autorité." />
+                    )}
+                    <Lead priority="🌐 Autorité marque Bing" color="#7C3AED" bg="#F5F3FF"
+                      text="Bing Copilot lit les données structurées. Ajoutez SpeakableSpecification, Organization et FAQ sur vos pages cibles. Vérifiez votre profil Bing Places et créez une entrée Wikidata si absente." />
+                    {geoPct < 50 && bingTotal > 0 && (
+                      <Lead priority="📊 Gap Bing → LLM" color="#DC2626" bg="#FEF2F2"
+                        text={`Bing vous cite (${bingTotal} fois) mais les LLMs peu (${geoPct}%). Le contenu est indexé mais ne répond pas aux questions de recommandation. Créez des pages comparatives et de guides d'achat ciblant les questions fan-out.`} />
+                    )}
+                  </div>
+                );
+              })()}
             </CrossCard>
 
             {/* 3. SEO × GEO */}

@@ -26,7 +26,7 @@ function Section({ number, title, sub, children }) {
   );
 }
 
-export default function ImportTab({ projects, currentProjectId, setCurrentProjectId, editingProjectName, setEditingProjectName, setProjects, sites, setSites, sfData, gscData, gaData, bingData, smData, setSfData, setGscData, setGaData, setBingData, setSmData, confirmModal, setConfirmModal, dbHistory, dbLoading, showHistory, setShowHistory, refreshHistory, pageTypes, setPageTypes }) {
+export default function ImportTab({ projects, currentProjectId, setCurrentProjectId, editingProjectName, setEditingProjectName, setProjects, ownerEmail = null, sites, setSites, sfData, gscData, gaData, bingData, smData, setSfData, setGscData, setGaData, setBingData, setSmData, confirmModal, setConfirmModal, dbHistory, dbLoading, showHistory, setShowHistory, refreshHistory, pageTypes, setPageTypes }) {
 
   // ── Last import dates ─────────────────────────────────────────
   const lastBySrc = {};
@@ -86,7 +86,7 @@ export default function ImportTab({ projects, currentProjectId, setCurrentProjec
               ))}
               {projects.length < 20 && (
                 <button onClick={() => {
-                  const p = newProject(`Projet ${projects.length + 1}`, [{ id: `site-${Date.now()}`, label: "Nouveau site", ...SITE_PALETTE[0] }]);
+                  const p = newProject(`Projet ${projects.length + 1}`, [{ id: `site-${Date.now()}`, label: "Nouveau site", ...SITE_PALETTE[0] }], ownerEmail);
                   setProjects(prev => [...prev, p]);
                   setCurrentProjectId(p.id);
                   sbSaveProject(p).catch(() => {});

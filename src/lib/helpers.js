@@ -66,11 +66,12 @@ export function emptyDataMap(sites) {
   return Object.fromEntries(sites.map(s => [s.id, []]));
 }
 
-export function newProject(name, sites) {
+export function newProject(name, sites, ownerEmail = null) {
   return {
     id: `proj-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     name,
     sites,
+    owner_email: ownerEmail,
     sfData:   emptyDataMap(sites),
     gscData:  emptyDataMap(sites),
     gaData:   emptyDataMap(sites),
@@ -79,9 +80,9 @@ export function newProject(name, sites) {
   };
 }
 
-export function makeInitialProject() {
-  const p = newProject("Projet 1", DEFAULT_SITES);
-  p.id = "proj-default";
+export function makeInitialProject(ownerEmail = null) {
+  const p = newProject("Mon projet", DEFAULT_SITES, ownerEmail);
+  p.id = `proj-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
   return p;
 }
 
