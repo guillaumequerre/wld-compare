@@ -412,11 +412,17 @@ function StatsHeader({ questions, results, brandName }) {
   const avgPos      = positions.length ? (positions.reduce((a, b) => a + b, 0) / positions.length).toFixed(1) : "—";
   const presence    = total ? Math.round(withBrand / total * 100) : 0;
 
-  // Top competitors
+  // Top competitors — 1 mention max per question/result (not cumulated)
   const compCount = {};
-  results.forEach(r => (r.competitors_mentioned || []).forEach(c => {
-    compCount[c.name] = (compCount[c.name] || 0) + 1;
-  }));
+  results.forEach(r => {
+    const seen = new Set();
+    (r.competitors_mentioned || []).forEach(c => {
+      if (c.name && !seen.has(c.name)) {
+        seen.add(c.name);
+        compCount[c.name] = (compCount[c.name] || 0) + 1;
+      }
+    });
+  });
   const topComps = Object.entries(compCount).sort((a, b) => b[1] - a[1]).slice(0, 5);
 
   // Top domains
@@ -425,8 +431,6 @@ function StatsHeader({ questions, results, brandName }) {
     try { const d = new URL(url).hostname.replace("www.", ""); domainCount[d] = (domainCount[d] || 0) + 1; } catch {}
   }));
   const topDomains = Object.entries(domainCount).sort((a, b) => b[1] - a[1]).slice(0, 5);
-
-  if (!total) return null;
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginBottom: 24 }}>
@@ -451,31 +455,31 @@ function StatsHeader({ questions, results, brandName }) {
         <div style={{ fontSize: 11, color: C.textLight }}>questions citées</div>
       </div>
 
-      {/* Top concurrents */}
-      {topComps.length > 0 && (
-        <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px" }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>Top concurrents cités</div>
-          {topComps.map(([name, cnt]) => (
-            <div key={name} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 3 }}>
-              <span style={{ color: C.text, fontWeight: 500 }}>{name}</span>
-              <span style={{ color: C.textLight }}>{cnt}×</span>
-            </div>
-          ))}
-        </div>
-      )}
+      {/* Top concurrents — always shown */}
+      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px" }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>Top concurrents cités</div>
+        {topComps.length > 0 ? topComps.map(([name, cnt]) => (
+          <div key={name} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 3 }}>
+            <span style={{ color: C.text, fontWeight: 500 }}>{name}</span>
+            <span style={{ color: C.textLight }}>{cnt}×</span>
+          </div>
+        )) : (
+          <span style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>Aucune citation concurrent identifiée</span>
+        )}
+      </div>
 
-      {/* Top domaines */}
-      {topDomains.length > 0 && (
-        <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px" }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>Sites les plus cités</div>
-          {topDomains.map(([domain, cnt]) => (
-            <div key={domain} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 3 }}>
-              <span style={{ color: "#2563EB", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 120 }}>{domain}</span>
-              <span style={{ color: C.textLight, flexShrink: 0 }}>{cnt}×</span>
-            </div>
-          ))}
-        </div>
-      )}
+      {/* Top domaines — always shown */}
+      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px" }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>Sites les plus cités</div>
+        {topDomains.length > 0 ? topDomains.map(([domain, cnt]) => (
+          <div key={domain} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 3 }}>
+            <span style={{ color: "#2563EB", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 120 }}>{domain}</span>
+            <span style={{ color: C.textLight, flexShrink: 0 }}>{cnt}×</span>
+          </div>
+        )) : (
+          <span style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>Aucun domaine source identifié</span>
+        )}
+      </div>
     </div>
   );
 }
@@ -1079,6 +1083,211 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
 }
 
 
+// ── GeoAnalysis — AI analysis of fan-out presence ─────────────────
+
+function GeoAnalysis({ questions, results, brand, claudeKey }) {
+  const [status, setStatus] = useState("idle"); // idle | loading | done | error
+  const [analysis, setAnalysis] = useState("");
+  const [open, setOpen] = useState(false);
+
+  const brandName   = brand?.brand_name || "";
+  const brandDomain = brand?.brand_domain || "";
+  const brandAliases = brand?.brand_aliases || [];
+
+  const run = async () => {
+    if (!claudeKey || !results.length) return;
+    setStatus("loading");
+    setAnalysis("");
+    setOpen(true);
+
+    // ── Aggregate data ─────────────────────────────────
+    const total = results.length;
+    const withBrand = results.filter(r => r.brand_mentioned === true || r.brand_mentioned === 1).length;
+    const withSources = results.filter(r => r.brand_in_sources).length;
+    const positions = results.filter(r => r.brand_position).map(r => r.brand_position);
+    const avgPos = positions.length ? (positions.reduce((a,b)=>a+b,0)/positions.length).toFixed(1) : null;
+
+    // Top URLs cited overall
+    const urlCount = {};
+    results.forEach(r => (r.sources || []).forEach(url => {
+      urlCount[url] = (urlCount[url] || 0) + 1;
+    }));
+    const topUrls = Object.entries(urlCount).sort((a,b)=>b[1]-a[1]).slice(0, 15);
+
+    // Brand URLs cited
+    const allBrandTerms = [brandDomain, brandName, ...brandAliases].filter(Boolean).map(t => t.toLowerCase());
+    const brandUrls = topUrls.filter(([url]) => allBrandTerms.some(t => url.toLowerCase().includes(t)));
+    const competitorUrls = topUrls.filter(([url]) => !allBrandTerms.some(t => url.toLowerCase().includes(t)));
+
+    // Top competitors
+    const compCount = {};
+    results.forEach(r => (r.competitors_mentioned || []).forEach(c => {
+      compCount[c.name] = (compCount[c.name] || 0) + 1;
+    }));
+    const topComps = Object.entries(compCount).sort((a,b)=>b[1]-a[1]).slice(0,8);
+
+    // Questions without brand
+    const qMap = {};
+    questions.forEach(q => { qMap[q.id] = q.question; });
+    const missingBrandQs = results
+      .filter(r => !(r.brand_mentioned === true || r.brand_mentioned === 1))
+      .map(r => qMap[r.question_id])
+      .filter(Boolean);
+    const uniqueMissing = [...new Set(missingBrandQs)].slice(0, 10);
+
+    // Questions with brand
+    const hasBrandQs = results
+      .filter(r => r.brand_mentioned === true || r.brand_mentioned === 1)
+      .map(r => qMap[r.question_id])
+      .filter(Boolean);
+    const uniquePresent = [...new Set(hasBrandQs)].slice(0, 8);
+
+    // Per-provider stats
+    const providerStats = {};
+    results.forEach(r => {
+      const pid = getProviderId(r.model);
+      if (!providerStats[pid]) providerStats[pid] = { total: 0, withBrand: 0 };
+      providerStats[pid].total++;
+      if (r.brand_mentioned === true || r.brand_mentioned === 1) providerStats[pid].withBrand++;
+    });
+
+    const prompt = `Tu es un expert en GEO (Generative Engine Optimization).
+
+Voici les données de présence de la marque "${brandName}" (domaine : ${brandDomain || "non renseigné"}) dans les réponses des moteurs d'IA :
+
+## MÉTRIQUES GLOBALES
+- Présence marque : ${withBrand}/${total} réponses (${total ? Math.round(withBrand/total*100) : 0}%)
+- Citée en source : ${withSources} réponses
+- Position moyenne : ${avgPos ? `#${avgPos}` : "non mesurée"}
+
+## PAR PROVIDER
+${Object.entries(providerStats).map(([pid, s]) => `- ${pid} : ${s.withBrand}/${s.total} (${Math.round(s.withBrand/s.total*100)}%)`).join("\n")}
+
+## QUESTIONS OÙ LA MARQUE EST PRÉSENTE (${uniquePresent.length})
+${uniquePresent.map((q,i) => `${i+1}. ${q}`).join("\n")}
+
+## QUESTIONS OÙ LA MARQUE EST ABSENTE (${uniqueMissing.length} sur ${[...new Set(missingBrandQs)].length})
+${uniqueMissing.map((q,i) => `${i+1}. ${q}`).join("\n")}
+
+## TOP CONCURRENTS CITÉS
+${topComps.map(([n,c]) => `- ${n} : ${c}×`).join("\n") || "Aucun"}
+
+## URLS MARQUE CITÉES EN SOURCE
+${brandUrls.map(([u,c]) => `- ${u} (${c}×)`).join("\n") || "Aucune URL marque détectée"}
+
+## TOP URLS CONCURRENTES CITÉES EN SOURCE  
+${competitorUrls.slice(0,10).map(([u,c]) => `- ${u} (${c}×)`).join("\n") || "Aucune"}
+
+---
+
+Produis une analyse GEO structurée en 3 sections EXACTEMENT dans ce format :
+
+## 🔍 ÉTAT DES LIEUX
+[Forces et faiblesses concrètes — 4-6 points, basés sur les chiffres]
+
+## 📈 RECOMMANDATIONS — PAGES CITÉES PAR LES IA
+[3-5 recommandations actionnables basées sur les URLs concurrentes les plus citées — qu'est-ce que ces pages ont que nos pages n'ont pas ?]
+
+## 🏠 RECOMMANDATIONS — OPTIMISATION DES PAGES MARQUE
+[3-5 recommandations pour améliorer les pages de ${brandDomain || "la marque"} déjà citées, ou créer les pages manquantes pour les questions sans présence]
+
+RÈGLES :
+- Commence directement par ## 🔍 ÉTAT DES LIEUX, aucune introduction
+- Chiffres précis, recommandations concrètes
+- Pas de formules de politesse`;
+
+    try {
+      const res = await fetch("/api/claude-geo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Claude-Key": claudeKey },
+        body: JSON.stringify({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 1200,
+          messages: [{ role: "user", content: prompt }],
+        }),
+      });
+      const raw = await res.text();
+      if (raw.trimStart().startsWith("<")) throw new Error("Proxy claude-geo introuvable");
+      const data = JSON.parse(raw);
+      if (!res.ok) throw new Error(data.error?.message || `Claude ${res.status}`);
+      const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("\n").trim();
+      setAnalysis(text || "Aucune analyse générée.");
+      setStatus("done");
+    } catch(e) {
+      setAnalysis(`Erreur : ${e.message}`);
+      setStatus("error");
+    }
+  };
+
+  // Parse sections for pretty rendering
+  const sections = analysis ? analysis.split(/(?=## )/).filter(Boolean) : [];
+
+  const sectionColors = {
+    "ÉTAT": { bg: "#EFF6FF", border: "#BFDBFE", title: "#1D4ED8" },
+    "RECOMMANDATIONS — PAGES": { bg: "#F0FDF4", border: "#BBF7D0", title: "#15803D" },
+    "RECOMMANDATIONS — OPTIMISATION": { bg: "#FFFBEB", border: "#FDE68A", title: "#B45309" },
+  };
+
+  const getColor = (text) => {
+    const key = Object.keys(sectionColors).find(k => text.includes(k));
+    return sectionColors[key] || { bg: C.bg, border: C.border, title: C.text };
+  };
+
+  if (!results.length) return null;
+
+  return (
+    <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: "14px 20px", marginBottom: 20 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>🔬 Analyse des présences Fan-out</div>
+          <div style={{ fontSize: 11, color: C.textLight }}>Forces, faiblesses et recommandations IA basées sur {results.length} réponses</div>
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {status === "done" && (
+            <button onClick={() => setOpen(o => !o)}
+              style={{ fontSize: 11, padding: "4px 10px", border: `1px solid ${C.border}`, borderRadius: 7, background: C.bg, cursor: "pointer", color: C.textMid }}>
+              {open ? "▲ Masquer" : "▼ Voir l'analyse"}
+            </button>
+          )}
+          <button onClick={run} disabled={status === "loading" || !claudeKey}
+            style={{ fontSize: 12, fontWeight: 700, padding: "6px 14px", border: "none", borderRadius: 8, cursor: status === "loading" || !claudeKey ? "not-allowed" : "pointer",
+              background: !claudeKey ? C.bg : status === "loading" ? "#E5E7EB" : "#7C3AED",
+              color: !claudeKey ? C.textLight : status === "loading" ? C.textLight : "#fff" }}>
+            {status === "loading" ? "⏳ Analyse en cours…" : status === "done" ? "↺ Relancer" : "✨ Analyser"}
+          </button>
+        </div>
+      </div>
+
+      {!claudeKey && (
+        <div style={{ marginTop: 8, fontSize: 11, color: "#D97706", background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 7, padding: "6px 10px" }}>
+          ⚠️ Clé Claude requise — configurez-la dans le setup
+        </div>
+      )}
+
+      {open && status === "done" && sections.length > 0 && (
+        <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 12 }}>
+          {sections.map((section, i) => {
+            const lines = section.trim().split("\n");
+            const title = lines[0].replace(/^## /, "");
+            const body = lines.slice(1).join("\n").trim();
+            const col = getColor(title);
+            return (
+              <div key={i} style={{ background: col.bg, border: `1px solid ${col.border}`, borderRadius: 10, padding: "12px 16px" }}>
+                <div style={{ fontSize: 12, fontWeight: 800, color: col.title, marginBottom: 8 }}>{title}</div>
+                <div style={{ fontSize: 12, color: C.text, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{body}</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {open && status === "error" && (
+        <div style={{ marginTop: 12, fontSize: 12, color: "#DC2626", padding: "10px 14px", background: "#FEF2F2", borderRadius: 8 }}>{analysis}</div>
+      )}
+    </div>
+  );
+}
+
 // ── Questions sub-tab (v2) ────────────────────────────────────────
 
 function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allResults, onResultSaved, activeProviders = ["openai"], providerKeys = {}, runMode = "parallel" }) {
@@ -1345,16 +1554,25 @@ ${question}`;
 
   return (
     <div>
-      {/* Manual question input */}
-      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px", marginBottom: 16, display: "flex", gap: 10 }}>
-        <input value={manualQ} onChange={e => setManualQ(e.target.value)} onKeyDown={e => e.key === "Enter" && addManual()}
-          placeholder="Ajouter une question manuellement…"
-          style={{ flex: 1, padding: "7px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, color: C.text }} />
-        <Btn onClick={addManual} disabled={!manualQ.trim()}>➕ Ajouter</Btn>
-      </div>
+      {/* ── GEO Analysis ── */}
+      <GeoAnalysis
+        questions={questions}
+        results={results}
+        brand={brand}
+        claudeKey={providerKeysRef.current["claude"]?.dec || ""}
+      />
 
       {/* ── Stats header (filtered) ── */}
       <StatsHeader questions={filtered} results={filteredResults} brandName={brand_name} />
+
+      {/* ── Manual question input ── */}
+      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 16px", marginBottom: 14, display: "flex", gap: 10, alignItems: "center" }}>
+        <span style={{ fontSize: 11, fontWeight: 600, color: C.textLight, flexShrink: 0 }}>➕ Question manuelle</span>
+        <input value={manualQ} onChange={e => setManualQ(e.target.value)} onKeyDown={e => e.key === "Enter" && addManual()}
+          placeholder="Saisir une question à ajouter manuellement…"
+          style={{ flex: 1, padding: "6px 10px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 12, color: C.text }} />
+        <Btn onClick={addManual} disabled={!manualQ.trim()} small>Ajouter</Btn>
+      </div>
 
       {/* ── Filters ── */}
       <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 16px", marginBottom: 14 }}>
@@ -2059,11 +2277,11 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
         {brandEditing && (
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             {[
-              { key: "brand_name",   label: "Nom de la marque",                   placeholder: "Altaroc" },
-              { key: "brand_domain", label: "Domaine du site",                     placeholder: "altaroc.com" },
-              { key: "brand_aliases", label: "Alias (séparés par virgules)",       placeholder: "Altaroc Capital, altaroc.com" },
-              { key: "competitors",  label: "Concurrents à tracker (virgules)",    placeholder: "Moonfare, Titanbay, iCapital" },
-              { key: "context",      label: "Contexte (instruction système)",      placeholder: "Tu es un investisseur particulier français…" },
+              { key: "brand_name",   label: "Nom de la marque",                   placeholder: "Sonate" },
+              { key: "brand_domain", label: "Domaine du site",                     placeholder: "sonate.fr" },
+              { key: "brand_aliases", label: "Alias (séparés par virgules)",       placeholder: "Sonate Audio, sonate.fr" },
+              { key: "competitors",  label: "Concurrents à tracker (virgules)",    placeholder: "Devialet, Focal, Cabasse" },
+              { key: "context",      label: "Contexte (instruction système)",      placeholder: "Tu es un audiophile passionné de haute-fidélité…" },
             ].map(f => (
               <div key={f.key} style={{ gridColumn: f.key === "context" ? "1 / -1" : "auto" }}>
                 <div style={{ fontSize: 11, fontWeight: 600, color: C.textMid, marginBottom: 5 }}>{f.label}</div>
@@ -2146,16 +2364,17 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
       {/* ── Sub-nav ── */}
       <div style={{ display: "flex", gap: 4, marginBottom: 20, background: C.bg, borderRadius: 10, padding: 4, width: "fit-content" }}>
         {[
-          { key: "keywords",  label: "🔑 Mots-clés" },
-          { key: "questions", label: "💬 Questions" },
-          { key: "urls",      label: "🔗 Sources citées" },
+          { key: "keywords",  label: "🔑 Mots-clés",     color: "#D97706" },
+          { key: "questions", label: "💬 Questions",      color: "#7C3AED" },
+          { key: "urls",      label: "🔗 Sources citées", color: "#2563EB" },
         ].map(t => (
           <button key={t.key} onClick={() => setSubTab(t.key)} style={{
-            padding: "7px 18px", borderRadius: 7, fontSize: 13, fontWeight: subTab === t.key ? 700 : 500,
-            border: "none", cursor: "pointer",
-            background: subTab === t.key ? C.white : "transparent",
-            color: subTab === t.key ? C.text : C.textLight,
-            boxShadow: subTab === t.key ? "0 1px 4px rgba(0,0,0,0.08)" : "none",
+            padding: "8px 20px", borderRadius: 8, fontSize: 13, fontWeight: 700,
+            border: subTab === t.key ? `2px solid ${t.color}` : `2px solid transparent`,
+            cursor: "pointer",
+            background: subTab === t.key ? t.color : "transparent",
+            color: subTab === t.key ? "#fff" : C.textLight,
+            boxShadow: subTab === t.key ? `0 2px 8px ${t.color}44` : "none",
             transition: "all 0.15s",
           }}>{t.label}</button>
         ))}
