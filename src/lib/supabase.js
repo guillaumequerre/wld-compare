@@ -213,11 +213,11 @@ export async function sbUpdateMilestone(id, patch) {
 
 // ── GEO — BRAND SETTINGS ─────────────────────────────────────────
 
-export async function sbSaveBrand({ project_id, site_id, brand_name, brand_aliases, competitors, context }) {
+export async function sbSaveBrand({ project_id, site_id, brand_name, brand_domain, brand_aliases, competitors, context }) {
   const res = await fetch(`${PROXY}/rest/v1/site_brand`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
-    body: JSON.stringify({ project_id, site_id, brand_name, brand_aliases, competitors, context, updated_at: new Date().toISOString() }),
+    body: JSON.stringify({ project_id, site_id, brand_name, brand_domain, brand_aliases, competitors, context, updated_at: new Date().toISOString() }),
   });
   if (!res.ok) throw new Error(`Save brand failed: ${res.status}`);
   return res.json();

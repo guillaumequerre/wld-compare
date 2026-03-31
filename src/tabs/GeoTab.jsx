@@ -843,10 +843,107 @@ function isBrandPresent(r) {
 // history: [{ test_date: "YYYY-MM-DD", brand_mentioned: bool }]
 // results: current geo_results for this provider (for today's optimistic update)
 
+// ── HintPanel — GEO optimisation hints ───────────────────────────
+
+function HintPanel({ question, sources, brandName, brandAliases, brandDomain: brandDomainProp = "", claudeKey }) {
+  const [status, setStatus] = useState("idle"); // idle | loading | done | error
+  const [hint, setHint]     = useState("");
+
+  // Use explicit brand domain first, then try aliases, then brand name
+  const brandDomain = brandDomainProp ||
+    [...(brandAliases || [])].map(a => (a || "").trim()).find(a => a.includes(".")) ||
+    brandName;
+
+  const run = async () => {
+    if (!claudeKey) return;
+    setStatus("loading");
+    setHint("");
+    const searchQuery = `${question} site:${brandDomain}`;
+    const sourcesText = (sources || []).length > 0
+      ? `Pages mentionnées dans la réponse :\n${sources.slice(0, 8).map((u, i) => `[${i+1}] ${u}`).join("\n")}`
+      : "Aucune source listée dans la réponse.";
+
+    const prompt = `Tu es un expert en GEO (Generative Engine Optimization).
+
+Un moteur d'IA a répondu à cette question sans mentionner la marque "${brandName}" :
+"${question}"
+
+${sourcesText}
+
+Effectue maintenant une recherche Google avec cette requête exacte : "${searchQuery}"
+
+En te basant sur :
+1. Les pages de ${brandDomain} qui ressortent sur cette recherche
+2. Les pages concurrentes citées dans la réponse du moteur d'IA
+
+Donne une recommandation GEO courte et actionnable (5-8 lignes max) :
+- Si une page de ${brandDomain} existe et est pertinente → comment l'optimiser pour être citée par les IA
+- Si aucune page de ${brandDomain} n'existe ou n'est pas pertinente → quel contenu créer
+Sois direct, concret, sans introduction.`;
+
+    try {
+      const res = await fetch("/api/claude-geo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Claude-Key": claudeKey },
+        body: JSON.stringify({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 600,
+          tools: [{ type: "web_search_20250305", name: "web_search" }],
+          messages: [{ role: "user", content: prompt }],
+        }),
+      });
+      const raw = await res.text();
+      if (raw.trimStart().startsWith("<")) throw new Error("Proxy claude-geo introuvable");
+      const data = JSON.parse(raw);
+      if (!res.ok) throw new Error(data.error?.message || `Claude ${res.status}`);
+      // Extract text from content blocks
+      const text = (data.content || [])
+        .filter(b => b.type === "text")
+        .map(b => b.text)
+        .join("\n")
+        .trim();
+      setHint(text || "Aucune recommandation générée.");
+      setStatus("done");
+    } catch(e) {
+      setHint(`Erreur : ${e.message}`);
+      setStatus("error");
+    }
+  };
+
+  return (
+    <div style={{ borderTop: `1px solid #FEF3C7`, background: "#FFFBEB", padding: "8px 12px" }}>
+      {status === "idle" && (
+        <button onClick={run}
+          style={{ fontSize: 11, fontWeight: 700, color: "#D97706", background: "#FEF3C7", border: "1px solid #FCD34D", borderRadius: 6, padding: "3px 10px", cursor: "pointer" }}>
+          💡 Obtenir des pistes d'optimisation GEO
+        </button>
+      )}
+      {status === "loading" && (
+        <div style={{ fontSize: 11, color: "#D97706", display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ animation: "spin 1s linear infinite", display: "inline-block" }}>⏳</span>
+          Recherche en cours sur {brandDomain}…
+        </div>
+      )}
+      {(status === "done" || status === "error") && (
+        <div>
+          <div style={{ fontSize: 11, whiteSpace: "pre-wrap", lineHeight: 1.6, color: status === "error" ? "#DC2626" : "#92400E" }}>
+            {hint}
+          </div>
+          <button onClick={() => { setStatus("idle"); setHint(""); }}
+            style={{ marginTop: 6, fontSize: 10, color: "#D97706", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>
+            ↺ Relancer
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── ProviderRow — calendar + info + accordion + run button ────────
 
-function ProviderRow({ provider, results, allProviderResults, brandName, brandAliases, hasKey, isRunning, onRun, questionId, newCalEntry = null }) {
+function ProviderRow({ provider, results, allProviderResults, brandName, brandAliases, brandDomain = "", hasKey, isRunning, onRun, questionId, newCalEntry = null, question = "", claudeKey = "" }) {
   const [open, setOpen] = useState(false);
+  const [showHint, setShowHint] = useState(false);
   const p = provider;
 
   // Most recent result for this provider
@@ -885,6 +982,14 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
             {open ? '▲' : '▼'}
           </button>
         )}
+        {/* Hint button — only when brand absent and Claude key configured */}
+        {result && !hasBrand && claudeKey && (
+          <button onClick={() => setShowHint(h => !h)}
+            title="Pistes d'optimisation GEO"
+            style={{ fontSize: 10, fontWeight: 700, color: showHint ? '#fff' : '#D97706', background: showHint ? '#D97706' : '#FEF3C7', border: '1px solid #FCD34D', borderRadius: 6, padding: '2px 7px', cursor: 'pointer', flexShrink: 0 }}>
+            💡 Hint
+          </button>
+        )}
 
         {/* Spacer */}
         <div style={{ flex: 1 }} />
@@ -912,6 +1017,16 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
       </div>
 
       {/* ── Accordion: answer + sources + competitors ── */}
+      {showHint && result && !hasBrand && (
+        <HintPanel
+          question={question}
+          sources={sources}
+          brandName={brandName}
+          brandAliases={brandAliases}
+          brandDomain={brandDomain}
+          claudeKey={claudeKey}
+        />
+      )}
       {open && result && (
         <div style={{ borderTop: `1px solid ${C.border}`, padding: '10px 12px', background: C.bg }}>
           <div style={{ fontSize: 12, color: C.text, lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
@@ -1502,6 +1617,9 @@ ${question}`;
                         onRun={() => runProvider(q, p)}
                         questionId={q.id}
                         newCalEntry={newCalEntries[`${q.id}|${p.id}`] || null}
+                        question={q.question}
+                        brandDomain={brand?.brand_domain || ""}
+                        claudeKey={providerKeysRef.current["claude"]?.dec || ""}
                       />
                     );
                   })}
@@ -1869,7 +1987,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
   const [apiKeyDec, setApiKeyDec]   = useState("");           // decrypted, only in memory
   const [allResults, setAllResults] = useState([]);
   const [brandEditing, setBrandEditing] = useState(false);
-  const [brandDraft, setBrandDraft] = useState({ brand_name: "", brand_aliases: "", competitors: "", context: "" });
+  const [brandDraft, setBrandDraft] = useState({ brand_name: "", brand_domain: "", brand_aliases: "", competitors: "", context: "" });
   const [categories, setCategories] = useState([]);
   const [axes, setAxes]             = useState(geoAxes || DEFAULT_AXES);
   const [axesEditing, setAxesEditing] = useState(false);
@@ -1893,7 +2011,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
     if (!projectId || !site?.id) return;
     sbGetBrand(projectId, site.id).then(b => {
       setBrand(b);
-      if (b) setBrandDraft({ brand_name: b.brand_name || "", brand_aliases: (b.brand_aliases || []).join(", "), competitors: (b.competitors || []).join(", "), context: b.context || "" });
+      if (b) setBrandDraft({ brand_name: b.brand_name || "", brand_domain: b.brand_domain || "", brand_aliases: (b.brand_aliases || []).join(", "), competitors: (b.competitors || []).join(", "), context: b.context || "" });
     });
     sbGetGeoResults(projectId, site.id).then(setAllResults);
   }, [projectId, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1909,7 +2027,8 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
   const saveBrand = async () => {
     const b = {
       project_id: projectId, site_id: site.id,
-      brand_name: brandDraft.brand_name.trim(),
+      brand_name:   brandDraft.brand_name.trim(),
+      brand_domain: (brandDraft.brand_domain || "").trim().replace(/^https?:\/\//, "").replace(/\/$/, ""),
       brand_aliases: brandDraft.brand_aliases.split(",").map(s => s.trim()).filter(Boolean),
       competitors:   brandDraft.competitors.split(",").map(s => s.trim()).filter(Boolean),
       context:       brandDraft.context.trim(),
@@ -2053,6 +2172,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             {[
               { key: "brand_name",   label: "Nom de la marque",                   placeholder: "Altaroc" },
+              { key: "brand_domain", label: "Domaine du site",                     placeholder: "altaroc.com" },
               { key: "brand_aliases", label: "Alias (séparés par virgules)",       placeholder: "Altaroc Capital, altaroc.com" },
               { key: "competitors",  label: "Concurrents à tracker (virgules)",    placeholder: "Moonfare, Titanbay, iCapital" },
               { key: "context",      label: "Contexte (instruction système)",      placeholder: "Tu es un investisseur particulier français…" },
