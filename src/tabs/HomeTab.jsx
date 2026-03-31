@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { C } from "../lib/constants";
-import { authLogin, authLogout, getCurrentUser, isSuperAdmin } from "../lib/auth";
+import { authLogin, isSuperAdmin } from "../lib/auth";
 
 // ── Feature card ──────────────────────────────────────────────────
 function FeatureCard({ icon, title, description, color }) {
