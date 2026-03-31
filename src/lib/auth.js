@@ -115,29 +115,18 @@ export async function sbSetProjectOwner(projectId, ownerEmail) {
   });
 }
 
-// Load projects accessible to this user
+// Load projects accessible to this user — uses server-side JWT validation
 export async function sbLoadAccessibleProjects(userEmail) {
-  if (isSuperAdmin({ email: userEmail })) {
-    // Superadmin sees all projects
-    const res = await fetch(`/api/supabase/rest/v1/projects?select=*&order=updated_at.desc`);
+  const token = getToken();
+  if (!token) return [];
+  try {
+    const res = await fetch("/api/projects", {
+      headers: { "Authorization": `Bearer ${token}` },
+    });
     if (!res.ok) return [];
-    return (await res.json()).map(parseProject);
-  }
-  // Regular user: projects they own OR are member of
-  const [owned, membered] = await Promise.all([
-    fetch(`/api/supabase/rest/v1/projects?owner_email=eq.${encodeURIComponent(userEmail)}&select=*&order=updated_at.desc`).then(r => r.ok ? r.json() : []),
-    fetch(`/api/supabase/rest/v1/project_members?user_email=eq.${encodeURIComponent(userEmail)}&select=project_id`).then(r => r.ok ? r.json() : []),
-  ]);
-  const memberIds = membered.map(m => m.project_id);
-  let memberProjects = [];
-  if (memberIds.length) {
-    const ids = memberIds.map(id => `"${id}"`).join(",");
-    const res = await fetch(`/api/supabase/rest/v1/projects?id=in.(${ids})&select=*&order=updated_at.desc`);
-    if (res.ok) memberProjects = await res.json();
-  }
-  const all = [...owned, ...memberProjects];
-  const seen = new Set();
-  return all.filter(p => { if (seen.has(p.id)) return false; seen.add(p.id); return true; }).map(parseProject);
+    const data = await res.json();
+    return (data.projects || []).map(parseProject);
+  } catch(e) { console.error("sbLoadAccessibleProjects error:", e); return []; }
 }
 
 function parseProject(r) {

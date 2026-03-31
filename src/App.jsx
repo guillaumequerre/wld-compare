@@ -3,7 +3,7 @@ import { C, SF_DIMS, RES_KPIS, RADAR_DIMS, DEFAULT_SITES, SEMRUSH_DIMS } from ".
 import { emptyDataMap, makeInitialProject, parseCSV } from "./lib/helpers";
 import { extractSF, extractGSC, extractGA, extractBing, extractSemrush, parseSemrush, filterByMode } from "./lib/parsers";
 import { buildUrlMaps, buildSfPageVectors, intraCorrFast, smIntraCorr } from "./lib/correlations";
-import { sbSaveProject, sbLoadProjects, sbGetHistory, sbGetLatest, sbDownload, sbGetPageTypes, sbSaveGeoAxes } from "./lib/supabase";
+import { sbSaveProject, sbGetHistory, sbGetLatest, sbDownload, sbGetPageTypes, sbSaveGeoAxes } from "./lib/supabase";
 import { sbLoadAccessibleProjects } from "./lib/auth";
 import AnalyseTab from "./tabs/AnalyseTab";
 import ImportTab from "./tabs/ImportTab";
@@ -280,10 +280,9 @@ export default function App() {
         const currentUser = getCurrentUser();
         if (!currentUser) {
           setDbLoading(false);
-          return; // No projects loaded until user logs in
+          return; // No projects until logged in
         }
-        const savedProjects = await sbLoadAccessibleProjects(currentUser.email)
-          .catch(() => sbLoadProjects());
+        const savedProjects = await sbLoadAccessibleProjects(currentUser.email);
           if (savedProjects && savedProjects.length > 0) {
           const restored = savedProjects.map(p => ({
             ...p,
@@ -544,6 +543,8 @@ export default function App() {
 
         {/* ── CONTENT ── */}
         <div style={{ maxWidth: 1400, margin: "0 auto", padding: "32px 28px" }}>
+          {/* Gate: redirect to home if accessing protected tab without login */}
+          {!user && tab !== "home" && (() => { setTimeout(() => setTab("home"), 0); return null; })()}
 
           {tab === "home" && (
             <HomeTab
