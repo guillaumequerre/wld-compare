@@ -876,10 +876,14 @@ En te basant sur :
 1. Les pages de ${brandDomain} qui ressortent sur cette recherche
 2. Les pages concurrentes citées dans la réponse du moteur d'IA
 
-Donne une recommandation GEO courte et actionnable (5-8 lignes max) :
-- Si une page de ${brandDomain} existe et est pertinente → comment l'optimiser pour être citée par les IA
-- Si aucune page de ${brandDomain} n'existe ou n'est pas pertinente → quel contenu créer
-Sois direct, concret, sans introduction.`;
+RÈGLES STRICTES :
+- Ne dis JAMAIS "Je vais effectuer", "Je recherche", "En effectuant cette recherche" ou toute phrase de transition
+- Ne décris pas ce que tu fais, donne directement le résultat
+- Commence directement par la recommandation (ex: "La page X est candidate…" ou "Créez une page dédiée…")
+- 5 à 8 lignes max, ton direct et actionnable
+
+Si une page de ${brandDomain} ressort pertinente → explique comment l'optimiser pour être citée par les IA
+Si aucune page pertinente de ${brandDomain} → recommande quel contenu créer et pourquoi`;
 
     try {
       const res = await fetch("/api/claude-geo", {
@@ -902,7 +906,16 @@ Sois direct, concret, sans introduction.`;
         .map(b => b.text)
         .join("\n")
         .trim();
-      setHint(text || "Aucune recommandation générée.");
+      // Strip common AI preambles before showing
+      const cleaned = (text || "")
+        .replace(/^(Je vais|En effectuant|Je recherche|D'accord[,.]?|Bien sûr[,.]?|Voici|Permettez)[^
+]*/gim, "")
+        .replace(/^(I will|Let me|Sure[,.]?)[^
+]*/gim, "")
+        .replace(/^\s*
+/gm, "")
+        .trim();
+      setHint(cleaned || "Aucune recommandation générée.");
       setStatus("done");
     } catch(e) {
       setHint(`Erreur : ${e.message}`);
@@ -978,16 +991,16 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
 
         {/* Accordion toggle */}
         {result && (
-          <button onClick={() => setOpen(o => !o)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.textLight, fontSize: 11, padding: '0 4px', flexShrink: 0 }} title="Voir la réponse">
-            {open ? '▲' : '▼'}
+          <button onClick={() => setOpen(o => !o)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.textLight, fontSize: 11, padding: '2px 6px', borderRadius: 5, display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0 }} title="Voir la réponse">
+            <span>Réponse</span><span>{open ? '▲' : '▼'}</span>
           </button>
         )}
         {/* Hint button — only when brand absent and Claude key configured */}
         {result && !hasBrand && claudeKey && (
           <button onClick={() => setShowHint(h => !h)}
             title="Pistes d'optimisation GEO"
-            style={{ fontSize: 10, fontWeight: 700, color: showHint ? '#fff' : '#D97706', background: showHint ? '#D97706' : '#FEF3C7', border: '1px solid #FCD34D', borderRadius: 6, padding: '2px 7px', cursor: 'pointer', flexShrink: 0 }}>
-            💡 Hint
+            style={{ fontSize: 10, fontWeight: 700, color: showHint ? '#fff' : '#D97706', background: showHint ? '#D97706' : '#FEF3C7', border: '1px solid #FCD34D', borderRadius: 6, padding: '2px 7px', cursor: 'pointer', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 3 }}>
+            <span>💡 Hint</span><span>{showHint ? '▲' : '▼'}</span>
           </button>
         )}
 
