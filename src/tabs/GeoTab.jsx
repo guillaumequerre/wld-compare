@@ -1275,22 +1275,36 @@ ${question}`;
     return true;
   }), [questions, filterFav, filterBrand, filterCat, filterKeyword, filterSearch, filterProviders, resultsByQ]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const runAllQuestions = async () => {
-    const currentProviders = activeProvidersRef.current;
+  // Returns providers that still need to be called for a question today
+  const getProvidersToRun = (q, force = false) => {
     const currentKeys = providerKeysRef.current;
-    const configuredProviders = PROVIDERS.filter(p => currentProviders.includes(p.id) && currentKeys[p.id]?.dec);
-    const toRun = filtered.filter(q => {
-      const qResults = resultsByQ[q.id] || [];
-      return configuredProviders.some(p =>
-        !qResults.some(r => r.model?.toLowerCase().includes(p.label.toLowerCase()))
+    const currentActive = activeProvidersRef.current;
+    const configuredProviders = PROVIDERS.filter(p => currentActive.includes(p.id) && currentKeys[p.id]?.dec);
+    if (force) return configuredProviders; // always run all when forced (individual ▶ button)
+    const today = new Date().toISOString().slice(0, 10);
+    const qResults = resultsByQ[q.id] || [];
+    return configuredProviders.filter(p => {
+      // Skip if already generated today for this provider
+      const alreadyToday = qResults.some(r =>
+        getProviderId(r.model) === p.id &&
+        r.created_at && r.created_at.slice(0, 10) === today
       );
+      return !alreadyToday;
     });
+  };
+
+  const runAllQuestions = async () => {
+    const toRun = filtered
+      .map(q => ({ q, providers: getProvidersToRun(q, false) }))
+      .filter(({ providers }) => providers.length > 0);
     if (!toRun.length) return;
     stopAllRef.current = false;
     setRunAll(true);
-    for (const q of toRun) {
+    for (const { q, providers } of toRun) {
       if (stopAllRef.current) break;
-      await runQuestion(q);
+      setRunning(r => ({ ...r, [q.id]: true }));
+      await Promise.all(providers.map(p => runProvider(q, p)));
+      setRunning(r => ({ ...r, [q.id]: false }));
     }
     setRunAll(false);
   };
@@ -1309,14 +1323,19 @@ ${question}`;
 
   // Count questions to generate for "Lancer tout" indicator
   const toRunCount = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10);
     const configuredProviders = PROVIDERS.filter(p =>
       activeProviders.includes(p.id) && providerKeys[p.id]?.dec
     );
     if (!configuredProviders.length) return 0;
     return filtered.filter(q => {
       const qResults = resultsByQ[q.id] || [];
+      // Count questions that have at least one provider not yet done today
       return configuredProviders.some(p =>
-        !qResults.some(r => r.model?.toLowerCase().includes(p.label.toLowerCase()))
+        !qResults.some(r =>
+          getProviderId(r.model) === p.id &&
+          r.created_at && r.created_at.slice(0, 10) === today
+        )
       );
     }).length;
   }, [filtered, resultsByQ, activeProviders, providerKeys]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1452,11 +1471,12 @@ ${question}`;
                       title="Modifier la question">✏️</button>
                     <button
                       onClick={() => {
-                        const configured = PROVIDERS.filter(p => providerKeysRef.current[p.id]?.dec);
-                        configured.forEach(p => runProvider(q, p));
+                        const toRun = getProvidersToRun(q, false); // skip already done today
+                        if (!toRun.length) return;
+                        toRun.forEach(p => runProvider(q, p));
                       }}
                       disabled={isRunning}
-                      title="Lancer tous les providers configurés"
+                      title="Lancer les providers non encore interrogés aujourd'hui"
                       style={{ padding: "3px 10px", border: `1px solid ${site.color}`, borderRadius: 6, background: site.color, color: "#fff", fontSize: 11, fontWeight: 700, cursor: isRunning ? "wait" : "pointer", opacity: isRunning ? 0.6 : 1 }}>
                       {isRunning ? "⏳" : "▶ Tous"}
                     </button>
