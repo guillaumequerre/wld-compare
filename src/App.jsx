@@ -182,7 +182,7 @@ export default function App() {
 
   // ── UI state ─────────────────────────────────────────────────────
   const [confirmModal, setConfirmModal] = useState(null);
-  const [tab, setTab]                   = useState("geo");
+  const [tab, setTab]                   = useState("home");
   const [pageMode, setPageMode]         = useState("all");
   const [templateFilter, setTemplateFilter] = useState([]); // [] = all types, array for multi-select
   const [pageTypes, setPageTypes]           = useState({}); // { siteId: { urlPath: type } }

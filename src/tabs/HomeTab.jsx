@@ -154,33 +154,31 @@ export default function HomeTab({ user, projects, currentProjectId, onLogin, onL
         </p>
       </div>
 
-      {/* Features + Auth widget */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 420px", gap: 40, marginBottom: 48, alignItems: "start" }}>
+      {/* Feature cards — horizontal */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 20, marginBottom: 48 }}>
+        <FeatureCard
+          icon="📡"
+          title="Monitoring GEO en temps réel"
+          description="Suivez la présence de votre marque dans les réponses d'OpenAI, Gemini, Perplexity et Claude. Historique 30 jours, alertes de présence, analyse par provider."
+          color="#7C3AED"
+        />
+        <FeatureCard
+          icon="📋"
+          title="Audits GEO prêts à livrer"
+          description="Générez en un clic un rapport d'audit complet : état des lieux, analyse concurrentielle, URLs à optimiser, recommandations actionnables et plan d'action priorisé."
+          color="#2563EB"
+        />
+        <FeatureCard
+          icon="🔬"
+          title="Analyse des critères GEO"
+          description="Comprenez quelles pages, structures et contenus favorisent la citation par les IA. Croisement SEO × GEO, analyse des sources citées, patterns des concurrents."
+          color="#059669"
+        />
+      </div>
 
-        {/* Feature cards */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <FeatureCard
-            icon="📡"
-            title="Monitoring GEO en temps réel"
-            description="Suivez la présence de votre marque dans les réponses d'OpenAI, Gemini, Perplexity et Claude. Historique 30 jours, alertes de présence, analyse par provider."
-            color="#7C3AED"
-          />
-          <FeatureCard
-            icon="📋"
-            title="Audits GEO prêts à livrer"
-            description="Générez en un clic un rapport d'audit complet : état des lieux, analyse concurrentielle, URLs à optimiser, recommandations actionnables et plan d'action priorisé."
-            color="#2563EB"
-          />
-          <FeatureCard
-            icon="🔬"
-            title="Analyse des critères GEO"
-            description="Comprenez quelles pages, structures et contenus favorisent la citation par les IA. Croisement SEO × GEO, analyse des sources citées, patterns des concurrents."
-            color="#059669"
-          />
-        </div>
-
-        {/* Auth widget */}
-        <div style={{ position: "sticky", top: 24 }}>
+      {/* Auth widget — centered */}
+      <div style={{ display: "flex", justifyContent: "center", marginBottom: 48 }}>
+        <div style={{ width: "100%", maxWidth: 480 }}>
           {user ? (
             <ConnectedWidget
               user={user}
