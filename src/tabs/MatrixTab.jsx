@@ -26,10 +26,11 @@ function Switch({ value, onChange, label }) {
   );
 }
 
-export default function MatrixTab({ sites, sfData, pageMode, setPageMode, matrixSites, setMatrixSites, filteredCorrMatrix, templateFilter, setTemplateFilter, pageTypes }) {
+export default function MatrixTab({ sites, sfData, pageMode, setPageMode, matrixSites, setMatrixSites, filteredCorrMatrix, templateFilter, setTemplateFilter, pageTypes, geoResults = [], geoQuestions = [] }) {
   const [sortCol, setSortCol] = useState({ key: null, dir: null });
   const [tooltipEnabled, setTooltipEnabled] = useState(true);
   const [showIntroPopup, setShowIntroPopup] = useState(false);
+  const [showFavsOnly, setShowFavsOnly] = useState(false);
   const tableWrapRef = useRef(null);
   const topBarRef    = useRef(null);
 
@@ -68,6 +69,26 @@ export default function MatrixTab({ sites, sfData, pageMode, setPageMode, matrix
 
   const colSpanTotal = RES_KPIS.length + 1;
 
+  // ── GEO KPIs ─────────────────────────────────────────────────────
+  const geoBysite = useMemo(() => {
+    const out = {};
+    sites.forEach(s => {
+      const siteResults = geoResults.filter(r => r.site_id === s.id);
+      const siteQuestions = (showFavsOnly ? geoQuestions.filter(q => q.is_favorite) : geoQuestions).filter(q => q.site_id === s.id);
+      const qIds = new Set(siteQuestions.map(q => q.id));
+      const filtered = siteResults.filter(r => qIds.has(r.question_id));
+      const total = filtered.length;
+      const withBrand = filtered.filter(r => r.brand_mentioned).length;
+      const withSource = filtered.filter(r => r.brand_in_sources).length;
+      const compNames = new Set();
+      filtered.forEach(r => (r.competitors_mentioned || []).forEach(c => { if (c?.name) compNames.add(c.name); }));
+      out[s.id] = { total, withBrand, withSource, pct: total ? Math.round(withBrand / total * 100) : null, topComp: [...compNames].slice(0, 3) };
+    });
+    return out;
+  }, [sites, geoResults, geoQuestions, showFavsOnly]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const hasGeo = geoResults.length > 0;
+
   return (
   <div>
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
@@ -75,6 +96,56 @@ export default function MatrixTab({ sites, sfData, pageMode, setPageMode, matrix
       <PageModeSelector value={pageMode} onChange={setPageMode} pageTypes={pageTypes} sites={sites} templateFilter={templateFilter} setTemplateFilter={setTemplateFilter} />
     </div>
     <InfoCard tabKey="matrix" />
+
+    {/* ── GEO KPIs Fan-out ── */}
+    {hasGeo && (
+      <div style={{ background: "#F5F3FF", border: "1px solid #DDD6FE", borderRadius: 14, padding: "16px 20px", marginBottom: 20 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 800, color: "#7C3AED" }}>🔍 Résultats Fan-outs</div>
+            <div style={{ fontSize: 11, color: "#6D28D9" }}>Présence de la marque dans les réponses LLM</div>
+          </div>
+          <button onClick={() => setShowFavsOnly(f => !f)} style={{
+            fontSize: 11, fontWeight: 700, padding: "4px 12px", borderRadius: 20, cursor: "pointer",
+            background: showFavsOnly ? "#7C3AED" : "#EDE9FE", color: showFavsOnly ? "#fff" : "#7C3AED",
+            border: "1px solid #C4B5FD",
+          }}>
+            {showFavsOnly ? "⭐ Favoris" : "☆ Toutes les questions"}
+          </button>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: `repeat(${sites.length}, 1fr)`, gap: 12 }}>
+          {sites.map(s => {
+            const g = geoBysite[s.id] || {};
+            const color = g.pct === null ? C.textLight : g.pct >= 50 ? "#059669" : g.pct >= 20 ? "#D97706" : "#DC2626";
+            return (
+              <div key={s.id} style={{ background: "#fff", borderRadius: 10, padding: "14px 16px", border: `1.5px solid ${s.color}33` }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: s.color, marginBottom: 10 }}>{s.label}</div>
+                <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+                  <div>
+                    <div style={{ fontSize: 22, fontWeight: 800, color }}>{g.pct !== null ? `${g.pct}%` : "—"}</div>
+                    <div style={{ fontSize: 10, color: C.textLight }}>présence ({g.withBrand}/{g.total})</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 22, fontWeight: 800, color: "#2563EB" }}>{g.withSource ?? "—"}</div>
+                    <div style={{ fontSize: 10, color: C.textLight }}>cités en source</div>
+                  </div>
+                </div>
+                {g.topComp?.length > 0 && (
+                  <div style={{ marginTop: 10, fontSize: 10, color: C.textLight }}>
+                    Concurrents : <span style={{ color: "#DC2626", fontWeight: 600 }}>{g.topComp.join(", ")}</span>
+                  </div>
+                )}
+                {g.pct !== null && (
+                  <div style={{ marginTop: 8, height: 4, background: "#EDE9FE", borderRadius: 2, overflow: "hidden" }}>
+                    <div style={{ height: "100%", width: `${g.pct}%`, background: color, borderRadius: 2 }} />
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    )}
 
     {/* Controls */}
     <div style={{ marginBottom: 20 }}>

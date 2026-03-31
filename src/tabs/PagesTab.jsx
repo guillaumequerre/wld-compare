@@ -1,17 +1,30 @@
 import InfoCard from "../components/InfoCard";
 import { computePageScore, scoreLabel } from "../lib/scoring";
 import ScoreTooltip from "../components/ScoreTooltip";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { C, PAGE_TYPE_MAP } from "../lib/constants";
 import { safeNum, toUrlPath } from "../lib/helpers";
 import { filterByMode } from "../lib/parsers";
 import { SectionHeader, Badge } from "../components/ui";
 import PageModeSelector from "../components/PageModeSelector";
 
-export default function PagesTab({ sites, sfData, gscData, bingData, pageMode, setPageMode, templateFilter, setTemplateFilter, pageTypes }) {
+export default function PagesTab({ sites, sfData, gscData, bingData, pageMode, setPageMode, templateFilter, setTemplateFilter, pageTypes, geoUrlIndex = [] }) {
   const [sortKey, setSortKey] = useState("score");
   const [sortDir, setSortDir] = useState("desc");
   const [search, setSearch] = useState("");
+
+  // Build geo citation map: normalised path → {count_as_source, count_in_answer}
+  const geoUrlMap = useMemo(() => {
+    const m = {};
+    geoUrlIndex.forEach(u => {
+      const path = (u.url || "").replace(/^https?:\/\/[^/]+/, "").replace(/\/$/, "") || "/";
+      if (!m[path]) m[path] = { source: 0, answer: 0 };
+      m[path].source += u.count_as_source || 0;
+      m[path].answer += u.count_in_answer || 0;
+    });
+    return m;
+  }, [geoUrlIndex]); // eslint-disable-line react-hooks/exhaustive-deps
+  const hasGeoData = geoUrlIndex.length > 0;
 
   return (
   <div>
@@ -279,10 +292,15 @@ export default function PagesTab({ sites, sfData, gscData, bingData, pageMode, s
                       .map(({ r, citations }, i) => {
                         const url = r["adresse"] || r["url"] || "";
                         const label = url.replace(/https?:\/\/[^/]+/, "").slice(0, 50) || url.slice(0, 50);
+                        const urlPath = url.replace(/https?:\/\/[^/]+/, "").replace(/\/$/, "") || "/";
+                        const geoCit = geoUrlMap[urlPath];
                         return (
                           <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: `1px solid ${C.borderLight}`, gap: 8 }}>
                             <div style={{ fontSize: 11, color: C.textMid, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={url}>{label || url}</div>
-                            <Badge color={C.purple} bg={C.purpleLight}>{citations} cit.</Badge>
+                            <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                              <Badge color={C.purple} bg={C.purpleLight}>{citations} Bing</Badge>
+                              {geoCit && <Badge color="#7C3AED" bg="#F5F3FF">🤖 {geoCit.source + geoCit.answer} LLM</Badge>}
+                            </div>
                           </div>
                         );
                       });
@@ -291,10 +309,15 @@ export default function PagesTab({ sites, sfData, gscData, bingData, pageMode, s
                     const url   = r["adresse"] || r["url"] || "";
                     const score = safeNum(gscR["clics"] || gscR["clicks"] || 0);
                     const label = url.replace(/https?:\/\/[^/]+/, "").slice(0, 50) || url.slice(0, 50);
+                    const urlPath2 = url.replace(/https?:\/\/[^/]+/, "").replace(/\/$/, "") || "/";
+                    const geoCit2 = geoUrlMap[urlPath2];
                     return (
                       <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: `1px solid ${C.borderLight}`, gap: 8 }}>
                         <div style={{ fontSize: 11, color: C.textMid, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={url}>{label || url}</div>
-                        <Badge color={C.blue} bg={C.blueLight}>{score} clics</Badge>
+                        <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                          <Badge color={C.blue} bg={C.blueLight}>{score} clics</Badge>
+                          {geoCit2 && <Badge color="#7C3AED" bg="#F5F3FF">🤖 {geoCit2.source + geoCit2.answer}</Badge>}
+                        </div>
                       </div>
                     );
                   })}

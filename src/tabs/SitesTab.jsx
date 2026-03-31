@@ -87,7 +87,7 @@ function RadarBlock({ sites, radarSites, setRadarSites, radarData }) {
 
 // ── Main ─────────────────────────────────────────────────────────
 
-export default function SitesTab({ sites, pageMode, setPageMode, metrics, radarSites, setRadarSites, radarData, pageTypes, templateFilter, setTemplateFilter }) {
+export default function SitesTab({ sites, pageMode, setPageMode, metrics, radarSites, setRadarSites, radarData, pageTypes, templateFilter, setTemplateFilter, geoResults = [], geoQuestions = [] }) {
   const DIM_LABELS = {
     avgFlesch: "Score Flesch", avgInlinksUniq: "Maillage interne", avgWords: "Volume contenu",
     schemaRate: "Schema JSON-LD", tableRate: "Tableaux", avgTitleLen: "Title",
@@ -167,6 +167,74 @@ export default function SitesTab({ sites, pageMode, setPageMode, metrics, radarS
           );
         })}
       </div>
+
+      {/* ── GEO Fan-out par site ── */}
+      {geoResults.length > 0 && (
+        <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, marginBottom: 20, overflow: "hidden" }}>
+          <div style={{ padding: "14px 20px", borderBottom: `1px solid ${C.border}`, background: "#F5F3FF", display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ fontSize: 18 }}>🔍</span>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#7C3AED" }}>Présence Fan-outs par site</div>
+              <div style={{ fontSize: 11, color: "#6D28D9" }}>Taux de mention de la marque dans les réponses LLM</div>
+            </div>
+          </div>
+          <div style={{ padding: "16px 20px", display: "grid", gridTemplateColumns: `repeat(${sites.length}, 1fr)`, gap: 16 }}>
+            {sites.map(s => {
+              const siteResults = geoResults.filter(r => r.site_id === s.id);
+              const total = siteResults.length;
+              const withBrand = siteResults.filter(r => r.brand_mentioned).length;
+              const withSource = siteResults.filter(r => r.brand_in_sources).length;
+              const positions = siteResults.filter(r => r.brand_position).map(r => r.brand_position);
+              const avgPos = positions.length ? (positions.reduce((a, b) => a + b, 0) / positions.length).toFixed(1) : null;
+              const pct = total ? Math.round(withBrand / total * 100) : null;
+              const color = pct === null ? C.textLight : pct >= 50 ? "#059669" : pct >= 20 ? "#D97706" : "#DC2626";
+
+              // Top cited URLs for this site
+              const urlCounts = {};
+              siteResults.forEach(r => {
+                (r.urls_cited || []).forEach(u => { urlCounts[u] = (urlCounts[u] || 0) + 1; });
+              });
+              const topUrls = Object.entries(urlCounts).sort((a,b)=>b[1]-a[1]).slice(0,3);
+
+              return (
+                <div key={s.id} style={{ background: s.bg, border: `1.5px solid ${s.color}33`, borderRadius: 12, padding: "14px 16px" }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: s.color, marginBottom: 12 }}>{s.label}</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
+                    {[
+                      { label: "Présence", value: pct !== null ? `${pct}%` : "—", sub: `${withBrand}/${total}`, color },
+                      { label: "En source", value: withSource, sub: "citations URL", color: "#2563EB" },
+                      { label: "Position moy.", value: avgPos || "—", sub: "dans les listes", color: "#D97706" },
+                      { label: "Questions testées", value: total, sub: "résultats LLM", color: C.textMid },
+                    ].map(k => (
+                      <div key={k.label} style={{ background: "#fff", borderRadius: 8, padding: "8px 10px" }}>
+                        <div style={{ fontSize: 10, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.5 }}>{k.label}</div>
+                        <div style={{ fontSize: 18, fontWeight: 800, color: k.color }}>{k.value}</div>
+                        <div style={{ fontSize: 10, color: C.textLight }}>{k.sub}</div>
+                      </div>
+                    ))}
+                  </div>
+                  {pct !== null && (
+                    <div style={{ height: 5, background: "#EDE9FE", borderRadius: 3, overflow: "hidden", marginBottom: 10 }}>
+                      <div style={{ height: "100%", width: `${pct}%`, background: color, borderRadius: 3 }} />
+                    </div>
+                  )}
+                  {topUrls.length > 0 && (
+                    <div style={{ fontSize: 10, color: C.textLight, marginTop: 6 }}>
+                      <div style={{ fontWeight: 700, marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.5 }}>URLs principales citées</div>
+                      {topUrls.map(([url, count]) => (
+                        <div key={url} style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}>
+                          <span style={{ color: "#2563EB", wordBreak: "break-all" }}>{url.replace(/^https?:\/\/[^/]+/, "").slice(0, 35)}…</span>
+                          <span style={{ fontWeight: 600, flexShrink: 0, marginLeft: 4 }}>{count}×</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* ── Card SF ── */}
       <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, marginBottom: 20, overflow: "hidden" }}>

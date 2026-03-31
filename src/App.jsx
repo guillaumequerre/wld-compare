@@ -3,7 +3,7 @@ import { C, SF_DIMS, RES_KPIS, RADAR_DIMS, DEFAULT_SITES, SEMRUSH_DIMS } from ".
 import { emptyDataMap, makeInitialProject, parseCSV } from "./lib/helpers";
 import { extractSF, extractGSC, extractGA, extractBing, extractSemrush, parseSemrush, filterByMode } from "./lib/parsers";
 import { buildUrlMaps, buildSfPageVectors, intraCorrFast, smIntraCorr } from "./lib/correlations";
-import { sbSaveProject, sbGetHistory, sbGetLatest, sbDownload, sbGetPageTypes, sbSaveGeoAxes } from "./lib/supabase";
+import { sbSaveProject, sbGetHistory, sbGetLatest, sbDownload, sbGetPageTypes, sbSaveGeoAxes, sbGetGeoResultsAll, sbGetUrlIndex } from "./lib/supabase";
 import { sbLoadAccessibleProjects } from "./lib/auth";
 import AnalyseTab from "./tabs/AnalyseTab";
 import ImportTab from "./tabs/ImportTab";
@@ -221,6 +221,8 @@ export default function App() {
   // ── Supabase ─────────────────────────────────────────────────────
   const [dbHistory, setDbHistory]   = useState([]);
   const [dbLoading, setDbLoading]   = useState(true);
+  const [geoResults, setGeoResults]   = useState([]);
+  const [geoUrlIndex, setGeoUrlIndex] = useState([]);
   const [showHistory, setShowHistory] = useState(false);
 
   const loadedProjectsRef = useRef(new Set());
@@ -380,6 +382,13 @@ export default function App() {
     const history = await sbGetHistory(currentProjectId);
     setDbHistory(history);
   }, [currentProjectId]);
+
+  // Load GEO results when project changes
+  useEffect(() => {
+    if (!currentProjectId) { setGeoResults([]); setGeoUrlIndex([]); return; }
+    sbGetGeoResultsAll(currentProjectId).then(setGeoResults).catch(() => setGeoResults([]));
+    sbGetUrlIndex(currentProjectId).then(setGeoUrlIndex).catch(() => setGeoUrlIndex([]));
+  }, [currentProjectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Computed metrics ─────────────────────────────────────────────
   const baseMetrics = useMemo(() => sites.map(s => ({
@@ -553,6 +562,9 @@ export default function App() {
               user={user}
               projects={projects}
               currentProjectId={currentProjectId}
+              onGoSetup={() => goTo("import")}
+              onGoFanout={() => goTo("geo")}
+              onGoAudit={() => goTo("geo_audit")}
               onLogin={async (u) => {
                 setUser(u);
                 // Reload accessible projects for this user
@@ -629,6 +641,8 @@ export default function App() {
               templateFilter={templateFilter}
               setTemplateFilter={setTemplateFilter}
               pageTypes={pageTypes}
+              geoResults={geoResults}
+              geoQuestions={[]}
             />
           )}
 
@@ -643,6 +657,7 @@ export default function App() {
               templateFilter={templateFilter}
               setTemplateFilter={setTemplateFilter}
               pageTypes={pageTypes}
+              geoUrlIndex={geoUrlIndex}
             />
           )}
 
@@ -665,6 +680,8 @@ export default function App() {
               bingData={bingData}
               smData={smData}
               pageTypes={pageTypes}
+              geoResults={geoResults}
+              geoUrlIndex={geoUrlIndex}
             />
           )}
 
@@ -681,6 +698,8 @@ export default function App() {
               pageTypes={pageTypes}
               templateFilter={templateFilter}
               setTemplateFilter={setTemplateFilter}
+              geoResults={geoResults}
+              geoUrlIndex={geoUrlIndex}
             />
           )}
 
