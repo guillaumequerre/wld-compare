@@ -183,6 +183,12 @@ export default function App() {
   // ── UI state ─────────────────────────────────────────────────────
   const [confirmModal, setConfirmModal] = useState(null);
   const [tab, setTab]                   = useState("home");
+
+  // Gate: redirect to home if not connected and trying to access protected tabs
+  const goTo = (t) => {
+    if (!user && t !== "home") { setTab("home"); return; }
+    setTab(t);
+  };
   const [pageMode, setPageMode]         = useState("all");
   const [templateFilter, setTemplateFilter] = useState([]); // [] = all types, array for multi-select
   const [pageTypes, setPageTypes]           = useState({}); // { siteId: { urlPath: type } }
@@ -272,9 +278,12 @@ export default function App() {
       setDbLoading(true);
       try {
         const currentUser = getCurrentUser();
-        const savedProjects = currentUser
-          ? await sbLoadAccessibleProjects(currentUser.email).catch(() => sbLoadProjects())
-          : await sbLoadProjects();
+        if (!currentUser) {
+          setDbLoading(false);
+          return; // No projects loaded until user logs in
+        }
+        const savedProjects = await sbLoadAccessibleProjects(currentUser.email)
+          .catch(() => sbLoadProjects());
           if (savedProjects && savedProjects.length > 0) {
           const restored = savedProjects.map(p => ({
             ...p,
@@ -529,7 +538,7 @@ export default function App() {
               <span style={{ fontWeight: 700, fontSize: 15, letterSpacing: -0.3 }}>CorrelDash</span>
               <span style={{ color: C.textLight, fontSize: 13 }}>· SEO × GEO</span>
             </div>
-            <NavBar tab={tab} setTab={setTab} user={user} onLogout={() => { authLogout(); setUser(null); }} />
+            <NavBar tab={tab} setTab={goTo} user={user} onLogout={() => { authLogout(); setUser(null); setTab("home"); }} />
           </div>
         </div>
 
@@ -541,14 +550,30 @@ export default function App() {
               user={user}
               projects={projects}
               currentProjectId={currentProjectId}
-              onLogin={(u) => { setUser(u); }}
+              onLogin={async (u) => {
+                setUser(u);
+                // Reload accessible projects for this user
+                try {
+                  const { sbLoadAccessibleProjects: loadAP } = await import("./lib/auth");
+                  const ps = await loadAP(u.email);
+                  if (ps && ps.length > 0) {
+                    const restored = ps.map(p => ({
+                      ...p,
+                      sfData: emptyDataMap(p.sites), gscData: emptyDataMap(p.sites),
+                      gaData: emptyDataMap(p.sites), bingData: emptyDataMap(p.sites), smData: emptyDataMap(p.sites),
+                    }));
+                    setProjects(restored);
+                    setCurrentProjectId(restored[0].id);
+                  }
+                } catch(e) { console.warn("Project reload failed:", e); }
+              }}
               onLogout={() => { authLogout(); setUser(null); }}
               onSelectProject={(id) => { setCurrentProjectId(id); setTab("geo"); }}
               onCreateProject={() => {
-                const p = makeInitialProject();
+                const p = { ...makeInitialProject(), owner_email: user?.email || null };
                 setProjects(prev => [...prev, p]);
                 setCurrentProjectId(p.id);
-                setTab("import");
+                goTo("import");
               }}
             />
           )}

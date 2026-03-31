@@ -60,7 +60,7 @@ export async function sbSaveProject(project) {
   const res = await fetch(`${PROXY}/rest/v1/projects`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
-    body: JSON.stringify({ id: project.id, name: project.name, sites_json: JSON.stringify(project.sites.map(s => ({ id: s.id, label: s.label, color: s.color, bg: s.bg }))), geo_axes_json: JSON.stringify(project.geo_axes || '["Quoi ?","Pourquoi ?","Comment ?","Comparaison","Coût/budget"]'), updated_at: new Date().toISOString() }),
+    body: JSON.stringify({ id: project.id, name: project.name, owner_email: project.owner_email || null, sites_json: JSON.stringify(project.sites.map(s => ({ id: s.id, label: s.label, color: s.color, bg: s.bg }))), geo_axes_json: JSON.stringify(project.geo_axes || '["Quoi ?","Pourquoi ?","Comment ?","Comparaison","Coût/budget"]'), updated_at: new Date().toISOString() }),
   });
   if (!res.ok) console.warn("Save project failed:", res.status);
 }
@@ -492,19 +492,6 @@ export async function sbSaveProviderKeys(project_id, keys) {
 }
 
 // ── GEO — PRESENCE HISTORY ───────────────────────────────────────
-
-export async function sbSavePresence(row) {
-  try {
-    const res = await fetch(`${PROXY}/rest/v1/geo_presence_history`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Prefer": "return=representation" },
-      body: JSON.stringify({ ...row, test_date: new Date().toISOString().slice(0, 10) }),
-    });
-    if (!res.ok) {
-      const err = await res.text();
-      console.warn("sbSavePresence failed:", res.status, err.slice(0,100));
-      return null;
-    }
     const data = await res.json();
     return Array.isArray(data) ? data[0] : data;
   } catch(e) { console.warn("sbSavePresence error:", e.message); return null; }
