@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { C } from "../lib/constants";
-import { authLogin, isSuperAdmin } from "../lib/auth";
+import { authLogin, authSignup, isSuperAdmin } from "../lib/auth";
 
 // ── Feature card ──────────────────────────────────────────────────
 function FeatureCard({ icon, title, description, color }) {
@@ -13,53 +13,98 @@ function FeatureCard({ icon, title, description, color }) {
   );
 }
 
-// ── Login form ────────────────────────────────────────────────────
+// ── Login / Signup form ──────────────────────────────────────────
 function LoginForm({ onLogin }) {
+  const [mode, setMode]         = useState("login"); // "login" | "signup"
   const [email, setEmail]       = useState("");
   const [password, setPassword] = useState("");
+  const [confirm, setConfirm]   = useState("");
   const [remember, setRemember] = useState(true);
   const [loading, setLoading]   = useState(false);
   const [error, setError]       = useState("");
+  const [success, setSuccess]   = useState("");
 
   const submit = async (e) => {
     e.preventDefault();
-    setLoading(true); setError("");
+    setError(""); setSuccess("");
+    if (mode === "signup" && password !== confirm) {
+      setError("Les mots de passe ne correspondent pas"); return;
+    }
+    if (password.length < 8) {
+      setError("Le mot de passe doit contenir au moins 8 caractères"); return;
+    }
+    setLoading(true);
     try {
-      const user = await authLogin(email.trim(), password, remember);
-      onLogin(user);
+      if (mode === "login") {
+        const user = await authLogin(email.trim(), password, remember);
+        onLogin(user);
+      } else {
+        const user = await authSignup(email.trim(), password);
+        if (user) {
+          onLogin(user);
+        } else {
+          setSuccess("Compte créé ! Vérifiez votre email pour confirmer votre compte, puis connectez-vous.");
+          setMode("login"); setPassword(""); setConfirm("");
+        }
+      }
     } catch(err) {
-      setError(err.message || "Identifiants incorrects");
+      setError(err.message);
     } finally { setLoading(false); }
   };
 
+  const isLogin = mode === "login";
+
   return (
     <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 16, padding: "28px 32px", maxWidth: 400 }}>
-      <div style={{ fontSize: 16, fontWeight: 800, color: C.text, marginBottom: 6 }}>🔐 Connexion</div>
-      <div style={{ fontSize: 12, color: C.textLight, marginBottom: 20 }}>Accédez à vos projets GEO</div>
+      {/* Mode toggle */}
+      <div style={{ display: "flex", background: C.bg, borderRadius: 10, padding: 3, marginBottom: 20, gap: 3 }}>
+        {[{key:"login",label:"Se connecter"},{key:"signup",label:"Créer un compte"}].map(m => (
+          <button key={m.key} onClick={() => { setMode(m.key); setError(""); setSuccess(""); }}
+            style={{ flex: 1, padding: "7px", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer",
+              background: mode === m.key ? "#fff" : "transparent",
+              color: mode === m.key ? "#7C3AED" : C.textLight,
+              boxShadow: mode === m.key ? "0 1px 4px rgba(0,0,0,0.08)" : "none" }}>
+            {m.label}
+          </button>
+        ))}
+      </div>
+
       {error && (
         <div style={{ background: "#FEF2F2", border: "1px solid #DC262633", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#DC2626", marginBottom: 14 }}>
           {error}
         </div>
       )}
+      {success && (
+        <div style={{ background: "#ECFDF5", border: "1px solid #05966633", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#059669", marginBottom: 14 }}>
+          {success}
+        </div>
+      )}
+
       <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         <input type="email" value={email} onChange={e => setEmail(e.target.value)} required
           placeholder="adresse@email.com"
-          style={{ padding: "9px 12px", border: `1px solid ${C.border}`, borderRadius: 9, fontSize: 13, color: C.text, outline: "none" }} />
+          style={{ padding: "9px 12px", border: `1px solid ${C.border}`, borderRadius: 9, fontSize: 13, color: C.text }} />
         <input type="password" value={password} onChange={e => setPassword(e.target.value)} required
-          placeholder="Mot de passe"
-          style={{ padding: "9px 12px", border: `1px solid ${C.border}`, borderRadius: 9, fontSize: 13, color: C.text, outline: "none" }} />
-        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: C.textLight, cursor: "pointer" }}>
-          <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} />
-          Se souvenir de moi
-        </label>
-        <button type="submit" disabled={loading || !email || !password}
-          style={{ padding: "10px", background: loading ? C.bg : "#7C3AED", color: loading ? C.textLight : "#fff", border: "none", borderRadius: 9, fontSize: 13, fontWeight: 700, cursor: loading ? "not-allowed" : "pointer", marginTop: 4 }}>
-          {loading ? "Connexion…" : "Se connecter"}
+          placeholder="Mot de passe (8 caractères min.)"
+          style={{ padding: "9px 12px", border: `1px solid ${C.border}`, borderRadius: 9, fontSize: 13, color: C.text }} />
+        {!isLogin && (
+          <input type="password" value={confirm} onChange={e => setConfirm(e.target.value)} required
+            placeholder="Confirmer le mot de passe"
+            style={{ padding: "9px 12px", border: `1px solid ${confirm && confirm !== password ? "#DC2626" : C.border}`, borderRadius: 9, fontSize: 13, color: C.text }} />
+        )}
+        {isLogin && (
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: C.textLight, cursor: "pointer" }}>
+            <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} />
+            Se souvenir de moi
+          </label>
+        )}
+        <button type="submit" disabled={loading || !email || !password || (!isLogin && !confirm)}
+          style={{ padding: "10px", background: loading ? C.bg : "#7C3AED", color: loading ? C.textLight : "#fff",
+            border: "none", borderRadius: 9, fontSize: 13, fontWeight: 700,
+            cursor: loading ? "not-allowed" : "pointer", marginTop: 4 }}>
+          {loading ? (isLogin ? "Connexion…" : "Création…") : (isLogin ? "Se connecter" : "Créer mon compte")}
         </button>
       </form>
-      <div style={{ marginTop: 14, fontSize: 11, color: C.textLight, textAlign: "center" }}>
-        Pas encore de compte ? Contactez l'administrateur.
-      </div>
     </div>
   );
 }

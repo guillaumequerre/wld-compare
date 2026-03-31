@@ -45,6 +45,22 @@ export async function authLogin(email, password, remember = true) {
   return data.user;
 }
 
+export async function authSignup(email, password) {
+  const res = await fetch("/api/auth?action=signup", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "Erreur lors de la création du compte");
+  // Auto-login after signup if token returned
+  if (data.access_token) {
+    storeSession({ access_token: data.access_token, refresh_token: data.refresh_token, user: data.user });
+    return data.user;
+  }
+  return data.user;
+}
+
 export async function authLogout() {
   clearSession();
 }

@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { C } from "../lib/constants";
-import { authLogin, isSuperAdmin, sbGetProjectMembers, sbAddProjectMember, sbRemoveProjectMember } from "../lib/auth";
+import { authLogin, authSignup, isSuperAdmin, sbGetProjectMembers, sbAddProjectMember, sbRemoveProjectMember } from "../lib/auth";
 
 function Section({ title, children }) {
   return (
@@ -15,27 +15,53 @@ function Section({ title, children }) {
 
 // ── Login card (when not connected) ──────────────────────────────
 function LoginCard({ onLogin }) {
-  const [email, setEmail] = useState("");
+  const [mode, setMode]         = useState("login");
+  const [email, setEmail]       = useState("");
   const [password, setPassword] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [confirm, setConfirm]   = useState("");
+  const [loading, setLoading]   = useState(false);
+  const [error, setError]       = useState("");
+  const [success, setSuccess]   = useState("");
 
   const submit = async (e) => {
     e.preventDefault();
-    setLoading(true); setError("");
-    try { const u = await authLogin(email.trim(), password); onLogin(u); }
-    catch(err) { setError(err.message); }
+    setError(""); setSuccess("");
+    if (mode === "signup" && password !== confirm) { setError("Mots de passe différents"); return; }
+    if (password.length < 8) { setError("8 caractères minimum"); return; }
+    setLoading(true);
+    try {
+      if (mode === "login") {
+        const u = await authLogin(email.trim(), password);
+        onLogin(u);
+      } else {
+        const u = await authSignup(email.trim(), password);
+        if (u) { onLogin(u); }
+        else { setSuccess("Compte créé ! Vérifiez votre email puis connectez-vous."); setMode("login"); setPassword(""); setConfirm(""); }
+      }
+    } catch(err) { setError(err.message); }
     finally { setLoading(false); }
   };
 
   return (
-    <Section title="🔐 Connexion">
-      {error && <div style={{ background: "#FEF2F2", border: "1px solid #DC262633", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#DC2626", marginBottom: 12 }}>{error}</div>}
+    <Section title="🔐 Connexion / Inscription">
+      <div style={{ display: "flex", gap: 6, marginBottom: 16 }}>
+        {[{key:"login",label:"Connexion"},{key:"signup",label:"Créer un compte"}].map(m => (
+          <button key={m.key} onClick={() => { setMode(m.key); setError(""); setSuccess(""); }}
+            style={{ flex: 1, padding: "7px", border: `2px solid ${mode===m.key ? "#7C3AED" : C.border}`, borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", background: mode===m.key ? "#F5F3FF" : "#fff", color: mode===m.key ? "#7C3AED" : C.textMid }}>
+            {m.label}
+          </button>
+        ))}
+      </div>
+      {error && <div style={{ background: "#FEF2F2", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#DC2626", marginBottom: 12 }}>{error}</div>}
+      {success && <div style={{ background: "#ECFDF5", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#059669", marginBottom: 12 }}>{success}</div>}
       <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 10, maxWidth: 360 }}>
         <input type="email" value={email} onChange={e => setEmail(e.target.value)} required placeholder="Email" style={{ padding: "8px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13 }} />
-        <input type="password" value={password} onChange={e => setPassword(e.target.value)} required placeholder="Mot de passe" style={{ padding: "8px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13 }} />
+        <input type="password" value={password} onChange={e => setPassword(e.target.value)} required placeholder="Mot de passe (8 min.)" style={{ padding: "8px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13 }} />
+        {mode === "signup" && (
+          <input type="password" value={confirm} onChange={e => setConfirm(e.target.value)} required placeholder="Confirmer" style={{ padding: "8px 12px", border: `1px solid ${confirm && confirm !== password ? "#DC2626" : C.border}`, borderRadius: 8, fontSize: 13 }} />
+        )}
         <button type="submit" disabled={loading} style={{ padding: "9px", background: "#7C3AED", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-          {loading ? "Connexion…" : "Se connecter"}
+          {loading ? "…" : mode === "login" ? "Se connecter" : "Créer mon compte"}
         </button>
       </form>
     </Section>
