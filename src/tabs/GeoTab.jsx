@@ -970,8 +970,9 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
   // Refs so callbacks always read current values without stale closure issues
   const activeProvidersRef = useRef(activeProviders);
   const providerKeysRef    = useRef(providerKeys);
-  useEffect(() => { activeProvidersRef.current = activeProviders; }, [activeProviders]);
-  useEffect(() => { providerKeysRef.current = providerKeys; }, [providerKeys]);
+  // Keep refs in sync with props on every render (not just via useEffect)
+  activeProvidersRef.current = activeProviders;
+  providerKeysRef.current    = providerKeys;
   const [selected, setSelected]     = useState(new Set());
   const [bulkCat, setBulkCat]       = useState("");
   const [keywords, setKeywords]     = useState([]);
