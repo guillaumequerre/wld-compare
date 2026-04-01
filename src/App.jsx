@@ -585,6 +585,8 @@ export default function App() {
                     setCurrentProjectId(restored[0].id);
                   }
                 } catch(e) { console.warn("Project reload failed:", e); }
+                // After login, go to Setup to configure the project
+                goTo("import");
               }}
               onLogout={() => { authLogout(); setUser(null); }}
               onSelectProject={(id) => { setCurrentProjectId(id); setTab("geo"); }}
@@ -650,7 +652,7 @@ export default function App() {
             />
           )}
 
-          {tab === "pages" && (
+          {tab === "pages" && user && (
             <PagesTab
               sites={sites}
               sfData={sfData}
@@ -689,7 +691,7 @@ export default function App() {
             />
           )}
 
-          {tab === "sites" && (
+          {tab === "sites" && user && (
             <SitesTab
               sites={sites}
               smData={smData}

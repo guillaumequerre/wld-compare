@@ -1,4 +1,4 @@
-import { DEFAULT_SITES } from "./constants";
+// constants import removed — DEFAULT_SITES no longer used here
 
 export function safeNum(v) {
   const n = parseFloat(String(v).replace(/\s/g, "").replace(",", "."));
@@ -81,7 +81,7 @@ export function newProject(name, sites, ownerEmail = null) {
 }
 
 export function makeInitialProject(ownerEmail = null) {
-  const p = newProject("Mon projet", DEFAULT_SITES, ownerEmail);
+  const p = newProject("Mon projet", [], ownerEmail);
   p.id = `proj-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
   return p;
 }

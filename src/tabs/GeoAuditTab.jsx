@@ -719,6 +719,7 @@ export default function GeoAuditTab({ sites, projectId, project = null, corrMatr
           <button
             onClick={() => { setExporting(true); exportPDF(audit, siteBrand, site, aiText); setTimeout(() => setExporting(false), 1000); }}
             disabled={noData || exporting}
+            title={noData ? "Lancez d'abord des Fan-outs pour générer des données d'audit à exporter" : undefined}
             style={{ padding: "8px 18px", background: noData ? C.bg : "#2563EB", color: noData ? C.textLight : "#fff", border: "none", borderRadius: 9, fontSize: 12, fontWeight: 700, cursor: noData ? "not-allowed" : "pointer" }}>
             {exporting ? "⏳ Export…" : "⬇ Export PDF"}
           </button>

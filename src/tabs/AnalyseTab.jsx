@@ -405,6 +405,7 @@ export default function AnalyseTab({ metrics, corrMatrix, resultVals, analysis, 
           </p>
         </div>
         <button onClick={runAnalysis} disabled={analysisLoading || !hasData}
+          title={!hasData ? "Importez au moins un fichier Screaming Frog dans ⚙️ Setup, ou lancez des Fan-outs, pour activer l'analyse IA" : undefined}
           style={{ padding: "10px 24px", background: analysisLoading ? C.border : "#2563EB", color: analysisLoading ? C.textLight : "#fff", border: "none", borderRadius: 9, cursor: hasData && !analysisLoading ? "pointer" : "not-allowed", fontSize: 14, fontWeight: 700, display: "flex", alignItems: "center", gap: 8, boxShadow: analysisLoading ? "none" : "0 2px 8px #2563EB33" }}>
           {analysisLoading
             ? <><span style={{ display: "inline-block", animation: "spin 1s linear infinite" }}>⟳</span> Analyse en cours…</>
