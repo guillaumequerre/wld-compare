@@ -145,6 +145,57 @@ function ProjectMembers({ project, ownerEmail }) {
 }
 
 // ── ManageTab ─────────────────────────────────────────────────────
+function AccountForm({ user, onLogout, isAdmin }) {
+  const [name, setName] = useState(user?.user_metadata?.display_name || "");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  const saveName = async () => {
+    setSaving(true);
+    try {
+      const { getToken } = await import("../lib/auth");
+      const token = getToken();
+      await fetch("/api/auth?action=update_name", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+        body: JSON.stringify({ display_name: name.trim() }),
+      });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch(e) { console.warn(e); }
+    setSaving(false);
+  };
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{user.email}</div>
+          <div style={{ fontSize: 11, color: C.textLight, marginTop: 3 }}>
+            Connecté
+            {isAdmin && <span style={{ marginLeft: 8, fontSize: 10, background: "#F5F3FF", color: "#7C3AED", borderRadius: 4, padding: "1px 6px", fontWeight: 700 }}>SUPER ADMIN</span>}
+          </div>
+        </div>
+        <button onClick={onLogout} style={{ padding: "7px 16px", border: `1px solid ${C.border}`, borderRadius: 8, background: "#fff", color: "#DC2626", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+          Déconnexion
+        </button>
+      </div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: C.textLight, marginBottom: 5 }}>Prénom / nom affiché</div>
+          <input value={name} onChange={e => setName(e.target.value)} placeholder="Ex : Guillaume"
+            style={{ width: "100%", padding: "8px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, color: C.text, boxSizing: "border-box" }} />
+        </div>
+        <button onClick={saveName} disabled={saving}
+          style={{ marginTop: 20, padding: "8px 16px", background: saved ? "#059669" : "#7C3AED", color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>
+          {saved ? "✓ Enregistré" : saving ? "…" : "Enregistrer"}
+        </button>
+      </div>
+      <div style={{ fontSize: 11, color: C.textLight, marginTop: 6 }}>Affiché sur l'accueil : "Bonjour, {name || "…"} !"</div>
+    </div>
+  );
+}
+
 export default function ManageTab({ user, projects, currentProjectId, setCurrentProjectId, onLogin, onLogout }) {
   const [selectedProjectId, setSelectedProjectId] = useState(currentProjectId);
   const selectedProject = projects.find(p => p.id === selectedProjectId) || projects[0];
@@ -165,18 +216,7 @@ export default function ManageTab({ user, projects, currentProjectId, setCurrent
 
       {/* Account info */}
       <Section title="Votre compte">
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div>
-            <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{user.email}</div>
-            <div style={{ fontSize: 11, color: C.textLight, marginTop: 3 }}>
-              Connecté
-              {isAdmin && <span style={{ marginLeft: 8, fontSize: 10, background: "#F5F3FF", color: "#7C3AED", borderRadius: 4, padding: "1px 6px", fontWeight: 700 }}>SUPER ADMIN</span>}
-            </div>
-          </div>
-          <button onClick={onLogout} style={{ padding: "7px 16px", border: `1px solid ${C.border}`, borderRadius: 8, background: "#fff", color: "#DC2626", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
-            Déconnexion
-          </button>
-        </div>
+        <AccountForm user={user} onLogout={onLogout} isAdmin={isAdmin} />
       </Section>
 
       {/* Project access */}

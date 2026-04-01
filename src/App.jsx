@@ -565,6 +565,7 @@ export default function App() {
               user={user}
               projects={projects}
               currentProjectId={currentProjectId}
+              dbLoading={dbLoading}
               onGoSetup={() => goTo("import")}
               onGoFanout={() => goTo("geo")}
               onGoAudit={() => goTo("geo_audit")}
