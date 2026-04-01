@@ -167,14 +167,20 @@ async function callProvider(provider, apiKey, prompt) {
       body: JSON.stringify({
         model: provider.model,
         max_tokens: 4000,
+        system: "Tu es un expert en recommandation d'entreprises et prestataires. Réponds directement sans mentionner les limites de tes connaissances.",
         messages: [{ role: "user", content: prompt }],
       }),
     });
     const raw = await res.text();
     if (raw.trimStart().startsWith("<")) throw new Error("Proxy /api/claude-geo introuvable — ajoutez claude-geo-proxy.js dans netlify/edge-functions/");
+    if (!res.ok) {
+      let errMsg = `Claude ${res.status}`;
+      try { errMsg = JSON.parse(raw)?.error?.message || errMsg; } catch {}
+      throw new Error(errMsg);
+    }
     const data = JSON.parse(raw);
-    if (!res.ok) throw new Error(data.error?.message || `Claude ${res.status}`);
     const text = data.content?.[0]?.text || "";
+    if (!text) throw new Error("Réponse Claude vide — vérifiez la clé API");
     return parseTextResponse(text, data.usage?.input_tokens || 0, data.usage?.output_tokens || 0);
   }
 
@@ -553,9 +559,10 @@ function KeywordsTab({ site, projectId, apiKey, model, axes, context, categories
   const [loading, setLoading]   = useState(false);
   const [busy, setBusy]         = useState({});
   const [runningAll, setRunningAll] = useState(false);
-  const [selected, setSelected] = useState(new Set());
-  const [bulkCat, setBulkCat]   = useState("");
+  const [selected, setSelected]   = useState(new Set());
+  const [bulkCat, setBulkCat]     = useState("");
   const [filterCat, setFilterCat] = useState("");
+  const [filterSearch, setFilterSearch] = useState(""); // regex/text filter on keyword
   const stopRef = useRef(false);
   const [enriching, setEnriching] = useState(false);
   const fileVolRef = useRef(null);
@@ -783,12 +790,45 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
     clearSel(); setBulkCat("");
   };
 
+  const bulkGenerate = async () => {
+    if (!selected.size || !apiKey) return;
+    const toProcess = keywords.filter(k => selected.has(k.id));
+    setRunningAll(true);
+    stopRef.current = false;
+    for (const kw of toProcess) {
+      if (stopRef.current) break;
+      await generateQuestions(kw, null);
+    }
+    setRunningAll(false);
+    onQuestionsGenerated?.(true);
+  };
+
+  const bulkDelete = async () => {
+    if (!selected.size) return;
+    const ids = [...selected];
+    await Promise.all(ids.map(id => sbDeleteKeyword(id)));
+    setKeywords(prev => prev.filter(k => !selected.has(k.id)));
+    clearSel();
+  };
+
   const setCatSingle = async (kwId, catId) => {
     await sbSetKeywordCategory(kwId, catId || null);
     setKeywords(prev => prev.map(k => k.id === kwId ? { ...k, category_id: catId || null } : k));
   };
 
-  const filtered = useMemo(() => filterCat ? keywords.filter(k => k.category_id === filterCat) : keywords, [keywords, filterCat]);
+  const filtered = useMemo(() => {
+    let kws = keywords;
+    if (filterCat) kws = kws.filter(k => k.category_id === filterCat);
+    if (filterSearch.trim()) {
+      try {
+        const rx = new RegExp(filterSearch.trim(), "i");
+        kws = kws.filter(k => rx.test(k.keyword));
+      } catch {
+        kws = kws.filter(k => k.keyword.toLowerCase().includes(filterSearch.trim().toLowerCase()));
+      }
+    }
+    return kws;
+  }, [keywords, filterCat, filterSearch]);
 
   const [axesOpen, setAxesOpen] = useState(false);
 
@@ -893,46 +933,103 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
 
       {/* Bulk bar + filters */}
       {keywords.length > 0 && (
-        <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 11, color: C.textLight }}>
-            {filtered.length} mot{filtered.length > 1 ? "s-clés" : "-clé"}
-            {" · "}<span style={{ color: "#059669", fontWeight: 600 }}>{filtered.filter(k => k.status === "done_q" || k.status === "done").length} générés</span>
-            {" · "}{filtered.reduce((s, k) => s + (k.question_count || 0), 0)} question{filtered.reduce((s, k) => s + (k.question_count || 0), 0) > 1 ? "s" : ""}
-            {selected.size > 0 && <strong style={{ color: C.text }}> · {selected.size} sélectionné{selected.size > 1 ? "s" : ""}</strong>}
-          </span>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
+          {/* Row 1: stats + search/regex + category filter */}
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ fontSize: 11, color: C.textLight, flexShrink: 0 }}>
+              {filtered.length} mot{filtered.length > 1 ? "s-clés" : "-clé"}
+              {" · "}<span style={{ color: "#059669", fontWeight: 600 }}>{filtered.filter(k => k.status === "done_q" || k.status === "done").length} générés</span>
+              {" · "}{filtered.reduce((s, k) => s + (k.question_count || 0), 0)} question{filtered.reduce((s, k) => s + (k.question_count || 0), 0) > 1 ? "s" : ""}
+              {selected.size > 0 && <strong style={{ color: C.text }}> · {selected.size} sélectionné{selected.size > 1 ? "s" : ""}</strong>}
+            </span>
 
-          {/* Filter by category */}
-          <CatSelect value={filterCat} categories={categories} onChange={v => setFilterCat(v || "")} placeholder="Toutes catégories" />
+            {/* Regex search */}
+            <input
+              value={filterSearch}
+              onChange={e => { setFilterSearch(e.target.value); setSelected(new Set()); }}
+              placeholder="Filtrer par regex ou texte…"
+              style={{ flex: 1, minWidth: 160, padding: "4px 10px", border: `1px solid ${filterSearch ? "#7C3AED" : C.border}`, borderRadius: 7, fontSize: 11, color: C.text }}
+            />
+            {filterSearch && (
+              <button onClick={() => setFilterSearch("")} style={{ fontSize: 11, padding: "3px 8px", border: `1px solid ${C.border}`, borderRadius: 5, background: C.white, cursor: "pointer", color: C.textMid }}>✕</button>
+            )}
 
-          {/* Bulk select */}
-          <div style={{ display: "flex", gap: 4 }}>
-            <button onClick={selectAll} style={{ fontSize: 11, padding: "3px 8px", border: `1px solid ${C.border}`, borderRadius: 5, background: C.white, cursor: "pointer", color: C.textMid }}>Tout sélect.</button>
-            {selected.size > 0 && <button onClick={clearSel} style={{ fontSize: 11, padding: "3px 8px", border: `1px solid ${C.border}`, borderRadius: 5, background: C.white, cursor: "pointer", color: C.textMid }}>Désélect.</button>}
+            {/* Filter by category */}
+            <CatSelect value={filterCat} categories={categories} onChange={v => { setFilterCat(v || ""); setSelected(new Set()); }} placeholder="Toutes catégories" />
           </div>
 
-          {/* Bulk categorize */}
-          {selected.size > 0 && (
-            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              <CatSelect value={bulkCat} categories={categories} onChange={setBulkCat} placeholder="Appliquer catégorie…" />
-              <Btn onClick={applyBulkCat} disabled={!bulkCat} small color="#7C3AED">Appliquer</Btn>
-            </div>
-          )}
+          {/* Row 2: select all + bulk actions */}
+          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+            {/* Select all filtered */}
+            <input
+              type="checkbox"
+              checked={filtered.length > 0 && filtered.every(k => selected.has(k.id))}
+              onChange={e => e.target.checked ? setSelected(new Set(filtered.map(k => k.id))) : clearSel()}
+              title="Tout sélectionner / désélectionner"
+              style={{ cursor: "pointer", width: 14, height: 14 }}
+            />
+            <span style={{ fontSize: 11, color: C.textLight }}>
+              {selected.size > 0 ? `${selected.size} sélectionné${selected.size > 1 ? "s" : ""}` : "Tout sélectionner"}
+            </span>
 
-          <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-            {runningAll && <Btn onClick={() => { stopRef.current = true; setRunningAll(false); }} color="#DC2626" variant="outline" small>⏹ Arrêter</Btn>}
+            {selected.size > 0 && (
+              <>
+                <div style={{ width: 1, height: 14, background: C.border, margin: "0 2px" }} />
+                {/* Bulk categorize */}
+                <CatSelect value={bulkCat} categories={categories} onChange={setBulkCat} placeholder="Catégorie…" />
+                {bulkCat && <Btn onClick={applyBulkCat} disabled={!bulkCat} small color="#7C3AED">Appliquer</Btn>}
+                {/* Bulk generate */}
+                <Btn onClick={bulkGenerate} disabled={runningAll || !apiKey} small color={site.color}
+                  title={!apiKey ? "Clé OpenAI manquante — ajoutez-la dans ⚙️ Gestion des Providers" : `Générer les questions pour ${selected.size} mot${selected.size > 1 ? "s-clés" : "-clé"}`}>
+                  💬 Générer ({selected.size})
+                </Btn>
+                {/* Bulk delete */}
+                <Btn onClick={bulkDelete} small color="#DC2626" variant="outline"
+                  title={`Supprimer ${selected.size} mot${selected.size > 1 ? "s-clés" : "-clé"}`}>
+                  🗑 Supprimer ({selected.size})
+                </Btn>
+              </>
+            )}
+
+            <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+              {runningAll && <Btn onClick={() => { stopRef.current = true; setRunningAll(false); }} color="#DC2626" variant="outline" small>⏹ Arrêter</Btn>}
             <Btn onClick={generateAll} disabled={runningAll || !apiKey} color={site.color} small
               title={!apiKey ? "Clé OpenAI manquante — ajoutez-la dans ⚙️ Gestion des Providers (en haut de page)" : undefined}>
               {runningAll ? "⏳ Génération en cours…" : "💬 Générer toutes les questions"}
             </Btn>
+          </div>
           </div>
         </div>
       )}
 
       {/* Keywords list */}
       {filtered.length === 0 ? (
-        <div style={{ textAlign: "center", padding: 40, color: C.textLight, fontSize: 12 }}>
-          {keywords.length === 0 ? "Aucun mot-clé — ajoutez-en ci-dessus ou importez un CSV" : "Aucun mot-clé dans cette catégorie"}
-        </div>
+        keywords.length === 0 ? (
+          <div style={{ background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 12, padding: "20px 24px", marginTop: 8 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#92400E", marginBottom: 10 }}>⚠️ Aucun mot-clé ajouté</div>
+            <div style={{ fontSize: 12, color: "#78350F", lineHeight: 1.6, marginBottom: 14 }}>Ajoutez vos mots-clés ci-dessus, puis configurez :</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ background: "#fff", border: "2px solid #F59E0B", borderRadius: 10, padding: "10px 14px", display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 18, flexShrink: 0 }}>⚙️</span>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: "#92400E" }}>Gestion des Providers</div>
+                  <div style={{ fontSize: 11, color: "#B45309" }}>Ajoutez vos clés API dans <strong>⚙️ Gestion des Providers</strong> en haut de l'onglet</div>
+                </div>
+              </div>
+              <div style={{ background: "#fff", border: "2px solid #F59E0B", borderRadius: 10, padding: "10px 14px", display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 18, flexShrink: 0 }}>🏷️</span>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: "#92400E" }}>Setup de la marque</div>
+                  <div style={{ fontSize: 11, color: "#B45309" }}>Renseignez votre marque et vos concurrents dans la <strong>carte du site</strong> ci-dessus</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div style={{ textAlign: "center", padding: 40, color: C.textLight, fontSize: 12 }}>
+            Aucun mot-clé dans cette catégorie
+          </div>
+        )
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           {filtered.map(kw => {
@@ -1437,6 +1534,11 @@ RÈGLES :
 function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allResults, onResultSaved, activeProviders = ["openai"], providerKeys = {}, runMode = "parallel" }) {
   const [questions, setQuestions]   = useState([]);
   const [results, setResults]       = useState(allResults || []);
+  // Stable sorted questions — never reorder on state updates
+  const sortedQuestions = useMemo(
+    () => [...questions].sort((a, b) => new Date(a.created_at) - new Date(b.created_at)),
+    [questions]
+  );
   const [manualQ, setManualQ]       = useState("");
   const [editingQ, setEditingQ]     = useState(null); // { id, text } — question being edited
   const [filterFav, setFilterFav]             = useState(false);
@@ -1462,15 +1564,11 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
   const [newCalEntries, setNewCalEntries] = useState({}); // { `${q.id}|${p.id}` → last newEntry for PresenceCalendar }
 
   // Sync results from parent prop — but don't overwrite optimistic updates.
-  // Track last loaded siteId to detect site changes vs normal re-renders.
-  const lastSiteRef = useRef(null);
+  // Reload results fresh from DB on mount and site change (catches cross-session data)
   useEffect(() => {
-    const siteChanged = lastSiteRef.current !== site?.id;
-    if (siteChanged) {
-      lastSiteRef.current = site?.id || null;
-      setResults(allResults || []);
-    }
-  }, [site?.id, allResults]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!projectId || !site?.id) { setResults(allResults || []); return; }
+    sbGetGeoResults(projectId, site.id).then(r => setResults(r.length ? r : (allResults || [])));
+  }, [site?.id, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!projectId || !site?.id) return;
@@ -1637,7 +1735,7 @@ ${question}`;
     return out;
   }, [resultsByQ]);
 
-  const filtered = useMemo(() => questions.filter(q => {
+  const filtered = useMemo(() => sortedQuestions.filter(q => {
     if (filterFav && !q.is_favorite) return false;
     if (filterCat && q.category_id !== filterCat) return false;
     if (filterKeyword && q.keyword_id !== filterKeyword) return false;
@@ -2266,6 +2364,11 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
   const [runMode, setRunMode]       = useState("parallel"); // parallel | sequential
   const [providerConfigOpen, setProviderConfigOpen] = useState(false);
   const [semrushKeyDec, setSemrushKeyDec] = useState(() => decodeKey(project?.semrush_key_enc || ""));
+  // Sync semrush key when project changes
+  useEffect(() => {
+    const dec = decodeKey(project?.semrush_key_enc || "");
+    if (dec) setSemrushKeyDec(dec);
+  }, [project?.id, project?.semrush_key_enc]); // eslint-disable-line react-hooks/exhaustive-deps
   const [semrushKeyInput, setSemrushKeyInput] = useState("");
   const [activeProviders, setActiveProviders] = useState(() => {
     // Start with all providers that have keys configured
@@ -2308,7 +2411,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
     if (project?.openai_key_enc && project.openai_key_enc !== apiKeyEnc) {
       setApiKeyEnc(project.openai_key_enc);
     }
-  }, [project?.openai_key_enc, project?.gemini_key_enc, project?.perplexity_key_enc, project?.claude_geo_key_enc]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [project?.id, project?.openai_key_enc, project?.gemini_key_enc, project?.perplexity_key_enc, project?.claude_geo_key_enc]); // eslint-disable-line react-hooks/exhaustive-deps
   const [apiKeyDec, setApiKeyDec]   = useState("");           // decrypted, only in memory
   const [allResults, setAllResults] = useState([]);
   const [brandEditing, setBrandEditing] = useState(false);
