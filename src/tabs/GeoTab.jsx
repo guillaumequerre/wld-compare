@@ -540,7 +540,7 @@ function CatSelect({ value, categories, onChange, placeholder = "Catégorie…" 
     <select value={value || ""} onChange={e => onChange(e.target.value || null)}
       style={{ padding: "4px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11, color: C.text, background: C.white, cursor: "pointer" }}>
       <option value="">{placeholder}</option>
-      {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+      {(categories || []).filter(c => c.id && c.name).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
     </select>
   );
 }
@@ -782,7 +782,7 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
           <div style={{ flex: 1, minWidth: 220 }}>
             <div style={{ fontSize: 11, fontWeight: 600, color: C.textMid, marginBottom: 6 }}>Ajouter des mots-clés (un par ligne)</div>
             <textarea value={input} onChange={e => setInput(e.target.value)}
-              placeholder={"meilleur logiciel CRM\nalternative Salesforce\ncomparer CRM PME"}
+              placeholder={"Mot clé 1\nMot clé 2\nMot clé 3"}
               style={{ width: "100%", minHeight: 90, padding: "8px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, color: C.text, resize: "vertical", fontFamily: "inherit", boxSizing: "border-box" }} />
             <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
               <Btn onClick={addKeywords} disabled={loading || !input.trim()}>{loading ? "Ajout…" : "➕ Ajouter"}</Btn>
@@ -815,7 +815,7 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
           </span>
 
           {/* Filter by category */}
-          <CatSelect value={filterCat} categories={[{ id: "", name: "Toutes catégories" }, ...categories]} onChange={v => setFilterCat(v || "")} placeholder="Toutes catégories" />
+          <CatSelect value={filterCat} categories={categories} onChange={v => setFilterCat(v || "")} placeholder="Toutes catégories" />
 
           {/* Bulk select */}
           <div style={{ display: "flex", gap: 4 }}>
@@ -898,7 +898,7 @@ function isBrandPresent(r) {
 
 // ── HintPanel — GEO optimisation hints ───────────────────────────
 
-function HintPanel({ question, sources, brandName, brandAliases, brandDomain: brandDomainProp = "", claudeKey }) {
+function HintPanel({ question, sources, brandName, brandAliases, brandDomain: brandDomainProp = "", claudeKey, hasBrand = false }) {
   const [status, setStatus] = useState("idle"); // idle | loading | done | error
   const [hint, setHint]     = useState("");
 
@@ -931,12 +931,13 @@ En te basant sur :
 
 RÈGLES STRICTES :
 - Ne dis JAMAIS "Je vais effectuer", "Je recherche", "En effectuant cette recherche" ou toute phrase de transition
-- Ne décris pas ce que tu fais, donne directement le résultat
-- Commence directement par la recommandation (ex: "La page X est candidate…" ou "Créez une page dédiée…")
+- Commence directement par la recommandation, sans introduction
 - 5 à 8 lignes max, ton direct et actionnable
 
-Si une page de ${brandDomain} ressort pertinente → explique comment l'optimiser pour être citée par les IA
-Si aucune page pertinente de ${brandDomain} → recommande quel contenu créer et pourquoi`;
+${hasBrand
+  ? "La marque est présente dans cette réponse. Analyse comment RENFORCER cette présence : améliorer la position, être cité en source, consolider l'autorité de " + brandDomain + " sur ce sujet."
+  : "Si une page de " + brandDomain + " ressort pertinente → explique comment l'optimiser pour être citée par les IA. Si aucune page pertinente → recommande quel contenu créer."
+}`;
 
     try {
       const res = await fetch("/api/claude-geo", {
@@ -1045,11 +1046,17 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
             <span>Réponse</span><span>{open ? '▲' : '▼'}</span>
           </button>
         )}
-        {/* Hint button — only when brand absent and Claude key configured */}
-        {result && !hasBrand && claudeKey && (
-          <button onClick={() => setShowHint(h => !h)}
-            title="Pistes d'optimisation GEO"
-            style={{ fontSize: 10, fontWeight: 700, color: showHint ? '#fff' : '#D97706', background: showHint ? '#D97706' : '#FEF3C7', border: '1px solid #FCD34D', borderRadius: 6, padding: '2px 7px', cursor: 'pointer', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 3 }}>
+        {/* Hint button — always shown, grayed when no Claude key */}
+        {result && (
+          <button
+            onClick={() => claudeKey && setShowHint(h => !h)}
+            title={!claudeKey ? "Configurez une clé Claude en haut de page dans ⚙️ Gestion des Providers pour accéder aux hints GEO" : (hasBrand ? "Analyser et renforcer la présence" : "Pistes d'optimisation GEO")}
+            style={{ fontSize: 10, fontWeight: 700,
+              color: !claudeKey ? C.textLight : showHint ? '#fff' : (hasBrand ? '#059669' : '#D97706'),
+              background: !claudeKey ? C.bg : showHint ? (hasBrand ? '#059669' : '#D97706') : (hasBrand ? '#DCFCE7' : '#FEF3C7'),
+              border: `1px solid ${!claudeKey ? C.border : hasBrand ? '#86EFAC' : '#FCD34D'}`,
+              borderRadius: 6, padding: '2px 7px', cursor: claudeKey ? 'pointer' : 'not-allowed',
+              flexShrink: 0, display: 'flex', alignItems: 'center', gap: 3, opacity: claudeKey ? 1 : 0.6 }}>
             <span>💡 Hint</span><span>{showHint ? '▲' : '▼'}</span>
           </button>
         )}
@@ -1080,7 +1087,7 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
       </div>
 
       {/* ── Accordion: answer + sources + competitors ── */}
-      {showHint && result && !hasBrand && (
+      {showHint && result && (
         <HintPanel
           question={question}
           sources={sources}
@@ -1088,6 +1095,7 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
           brandAliases={brandAliases}
           brandDomain={brandDomain}
           claudeKey={claudeKey}
+          hasBrand={hasBrand}
         />
       )}
       {open && result && (
@@ -1629,7 +1637,7 @@ ${question}`;
             placeholder="🔍 Regex / texte sur les questions…"
             style={{ padding: "5px 10px", border: `1px solid ${filterSearch ? "#2563EB" : C.border}`, borderRadius: 7, fontSize: 11, color: C.text, width: 230 }}
           />
-          <CatSelect value={filterCat} categories={[{ id: "", name: "Toutes catégories" }, ...categories]} onChange={v => setFilterCat(v || "")} placeholder="Toutes catégories" />
+          <CatSelect value={filterCat} categories={categories} onChange={v => setFilterCat(v || "")} placeholder="Toutes catégories" />
           <select value={filterKeyword} onChange={e => setFilterKeyword(e.target.value)}
             style={{ padding: "5px 8px", border: `1px solid ${filterKeyword ? "#2563EB" : C.border}`, borderRadius: 7, fontSize: 11, color: C.text }}>
             <option value="">Tous les mots-clés</option>

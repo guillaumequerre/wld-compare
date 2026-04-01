@@ -373,10 +373,13 @@ export default function App() {
   }, [currentProjectId, loadProjectData]);
 
   useEffect(() => {
-    if (!currentProject) return;
+    // Don't save EMPTY_PROJECT (no real id) or when not logged in
+    // Only save real projects that belong to the user's project list
+    if (!currentProject?.id || !currentProjectId) return;
+    if (!projects.some(p => p.id === currentProject.id)) return;
     const t = setTimeout(() => sbSaveProject(currentProject), 800);
     return () => clearTimeout(t);
-  }, [currentProject]);
+  }, [currentProject]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const refreshHistory = useCallback(async () => {
     const history = await sbGetHistory(currentProjectId);
