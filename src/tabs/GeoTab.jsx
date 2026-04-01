@@ -636,8 +636,7 @@ function KeywordsTab({ site, projectId, apiKey, model, axes, context, categories
     const reader = new FileReader();
     reader.onload = async (ev) => {
       const text = ev.target.result;
-      const lines = text.split("
-").map(l => l.trim()).filter(Boolean);
+      const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
       if (lines.length < 2) return;
       const header = lines[0].split(";").map(h => h.toLowerCase().replace(/"/g, "").trim());
       const kwIdx  = header.findIndex(h => h === "keyword" || h === "mot-clé" || h.startsWith("keyword"));
