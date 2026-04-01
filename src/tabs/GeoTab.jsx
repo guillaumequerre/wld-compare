@@ -557,6 +557,8 @@ function KeywordsTab({ site, projectId, apiKey, model, axes, context, categories
   const [bulkCat, setBulkCat]   = useState("");
   const [filterCat, setFilterCat] = useState("");
   const stopRef = useRef(false);
+  const [enriching, setEnriching] = useState(false);
+  const fileVolRef = useRef(null);
 
   useEffect(() => {
     if (!projectId || !site?.id) return;
