@@ -2265,7 +2265,6 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
   const [brand, setBrand]           = useState(null);
   const [runMode, setRunMode]       = useState("parallel"); // parallel | sequential
   const [providerConfigOpen, setProviderConfigOpen] = useState(false);
-  const [semrushKeyEnc, setSemrushKeyEnc] = useState(project?.semrush_key_enc || "");
   const [semrushKeyDec, setSemrushKeyDec] = useState(() => decodeKey(project?.semrush_key_enc || ""));
   const [semrushKeyInput, setSemrushKeyInput] = useState("");
   const [activeProviders, setActiveProviders] = useState(() => {
@@ -2492,8 +2491,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
                   const k = semrushKeyInput.trim();
                   if (!k) return;
                   const enc = encodeKey(k);
-                  setSemrushKeyEnc(enc);
-                  setSemrushKeyDec(k);
+                                    setSemrushKeyDec(k);
                   setSemrushKeyInput("");
                   await sbSaveProviderKeys(projectId, { semrush_key_enc: enc });
                 }}

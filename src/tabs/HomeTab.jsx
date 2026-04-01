@@ -256,19 +256,16 @@ function ProjectsList({ user, projects, currentProjectId, dbLoading, onSelectPro
 
 // ── HomeTab ───────────────────────────────────────────────────────
 export default function HomeTab({ user, projects, currentProjectId, dbLoading, onLogin, onLogout, onSelectProject, onCreateProject, onGoSetup, onGoFanout, onGoAudit }) {
-  const [transitioning, setTransitioning] = useState(false);
   const [visible, setVisible]             = useState(true);
   const [displayUser, setDisplayUser]     = useState(user);
 
   // Smooth transition when user logs in/out
   useEffect(() => {
     if (user === displayUser) return;
-    setTransitioning(true);
     setVisible(false);
     const t = setTimeout(() => {
       setDisplayUser(user);
       setVisible(true);
-      setTransitioning(false);
     }, 280);
     return () => clearTimeout(t);
   }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
