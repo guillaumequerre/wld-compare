@@ -175,10 +175,11 @@ function parseProject(r) {
     id: r.id, name: r.name,
     sites: JSON.parse(r.sites_json || "[]"),
     openai_key_enc: r.openai_key_enc || null,
-    geo_axes: JSON.parse(r.geo_axes_json || "null") || ["Quoi ?","Pourquoi ?","Comment ?","Comparaison","Coût/budget"],
+    geo_axes: JSON.parse(r.geo_axes_json || "null") || ["Meilleur / top / recommandé","Pistes et approches pour utiliser / bénéficier du mot-clé","Avis / fiable / fiabilité","Pour atteindre un objectif lié au mot-clé","Pour résoudre une problématique liée au mot-clé"],
     gemini_key_enc: r.gemini_key_enc || null,
     perplexity_key_enc: r.perplexity_key_enc || null,
     claude_geo_key_enc: r.claude_geo_key_enc || null,
+    semrush_key_enc: r.semrush_key_enc || null,
     owner_email: r.owner_email || null,
     updated_at: r.updated_at || null,
   };

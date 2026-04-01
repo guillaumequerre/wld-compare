@@ -60,7 +60,7 @@ export async function sbSaveProject(project) {
   const res = await fetch(`${PROXY}/rest/v1/projects`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
-    body: JSON.stringify({ id: project.id, name: project.name, owner_email: project.owner_email || null, sites_json: JSON.stringify(project.sites.map(s => ({ id: s.id, label: s.label, color: s.color, bg: s.bg }))), geo_axes_json: JSON.stringify(project.geo_axes || ["Meilleur / top / recommandé","Pistes et approches pour utiliser / bénéficier du mot-clé","Avis / fiable / fiabilité","Pour atteindre un objectif lié au mot-clé","Pour résoudre une problématique liée au mot-clé"]), updated_at: new Date().toISOString() }),
+    body: JSON.stringify({ id: project.id, name: project.name, owner_email: project.owner_email || null, semrush_key_enc: project.semrush_key_enc || null, sites_json: JSON.stringify(project.sites.map(s => ({ id: s.id, label: s.label, color: s.color, bg: s.bg }))), geo_axes_json: JSON.stringify(project.geo_axes || ["Meilleur / top / recommandé","Pistes et approches pour utiliser / bénéficier du mot-clé","Avis / fiable / fiabilité","Pour atteindre un objectif lié au mot-clé","Pour résoudre une problématique liée au mot-clé"]), updated_at: new Date().toISOString() }),
   });
   if (!res.ok) console.warn("Save project failed:", res.status);
 }
@@ -265,6 +265,15 @@ export async function sbUpdateKeywordStatus(id, status) {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ status }),
+  });
+  return res.ok;
+}
+
+export async function sbUpdateKeywordVolume(id, volume, source = "semrush_api") {
+  const res = await fetch(`${PROXY}/rest/v1/geo_keywords?id=eq.${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ search_volume: volume, volume_source: source, volume_updated_at: new Date().toISOString() }),
   });
   return res.ok;
 }

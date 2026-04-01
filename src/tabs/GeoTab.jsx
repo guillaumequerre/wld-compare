@@ -4,7 +4,7 @@ import PresenceCalendar from "../components/PresenceCalendar";
 import { sbSaveProviderKeys } from "../lib/supabase";
 import {
   sbSaveBrand, sbGetBrand,
-  sbSaveKeywords, sbGetKeywords, sbUpdateKeywordStatus, sbDeleteKeyword,
+  sbSaveKeywords, sbGetKeywords, sbUpdateKeywordStatus, sbDeleteKeyword, sbUpdateKeywordVolume,
   sbSaveQuestions, sbGetQuestions, sbUpdateQuestion, sbDeleteQuestion,
   sbSaveGeoResult, sbGetGeoResults,
   sbGetCategories, sbSaveCategory, sbDeleteCategory,
@@ -357,9 +357,9 @@ function highlightBrand(text, brandName, brandAliases = []) {
 
 // ── Small UI helpers ──────────────────────────────────────────────
 
-function Pill({ children, color = C.blue, bg, onClick, active }) {
+function Pill({ children, color = C.blue, bg, onClick, active, title }) {
   return (
-    <span onClick={onClick} style={{
+    <span onClick={onClick} title={title} style={{
       display: "inline-flex", alignItems: "center", gap: 4,
       padding: "2px 9px", borderRadius: 20, fontSize: 11, fontWeight: 600,
       background: active ? color : (bg || C.bg),
@@ -371,7 +371,7 @@ function Pill({ children, color = C.blue, bg, onClick, active }) {
   );
 }
 
-function Btn({ children, onClick, disabled, color = C.blue, variant = "solid", small }) {
+function Btn({ children, onClick, disabled, color = C.blue, variant = "solid", small, title }) {
   const base = {
     padding: small ? "4px 10px" : "7px 16px",
     borderRadius: 8, fontSize: small ? 11 : 12, fontWeight: 600,
@@ -382,7 +382,7 @@ function Btn({ children, onClick, disabled, color = C.blue, variant = "solid", s
   const styles = variant === "outline"
     ? { ...base, background: "transparent", border: `1px solid ${color}`, color }
     : { ...base, background: color, color: "#fff" };
-  return <button onClick={onClick} disabled={disabled} style={styles}>{children}</button>;
+  return <button onClick={onClick} disabled={disabled} title={title} style={styles}>{children}</button>;
 }
 
 function StatusBadge({ status }) {
@@ -547,7 +547,7 @@ function CatSelect({ value, categories, onChange, placeholder = "Catégorie…" 
 
 // ── Keywords sub-tab (v2) ─────────────────────────────────────────
 
-function KeywordsTab({ site, projectId, apiKey, model, axes, context, categories, setCategories, onSaveAxes, onAxesChange, onQuestionsGenerated }) {
+function KeywordsTab({ site, projectId, apiKey, model, axes, context, categories, setCategories, onSaveAxes, onAxesChange, onQuestionsGenerated, semrushKey = "" }) {
   const [keywords, setKeywords] = useState([]);
   const [input, setInput]       = useState("");
   const [loading, setLoading]   = useState(false);
@@ -602,6 +602,70 @@ function KeywordsTab({ site, projectId, apiKey, model, axes, context, categories
     };
     reader.readAsText(file);
     e.target.value = "";
+  };
+
+  // ── Volume enrichment from Semrush API ──────────────────────
+  const enrichFromApi = async () => {
+    if (!semrushKey || !keywords.length) return;
+    setEnriching(true);
+    const batch = keywords.slice(0, 100);
+    try {
+      const res = await fetch("/api/semrush-volume", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Semrush-Key": semrushKey },
+        body: JSON.stringify({ keywords: batch.map(k => k.keyword), database: "fr" }),
+      });
+      const data = await res.json();
+      if (data.error) { alert("Erreur Semrush : " + data.error); return; }
+      const vols = data.volumes || {};
+      for (const kw of batch) {
+        const vol = vols[kw.keyword.toLowerCase()];
+        if (vol !== undefined) {
+          await sbUpdateKeywordVolume(kw.id, vol, "semrush_api");
+          setKeywords(prev => prev.map(k => k.id === kw.id ? { ...k, search_volume: vol, volume_source: "semrush_api" } : k));
+        }
+      }
+    } catch(e) { alert("Erreur : " + e.message); }
+    setEnriching(false);
+  };
+
+  // ── Volume enrichment from Semrush CSV ───────────────────────
+  const enrichFromCsv = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      const text = ev.target.result;
+      const lines = text.split("
+").map(l => l.trim()).filter(Boolean);
+      if (lines.length < 2) return;
+      const header = lines[0].split(";").map(h => h.toLowerCase().replace(/"/g, "").trim());
+      const kwIdx  = header.findIndex(h => h === "keyword" || h === "mot-clé" || h.startsWith("keyword"));
+      const volIdx = header.findIndex(h => h === "volume" || h.includes("volume"));
+      if (kwIdx === -1 || volIdx === -1) {
+        alert("Colonnes non trouvées. Le CSV doit avoir des colonnes 'Keyword' et 'Volume'.");
+        return;
+      }
+      const volMap = {};
+      for (const line of lines.slice(1)) {
+        const cols = line.split(";").map(c => c.replace(/"/g, "").trim());
+        const kw  = cols[kwIdx]?.toLowerCase();
+        const vol = parseInt(cols[volIdx], 10);
+        if (kw && !isNaN(vol)) volMap[kw] = vol;
+      }
+      let updated = 0;
+      for (const kw of keywords) {
+        const vol = volMap[kw.keyword.toLowerCase()];
+        if (vol !== undefined) {
+          await sbUpdateKeywordVolume(kw.id, vol, "semrush_csv");
+          setKeywords(prev => prev.map(k => k.id === kw.id ? { ...k, search_volume: vol, volume_source: "semrush_csv" } : k));
+          updated++;
+        }
+      }
+      alert(`${updated} mot${updated > 1 ? "s-clés" : "-clé"} enrichi${updated > 1 ? "s" : ""} depuis le CSV.`);
+      if (fileVolRef.current) fileVolRef.current.value = "";
+    };
+    reader.readAsText(file, "UTF-8");
   };
 
   const generateQuestions = async (kw, axes) => {
@@ -776,6 +840,28 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
         )}
       </div>
 
+      {/* ── Volume enrichment toolbar ── */}
+      {keywords.length > 0 && (
+        <div style={{ background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 10, padding: "10px 14px", marginBottom: 12, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: "#1D4ED8" }}>🔍 Volumes de recherche</span>
+          <span style={{ fontSize: 11, color: "#3B82F6" }}>
+            {keywords.filter(k => k.search_volume != null).length}/{keywords.length} enrichis
+          </span>
+          <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+            <input ref={fileVolRef} type="file" accept=".csv" style={{ display: "none" }} onChange={enrichFromCsv} />
+            <button onClick={() => fileVolRef.current?.click()}
+              style={{ fontSize: 11, fontWeight: 600, padding: "4px 10px", border: "1px solid #BFDBFE", borderRadius: 7, background: "#fff", color: "#2563EB", cursor: "pointer" }}>
+              📄 CSV Semrush
+            </button>
+            <button onClick={enrichFromApi} disabled={enriching || !semrushKey}
+              title={!semrushKey ? "Clé API Semrush non configurée — ajoutez-la dans ⚙️ Gestion des Providers" : "Récupérer les volumes depuis l'API Semrush (1 crédit/mot-clé)"}
+              style={{ fontSize: 11, fontWeight: 600, padding: "4px 10px", border: "1px solid #BFDBFE", borderRadius: 7, background: semrushKey ? "#2563EB" : C.bg, color: semrushKey ? "#fff" : C.textLight, cursor: semrushKey ? "pointer" : "not-allowed", opacity: semrushKey ? 1 : 0.6 }}>
+              {enriching ? "⏳ Enrichissement…" : "⚡ API Semrush"}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Input + CSV import */}
       <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20, marginBottom: 16 }}>
         <div style={{ display: "flex", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
@@ -833,7 +919,8 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
 
           <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
             {runningAll && <Btn onClick={() => { stopRef.current = true; setRunningAll(false); }} color="#DC2626" variant="outline" small>⏹ Arrêter</Btn>}
-            <Btn onClick={generateAll} disabled={runningAll || !apiKey} color={site.color} small>
+            <Btn onClick={generateAll} disabled={runningAll || !apiKey} color={site.color} small
+              title={!apiKey ? "Clé OpenAI manquante — ajoutez-la dans ⚙️ Gestion des Providers (en haut de page)" : undefined}>
               {runningAll ? "⏳ Génération en cours…" : "💬 Générer toutes les questions"}
             </Btn>
           </div>
@@ -872,7 +959,8 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
                 </div>
                 <div style={{ display: "flex", gap: 6, flexShrink: 0, alignItems: "center" }}>
                   <CatSelect value={kw.category_id} categories={categories} onChange={v => setCatSingle(kw.id, v)} />
-                  <Btn onClick={() => generateQuestions(kw, null)} disabled={!!busy[kw.id] || !apiKey} variant="outline" small color={site.color}>
+                  <Btn onClick={() => generateQuestions(kw, null)} disabled={!!busy[kw.id] || !apiKey} variant="outline" small color={site.color}
+                    title={!apiKey ? "Clé OpenAI manquante — ajoutez-la dans ⚙️ Gestion des Providers (en haut de page)" : undefined}>
                     {busy[kw.id] === "q" ? "⏳" : kw.status === "done_q" ? "🔄" : "💬"}
                   </Btn>
                   <button onClick={() => deleteKw(kw.id)} style={{ padding: "3px 7px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.white, color: C.textLight, fontSize: 10, cursor: "pointer" }}>🗑</button>
@@ -1304,6 +1392,7 @@ RÈGLES :
             </button>
           )}
           <button onClick={run} disabled={status === "loading" || !claudeKey}
+            title={!claudeKey ? "Clé Claude manquante — ajoutez-la dans ⚙️ Gestion des Providers (en haut de page)" : undefined}
             style={{ fontSize: 12, fontWeight: 700, padding: "6px 14px", border: "none", borderRadius: 8, cursor: status === "loading" || !claudeKey ? "not-allowed" : "pointer",
               background: !claudeKey ? C.bg : status === "loading" ? "#E5E7EB" : "#7C3AED",
               color: !claudeKey ? C.textLight : status === "loading" ? C.textLight : "#fff" }}>
@@ -1349,12 +1438,14 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
   const [results, setResults]       = useState(allResults || []);
   const [manualQ, setManualQ]       = useState("");
   const [editingQ, setEditingQ]     = useState(null); // { id, text } — question being edited
-  const [filterFav, setFilterFav]       = useState(false);
-  const [filterBrand, setFilterBrand]   = useState(false);
-  const [filterCat, setFilterCat]       = useState("");
-  const [filterKeyword, setFilterKeyword] = useState("");     // keyword_id filter
-  const [filterSearch, setFilterSearch]  = useState("");     // regex/text on question
-  const [filterProviders, setFilterProviders] = useState([]); // [] = all
+  const [filterFav, setFilterFav]             = useState(false);
+  const [filterBrand, setFilterBrand]         = useState(false);
+  const [filterPositioned, setFilterPositioned] = useState(false); // marque présente dans dernier résultat
+  const [filterLost, setFilterLost]           = useState(false);   // marque était présente mais ne l'est plus
+  const [filterCat, setFilterCat]             = useState("");
+  const [filterKeyword, setFilterKeyword]     = useState("");
+  const [filterSearch, setFilterSearch]       = useState("");
+  const [filterProviders, setFilterProviders] = useState([]);
   const [running, setRunning]       = useState({});
   const [runAll, setRunAll]         = useState(false);
   const stopAllRef = useRef(false);
@@ -1520,6 +1611,31 @@ ${question}`;
     setRunning(r => ({ ...r, [`${q.id}-${provider.id}`]: false }));
   }, [brand, projectId, site?.id, providerKeys, onResultSaved]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Per question: latest result (most recent by created_at)
+  const latestResultByQ = useMemo(() => {
+    const out = {};
+    Object.entries(resultsByQ).forEach(([qId, results]) => {
+      if (!results.length) return;
+      const sorted = [...results].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+      out[qId] = sorted[0];
+    });
+    return out;
+  }, [resultsByQ]);
+
+  // Per question: was brand ever present in older results but not in latest?
+  const lostByQ = useMemo(() => {
+    const out = {};
+    Object.entries(resultsByQ).forEach(([qId, results]) => {
+      if (results.length < 2) return;
+      const sorted = [...results].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+      const latest = sorted[0];
+      const hadBrandBefore = sorted.slice(1).some(r => r.brand_mentioned === true || r.brand_mentioned === 1);
+      const latestAbsent = !(latest.brand_mentioned === true || latest.brand_mentioned === 1);
+      out[qId] = hadBrandBefore && latestAbsent;
+    });
+    return out;
+  }, [resultsByQ]);
+
   const filtered = useMemo(() => questions.filter(q => {
     if (filterFav && !q.is_favorite) return false;
     if (filterCat && q.category_id !== filterCat) return false;
@@ -1538,8 +1654,15 @@ ${question}`;
       const qRes = resultsByQ[q.id] || [];
       if (!qRes.some(r => filterProviders.includes(getProviderId(r.model)))) return false;
     }
+    if (filterPositioned) {
+      const latest = latestResultByQ[q.id];
+      if (!latest || !(latest.brand_mentioned === true || latest.brand_mentioned === 1)) return false;
+    }
+    if (filterLost) {
+      if (!lostByQ[q.id]) return false;
+    }
     return true;
-  }), [questions, filterFav, filterBrand, filterCat, filterKeyword, filterSearch, filterProviders, resultsByQ]); // eslint-disable-line react-hooks/exhaustive-deps
+  }), [questions, filterFav, filterBrand, filterCat, filterKeyword, filterSearch, filterProviders, filterPositioned, filterLost, resultsByQ, latestResultByQ, lostByQ]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Returns providers that still need to be called for a question today
   const getProvidersToRun = (q, force = false) => {
@@ -1645,8 +1768,16 @@ ${question}`;
           </select>
           <Pill color="#F59E0B" active={filterFav} onClick={() => setFilterFav(f => !f)}>⭐ Favoris</Pill>
           <Pill color="#059669" active={filterBrand} onClick={() => setFilterBrand(f => !f)}>✓ Marque</Pill>
-          {(filterSearch || filterCat || filterKeyword || filterFav || filterBrand || filterProviders.length > 0) && (
-            <button onClick={() => { setFilterSearch(""); setFilterCat(""); setFilterKeyword(""); setFilterFav(false); setFilterBrand(false); setFilterProviders([]); }}
+          <Pill color="#2563EB" active={filterPositioned} onClick={() => setFilterPositioned(f => !f)}
+            title="Fan-outs où la marque est présente dans le dernier résultat connu">
+            📍 Positionné
+          </Pill>
+          <Pill color="#DC2626" active={filterLost} onClick={() => setFilterLost(f => !f)}
+            title="Fan-outs où la marque était présente dans un résultat précédent mais est absente du dernier — position perdue">
+            📉 Position perdue
+          </Pill>
+          {(filterSearch || filterCat || filterKeyword || filterFav || filterBrand || filterPositioned || filterLost || filterProviders.length > 0) && (
+            <button onClick={() => { setFilterSearch(""); setFilterCat(""); setFilterKeyword(""); setFilterFav(false); setFilterBrand(false); setFilterPositioned(false); setFilterLost(false); setFilterProviders([]); }}
               style={{ fontSize: 11, padding: "3px 8px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.bg, cursor: "pointer", color: C.textMid }}>
               ✕ Réinitialiser
             </button>
@@ -1661,7 +1792,8 @@ ${question}`;
             const hasKey = !!providerKeys[p.id]?.dec;
             return (
               <button key={p.id} onClick={() => setFilterProviders(prev => active ? prev.filter(id => id !== p.id) : [...prev, p.id])}
-                style={{ padding: "2px 10px", border: `2px solid ${p.color}`, borderRadius: 10, fontSize: 10, fontWeight: 600, cursor: "pointer",
+                title={!hasKey ? `Clé ${p.label} manquante — ajoutez-la dans ⚙️ Gestion des Providers (en haut de page)` : undefined}
+                style={{ padding: "2px 10px", border: `2px solid ${p.color}`, borderRadius: 10, fontSize: 10, fontWeight: 600, cursor: hasKey ? "pointer" : "not-allowed",
                   background: active ? p.color : "transparent", color: active ? "#fff" : hasKey ? p.color : C.textLight, opacity: hasKey ? 1 : 0.4 }}>
                 {p.icon} {p.label}
               </button>
@@ -1687,7 +1819,10 @@ ${question}`;
           <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
             <button onClick={() => sbGetQuestions(projectId, site.id).then(setQuestions)}
               title="Recharger les questions" style={{ padding: "4px 8px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.white, color: C.textLight, fontSize: 11, cursor: "pointer" }}>🔄</button>
-            <Btn onClick={runAllQuestions} disabled={runAll || toRunCount === 0} color="#7C3AED">{runAll ? "⏳ En cours…" : toRunCount > 0 ? `▶ Lancer tout (${toRunCount})` : "✓ Tout généré"}</Btn>
+            <Btn onClick={runAllQuestions} disabled={runAll || toRunCount === 0} color="#7C3AED"
+              title={!runAll && toRunCount === 0 ? "Toutes les questions ont déjà été interrogées aujourd'hui — relancez manuellement une question pour forcer la ré-interrogation" : undefined}>
+              {runAll ? "⏳ En cours…" : toRunCount > 0 ? `▶ Lancer tout (${toRunCount})` : "✓ Tout généré"}
+            </Btn>
             {runAll && <Btn onClick={() => { stopAllRef.current = true; setRunAll(false); }} color="#DC2626" variant="outline" small>⏹ Arrêter</Btn>}
           </div>
         </div>
@@ -2129,6 +2264,9 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
   const [brand, setBrand]           = useState(null);
   const [runMode, setRunMode]       = useState("parallel"); // parallel | sequential
   const [providerConfigOpen, setProviderConfigOpen] = useState(false);
+  const [semrushKeyEnc, setSemrushKeyEnc] = useState(project?.semrush_key_enc || "");
+  const [semrushKeyDec, setSemrushKeyDec] = useState(() => decodeKey(project?.semrush_key_enc || ""));
+  const [semrushKeyInput, setSemrushKeyInput] = useState("");
   const [activeProviders, setActiveProviders] = useState(() => {
     // Start with all providers that have keys configured
     if (project) {
@@ -2327,9 +2465,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
                       const enc = encodeKey(k);
                       const dec = decodeKey(enc);
                       setProviderKeys(prev => ({ ...prev, [p.id]: { enc, dec, input: "", status: "ok" } }));
-                      // Also sync legacy openai key
                       if (p.id === "openai") { setApiKeyEnc(enc); setApiKeyDec(dec); }
-                      // Save all provider keys to Supabase
                       await sbSaveProviderKeys(projectId, { [p.keyField]: enc });
                     }}
                     style={{ padding: "5px 10px", borderRadius: 7, background: p.color, color: "#fff", border: "none", fontSize: 11, fontWeight: 700, cursor: pk.input?.trim() ? "pointer" : "not-allowed", opacity: pk.input?.trim() ? 1 : 0.5 }}>
@@ -2339,6 +2475,32 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
               </div>
             );
           })}
+          {/* Semrush API key — for volume enrichment */}
+          <div>
+            <div style={{ fontSize: 10, fontWeight: 600, color: "#FF642B", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 4 }}>
+              📊 Semrush{semrushKeyDec && <span style={{ color: "#059669", marginLeft: 4 }}>● OK</span>}
+              <span style={{ fontSize: 9, color: C.textLight, marginLeft: 6, fontWeight: 400, textTransform: "none" }}>volumes mots-clés</span>
+            </div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <input type="password" value={semrushKeyInput}
+                onChange={e => setSemrushKeyInput(e.target.value)}
+                placeholder={semrushKeyDec ? "Remplacer…" : "Clé API Semrush"}
+                style={{ flex: 1, padding: "5px 8px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 11, color: C.text, minWidth: 0 }} />
+              <button disabled={!semrushKeyInput.trim()}
+                onClick={async () => {
+                  const k = semrushKeyInput.trim();
+                  if (!k) return;
+                  const enc = encodeKey(k);
+                  setSemrushKeyEnc(enc);
+                  setSemrushKeyDec(k);
+                  setSemrushKeyInput("");
+                  await sbSaveProviderKeys(projectId, { semrush_key_enc: enc });
+                }}
+                style={{ padding: "5px 10px", borderRadius: 7, background: "#FF642B", color: "#fff", border: "none", fontSize: 11, fontWeight: 700, cursor: semrushKeyInput.trim() ? "pointer" : "not-allowed", opacity: semrushKeyInput.trim() ? 1 : 0.5 }}>
+                ✓
+              </button>
+            </div>
+          </div>
         </div>
         </div>
         )}
@@ -2443,6 +2605,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
           setCategories={setCategories}
           onSaveAxes={onSaveAxes}
           onAxesChange={(a) => setAxes(a)}
+          semrushKey={semrushKeyDec}
           onQuestionsGenerated={(showPopup) => { setQuestionsKey(k => k + 1); if (showPopup) setShowQuestionsPopup(true); }}
         />
       )}
