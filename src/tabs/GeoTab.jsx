@@ -677,7 +677,7 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
         ? { ...k, status: "done_q", question_count: (k.question_count || 0) + savedCount }
         : k
       ));
-      onQuestionsGenerated?.();
+      onQuestionsGenerated?.(false);
     } catch(e) {
       console.error("generateQuestions error:", e);
       await sbUpdateKeywordStatus(kw.id, "error");
@@ -703,7 +703,7 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
       await generateQuestions(kw, null);
     }
     setRunningAll(false);
-    onQuestionsGenerated?.();
+    onQuestionsGenerated?.(true);
   };
 
   const toggleSelect = (id) => setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -2123,6 +2123,7 @@ function UrlsTab({ projectId, categories, brand, allResults }) {
 export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes }) {
   const [subTab, setSubTab]         = useState("keywords"); // keywords | questions | urls
   const [questionsKey, setQuestionsKey] = useState(0); // incremented to force QuestionsTab reload
+  const [showQuestionsPopup, setShowQuestionsPopup] = useState(false);
   const [selectedSite, setSelectedSite] = useState(sites[0]?.id || "");
   const [model] = useState("gpt-4o-mini"); // kept for variation generation (OpenAI completions endpoint)
   const [brand, setBrand]           = useState(null);
@@ -2366,9 +2367,9 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
             {[
               { key: "brand_name",   label: "Nom de la marque",                   placeholder: "Sonate" },
               { key: "brand_domain", label: "Domaine du site",                     placeholder: "sonate.fr" },
-              { key: "brand_aliases", label: "Alias (séparés par virgules)",       placeholder: "Sonate Audio, sonate.fr" },
+              { key: "brand_aliases", label: "Alias (séparés par virgules)",       placeholder: "sonate-group, sonate.fr" },
               { key: "competitors",  label: "Concurrents à tracker (virgules)",    placeholder: "Devialet, Focal, Cabasse" },
-              { key: "context",      label: "Contexte (instruction système)",      placeholder: "Tu es un audiophile passionné de haute-fidélité…" },
+              { key: "context",      label: "Contexte (instruction système)",      placeholder: "Tu cherches un prestataire pour …" },
             ].map(f => (
               <div key={f.key} style={{ gridColumn: f.key === "context" ? "1 / -1" : "auto" }}>
                 <div style={{ fontSize: 11, fontWeight: 600, color: C.textMid, marginBottom: 5 }}>{f.label}</div>
@@ -2384,6 +2385,31 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
           </div>
         )}
       </div>
+
+      {/* ── Questions ready popup ── */}
+      {showQuestionsPopup && (
+        <div style={{ position: "fixed", bottom: 24, right: 24, zIndex: 1000, background: "#fff", border: "1px solid #7C3AED", borderRadius: 14, padding: "18px 22px", boxShadow: "0 8px 32px rgba(124,58,237,0.18)", maxWidth: 340 }}>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+            <span style={{ fontSize: 24, flexShrink: 0 }}>✅</span>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 14, fontWeight: 800, color: "#7C3AED", marginBottom: 4 }}>Questions générées !</div>
+              <div style={{ fontSize: 12, color: "#6D28D9", lineHeight: 1.5, marginBottom: 12 }}>
+                Rendez-vous dans l'onglet <strong>💬 Questions</strong> pour interroger les LLMs et mesurer la présence de votre marque.
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={() => { setSubTab("questions"); setShowQuestionsPopup(false); }}
+                  style={{ flex: 1, padding: "7px 12px", background: "#7C3AED", color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                  → Voir les Questions
+                </button>
+                <button onClick={() => setShowQuestionsPopup(false)}
+                  style={{ padding: "7px 10px", background: "transparent", color: "#7C3AED", border: "1px solid #DDD6FE", borderRadius: 8, fontSize: 12, cursor: "pointer" }}>
+                  ✕
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Sub-nav ── */}
       <div style={{ display: "flex", gap: 6, marginBottom: 20 }}>
@@ -2417,7 +2443,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
           setCategories={setCategories}
           onSaveAxes={onSaveAxes}
           onAxesChange={(a) => setAxes(a)}
-          onQuestionsGenerated={() => { setQuestionsKey(k => k + 1); setSubTab("questions"); }}
+          onQuestionsGenerated={(showPopup) => { setQuestionsKey(k => k + 1); if (showPopup) setShowQuestionsPopup(true); }}
         />
       )}
       {subTab === "questions" && (

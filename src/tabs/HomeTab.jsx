@@ -109,8 +109,110 @@ function LoginForm({ onLogin }) {
   );
 }
 
+// ── Onboarding hint ──────────────────────────────────────────────
+function OnboardingHint({ onGoSetup, onGoFanout, onGoAudit }) {
+  const steps = [
+    {
+      num: 1,
+      icon: "📁",
+      title: "Importer les données externes",
+      desc: "Dans ⚙️ Setup, importez vos exports Screaming Frog (SF), Google Search Console (GSC), GA4, Bing Webmaster et Semrush pour enrichir les analyses.",
+      action: "Aller au Setup",
+      onClick: onGoSetup,
+      color: "#2563EB",
+    },
+    {
+      num: 2,
+      icon: "🔑",
+      title: "Clé API Claude (pour les Hints GEO)",
+      desc: null,
+      link: { label: "Générer une clé sur platform.claude.com", url: "https://platform.claude.com/settings/keys" },
+      note: "Renseignez-la dans Fan-outs > ⚙️ Gestion des Providers.",
+      action: "Aller aux Fan-outs",
+      onClick: onGoFanout,
+      color: "#D97706",
+    },
+    {
+      num: 3,
+      icon: "🤖",
+      title: "Clés API LLM (pour interroger les providers)",
+      desc: "Configurez au moins un provider pour lancer les Fan-outs :",
+      providers: [
+        { name: "OpenAI", url: "https://platform.openai.com/api-keys" },
+        { name: "Perplexity", url: "https://www.perplexity.ai/settings/api" },
+        { name: "Gemini", url: "https://aistudio.google.com/app/apikey" },
+      ],
+      note: "Renseignez les clés dans Fan-outs > ⚙️ Gestion des Providers.",
+      action: "Aller aux Fan-outs",
+      onClick: onGoFanout,
+      color: "#7C3AED",
+    },
+    {
+      num: 4,
+      icon: "🚀",
+      title: "Lancer les Fan-outs",
+      desc: "Ajoutez vos mots-clés dans Fan-outs > Mots-clés, générez les questions, puis lancez les interrogations LLM pour mesurer la présence de votre marque.",
+      action: "Aller aux Fan-outs",
+      onClick: onGoFanout,
+      color: "#059669",
+    },
+    {
+      num: 5,
+      icon: "📋",
+      title: "Audit GEO",
+      desc: "Une fois les Fan-outs lancés, générez votre audit GEO complet avec recommandations actionnables.",
+      action: "Voir l'audit",
+      onClick: onGoAudit,
+      color: "#DC2626",
+    },
+  ];
+
+  return (
+    <div style={{ background: "#F5F3FF", border: "1px solid #DDD6FE", borderRadius: 14, padding: "20px 24px", marginTop: 20 }}>
+      <div style={{ fontSize: 13, fontWeight: 800, color: "#7C3AED", marginBottom: 4 }}>🎯 Setup complet — étapes à suivre</div>
+      <div style={{ fontSize: 11, color: "#6D28D9", marginBottom: 16 }}>Suivez ces étapes pour obtenir vos premiers résultats GEO</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        {steps.map(s => (
+          <div key={s.num} style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", border: `1px solid ${s.color}22`, borderLeft: `3px solid ${s.color}` }}>
+            <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+              <div style={{ width: 24, height: 24, borderRadius: "50%", background: s.color, color: "#fff", fontSize: 11, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 1 }}>{s.num}</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#1E1B4B", marginBottom: 4 }}>{s.icon} {s.title}</div>
+                {s.desc && <div style={{ fontSize: 11, color: "#6D28D9", lineHeight: 1.5, marginBottom: s.link || s.providers || s.note ? 6 : 0 }}>{s.desc}</div>}
+                {s.link && (
+                  <a href={s.link.url} target="_blank" rel="noopener noreferrer"
+                    style={{ fontSize: 11, color: s.color, fontWeight: 600, display: "inline-block", marginBottom: 4, textDecoration: "underline" }}>
+                    🔗 {s.link.label}
+                  </a>
+                )}
+                {s.providers && (
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 4 }}>
+                    {s.providers.map(p => (
+                      <a key={p.name} href={p.url} target="_blank" rel="noopener noreferrer"
+                        style={{ fontSize: 10, fontWeight: 700, color: s.color, background: "#F5F3FF", border: `1px solid ${s.color}44`, borderRadius: 6, padding: "2px 8px", textDecoration: "none" }}>
+                        🔗 {p.name}
+                      </a>
+                    ))}
+                  </div>
+                )}
+                {s.note && <div style={{ fontSize: 10, color: "#6D28D9", fontStyle: "italic", marginBottom: 4 }}>→ {s.note}</div>}
+              </div>
+              {s.action && s.onClick && (
+                <button onClick={s.onClick}
+                  style={{ fontSize: 10, fontWeight: 700, color: s.color, background: "#F5F3FF", border: `1px solid ${s.color}44`, borderRadius: 6, padding: "3px 10px", cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}>
+                  {s.action} →
+                </button>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ── Connected widget ──────────────────────────────────────────────
-function ConnectedWidget({ user, projects, currentProjectId, onSelectProject, onCreateProject, onLogout }) {
+function ConnectedWidget({ user, projects, currentProjectId, onSelectProject, onCreateProject, onLogout, onGoSetup, onGoFanout, onGoAudit }) {
   const lastProject = projects.find(p => p.id === currentProjectId) || projects[0];
   const isAdmin = isSuperAdmin(user);
 
@@ -176,14 +278,16 @@ function ConnectedWidget({ user, projects, currentProjectId, onSelectProject, on
             style={{ padding: "10px 20px", background: "#7C3AED", color: "#fff", border: "none", borderRadius: 9, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
             + Créer mon premier projet
           </button>
+          <OnboardingHint onGoSetup={onGoSetup} onGoFanout={onGoFanout} onGoAudit={onGoAudit} />
         </div>
       )}
+      <OnboardingHint onGoSetup={onGoSetup} onGoFanout={onGoFanout} onGoAudit={onGoAudit} />
     </div>
   );
 }
 
 // ── HomeTab ───────────────────────────────────────────────────────
-export default function HomeTab({ user, projects, currentProjectId, onLogin, onLogout, onSelectProject, onCreateProject }) {
+export default function HomeTab({ user, projects, currentProjectId, onLogin, onLogout, onSelectProject, onCreateProject, onGoSetup, onGoFanout, onGoAudit }) {
   return (
     <div style={{ maxWidth: 1100, margin: "0 auto", padding: "32px 24px" }}>
 
@@ -232,6 +336,9 @@ export default function HomeTab({ user, projects, currentProjectId, onLogin, onL
               onSelectProject={onSelectProject}
               onCreateProject={onCreateProject}
               onLogout={onLogout}
+              onGoSetup={onGoSetup}
+              onGoFanout={onGoFanout}
+              onGoAudit={onGoAudit}
             />
           ) : (
             <LoginForm onLogin={onLogin} />
