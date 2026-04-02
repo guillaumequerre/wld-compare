@@ -735,6 +735,9 @@ export default function App() {
                 await sbSaveGeoAxes(currentProjectId, axes);
                 setProjects(prev => prev.map(p => p.id === currentProjectId ? { ...p, geo_axes: axes } : p));
               }}
+              onSaveProviderKeys={(keyPatch) => {
+                setProjects(prev => prev.map(p => p.id === currentProjectId ? { ...p, ...keyPatch } : p));
+              }}
             />
           )}
 

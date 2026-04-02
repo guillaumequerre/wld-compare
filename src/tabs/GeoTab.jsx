@@ -2371,7 +2371,7 @@ function UrlsTab({ projectId, categories, brand, allResults }) {
 
 // ── Main GeoTab ───────────────────────────────────────────────────
 
-export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes }) {
+export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes, onSaveProviderKeys }) {
   const [subTab, setSubTab]         = useState("keywords"); // keywords | questions | urls
   const [questionsKey, setQuestionsKey] = useState(0); // incremented to force QuestionsTab reload
   const [showQuestionsPopup, setShowQuestionsPopup] = useState(false);
@@ -2587,6 +2587,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
                       setProviderKeys(prev => ({ ...prev, [p.id]: { enc, dec, input: "", status: "ok" } }));
                       if (p.id === "openai") { setApiKeyEnc(enc); setApiKeyDec(dec); }
                       await sbSaveProviderKeys(projectId, { [p.keyField]: enc });
+                      onSaveProviderKeys?.({ [p.keyField]: enc });
                     }}
                     style={{ padding: "5px 10px", borderRadius: 7, background: p.color, color: "#fff", border: "none", fontSize: 11, fontWeight: 700, cursor: pk.input?.trim() ? "pointer" : "not-allowed", opacity: pk.input?.trim() ? 1 : 0.5 }}>
                     ✓
@@ -2614,6 +2615,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes 
                                     setSemrushKeyDec(k);
                   setSemrushKeyInput("");
                   await sbSaveProviderKeys(projectId, { semrush_key_enc: enc });
+                  onSaveProviderKeys?.({ semrush_key_enc: enc });
                 }}
                 style={{ padding: "5px 10px", borderRadius: 7, background: "#FF642B", color: "#fff", border: "none", fontSize: 11, fontWeight: 700, cursor: semrushKeyInput.trim() ? "pointer" : "not-allowed", opacity: semrushKeyInput.trim() ? 1 : 0.5 }}>
                 ✓
