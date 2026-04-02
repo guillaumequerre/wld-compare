@@ -122,6 +122,7 @@ RÈGLES STRICTES:
 - 1 action par horizon (quick_wins, moyen_terme, long_terme) par site
 - Chaque action roadmap: {"action":"...","metric":"...","why":"...","effort":"court|moyen|long","ice_impact":7,"ice_confidence":6,"ice_effort":5}
 - ice_* sont des entiers de 1 à 10
+- TEXTES COURTS OBLIGATOIRES : title ≤ 60 car. | detail ≤ 150 car. | action ≤ 80 car. | why ≤ 80 car. | strategic_summary ≤ 180 car. | gap.gap ≤ 100 car.
 - ${metrics.length === 1 ? 'comparative: winner_seo="", winner_geo="", gap_analysis=[], strategic_summary=""' : "max 3 gap_analysis"}
 - JSON COMPLET ET VALIDE — ferme tous les tableaux et objets`;
 }
@@ -306,7 +307,7 @@ export default function AnalyseTab({ metrics, corrMatrix, resultVals, analysis, 
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: "claude-sonnet-4-20250514",
-          max_tokens: 8000,
+          max_tokens: 16000,
           system: "Tu es un expert SEO/GEO senior. Réponds UNIQUEMENT avec un objet JSON valide, sans markdown, sans backticks, sans texte avant ou après. Commence directement par { et termine par }.",
           messages: [
             { role: "user", content: prompt },
