@@ -4,6 +4,8 @@ import { parseCSV, isSemrushCSV } from "../lib/helpers";
 import { sbUpload, sbInsertImport, sbDeleteImport, sbDeleteFile, sbGetHistory } from "../lib/supabase";
 import { SnapshotModal } from "./SnapshotSaver";
 
+const MAX_STORAGE_BYTES = 49 * 1024 * 1024; // 49MB
+
 // ── Confirmation mini-dialog ──────────────────────────────────────
 function ConfirmPopover({ message, onConfirm, onCancel, loading }) {
   return (
@@ -24,6 +26,92 @@ function ConfirmPopover({ message, onConfirm, onCancel, loading }) {
   );
 }
 
+// ── Large file modal ──────────────────────────────────────────────
+function LargeFileModal({ file, text, onTruncate, onSkipStorage, onCancel }) {
+  const sizeMB = (file.size / 1024 / 1024).toFixed(1);
+  const opts = [
+    {
+      icon: "✂️",
+      title: "Importer une partie du fichier",
+      desc: `Tronquer à 49MB (${sizeMB}MB → 49MB). Les dernières lignes seront perdues mais le fichier sera sauvegardé en base.`,
+      color: "#D97706",
+      bg: "#FFFBEB",
+      border: "#FDE68A",
+      action: onTruncate,
+      label: "Tronquer et importer",
+    },
+    {
+      icon: "⚡",
+      title: "Importer sans stocker",
+      desc: "Charger les données en mémoire pour cette session uniquement. Le fichier ne sera pas sauvegardé en base — vous devrez le réimporter à la prochaine session.",
+      color: "#2563EB",
+      bg: "#EFF6FF",
+      border: "#BFDBFE",
+      action: onSkipStorage,
+      label: "Importer sans sauvegarder",
+    },
+    {
+      icon: "📂",
+      title: "Choisir un autre fichier",
+      desc: "Annuler et sélectionner un export plus léger (ex : filtrer les colonnes dans Screaming Frog avant d'exporter).",
+      color: "#059669",
+      bg: "#ECFDF5",
+      border: "#BBF7D0",
+      action: onCancel,
+      label: "Choisir un autre fichier",
+    },
+    {
+      icon: "🚀",
+      title: "Upgrader le plan Supabase",
+      desc: "Le plan Pro ($25/mois) supporte jusqu'à 250GB. Contactez l'admin du projet.",
+      color: "#7C3AED",
+      bg: "#F5F3FF",
+      border: "#DDD6FE",
+      action: () => window.open("mailto:guillaume@deux.io?subject=Upgrade Supabase — CorrelDash", "_blank"),
+      label: "Contacter l'admin",
+      external: true,
+    },
+  ];
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 500, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}
+      onClick={e => { if (e.target === e.currentTarget) onCancel(); }}>
+      <div style={{ background: C.white, borderRadius: 16, padding: 28, maxWidth: 500, width: "100%", boxShadow: "0 24px 64px rgba(0,0,0,0.2)" }}>
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 12, marginBottom: 20 }}>
+          <span style={{ fontSize: 28 }}>⚠️</span>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: C.text, marginBottom: 4 }}>Fichier trop volumineux</div>
+            <div style={{ fontSize: 13, color: C.textLight, lineHeight: 1.5 }}>
+              <strong>{file.name}</strong> ({sizeMB}MB) dépasse la limite de stockage Supabase (50MB).
+              Choisissez comment procéder :
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 20 }}>
+          {opts.map((opt, i) => (
+            <button key={i} onClick={opt.action}
+              style={{ display: "flex", gap: 12, alignItems: "flex-start", padding: "12px 14px", background: opt.bg, border: `1.5px solid ${opt.border}`, borderRadius: 10, cursor: "pointer", textAlign: "left", width: "100%" }}>
+              <span style={{ fontSize: 20, flexShrink: 0 }}>{opt.icon}</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: opt.color, marginBottom: 3 }}>
+                  {opt.title}{opt.external ? " ↗" : ""}
+                </div>
+                <div style={{ fontSize: 11, color: C.textMid, lineHeight: 1.5 }}>{opt.desc}</div>
+              </div>
+            </button>
+          ))}
+        </div>
+
+        <button onClick={onCancel}
+          style={{ width: "100%", padding: "8px", border: `1px solid ${C.border}`, borderRadius: 8, background: "transparent", color: C.textLight, fontSize: 12, cursor: "pointer" }}>
+          Annuler
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────────
 export default function UploadCard({ label, icon, hint, onData, onClear, loaded, color, siteId, source, projectId, onLoadFromHistory, rawMode, rows }) {
   const [drag, setDrag]               = useState(false);
@@ -32,29 +120,52 @@ export default function UploadCard({ label, icon, hint, onData, onClear, loaded,
   const [uploadErr, setUploadErr]     = useState(null);
   const [lastImportId, setLastImportId] = useState(null);
   const [lastStoragePath, setLastStoragePath] = useState(null);
+  const [largeFileModal, setLargeFileModal] = useState(null); // { file, text }
 
-  // Modals/popovers
-  const [showSnapshot,      setShowSnapshot]      = useState(false);
-  const [showConfirmFull,   setShowConfirmFull]    = useState(false);
-  const [showConfirmLocal,  setShowConfirmLocal]   = useState(false);
-  const [deleting,          setDeleting]           = useState(false);
+  const [showSnapshot,     setShowSnapshot]     = useState(false);
+  const [showConfirmFull,  setShowConfirmFull]  = useState(false);
+  const [showConfirmLocal, setShowConfirmLocal] = useState(false);
+  const [deleting,         setDeleting]         = useState(false);
 
   const ref = useRef();
 
-  // Fetch last import record to get id + storage_path
   const fetchLastImport = useCallback(async () => {
     if (!siteId || !source || !projectId) return null;
     try {
       const rows = await sbGetHistory(projectId, 50);
       const match = rows.find(r => r.site_id === siteId && r.source === source);
-      if (match) {
-        setLastImportId(match.id);
-        setLastStoragePath(match.storage_path);
-        return match;
-      }
-    } catch { /* silent */ }
+      if (match) { setLastImportId(match.id); setLastStoragePath(match.storage_path); return match; }
+    } catch {}
     return null;
   }, [siteId, source, projectId]);
+
+  // Core: parse + load data into app state
+  const loadData = useCallback((text) => {
+    const parsedRows = rawMode ? null : parseCSV(text);
+    rawMode ? onData(null, text) : onData(parsedRows);
+    return rawMode ? parseCSV(text).length : parsedRows.length;
+  }, [onData, rawMode]);
+
+  // Upload to Supabase Storage + insert import record
+  const saveToStorage = useCallback(async (file, text) => {
+    const ts       = new Date().toISOString().replace(/[:.]/g, "-");
+    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const path     = `${projectId || "proj-default"}/${siteId}/${source}/${ts}_${safeName}`;
+    await sbUpload(path, text);
+    const rc     = rawMode ? parseCSV(text).length : parseCSV(text).length;
+    const result = await sbInsertImport({ project_id: projectId || "proj-default", site_id: siteId, source, filename: file.name, storage_path: path, row_count: rc });
+    if (result?.[0]) { setLastImportId(result[0].id); setLastStoragePath(result[0].storage_path); }
+  }, [projectId, siteId, source, rawMode]);
+
+  // Insert record only (no file storage)
+  const saveMetaOnly = useCallback(async (file, rowCount) => {
+    const result = await sbInsertImport({
+      project_id: projectId || "proj-default", site_id: siteId, source,
+      filename: file.name + " (non stocké — fichier trop volumineux)",
+      storage_path: "", row_count: rowCount,
+    });
+    if (result?.[0]) { setLastImportId(result[0].id); setLastStoragePath(""); }
+  }, [projectId, siteId, source]);
 
   const handle = useCallback(async (file) => {
     if (!file) return;
@@ -66,58 +177,89 @@ export default function UploadCard({ label, icon, hint, onData, onClear, loaded,
         setUploadErr("Format non reconnu — attendu : export Semrush");
         return;
       }
-      const parsedRows = rawMode ? null : parseCSV(text);
-      rawMode ? onData(null, text) : onData(parsedRows);
+
+      // Check file size before attempting upload
+      if (file.size > MAX_STORAGE_BYTES && siteId && source) {
+        // Load data into app state immediately regardless
+        loadData(text);
+        // Show choice modal
+        setLargeFileModal({ file, text });
+        return;
+      }
+
+      // Normal flow: load + upload
+      loadData(text);
       if (siteId && source) {
         setUploading(true);
         try {
-          const ts       = new Date().toISOString().replace(/[:.]/g, "-");
-          const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-          const path     = `${projectId || "proj-default"}/${siteId}/${source}/${ts}_${safeName}`;
-          await sbUpload(path, text);
-          const rc = rawMode ? parseCSV(text).length : parsedRows.length;
-          const result = await sbInsertImport({ project_id: projectId || "proj-default", site_id: siteId, source, filename: file.name, storage_path: path, row_count: rc });
-          if (result?.[0]) { setLastImportId(result[0].id); setLastStoragePath(result[0].storage_path); }
+          await saveToStorage(file, text);
         } catch (err) {
-          setUploadErr(`Sauvegarde échouée — ${(err?.message || String(err)).slice(0, 60)}`);
-          console.warn("Supabase upload error:", err);
+          setUploadErr(`Sauvegarde échouée — ${(err?.message || String(err)).slice(0, 80)}`);
+          console.warn("Upload error:", err);
         } finally {
           setUploading(false);
         }
       }
     };
     reader.readAsText(file);
-  }, [onData, siteId, source, projectId, rawMode]);
+  }, [siteId, source, loadData, saveToStorage]);
 
-  // Delete from DB + storage, and clear local state
+  // Modal actions
+  const handleTruncate = useCallback(async () => {
+    if (!largeFileModal) return;
+    const { file, text } = largeFileModal;
+    setLargeFileModal(null);
+    setUploading(true);
+    try {
+      // Truncate text to 49MB
+      const truncated = text.slice(0, MAX_STORAGE_BYTES);
+      // Keep header line + truncate at last complete line
+      const lastNewline = truncated.lastIndexOf("\n");
+      const safe = lastNewline > 0 ? truncated.slice(0, lastNewline) : truncated;
+      await saveToStorage({ ...file, name: file.name }, safe);
+    } catch (err) {
+      setUploadErr(`Sauvegarde tronquée échouée — ${(err?.message || String(err)).slice(0, 80)}`);
+    } finally {
+      setUploading(false);
+    }
+  }, [largeFileModal, saveToStorage]);
+
+  const handleSkipStorage = useCallback(async () => {
+    if (!largeFileModal) return;
+    const { file, text } = largeFileModal;
+    setLargeFileModal(null);
+    setUploading(true);
+    try {
+      const rowCount = parseCSV(text).length;
+      await saveMetaOnly(file, rowCount);
+    } catch (err) {
+      setUploadErr(`Erreur métadonnées — ${(err?.message || String(err)).slice(0, 80)}`);
+    } finally {
+      setUploading(false);
+    }
+  }, [largeFileModal, saveMetaOnly]);
+
+  const handleCancelLarge = useCallback(() => {
+    setLargeFileModal(null);
+    if (ref.current) ref.current.value = "";
+  }, []);
+
   const handleDeleteFull = async () => {
     setDeleting(true);
     try {
-      let importId = lastImportId;
-      let storagePath = lastStoragePath;
-      if (!importId) {
-        const rec = await fetchLastImport();
-        importId = rec?.id;
-        storagePath = rec?.storage_path;
-      }
+      let importId = lastImportId, storagePath = lastStoragePath;
+      if (!importId) { const rec = await fetchLastImport(); importId = rec?.id; storagePath = rec?.storage_path; }
       if (storagePath) await sbDeleteFile(storagePath).catch(() => {});
       if (importId) await sbDeleteImport(importId);
       onClear?.();
-      setLastImportId(null);
-      setLastStoragePath(null);
+      setLastImportId(null); setLastStoragePath(null);
       setShowConfirmFull(false);
     } catch (err) {
       setUploadErr(`Suppression échouée — ${(err?.message || String(err)).slice(0, 60)}`);
-    } finally {
-      setDeleting(false);
-    }
+    } finally { setDeleting(false); }
   };
 
-  // Only clear local state (keep DB)
-  const handleDeleteLocal = () => {
-    onClear?.();
-    setShowConfirmLocal(false);
-  };
+  const handleDeleteLocal = () => { onClear?.(); setShowConfirmLocal(false); };
 
   const handleDragOver = (e) => {
     e.preventDefault();
@@ -130,11 +272,8 @@ export default function UploadCard({ label, icon, hint, onData, onClear, loaded,
     e.preventDefault();
     setDrag(false); setDragHistory(false);
     const histJson = e.dataTransfer.getData("historyRow");
-    if (histJson) {
-      try { const row = JSON.parse(histJson); onLoadFromHistory?.(row); } catch {}
-    } else {
-      handle(e.dataTransfer.files[0]);
-    }
+    if (histJson) { try { onLoadFromHistory?.(JSON.parse(histJson)); } catch {} }
+    else { handle(e.dataTransfer.files[0]); }
   };
 
   const borderColor = dragHistory ? C.blue : drag ? color : loaded ? color : "#D1D5DB";
@@ -142,14 +281,10 @@ export default function UploadCard({ label, icon, hint, onData, onClear, loaded,
 
   return (
     <div style={{ position: "relative" }}>
-      {/* ── Main card ── */}
       <div
-        onClick={() => { if (!showConfirmFull && !showConfirmLocal && !showSnapshot) ref.current.click(); }}
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
-        style={{ border: `1.5px dashed ${borderColor}`, borderRadius: 10, padding: "11px 14px", cursor: "pointer", background: bgColor, transition: "all 0.18s", display: "flex", alignItems: "center", gap: 10, position: "relative" }}
-      >
+        onClick={() => { if (!showConfirmFull && !showConfirmLocal && !showSnapshot && !largeFileModal) ref.current.click(); }}
+        onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}
+        style={{ border: `1.5px dashed ${borderColor}`, borderRadius: 10, padding: "11px 14px", cursor: "pointer", background: bgColor, transition: "all 0.18s", display: "flex", alignItems: "center", gap: 10, position: "relative" }}>
         {dragHistory && (
           <div style={{ position: "absolute", inset: 0, borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center", background: `${C.blue}18`, fontSize: 13, fontWeight: 700, color: C.blue, pointerEvents: "none" }}>
             Déposer ici
@@ -157,10 +292,7 @@ export default function UploadCard({ label, icon, hint, onData, onClear, loaded,
         )}
         <input ref={ref} type="file" accept=".csv" style={{ display: "none" }} onChange={e => handle(e.target.files[0])} />
 
-        {/* Icon */}
         <div style={{ fontSize: 20, flexShrink: 0 }}>{uploading ? "⏳" : loaded ? "✅" : icon}</div>
-
-        {/* Text */}
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 12, fontWeight: 600, color: loaded ? color : C.textMid }}>{label}</div>
           <div style={{ fontSize: 11, color: uploadErr ? "#DC2626" : C.textLight, marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -168,67 +300,37 @@ export default function UploadCard({ label, icon, hint, onData, onClear, loaded,
           </div>
         </div>
 
-        {/* Action buttons — only when loaded */}
         {loaded && (
           <div style={{ display: "flex", gap: 4, flexShrink: 0 }} onClick={e => e.stopPropagation()}>
-
-            {/* Snapshot */}
-            <button
-              title="Sauvegarder un snapshot d'évolution"
-              onClick={() => setShowSnapshot(true)}
-              style={{ padding: "3px 8px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.white, color: C.textMid, fontSize: 11, cursor: "pointer", lineHeight: "18px" }}>
-              📌
-            </button>
-
-            {/* Delete local only */}
-            <button
-              title="Retirer du projet (conserver dans la BDD)"
-              onClick={() => { setShowConfirmFull(false); setShowConfirmLocal(true); }}
-              style={{ padding: "3px 8px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.white, color: C.textMid, fontSize: 11, cursor: "pointer", lineHeight: "18px" }}>
-              ↩
-            </button>
-
-            {/* Delete full */}
-            <button
-              title="Supprimer l'import (fichier + BDD)"
-              onClick={() => { setShowConfirmLocal(false); setShowConfirmFull(true); }}
-              style={{ padding: "3px 8px", border: "1px solid #FECACA", borderRadius: 6, background: "#FEF2F2", color: "#DC2626", fontSize: 11, cursor: "pointer", lineHeight: "18px" }}>
-              🗑
-            </button>
+            <button title="Sauvegarder un snapshot d'évolution" onClick={() => setShowSnapshot(true)}
+              style={{ padding: "3px 8px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.white, color: C.textMid, fontSize: 11, cursor: "pointer", lineHeight: "18px" }}>📌</button>
+            <button title="Retirer du projet (conserver dans la BDD)" onClick={() => { setShowConfirmFull(false); setShowConfirmLocal(true); }}
+              style={{ padding: "3px 8px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.white, color: C.textMid, fontSize: 11, cursor: "pointer", lineHeight: "18px" }}>↩</button>
+            <button title="Supprimer l'import (fichier + BDD)" onClick={() => { setShowConfirmLocal(false); setShowConfirmFull(true); }}
+              style={{ padding: "3px 8px", border: "1px solid #FECACA", borderRadius: 6, background: "#FEF2F2", color: "#DC2626", fontSize: 11, cursor: "pointer", lineHeight: "18px" }}>🗑</button>
           </div>
         )}
       </div>
 
-      {/* ── Confirm: delete full (BDD + file) ── */}
       {showConfirmFull && (
-        <ConfirmPopover
-          message="Supprimer définitivement cet import de la BDD et du stockage ?"
-          onConfirm={handleDeleteFull}
-          onCancel={() => setShowConfirmFull(false)}
-          loading={deleting}
-        />
+        <ConfirmPopover message="Supprimer définitivement cet import de la BDD et du stockage ?"
+          onConfirm={handleDeleteFull} onCancel={() => setShowConfirmFull(false)} loading={deleting} />
       )}
-
-      {/* ── Confirm: remove local only ── */}
       {showConfirmLocal && (
-        <ConfirmPopover
-          message="Retirer cet import du projet ? (le fichier reste dans la BDD)"
-          onConfirm={handleDeleteLocal}
-          onCancel={() => setShowConfirmLocal(false)}
-          loading={false}
-        />
+        <ConfirmPopover message="Retirer cet import du projet ? (le fichier reste dans la BDD)"
+          onConfirm={handleDeleteLocal} onCancel={() => setShowConfirmLocal(false)} loading={false} />
       )}
-
-      {/* ── Snapshot modal ── */}
       {showSnapshot && (
-        <SnapshotModal
-          source={source}
-          rows={rows || []}
-          filename={null}
-          projectId={projectId}
-          siteId={siteId}
-          onClose={() => setShowSnapshot(false)}
-          onSaved={() => {}}
+        <SnapshotModal source={source} rows={rows || []} filename={null}
+          projectId={projectId} siteId={siteId} onClose={() => setShowSnapshot(false)} onSaved={() => {}} />
+      )}
+      {largeFileModal && (
+        <LargeFileModal
+          file={largeFileModal.file}
+          text={largeFileModal.text}
+          onTruncate={handleTruncate}
+          onSkipStorage={handleSkipStorage}
+          onCancel={handleCancelLarge}
         />
       )}
     </div>
