@@ -2878,7 +2878,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
           onAxesChange={(a) => setAxes(a)}
           semrushKey={semrushKeyDec}
           providerKeys={providerKeys}
-          onQuestionsGenerated={(showPopup) => { setQuestionsKey(k => k + 1); if (showPopup) setShowQuestionsPopup(true); }}
+          onQuestionsGenerated={() => { setQuestionsKey(k => k + 1); }}
         />
       )}
       {subTab === "questions" && (
