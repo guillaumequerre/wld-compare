@@ -1151,9 +1151,17 @@ function isBrandPresent(r) {
 
 // ── HintPanel — GEO optimisation hints ───────────────────────────
 
-function HintPanel({ question, sources, brandName, brandAliases, brandDomain: brandDomainProp = "", claudeKey, hasBrand = false, questionId = null, projectId = null, siteId = null, savedHint = "" }) {
+function HintPanel({ question, sources, brandName, brandAliases, brandDomain: brandDomainProp = "", claudeKey, hasBrand = false, questionId = null, projectId = null, siteId = null, savedHint = "", autoRun = false }) {
   const [status, setStatus] = useState(() => savedHint ? "done" : "idle");
   const [hint, setHint]     = useState(savedHint || "");
+
+  const runRef = useRef(null);
+  // Auto-run on open when no saved hint and claudeKey is available
+  useEffect(() => {
+    if (autoRun && status === "idle" && claudeKey && !savedHint) {
+      runRef.current?.();
+    }
+  }, [autoRun]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Use explicit brand domain first, then try aliases, then brand name
   const brandDomain = brandDomainProp ||
@@ -1233,6 +1241,7 @@ ${hasBrand
       setStatus("error");
     }
   };
+  runRef.current = run; // always up to date
 
   return (
     <div style={{ borderTop: `1px solid #FEF3C7`, background: "#FFFBEB", padding: "8px 12px" }}>
@@ -1361,6 +1370,7 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
           projectId={projectId}
           siteId={siteId}
           savedHint={savedHint}
+          autoRun={true}
         />
       )}
       {open && result && (
