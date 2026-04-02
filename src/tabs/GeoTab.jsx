@@ -553,7 +553,7 @@ function CatSelect({ value, categories, onChange, placeholder = "Catégorie…" 
 
 // ── Keywords sub-tab (v2) ─────────────────────────────────────────
 
-function KeywordsTab({ site, projectId, apiKey, model, axes, context, categories, setCategories, onSaveAxes, onAxesChange, onQuestionsGenerated, semrushKey = "" }) {
+function KeywordsTab({ site, projectId, apiKey, model, axes, context, categories, setCategories, onSaveAxes, onAxesChange, onQuestionsGenerated, semrushKey = "", providerKeys = {} }) {
   const [keywords, setKeywords] = useState([]);
   const [input, setInput]       = useState("");
   const [loading, setLoading]   = useState(false);
@@ -677,7 +677,9 @@ function KeywordsTab({ site, projectId, apiKey, model, axes, context, categories
   };
 
   const generateQuestions = async (kw, axes) => {
-    if (!apiKey) return;
+    // Use providerKeys.openai first (set via UI), fallback to legacy apiKey prop
+    const resolvedKey = providerKeys?.openai?.dec || apiKey;
+    if (!resolvedKey) return;
     setBusy(b => ({ ...b, [kw.id]: "q" }));
     await sbUpdateKeywordStatus(kw.id, "generating_q");
     setKeywords(prev => prev.map(k => k.id === kw.id ? { ...k, status: "generating_q" } : k));
@@ -709,7 +711,7 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
       // Direct fetch — plain text, no json_object format
       const res = await fetch("/api/openai", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-Openai-Key": apiKey, "X-Openai-Endpoint": "completions" },
+        headers: { "Content-Type": "application/json", "X-Openai-Key": resolvedKey, "X-Openai-Endpoint": "completions" },
         body: JSON.stringify({ model, messages: [{ role: "user", content: prompt }], temperature: 0.7, max_tokens: 400 }),
       });
       const text = await res.text();
@@ -790,7 +792,8 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
   };
 
   const bulkGenerate = async () => {
-    if (!selected.size || !apiKey) return;
+    const resolvedKey = providerKeys?.openai?.dec || apiKey;
+    if (!selected.size || !resolvedKey) return;
     const toProcess = keywords.filter(k => selected.has(k.id));
     setRunningAll(true);
     stopRef.current = false;
@@ -992,8 +995,8 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
 
             <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
               {runningAll && <Btn onClick={() => { stopRef.current = true; setRunningAll(false); }} color="#DC2626" variant="outline" small>⏹ Arrêter</Btn>}
-            <Btn onClick={generateAll} disabled={runningAll || !apiKey} color={site.color} small
-              title={!apiKey ? "Clé OpenAI manquante — ajoutez-la dans ⚙️ Gestion des Providers (en haut de page)" : undefined}>
+            <Btn onClick={generateAll} disabled={runningAll || (!apiKey && !providerKeys?.openai?.dec)} color={site.color} small
+              title={(!apiKey && !providerKeys?.openai?.dec) ? "Clé OpenAI manquante — ajoutez-la dans ⚙️ Gestion des Providers (en haut de page)" : undefined}>
               {runningAll ? "⏳ Génération en cours…" : "💬 Générer toutes les questions"}
             </Btn>
           </div>
@@ -1056,8 +1059,8 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
                 </div>
                 <div style={{ display: "flex", gap: 6, flexShrink: 0, alignItems: "center" }}>
                   <CatSelect value={kw.category_id} categories={categories} onChange={v => setCatSingle(kw.id, v)} />
-                  <Btn onClick={() => generateQuestions(kw, null)} disabled={!!busy[kw.id] || !apiKey} variant="outline" small color={site.color}
-                    title={!apiKey ? "Clé OpenAI manquante — ajoutez-la dans ⚙️ Gestion des Providers (en haut de page)" : undefined}>
+                  <Btn onClick={() => generateQuestions(kw, null)} disabled={!!busy[kw.id] || (!apiKey && !providerKeys?.openai?.dec)} variant="outline" small color={site.color}
+                    title={(!apiKey && !providerKeys?.openai?.dec) ? "Clé OpenAI manquante — ajoutez-la dans ⚙️ Gestion des Providers (en haut de page)" : undefined}>
                     {busy[kw.id] === "q" ? "⏳" : kw.status === "done_q" ? "🔄" : "💬"}
                   </Btn>
                   <button onClick={() => deleteKw(kw.id)} style={{ padding: "3px 7px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.white, color: C.textLight, fontSize: 10, cursor: "pointer" }}>🗑</button>
@@ -1155,7 +1158,9 @@ ${hasBrand
       setHint(finalHint);
       // Persist hint to DB
       if (questionId && projectId && siteId) {
-        sbSaveHint(questionId, siteId, projectId, finalHint).catch(() => {});
+        sbSaveHint(questionId, siteId, projectId, finalHint).catch(e => {
+          console.warn("[HintPanel] sbSaveHint failed:", e.message);
+        });
       }
       setStatus("done");
     } catch(e) {
@@ -2727,6 +2732,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
           onSaveAxes={onSaveAxes}
           onAxesChange={(a) => setAxes(a)}
           semrushKey={semrushKeyDec}
+          providerKeys={providerKeys}
           onQuestionsGenerated={(showPopup) => { setQuestionsKey(k => k + 1); if (showPopup) setShowQuestionsPopup(true); }}
         />
       )}
