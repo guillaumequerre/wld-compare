@@ -10,7 +10,7 @@ import {
   sbGetSchedule, sbSaveSchedule, sbUpdateSchedule, sbTriggerScheduler,
   sbSaveProjectSettings,
   sbGetCategories, sbSaveCategory, sbDeleteCategory,
-  sbSetKeywordCategory, sbSetQuestionCategory,
+  sbSetQuestionCategory,
   sbBulkSetKeywordCategory, sbBulkSetQuestionCategory,
   sbGetUrlIndex, sbUpdateUrlMeta, sbIncrementUrlCounts,
   sbAddCalendarEntry,
