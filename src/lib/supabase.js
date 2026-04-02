@@ -10,6 +10,37 @@ function authHeaders(extra = {}) {
 }
 
 export async function sbUpload(path, csvText) {
+  // Upload direct vers Supabase Storage (bypass proxy Netlify — limite 1MB)
+  // Utilise REACT_APP_SUPABASE_URL et REACT_APP_SUPABASE_ANON définis dans Netlify env
+  const supabaseUrl = process.env.REACT_APP_SUPABASE_URL;
+  const anonKey     = process.env.REACT_APP_SUPABASE_ANON;
+  const jwt = (() => {
+    try {
+      const s = sessionStorage.getItem("correl_session") || localStorage.getItem("correl_session");
+      return s ? JSON.parse(s).access_token : null;
+    } catch { return null; }
+  })();
+
+  if (supabaseUrl && anonKey) {
+    // Upload direct — pas de limite Netlify
+    const res = await fetch(`${supabaseUrl}/storage/v1/object/csv-imports/${path}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "text/csv",
+        "x-upsert": "true",
+        "apikey": anonKey,
+        "Authorization": jwt ? `Bearer ${jwt}` : `Bearer ${anonKey}`,
+      },
+      body: csvText,
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`Upload failed: ${res.status} — ${body.slice(0, 120)}`);
+    }
+    return path;
+  }
+
+  // Fallback: proxy Netlify (limité ~1MB)
   const res = await fetch(`${PROXY}/storage/v1/object/csv-imports/${path}`, {
     method: "POST",
     headers: { ...authHeaders(), "Content-Type": "text/csv", "x-upsert": "true" },
