@@ -14,7 +14,7 @@ let _sbConfig = null;
 async function getDirectConfig() {
   if (_sbConfig) return _sbConfig;
   try {
-    const res = await fetch("/api/supabase-info", { headers: authHeaders() });
+    const res = await fetch("/api/supabase-info"); // pas d'auth nécessaire
     if (res.ok) { _sbConfig = await res.json(); return _sbConfig; }
   } catch {}
   return null;
