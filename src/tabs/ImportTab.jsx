@@ -214,12 +214,13 @@ export default function ImportTab({ projects, currentProjectId, setCurrentProjec
           </div>
         )}
 
-        <div style={{ display: "grid", gridTemplateColumns: `repeat(${Math.min(sites.length + (sites.length < 3 ? 1 : 0), 3)}, 1fr)`, gap: 20 }}>
-          {sites.length === 0 ? (
+        <div style={{ display: "grid", gridTemplateColumns: `repeat(${Math.min(Math.max(sites.length, 1) + (sites.length < 3 ? 1 : 0), 3)}, 1fr)`, gap: 20 }}>
+          {sites.length === 0 && (
             <div style={{ gridColumn: "1 / -1", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 12, padding: "20px 24px", fontSize: 13, color: "#92400E" }}>
               ⚠️ Aucun site configuré — créez un projet avec au moins un site dans la section <strong>Projet actif</strong> ci-dessus pour importer des fichiers.
             </div>
-          ) : sites.map(site => (
+          )}
+          {sites.map(site => (
             <div key={site.id} style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: 20 }}>
               {/* Site header */}
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, paddingBottom: 12, borderBottom: `1px solid ${C.borderLight}` }}>
@@ -291,7 +292,6 @@ export default function ImportTab({ projects, currentProjectId, setCurrentProjec
               <div style={{ fontSize: 13, fontWeight: 600, color: C.blue }}>Ajouter un site</div>
               <div style={{ fontSize: 11, color: C.textLight }}>Max 3 sites par projet</div>
             </div>
-          )}
           )}
         </div>
       </Section>
@@ -365,7 +365,6 @@ export default function ImportTab({ projects, currentProjectId, setCurrentProjec
           </div>
         </div>
       )}
-    </div>
     </div>
   );
 }
