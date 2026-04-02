@@ -58,8 +58,8 @@ function NavBar({ tab, setTab, user, onLogout }) {
     }}>{t.label}</button>
   );
 
-  const burgerItems = BURGER_TABS.slice(0, 3); // Setup, Compte, Analyse IA — top 3 in burger
-  const moreTabs = BURGER_TABS.slice(3);       // rest in a sub-section
+  const burgerItems = BURGER_TABS.slice(0, 3); // Compte, Analyse IA, Accueil
+  const moreTabs    = BURGER_TABS.slice(3);     // Évolution, Matrice, Semrush, Tous les projets
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
