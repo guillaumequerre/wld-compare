@@ -630,6 +630,22 @@ export default function App() {
               refreshHistory={refreshHistory}
             pageTypes={pageTypes}
             setPageTypes={setPageTypes}
+            onSemrushVolumes={async (siteId, semrushRows) => {
+              try {
+                const { sbGetKeywords, sbUpdateKeywordVolume } = await import("./lib/supabase");
+                const kws = await sbGetKeywords(currentProjectId, siteId);
+                const volMap = {};
+                semrushRows.forEach(r => {
+                  const kw = (r.keyword || r.Keyword || "").toLowerCase().trim();
+                  const vol = parseInt(r.volume || r.Volume || r["search volume"] || 0, 10);
+                  if (kw && !isNaN(vol) && vol > 0) volMap[kw] = vol;
+                });
+                for (const kw of kws) {
+                  const vol = volMap[kw.keyword?.toLowerCase()];
+                  if (vol !== undefined) await sbUpdateKeywordVolume(kw.id, vol, "semrush_csv");
+                }
+              } catch(e) { console.warn("Semrush volume match failed:", e); }
+            }}
             />
           )}
 

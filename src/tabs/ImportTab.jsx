@@ -26,7 +26,7 @@ function Section({ number, title, sub, children }) {
   );
 }
 
-export default function ImportTab({ projects, currentProjectId, setCurrentProjectId, editingProjectName, setEditingProjectName, setProjects, ownerEmail = null, sites, setSites, sfData, gscData, gaData, bingData, smData, setSfData, setGscData, setGaData, setBingData, setSmData, confirmModal, setConfirmModal, dbHistory, dbLoading, showHistory, setShowHistory, refreshHistory, pageTypes, setPageTypes }) {
+export default function ImportTab({ projects, currentProjectId, setCurrentProjectId, editingProjectName, setEditingProjectName, setProjects, ownerEmail = null, sites, setSites, sfData, gscData, gaData, bingData, smData, setSfData, setGscData, setGaData, setBingData, setSmData, confirmModal, setConfirmModal, dbHistory, dbLoading, showHistory, setShowHistory, refreshHistory, pageTypes, setPageTypes, onSemrushVolumes }) {
 
   // ── Last import dates ─────────────────────────────────────────
   const lastBySrc = {};
@@ -255,7 +255,15 @@ export default function ImportTab({ projects, currentProjectId, setCurrentProjec
                   onLoadFromHistory={async row => { try { const text = await sbDownload(row.storage_path); setBingData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn("History load error", e); } }} />
                 <UploadCard label="Semrush Organic Pages" icon="📈" hint="Positions, trafic estimé, volumes" color={site.color}
                   loaded={smData[site.id]?.length > 0} rows={smData[site.id]}
-                  onData={(_, rawText) => { const rows = parseSemrush(parseSemrushCSV(rawText)); setSmData(p => ({...p, [site.id]: rows})); }}
+                  onData={(_, rawText) => {
+                    const rows = parseSemrush(parseSemrushCSV(rawText));
+                    setSmData(p => ({...p, [site.id]: rows}));
+                    // Auto-match keyword volumes if Keyword Overview format
+                    const parsed = parseSemrushCSV(rawText);
+                    if (parsed.length > 0 && parsed[0].keyword !== undefined) {
+                      onSemrushVolumes?.(site.id, parsed);
+                    }
+                  }}
                   onClear={() => setSmData(p => ({...p, [site.id]: []}))}
                   rawMode siteId={site.id} source="sm" projectId={currentProjectId}
                   onLoadFromHistory={async row => { try { const text = await sbDownload(row.storage_path); const rows = parseSemrush(parseSemrushCSV(text)); setSmData(p => ({...p, [site.id]: rows})); } catch(e) { console.warn("History load error", e); } }} />
@@ -353,6 +361,37 @@ export default function ImportTab({ projects, currentProjectId, setCurrentProjec
       </Section>
 
       {/* Confirm modal */}
+      {/* ── 5. CONFIGURATION PROVIDERS ─────────────────────────── */}
+      <Section number="5" title="Gestion des Providers" sub="Clés API pour les Fan-outs GEO — configurées par projet">
+        <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: "20px 24px" }}>
+          <div style={{ fontSize: 13, color: C.textMid, marginBottom: 16, lineHeight: 1.6 }}>
+            Les clés API sont associées à chaque projet et configurées dans l'onglet <strong>🔍 Fan-outs → ⚙️ Gestion des Providers</strong>.
+            Elles sont sauvegardées automatiquement et rechargées à chaque session.
+          </div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            {[
+              { label: "OpenAI",     field: "openai_key_enc",      icon: "🟢", color: "#059669" },
+              { label: "Gemini",     field: "gemini_key_enc",      icon: "🔵", color: "#2563EB" },
+              { label: "Perplexity", field: "perplexity_key_enc",  icon: "🟣", color: "#7C3AED" },
+              { label: "Claude",     field: "claude_geo_key_enc",  icon: "🟠", color: "#D97706" },
+              { label: "Semrush",    field: "semrush_key_enc",     icon: "📊", color: "#FF642B" },
+            ].map(p => {
+              const hasKey = !!(projects.find(pr => pr.id === currentProjectId)?.[p.field]);
+              return (
+                <div key={p.label} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", borderRadius: 8, background: hasKey ? "#ECFDF5" : C.bg, border: `1px solid ${hasKey ? "#BBF7D0" : C.border}` }}>
+                  <span style={{ fontSize: 14 }}>{p.icon}</span>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: hasKey ? "#059669" : C.textLight }}>{p.label}</span>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: hasKey ? "#059669" : "#DC2626" }}>{hasKey ? "✓ OK" : "✗"}</span>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ marginTop: 14, fontSize: 11, color: C.textLight }}>
+            → Configurez vos clés dans <strong>🔍 Fan-outs → ⚙️ Gestion des Providers</strong> (en haut de page)
+          </div>
+        </div>
+      </Section>
+
       {confirmModal && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center" }}>
           <div style={{ background: C.white, borderRadius: 14, padding: 32, maxWidth: 400, width: "90%", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>

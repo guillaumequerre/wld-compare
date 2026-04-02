@@ -1149,6 +1149,93 @@ function isBrandPresent(r) {
 // history: [{ test_date: "YYYY-MM-DD", brand_mentioned: bool }]
 // results: current geo_results for this provider (for today's optimistic update)
 
+// ── HintPanelQuestion — one hint per question ────────────────────
+function HintPanelQuestion({ questionId, question, sources, brandName, brandAliases, brandDomain, claudeKey, hasBrand, projectId, siteId, savedHint, onHintSaved, initialOpen = false }) {
+  const [open, setOpen]       = useState(initialOpen || !!savedHint);
+  const [status, setStatus]   = useState(savedHint ? "done" : "idle");
+  const [hint, setHint]       = useState(savedHint || "");
+  const hasHint = !!hint;
+
+  const run = async () => {
+    if (!claudeKey) return;
+    setStatus("loading");
+    const bDomain = brandDomain || brandName;
+    const sourcesText = (sources || []).length > 0
+      ? `Pages dans la réponse :
+${sources.slice(0, 6).map((u, i) => `[${i+1}] ${u}`).join("
+")}`
+      : "Aucune source listée.";
+    const prompt = `Tu es un expert GEO. Un moteur d'IA a répondu à cette question sans mentionner "${brandName}" :
+"${question}"
+
+${sourcesText}
+
+REGLES STRICTES :
+- Commence directement par la recommandation, sans introduction
+- 5 à 7 lignes max, ton direct et actionnable
+
+${hasBrand
+      ? `La marque est présente. Analyse comment RENFORCER cette présence sur ${bDomain}.`
+      : `Si une page de ${bDomain} est pertinente → comment l'optimiser. Sinon → quel contenu créer.`}`;
+    try {
+      const res = await fetch("/api/claude-geo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Claude-Key": claudeKey },
+        body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 500, messages: [{ role: "user", content: prompt }] }),
+      });
+      const raw = await res.text();
+      const data = JSON.parse(raw);
+      if (!res.ok) throw new Error(data.error?.message || `Claude ${res.status}`);
+      const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("
+").trim();
+      const cleaned = text.replace(/^(Je vais|En effectuant|Je recherche|Voici|Permettez)[^
+]*/gim, "").replace(/^\s*
+/gm, "").trim();
+      const finalHint = cleaned || "Aucune recommandation générée.";
+      setHint(finalHint);
+      setStatus("done");
+      setOpen(true);
+      onHintSaved?.(finalHint);
+      if (questionId && projectId && siteId) {
+        sbSaveHint(questionId, siteId, projectId, finalHint).catch(e => console.warn("[Hint] save failed:", e.message));
+      }
+    } catch(e) {
+      setHint(`Erreur : ${e.message}`);
+      setStatus("error");
+      setOpen(true);
+    }
+  };
+
+  return (
+    <div style={{ borderRadius: 8, overflow: "hidden", border: `1px solid ${hasHint ? "#FCD34D" : C.border}` }}>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: hasHint ? "#FFFBEB" : C.bg, cursor: "pointer" }}
+        onClick={() => hasHint ? setOpen(o => !o) : (!status.includes("loading") && run())}>
+        <span style={{ fontSize: 14 }}>💡</span>
+        {status === "loading" ? (
+          <span style={{ fontSize: 11, color: "#D97706" }}>⏳ Génération du hint…</span>
+        ) : hasHint ? (
+          <>
+            <span style={{ fontSize: 11, fontWeight: 700, color: "#D97706", flex: 1 }}>
+              {open ? "▲ Masquer le Hint" : "▼ Voir le Hint"}
+            </span>
+            <button onClick={(e) => { e.stopPropagation(); setStatus("idle"); setHint(""); setOpen(false); run(); }}
+              style={{ fontSize: 10, color: C.textLight, background: "none", border: "none", cursor: "pointer" }}>↺</button>
+          </>
+        ) : (
+          <span style={{ fontSize: 11, fontWeight: 700, color: "#D97706" }}>✨ Générer un Hint</span>
+        )}
+      </div>
+      {/* Content */}
+      {open && hint && (
+        <div style={{ padding: "8px 12px", background: "#FFFBEB", borderTop: "1px solid #FEF3C7" }}>
+          <div style={{ fontSize: 11, whiteSpace: "pre-wrap", lineHeight: 1.7, color: status === "error" ? "#DC2626" : "#92400E" }}>{hint}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── HintPanel — GEO optimisation hints ───────────────────────────
 
 function HintPanel({ question, sources, brandName, brandAliases, brandDomain: brandDomainProp = "", claudeKey, hasBrand = false, questionId = null, projectId = null, siteId = null, savedHint = "", autoRun = false }) {
@@ -1276,7 +1363,6 @@ ${hasBrand
 
 function ProviderRow({ provider, results, allProviderResults, brandName, brandAliases, brandDomain = "", hasKey, isRunning, onRun, questionId, newCalEntry = null, question = "", claudeKey = "", projectId = null, siteId = null, savedHint = "" }) {
   const [open, setOpen] = useState(false);
-  const [showHint, setShowHint] = useState(false);
   const p = provider;
 
   // Most recent result for this provider
@@ -1315,20 +1401,7 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
             <span>Réponse</span><span>{open ? '▲' : '▼'}</span>
           </button>
         )}
-        {/* Hint button — always shown, grayed when no Claude key */}
-        {result && (
-          <button
-            onClick={() => claudeKey && setShowHint(h => !h)}
-            title={!claudeKey ? "Configurez une clé Claude en haut de page dans ⚙️ Gestion des Providers pour accéder aux hints GEO" : (hasBrand ? "Analyser et renforcer la présence" : "Pistes d'optimisation GEO")}
-            style={{ fontSize: 10, fontWeight: 700,
-              color: !claudeKey ? C.textLight : showHint ? '#fff' : (hasBrand ? '#059669' : '#D97706'),
-              background: !claudeKey ? C.bg : showHint ? (hasBrand ? '#059669' : '#D97706') : (hasBrand ? '#DCFCE7' : '#FEF3C7'),
-              border: `1px solid ${!claudeKey ? C.border : hasBrand ? '#86EFAC' : '#FCD34D'}`,
-              borderRadius: 6, padding: '2px 7px', cursor: claudeKey ? 'pointer' : 'not-allowed',
-              flexShrink: 0, display: 'flex', alignItems: 'center', gap: 3, opacity: claudeKey ? 1 : 0.6 }}>
-            <span>💡 Hint</span><span>{showHint ? '▲' : '▼'}</span>
-          </button>
-        )}
+
 
         {/* Spacer */}
         <div style={{ flex: 1 }} />
@@ -1357,22 +1430,7 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
       </div>
 
       {/* ── Accordion: answer + sources + competitors ── */}
-      {showHint && result && (
-        <HintPanel
-          question={question}
-          sources={sources}
-          brandName={brandName}
-          brandAliases={brandAliases}
-          brandDomain={brandDomain}
-          claudeKey={claudeKey}
-          hasBrand={hasBrand}
-          questionId={questionId}
-          projectId={projectId}
-          siteId={siteId}
-          savedHint={savedHint}
-          autoRun={true}
-        />
-      )}
+
       {open && result && (
         <div style={{ borderTop: `1px solid ${C.border}`, padding: '10px 12px', background: C.bg }}>
           <div style={{ fontSize: 12, color: C.text, lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
@@ -2116,6 +2174,59 @@ ${question}`;
                     );
                   })}
                 </div>
+                {/* ── Hint at question level ── */}
+                {(() => {
+                  const claudeKey = providerKeysRef.current["claude"]?.dec || "";
+                  const savedH = hintsMap[q.id] || "";
+                  const anyResult = qResults.length > 0;
+                  if (!anyResult) return null;
+                  // Get sources from latest result across all providers
+                  const latestResult = [...qResults].sort((a,b) => new Date(b.created_at||0) - new Date(a.created_at||0))[0];
+                  const hasBrandQ = isBrandPresent(latestResult);
+                  return (
+                    <div style={{ marginTop: 8 }}>
+                      {savedH ? (
+                        /* Hint exists — show toggle */
+                        <HintPanelQuestion
+                          questionId={q.id}
+                          question={q.question}
+                          sources={latestResult?.sources || []}
+                          brandName={brand_name}
+                          brandAliases={brand_aliases}
+                          brandDomain={brand?.brand_domain || ""}
+                          claudeKey={claudeKey}
+                          hasBrand={hasBrandQ}
+                          projectId={projectId}
+                          siteId={site?.id}
+                          savedHint={savedH}
+                          onHintSaved={(text) => setHintsMap(prev => ({ ...prev, [q.id]: text }))}
+                          initialOpen={false}
+                        />
+                      ) : claudeKey ? (
+                        /* No hint — show generate button */
+                        <HintPanelQuestion
+                          questionId={q.id}
+                          question={q.question}
+                          sources={latestResult?.sources || []}
+                          brandName={brand_name}
+                          brandAliases={brand_aliases}
+                          brandDomain={brand?.brand_domain || ""}
+                          claudeKey={claudeKey}
+                          hasBrand={hasBrandQ}
+                          projectId={projectId}
+                          siteId={site?.id}
+                          savedHint=""
+                          onHintSaved={(text) => setHintsMap(prev => ({ ...prev, [q.id]: text }))}
+                          initialOpen={false}
+                        />
+                      ) : (
+                        <div style={{ fontSize: 10, color: C.textLight, fontStyle: "italic", marginTop: 4 }}>
+                          💡 Clé Claude manquante pour générer un hint
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             );
           })}
@@ -2648,7 +2759,11 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
             return (
               <div key={p.id}>
                 <div style={{ fontSize: 10, fontWeight: 600, color: p.color, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 4 }}>
-                  {p.icon} {p.label}{hasK && <span style={{ color: "#059669", marginLeft: 4 }}>● OK</span>}
+                  {p.icon} {p.label}
+                  {hasK
+                    ? <span style={{ color: "#059669", marginLeft: 6, fontWeight: 700 }}>✓ OK</span>
+                    : <span style={{ color: C.textLight, marginLeft: 6, fontWeight: 400 }}>· non configuré</span>
+                  }
                 </div>
                 <div style={{ display: "flex", gap: 6 }}>
                   <input
@@ -2680,7 +2795,11 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
           {/* Semrush API key — for volume enrichment */}
           <div>
             <div style={{ fontSize: 10, fontWeight: 600, color: "#FF642B", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 4 }}>
-              📊 Semrush{semrushKeyDec && <span style={{ color: "#059669", marginLeft: 4 }}>● OK</span>}
+              📊 Semrush
+              {semrushKeyDec
+                ? <span style={{ color: "#059669", marginLeft: 6, fontWeight: 700 }}>✓ OK</span>
+                : <span style={{ color: C.textLight, marginLeft: 6, fontWeight: 400 }}>· non configuré</span>
+              }
               <span style={{ fontSize: 9, color: C.textLight, marginLeft: 6, fontWeight: 400, textTransform: "none" }}>volumes mots-clés</span>
             </div>
             <div style={{ display: "flex", gap: 6 }}>
