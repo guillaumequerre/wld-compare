@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { C } from "../lib/constants";
 import PresenceCalendar from "../components/PresenceCalendar";
 import {
-  sbSaveBrand, sbGetBrand,
+  sbGetBrand,
   sbSaveKeywords, sbGetKeywords, sbUpdateKeywordStatus, sbDeleteKeyword, sbUpdateKeywordVolume,
   sbSaveQuestions, sbGetQuestions, sbUpdateQuestion, sbDeleteQuestion,
   sbSaveGeoResult, sbGetGeoResults, sbSaveHint, sbGetHints, sbSetKeywordTags,
@@ -29,9 +29,6 @@ const DEFAULT_AXES = [
 // ── API Key helpers — base64 obfuscation (Supabase already protected by auth) ──
 // Fallback: if stored value looks like an AES blob (not a valid sk- key after decode),
 // the user must re-enter the key once to migrate to the new format.
-function encodeKey(k) {
-  try { return btoa(unescape(encodeURIComponent(k))); } catch { return k; }
-}
 function decodeKey(enc) {
   if (!enc) return "";
   try {
@@ -2705,8 +2702,7 @@ function AutomationTab({ projectId, site, user, providerKeys }) {
 export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes, onSaveProviderKeys, user }) {
   const [subTab, setSubTab]         = useState("keywords"); // keywords | questions | urls
   const [questionsKey, setQuestionsKey] = useState(0); // incremented to force QuestionsTab reload
-  const [showQuestionsPopup, setShowQuestionsPopup] = useState(false);
-  const [selectedSite, setSelectedSite] = useState(sites[0]?.id || "");
+  const [selectedSite] = useState(sites[0]?.id || "");
   // Parse persisted settings from project
   const projectSettings = (() => {
     try { return project?.settings_json ? JSON.parse(project.settings_json) : {}; } catch { return {}; }
@@ -2714,7 +2710,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
 
   const [model] = useState(projectSettings.model || "gpt-4o-mini"); // kept for variation generation (OpenAI completions endpoint)
   const [brand, setBrand]           = useState(null);
-  const [runMode, setRunMode]       = useState(projectSettings.runMode || "parallel"); // parallel | sequential
+  const [runMode] = useState(projectSettings.runMode || "parallel"); // parallel | sequential
   const [semrushKeyDec, setSemrushKeyDec] = useState(() => decodeKey(project?.semrush_key_enc || ""));
   // Sync semrush key when project changes
   useEffect(() => {
