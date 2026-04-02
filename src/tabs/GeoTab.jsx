@@ -2816,7 +2816,6 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
     if (!projectId || !site?.id) return;
     sbGetBrand(projectId, site.id).then(b => {
       setBrand(b);
-      if (b) setBrandDraft({ brand_name: b.brand_name || "", brand_domain: b.brand_domain || "", brand_aliases: (b.brand_aliases || []).join(", "), competitors: (b.competitors || []).join(", "), context: b.context || "" });
     });
     sbGetGeoResults(projectId, site.id).then(setAllResults);
   }, [projectId, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps

@@ -1,4 +1,5 @@
 import InfoCard from "../components/InfoCard";
+import { ProviderConfigPanel, BrandConfigPanel } from "../components/GeoConfig";
 import { C, SITE_PALETTE } from "../lib/constants";
 import { newProject, parseCSV, parseSemrushCSV } from "../lib/helpers";
 import { sbSaveProject, sbDeleteProject, sbDownload } from "../lib/supabase";
