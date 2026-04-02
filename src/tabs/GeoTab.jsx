@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { C } from "../lib/constants";
 import PresenceCalendar from "../components/PresenceCalendar";
-import { sbSaveProviderKeys } from "../lib/supabase";
 import {
   sbSaveBrand, sbGetBrand,
   sbSaveKeywords, sbGetKeywords, sbUpdateKeywordStatus, sbDeleteKeyword, sbUpdateKeywordVolume,
@@ -1100,6 +1099,12 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
                   <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{kw.keyword}</div>
                   <div style={{ display: "flex", gap: 6, marginTop: 3, alignItems: "center", flexWrap: "wrap" }}>
                     <StatusBadge status={kw.status} />
+                    {kw.search_volume > 0 && (
+                      <span style={{ fontSize: 10, fontWeight: 700, color: "#2563EB", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 10, padding: "1px 8px" }}
+                        title={`Volume de recherche mensuel${kw.volume_source ? " (" + kw.volume_source + ")" : ""}`}>
+                        🔍 {kw.search_volume >= 1000 ? (kw.search_volume / 1000).toFixed(1) + "k" : kw.search_volume}
+                      </span>
+                    )}
                     {kw.error_msg && (
                       <span style={{ fontSize: 10, color: "#DC2626", fontStyle: "italic", maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={kw.error_msg}>
                         {kw.error_msg}
@@ -2029,6 +2034,12 @@ ${question}`;
                     )}
                     <div style={{ display: "flex", gap: 5, marginTop: 4, flexWrap: "wrap", alignItems: "center" }}>
                       {kwTag && <span style={{ fontSize: 10, color: C.textLight, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: "1px 7px" }}>🔑 {kwTag.keyword}</span>}
+                      {kwTag?.search_volume > 0 && (
+                        <span style={{ fontSize: 10, fontWeight: 700, color: "#2563EB", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 10, padding: "1px 7px" }}
+                          title="Volume de recherche mensuel (Semrush)">
+                          🔍 {kwTag.search_volume >= 1000 ? (kwTag.search_volume / 1000).toFixed(1) + "k" : kwTag.search_volume}
+                        </span>
+                      )}
                       {cat && <span style={{ fontSize: 10, fontWeight: 700, color: cat.color, background: cat.color + "18", border: `1px solid ${cat.color}44`, borderRadius: 10, padding: "1px 7px" }}>{cat.name}</span>}
                       {q.is_manual && <Pill color={C.textLight}>manuel</Pill>}
                       {hasBrand && <Pill color="#059669">✓ {brand_name}</Pill>}
@@ -2704,14 +2715,12 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
   const [model] = useState(projectSettings.model || "gpt-4o-mini"); // kept for variation generation (OpenAI completions endpoint)
   const [brand, setBrand]           = useState(null);
   const [runMode, setRunMode]       = useState(projectSettings.runMode || "parallel"); // parallel | sequential
-  const [providerConfigOpen, setProviderConfigOpen] = useState(false);
   const [semrushKeyDec, setSemrushKeyDec] = useState(() => decodeKey(project?.semrush_key_enc || ""));
   // Sync semrush key when project changes
   useEffect(() => {
     const dec = decodeKey(project?.semrush_key_enc || "");
     if (dec) setSemrushKeyDec(dec);
   }, [project?.id, project?.semrush_key_enc]); // eslint-disable-line react-hooks/exhaustive-deps
-  const [semrushKeyInput, setSemrushKeyInput] = useState("");
   const [activeProviders, setActiveProviders] = useState(() => {
     // 1. Load from saved settings
     if (projectSettings.activeProviders?.length) return projectSettings.activeProviders;
@@ -2786,8 +2795,6 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
     });
   }, [project?.openai_key_enc, project?.gemini_key_enc, project?.perplexity_key_enc, project?.claude_geo_key_enc]); // eslint-disable-line react-hooks/exhaustive-deps
   const [allResults, setAllResults] = useState([]);
-  const [brandEditing, setBrandEditing] = useState(false);
-  const [brandDraft, setBrandDraft] = useState({ brand_name: "", brand_domain: "", brand_aliases: "", competitors: "", context: "" });
   const [categories, setCategories] = useState([]);
   const [axes, setAxes]             = useState(geoAxes || DEFAULT_AXES);
 
@@ -2821,20 +2828,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
     setApiKeyDec(k);
   }, [apiKeyEnc]); // eslint-disable-line react-hooks/exhaustive-deps
 
-
-  const saveBrand = async () => {
-    const b = {
-      project_id: projectId, site_id: site.id,
-      brand_name:   brandDraft.brand_name.trim(),
-      brand_domain: (brandDraft.brand_domain || "").trim().replace(/^https?:\/\//, "").replace(/\/$/, ""),
-      brand_aliases: brandDraft.brand_aliases.split(",").map(s => s.trim()).filter(Boolean),
-      competitors:   brandDraft.competitors.split(",").map(s => s.trim()).filter(Boolean),
-      context:       brandDraft.context.trim(),
-    };
-    await sbSaveBrand(b);
-    setBrand(b);
-    setBrandEditing(false);
-  };
+;
 
 
   return (
@@ -2845,217 +2839,14 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
         <div style={{ fontSize: 12, color: C.textLight }}>Analysez la présence de vos marques dans les réponses ChatGPT</div>
       </div>
 
-      {/* ── Config strip: Providers (collapsible) ── */}
-      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, marginBottom: 20, overflow: "hidden" }}>
-        <button onClick={() => setProviderConfigOpen(o => !o)}
-          style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 20px", background: "none", border: "none", cursor: "pointer", textAlign: "left" }}>
-          <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>⚙️ Gestion des Providers</span>
-          <span style={{ fontSize: 13, color: C.textLight }}>{providerConfigOpen ? "▲" : "▼"}</span>
-        </button>
-        {providerConfigOpen && (
-        <div style={{ padding: "0 20px 20px", borderTop: `1px solid ${C.border}` }}>
-
-        {/* Row 1: site + run mode */}
-        <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap", marginBottom: 16 }}>
-          {sites.length > 1 && (
-            <div>
-              <div style={{ fontSize: 10, fontWeight: 600, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 5 }}>Site</div>
-              <div style={{ display: "flex", gap: 6 }}>
-                {sites.map(s => (
-                  <button key={s.id} onClick={() => setSelectedSite(s.id)} style={{
-                    padding: "5px 12px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer",
-                    border: `2px solid ${s.color}`,
-                    background: selectedSite === s.id ? s.color : "transparent",
-                    color: selectedSite === s.id ? "#fff" : s.color,
-                  }}>{s.label}</button>
-                ))}
-              </div>
-            </div>
-          )}
-          <div>
-            <div style={{ fontSize: 10, fontWeight: 600, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 5 }}>Mode d'exécution</div>
-            <div style={{ display: "flex", gap: 4, background: C.bg, borderRadius: 8, padding: 3 }}>
-              {[{ key: "parallel", label: "⚡ Parallèle" }, { key: "sequential", label: "▶ Séquentiel" }].map(m => (
-                <button key={m.key} onClick={() => setRunMode(m.key)} style={{
-                  padding: "4px 12px", borderRadius: 6, fontSize: 11, fontWeight: runMode === m.key ? 700 : 400,
-                  border: "none", cursor: "pointer",
-                  background: runMode === m.key ? C.white : "transparent",
-                  color: runMode === m.key ? C.text : C.textLight,
-                  boxShadow: runMode === m.key ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
-                }}>{m.label}</button>
-              ))}
-            </div>
-          </div>
-          <div style={{ marginLeft: "auto" }}>
-            <div style={{ fontSize: 10, fontWeight: 600, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 5 }}>Providers actifs</div>
-            <div style={{ display: "flex", gap: 6 }}>
-              {PROVIDERS.map(p => {
-                const isActive = activeProviders.includes(p.id);
-                const hasKey = !!providerKeys[p.id]?.dec;
-                return (
-                  <button key={p.id} onClick={() => {
-                    if (!hasKey && !isActive) return; // can't activate without key
-                    setActiveProviders(prev => isActive ? prev.filter(id => id !== p.id) : [...prev, p.id]);
-                  }} title={!hasKey ? `Configurez la clé ${p.label} ci-dessous` : ""} style={{
-                    display: "flex", alignItems: "center", gap: 5,
-                    padding: "4px 10px", borderRadius: 7, fontSize: 11, fontWeight: 600, cursor: hasKey ? "pointer" : "not-allowed",
-                    border: `2px solid ${p.color}`,
-                    background: isActive && hasKey ? p.color : "transparent",
-                    color: isActive && hasKey ? "#fff" : hasKey ? p.color : C.textLight,
-                    opacity: hasKey ? 1 : 0.4,
-                    transition: "all 0.15s",
-                  }}>
-                    {p.icon} {p.label}
-                    {hasKey && <span style={{ fontSize: 9, opacity: 0.8 }}>●</span>}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+      {/* ── Config notice ── */}
+      <div style={{ background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 12, padding: "10px 16px", marginBottom: 20, display: "flex", alignItems: "center", gap: 10 }}>
+        <span style={{ fontSize: 16 }}>⚙️</span>
+        <div style={{ fontSize: 12, color: "#1D4ED8" }}>
+          Gestion des providers et configuration des marques disponibles dans <strong>⚙️ Setup → Section 5</strong>
         </div>
-
-        {/* Row 2: API keys for each provider */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 12 }}>
-          {PROVIDERS.map(p => {
-            const pk = providerKeys[p.id] || { enc: "", dec: "", input: "", status: "idle" };
-            const hasK = !!pk.dec;
-            return (
-              <div key={p.id}>
-                <div style={{ fontSize: 10, fontWeight: 600, color: p.color, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 4 }}>
-                  {p.icon} {p.label}
-                  {hasK
-                    ? <span style={{ color: "#059669", marginLeft: 6, fontWeight: 700 }}>✓ OK</span>
-                    : <span style={{ color: C.textLight, marginLeft: 6, fontWeight: 400 }}>· non configuré</span>
-                  }
-                </div>
-                <div style={{ display: "flex", gap: 6 }}>
-                  <input
-                    type="password"
-                    value={pk.input || ""}
-                    onChange={e => setProviderKeys(prev => ({ ...prev, [p.id]: { ...prev[p.id], input: e.target.value, status: "idle" } }))}
-                    placeholder={hasK ? "Remplacer…" : p.keyPlaceholder}
-                    style={{ flex: 1, padding: "5px 8px", border: `1px solid ${pk.status === "error" ? "#DC2626" : C.border}`, borderRadius: 7, fontSize: 11, color: C.text, minWidth: 0 }}
-                  />
-                  <button
-                    disabled={!pk.input?.trim()}
-                    onClick={async () => {
-                      const k = (pk.input || "").trim();
-                      if (!k) return;
-                      const enc = encodeKey(k);
-                      const dec = decodeKey(enc);
-                      setProviderKeys(prev => ({ ...prev, [p.id]: { enc, dec, input: "", status: "ok" } }));
-                      if (p.id === "openai") { setApiKeyEnc(enc); setApiKeyDec(dec); }
-                      await sbSaveProviderKeys(projectId, { [p.keyField]: enc });
-                      onSaveProviderKeys?.({ [p.keyField]: enc });
-                    }}
-                    style={{ padding: "5px 10px", borderRadius: 7, background: p.color, color: "#fff", border: "none", fontSize: 11, fontWeight: 700, cursor: pk.input?.trim() ? "pointer" : "not-allowed", opacity: pk.input?.trim() ? 1 : 0.5 }}>
-                    ✓
-                  </button>
-                </div>
-              </div>
-            );
-          })}
-          {/* Semrush API key — for volume enrichment */}
-          <div>
-            <div style={{ fontSize: 10, fontWeight: 600, color: "#FF642B", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 4 }}>
-              📊 Semrush
-              {semrushKeyDec
-                ? <span style={{ color: "#059669", marginLeft: 6, fontWeight: 700 }}>✓ OK</span>
-                : <span style={{ color: C.textLight, marginLeft: 6, fontWeight: 400 }}>· non configuré</span>
-              }
-              <span style={{ fontSize: 9, color: C.textLight, marginLeft: 6, fontWeight: 400, textTransform: "none" }}>volumes mots-clés</span>
-            </div>
-            <div style={{ display: "flex", gap: 6 }}>
-              <input type="password" value={semrushKeyInput}
-                onChange={e => setSemrushKeyInput(e.target.value)}
-                placeholder={semrushKeyDec ? "Remplacer…" : "Clé API Semrush"}
-                style={{ flex: 1, padding: "5px 8px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 11, color: C.text, minWidth: 0 }} />
-              <button disabled={!semrushKeyInput.trim()}
-                onClick={async () => {
-                  const k = semrushKeyInput.trim();
-                  if (!k) return;
-                  const enc = encodeKey(k);
-                                    setSemrushKeyDec(k);
-                  setSemrushKeyInput("");
-                  await sbSaveProviderKeys(projectId, { semrush_key_enc: enc });
-                  onSaveProviderKeys?.({ semrush_key_enc: enc });
-                }}
-                style={{ padding: "5px 10px", borderRadius: 7, background: "#FF642B", color: "#fff", border: "none", fontSize: 11, fontWeight: 700, cursor: semrushKeyInput.trim() ? "pointer" : "not-allowed", opacity: semrushKeyInput.trim() ? 1 : 0.5 }}>
-                ✓
-              </button>
-            </div>
-          </div>
-        </div>
-        </div>
-        )}
       </div>
 
-      {/* ── Brand config (per site) ── */}
-      <div style={{ background: site ? site.bg : C.bg, border: `1px solid ${site ? site.color + "33" : C.border}`, borderRadius: 14, padding: "16px 20px", marginBottom: 20 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: brandEditing ? 14 : 0 }}>
-          <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-            <span style={{ fontSize: 12, fontWeight: 700, color: site?.color }}>🏷️ {site?.label}</span>
-            {brand?.brand_name && !brandEditing && (
-              <>
-                <span style={{ fontSize: 12, color: C.text, fontWeight: 600 }}>Marque : <strong>{brand.brand_name}</strong></span>
-                {brand.competitors?.length > 0 && <span style={{ fontSize: 11, color: C.textLight }}>{brand.competitors.length} concurrent{brand.competitors.length > 1 ? "s" : ""} trackés</span>}
-              </>
-            )}
-            {!brand?.brand_name && !brandEditing && <span style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>Aucune marque configurée pour ce site</span>}
-          </div>
-          <Btn onClick={() => setBrandEditing(e => !e)} variant="outline" small color={site?.color || C.blue}>
-            {brandEditing ? "Annuler" : brand ? "✏️ Modifier" : "➕ Configurer"}
-          </Btn>
-        </div>
-
-        {brandEditing && (
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            {[
-              { key: "brand_name",   label: "Nom de la marque",                   placeholder: "Sonate" },
-              { key: "brand_domain", label: "Domaine du site",                     placeholder: "sonate.fr" },
-              { key: "brand_aliases", label: "Alias (séparés par virgules)",       placeholder: "sonate-group, sonate.fr" },
-              { key: "competitors",  label: "Concurrents à tracker (virgules)",    placeholder: "Devialet, Focal, Cabasse" },
-              { key: "context",      label: "Contexte (instruction système)",      placeholder: "Tu cherches un prestataire pour …" },
-            ].map(f => (
-              <div key={f.key} style={{ gridColumn: f.key === "context" ? "1 / -1" : "auto" }}>
-                <div style={{ fontSize: 11, fontWeight: 600, color: C.textMid, marginBottom: 5 }}>{f.label}</div>
-                {f.key === "context"
-                  ? <textarea value={brandDraft[f.key]} onChange={e => setBrandDraft(d => ({ ...d, [f.key]: e.target.value }))} placeholder={f.placeholder} rows={2} style={{ width: "100%", padding: "7px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, color: C.text, resize: "vertical", fontFamily: "inherit", boxSizing: "border-box" }} />
-                  : <input value={brandDraft[f.key]} onChange={e => setBrandDraft(d => ({ ...d, [f.key]: e.target.value }))} placeholder={f.placeholder} style={{ width: "100%", padding: "7px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, color: C.text, boxSizing: "border-box" }} />
-                }
-              </div>
-            ))}
-            <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end" }}>
-              <Btn onClick={saveBrand} color={site?.color || C.blue}>💾 Sauvegarder</Btn>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* ── Questions ready popup ── */}
-      {showQuestionsPopup && (
-        <div style={{ position: "fixed", bottom: 24, right: 24, zIndex: 1000, background: "#fff", border: "1px solid #7C3AED", borderRadius: 14, padding: "18px 22px", boxShadow: "0 8px 32px rgba(124,58,237,0.18)", maxWidth: 340 }}>
-          <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
-            <span style={{ fontSize: 24, flexShrink: 0 }}>✅</span>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 14, fontWeight: 800, color: "#7C3AED", marginBottom: 4 }}>Questions générées !</div>
-              <div style={{ fontSize: 12, color: "#6D28D9", lineHeight: 1.5, marginBottom: 12 }}>
-                Rendez-vous dans l'onglet <strong>💬 Questions</strong> pour interroger les LLMs et mesurer la présence de votre marque.
-              </div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <button onClick={() => { setSubTab("questions"); setShowQuestionsPopup(false); }}
-                  style={{ flex: 1, padding: "7px 12px", background: "#7C3AED", color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-                  → Voir les Questions
-                </button>
-                <button onClick={() => setShowQuestionsPopup(false)}
-                  style={{ padding: "7px 10px", background: "transparent", color: "#7C3AED", border: "1px solid #DDD6FE", borderRadius: 8, fontSize: 12, cursor: "pointer" }}>
-                  ✕
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ── Sub-nav ── */}
       <div style={{ display: "flex", gap: 6, marginBottom: 20 }}>

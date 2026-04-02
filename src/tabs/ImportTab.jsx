@@ -361,37 +361,44 @@ export default function ImportTab({ projects, currentProjectId, setCurrentProjec
       </Section>
 
       {/* Confirm modal */}
-      {/* ── 5. CONFIGURATION PROVIDERS ─────────────────────────── */}
-      <Section number="5" title="Gestion des Providers" sub="Clés API pour les Fan-outs GEO — configurées par projet">
-        <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: "20px 24px" }}>
-          <div style={{ fontSize: 13, color: C.textMid, marginBottom: 16, lineHeight: 1.6 }}>
-            Les clés API sont associées à chaque projet et configurées dans l'onglet <strong>🔍 Fan-outs → ⚙️ Gestion des Providers</strong>.
-            Elles sont sauvegardées automatiquement et rechargées à chaque session.
+      {/* ── 5. CONFIGURATION GEO ───────────────────────────────── */}
+      <Section number="5" title="Configuration GEO" sub="Providers d'IA et marques — associés au projet">
+        {/* ── 5a. Provider keys ── */}
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>
+            Clés API des providers
           </div>
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            {[
-              { label: "OpenAI",     field: "openai_key_enc",      icon: "🟢", color: "#059669" },
-              { label: "Gemini",     field: "gemini_key_enc",      icon: "🔵", color: "#2563EB" },
-              { label: "Perplexity", field: "perplexity_key_enc",  icon: "🟣", color: "#7C3AED" },
-              { label: "Claude",     field: "claude_geo_key_enc",  icon: "🟠", color: "#D97706" },
-              { label: "Semrush",    field: "semrush_key_enc",     icon: "📊", color: "#FF642B" },
-            ].map(p => {
-              const hasKey = !!(projects.find(pr => pr.id === currentProjectId)?.[p.field]);
-              return (
-                <div key={p.label} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", borderRadius: 8, background: hasKey ? "#ECFDF5" : C.bg, border: `1px solid ${hasKey ? "#BBF7D0" : C.border}` }}>
-                  <span style={{ fontSize: 14 }}>{p.icon}</span>
-                  <span style={{ fontSize: 12, fontWeight: 600, color: hasKey ? "#059669" : C.textLight }}>{p.label}</span>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: hasKey ? "#059669" : "#DC2626" }}>{hasKey ? "✓ OK" : "✗"}</span>
-                </div>
-              );
-            })}
+          <ProviderConfigPanel
+            project={projects.find(p => p.id === currentProjectId) || null}
+            projectId={currentProjectId}
+            sites={sites}
+            onSaveProviderKeys={(keyPatch) => {
+              setProjects(prev => prev.map(p => p.id === currentProjectId ? { ...p, ...keyPatch } : p));
+            }}
+          />
+        </div>
+
+        {/* ── 5b. Brand setup per site ── */}
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>
+            Configuration des marques
           </div>
-          <div style={{ marginTop: 14, fontSize: 11, color: C.textLight }}>
-            → Configurez vos clés dans <strong>🔍 Fan-outs → ⚙️ Gestion des Providers</strong> (en haut de page)
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {sites.map(site => (
+              <BrandConfigPanel
+                key={site.id}
+                site={site}
+                projectId={currentProjectId}
+              />
+            ))}
+            {sites.length === 0 && (
+              <div style={{ fontSize: 12, color: C.textLight, fontStyle: "italic" }}>
+                Ajoutez un site dans la section Import pour configurer sa marque.
+              </div>
+            )}
           </div>
         </div>
       </Section>
-
       {confirmModal && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center" }}>
           <div style={{ background: C.white, borderRadius: 14, padding: 32, maxWidth: 400, width: "90%", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
