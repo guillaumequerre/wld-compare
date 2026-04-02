@@ -779,7 +779,6 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
   };
 
   const toggleSelect = (id) => setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  const selectAll = () => setSelected(new Set(filtered.map(k => k.id)));
   const clearSel = () => setSelected(new Set());
 
   const applyBulkCat = async () => {
