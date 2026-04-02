@@ -6,7 +6,7 @@ import {
   sbSaveBrand, sbGetBrand,
   sbSaveKeywords, sbGetKeywords, sbUpdateKeywordStatus, sbDeleteKeyword, sbUpdateKeywordVolume,
   sbSaveQuestions, sbGetQuestions, sbUpdateQuestion, sbDeleteQuestion,
-  sbSaveGeoResult, sbGetGeoResults, sbSaveHint, sbGetHints,
+  sbSaveGeoResult, sbGetGeoResults, sbSaveHint, sbGetHints, sbSetKeywordTags, sbBulkSetKeywordTags,
   sbGetCategories, sbSaveCategory, sbDeleteCategory,
   sbSetKeywordCategory, sbSetQuestionCategory,
   sbBulkSetKeywordCategory, sbBulkSetQuestionCategory,
@@ -393,7 +393,7 @@ function Btn({ children, onClick, disabled, color = C.blue, variant = "solid", s
 
 function StatusBadge({ status }) {
   const map = {
-    pending:       { label: "En attente",    color: C.textLight, bg: C.bg },
+    pending:       { label: "🚀 Prêt pour génération !", color: "#2563EB", bg: "#EFF6FF" },
     generating_q:  { label: "⏳ Génération…",  color: "#D97706", bg: "#FFFBEB" },
     done_q:        { label: "✓ Généré",         color: "#059669", bg: "#ECFDF5" },
     generating_r:  { label: "Appel LLM…",   color: "#7C3AED", bg: "#F5F3FF" },
@@ -540,6 +540,61 @@ function CategoryManager({ projectId, categories, setCategories, compact }) {
 }
 
 // ── Category selector dropdown ────────────────────────────────────
+
+// ── Multi-tag selector ───────────────────────────────────────────
+function TagSelect({ values = [], categories, onChange, placeholder = "Tags…" }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef();
+  useEffect(() => {
+    if (!open) return;
+    const h = (e) => { if (!ref.current?.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [open]);
+  const toggle = (id) => {
+    const next = values.includes(id) ? values.filter(v => v !== id) : [...values, id];
+    onChange(next);
+  };
+  const selected = categories.filter(c => values.includes(c.id));
+  return (
+    <div ref={ref} style={{ position: "relative", display: "inline-block" }}>
+      <div onClick={() => setOpen(o => !o)}
+        style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center", minWidth: 80, padding: "3px 6px", border: `1px solid ${C.border}`, borderRadius: 7, cursor: "pointer", background: C.white, fontSize: 11 }}>
+        {selected.length === 0
+          ? <span style={{ color: C.textLight }}>{placeholder}</span>
+          : selected.map(c => (
+            <span key={c.id} style={{ background: c.color + "22", color: c.color, border: `1px solid ${c.color}44`, borderRadius: 4, padding: "1px 5px", fontSize: 10, fontWeight: 700 }}>
+              {c.name}
+            </span>
+          ))
+        }
+        <span style={{ color: C.textLight, marginLeft: 2 }}>▾</span>
+      </div>
+      {open && (
+        <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 200, background: C.white, border: `1px solid ${C.border}`, borderRadius: 9, boxShadow: "0 4px 16px rgba(0,0,0,0.1)", padding: 6, minWidth: 160 }}>
+          {categories.length === 0
+            ? <div style={{ fontSize: 11, color: C.textLight, padding: "4px 8px" }}>Aucune catégorie</div>
+            : categories.map(c => (
+              <div key={c.id} onClick={() => toggle(c.id)}
+                style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 8px", borderRadius: 6, cursor: "pointer", background: values.includes(c.id) ? c.color + "18" : "transparent" }}>
+                <div style={{ width: 14, height: 14, borderRadius: 4, border: `2px solid ${values.includes(c.id) ? c.color : C.border}`, background: values.includes(c.id) ? c.color : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  {values.includes(c.id) && <span style={{ color: "#fff", fontSize: 9, lineHeight: 1 }}>✓</span>}
+                </div>
+                <span style={{ fontSize: 11, color: c.color, fontWeight: 600 }}>{c.name}</span>
+              </div>
+            ))
+          }
+          {selected.length > 0 && (
+            <div onClick={() => onChange([])}
+              style={{ marginTop: 4, padding: "4px 8px", fontSize: 10, color: C.textLight, cursor: "pointer", borderTop: `1px solid ${C.border}` }}>
+              ✕ Tout retirer
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function CatSelect({ value, categories, onChange, placeholder = "Catégorie…" }) {
   return (
@@ -818,9 +873,14 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
     setKeywords(prev => prev.map(k => k.id === kwId ? { ...k, category_id: catId || null } : k));
   };
 
+  const setTagsSingle = async (kwId, tags) => {
+    await sbSetKeywordTags(kwId, tags);
+    setKeywords(prev => prev.map(k => k.id === kwId ? { ...k, tags: tags || [] } : k));
+  };
+
   const filtered = useMemo(() => {
     let kws = keywords;
-    if (filterCat) kws = kws.filter(k => k.category_id === filterCat);
+    if (filterCat) kws = kws.filter(k => (k.tags || (k.category_id ? [k.category_id] : [])).includes(filterCat));
     if (filterSearch.trim()) {
       try {
         const rx = new RegExp(filterSearch.trim(), "i");
@@ -1054,11 +1114,16 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
                         {kw.question_count} question{kw.question_count > 1 ? "s" : ""}
                       </span>
                     )}
-                    {cat && <span style={{ fontSize: 10, fontWeight: 700, color: cat.color, background: cat.color + "18", border: `1px solid ${cat.color}44`, borderRadius: 10, padding: "1px 7px" }}>{cat.name}</span>}
+                    {(kw.tags || (kw.category_id ? [kw.category_id] : [])).map(tagId => {
+                      const tagCat = categories.find(c => c.id === tagId);
+                      return tagCat ? (
+                        <span key={tagId} style={{ fontSize: 10, fontWeight: 700, color: tagCat.color, background: tagCat.color + "18", border: `1px solid ${tagCat.color}44`, borderRadius: 10, padding: "1px 7px" }}>{tagCat.name}</span>
+                      ) : null;
+                    })}
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 6, flexShrink: 0, alignItems: "center" }}>
-                  <CatSelect value={kw.category_id} categories={categories} onChange={v => setCatSingle(kw.id, v)} />
+                  <TagSelect values={kw.tags || (kw.category_id ? [kw.category_id] : [])} categories={categories} onChange={tags => setTagsSingle(kw.id, tags)} />
                   <Btn onClick={() => generateQuestions(kw, null)} disabled={!!busy[kw.id] || (!apiKey && !providerKeys?.openai?.dec)} variant="outline" small color={site.color}
                     title={(!apiKey && !providerKeys?.openai?.dec) ? "Clé OpenAI manquante — ajoutez-la dans ⚙️ Gestion des Providers (en haut de page)" : undefined}>
                     {busy[kw.id] === "q" ? "⏳" : kw.status === "done_q" ? "🔄" : "💬"}
@@ -1274,8 +1339,9 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
         )}
 
         {hasKey && (
-          <button onClick={onRun} disabled={isRunning} title={`Interroger ${p.label}`}
-            style={{ width: 22, height: 22, borderRadius: '50%', border: 'none', cursor: isRunning ? 'wait' : 'pointer', background: isRunning ? C.bg : '#059669', color: isRunning ? C.textLight : '#fff', fontSize: 11, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, opacity: isRunning ? 0.6 : 1 }}>
+          <button onClick={onRun} disabled={isRunning || !hasKey}
+            title={!hasKey ? `Clé ${p.label} manquante — ajoutez-la dans ⚙️ Gestion des Providers` : `Interroger ${p.label}`}
+            style={{ width: 22, height: 22, borderRadius: '50%', border: 'none', cursor: (!hasKey || isRunning) ? 'not-allowed' : 'pointer', background: !hasKey ? C.bg : isRunning ? C.bg : '#059669', color: (!hasKey || isRunning) ? C.textLight : '#fff', fontSize: 11, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, opacity: (isRunning || !hasKey) ? 0.5 : 1 }}>
             {isRunning ? '⏳' : '▶'}
           </button>
         )}
@@ -1913,7 +1979,7 @@ ${question}`;
                 title={!hasKey ? `Clé ${p.label} manquante — ajoutez-la dans ⚙️ Gestion des Providers (en haut de page)` : undefined}
                 style={{ padding: "2px 10px", border: `2px solid ${p.color}`, borderRadius: 10, fontSize: 10, fontWeight: 600, cursor: hasKey ? "pointer" : "not-allowed",
                   background: active ? p.color : "transparent", color: active ? "#fff" : hasKey ? p.color : C.textLight, opacity: hasKey ? 1 : 0.4 }}>
-                {p.icon} {p.label}
+                {p.icon} {p.label}{!hasKey ? " 🔑" : ""}
               </button>
             );
           })}

@@ -116,7 +116,13 @@ export async function sbSaveProject(project) {
   const res = await fetch(`${PROXY}/rest/v1/projects`, {
     method: "POST",
     headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
-    body: JSON.stringify({ id: project.id, name: project.name, owner_email: project.owner_email || null, semrush_key_enc: project.semrush_key_enc || null, sites_json: JSON.stringify(project.sites.map(s => ({ id: s.id, label: s.label, color: s.color, bg: s.bg }))), geo_axes_json: JSON.stringify(project.geo_axes || ["Meilleur / top / recommandé","Pistes et approches pour utiliser / bénéficier du mot-clé","Avis / fiable / fiabilité","Pour atteindre un objectif lié au mot-clé","Pour résoudre une problématique liée au mot-clé"]), updated_at: new Date().toISOString() }),
+    body: JSON.stringify({ id: project.id, name: project.name, owner_email: project.owner_email || null,
+      openai_key_enc:      project.openai_key_enc      || null,
+      gemini_key_enc:      project.gemini_key_enc      || null,
+      perplexity_key_enc:  project.perplexity_key_enc  || null,
+      claude_geo_key_enc:  project.claude_geo_key_enc  || null,
+      semrush_key_enc:     project.semrush_key_enc     || null,
+      sites_json: JSON.stringify(project.sites.map(s => ({ id: s.id, label: s.label, color: s.color, bg: s.bg }))), geo_axes_json: JSON.stringify(project.geo_axes || ["Meilleur / top / recommandé","Pistes et approches pour utiliser / bénéficier du mot-clé","Avis / fiable / fiabilité","Pour atteindre un objectif lié au mot-clé","Pour résoudre une problématique liée au mot-clé"]), updated_at: new Date().toISOString() }),
   });
   if (!res.ok) console.warn("Save project failed:", res.status);
 }
@@ -125,7 +131,7 @@ export async function sbLoadProjects() {
   const res = await fetch(`${PROXY}/rest/v1/projects?select=*&order=created_at.asc`, { headers: authHeaders() });
   if (!res.ok) return null;
   const rows = await res.json();
-  return rows.map(r => ({ id: r.id, name: r.name, sites: JSON.parse(r.sites_json || "[]"), openai_key_enc: r.openai_key_enc || null, geo_axes: JSON.parse(r.geo_axes_json || "null") || ["Meilleur / top / recommandé","Pistes et approches pour utiliser / bénéficier du mot-clé","Avis / fiable / fiabilité","Pour atteindre un objectif lié au mot-clé","Pour résoudre une problématique liée au mot-clé"], gemini_key_enc: r.gemini_key_enc || null, perplexity_key_enc: r.perplexity_key_enc || null, claude_geo_key_enc: r.claude_geo_key_enc || null }));
+  return rows.map(r => ({ id: r.id, name: r.name, sites: JSON.parse(r.sites_json || "[]"), openai_key_enc: r.openai_key_enc || null, geo_axes: JSON.parse(r.geo_axes_json || "null") || ["Meilleur / top / recommandé","Pistes et approches pour utiliser / bénéficier du mot-clé","Avis / fiable / fiabilité","Pour atteindre un objectif lié au mot-clé","Pour résoudre une problématique liée au mot-clé"], gemini_key_enc: r.gemini_key_enc || null, perplexity_key_enc: r.perplexity_key_enc || null, claude_geo_key_enc: r.claude_geo_key_enc || null, semrush_key_enc: r.semrush_key_enc || null, owner_email: r.owner_email || null, updated_at: r.updated_at || null }));
 }
 
 export async function sbDeleteProject(projectId) {
@@ -475,6 +481,26 @@ export async function sbSetQuestionCategory(id, category_id) {
   });
 }
 
+export async function sbSetKeywordTags(id, tags) {
+  const res = await fetch(`${PROXY}/rest/v1/geo_keywords?id=eq.${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ tags: tags || [] }),
+  });
+  return res.ok;
+}
+
+export async function sbBulkSetKeywordTags(ids, tags) {
+  if (!ids.length) return;
+  const filter = ids.map(id => `"${id}"`).join(",");
+  const res = await fetch(`${PROXY}/rest/v1/geo_keywords?id=in.(${filter})`, {
+    method: "PATCH",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ tags: tags || [] }),
+  });
+  return res.ok;
+}
+
 export async function sbBulkSetKeywordCategory(ids, category_id) {
   // Supabase REST: PATCH with in() filter
   const filter = ids.map(id => encodeURIComponent(id)).join(",");
@@ -549,11 +575,10 @@ function extractDomain(url) {
 }
 
 export async function sbSaveProviderKeys(project_id, keys) {
-  // keys: { gemini_key_enc, perplexity_key_enc, claude_geo_key_enc }
+  // keys: any of { openai_key_enc, gemini_key_enc, perplexity_key_enc, claude_geo_key_enc, semrush_key_enc }
+  const allowed = ["openai_key_enc", "gemini_key_enc", "perplexity_key_enc", "claude_geo_key_enc", "semrush_key_enc"];
   const patch = {};
-  if (keys.gemini_key_enc     !== undefined) patch.gemini_key_enc     = keys.gemini_key_enc;
-  if (keys.perplexity_key_enc !== undefined) patch.perplexity_key_enc = keys.perplexity_key_enc;
-  if (keys.claude_geo_key_enc !== undefined) patch.claude_geo_key_enc = keys.claude_geo_key_enc;
+  allowed.forEach(k => { if (keys[k] !== undefined) patch[k] = keys[k]; });
   const res = await fetch(`${PROXY}/rest/v1/projects?id=eq.${encodeURIComponent(project_id)}`, {
     method: "PATCH",
     headers: { ...authHeaders(), "Content-Type": "application/json" },
