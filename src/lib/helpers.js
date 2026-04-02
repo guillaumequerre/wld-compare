@@ -102,13 +102,15 @@ export function isSemrushCSV(text) {
   const t = text.trimStart();
   // Format Position Tracking (header propriétaire avec tirets)
   if (t.startsWith("-----")) return true;
+  const firstLine = t.split(/\r?\n/)[0].toLowerCase().replace(/"/g, "").trim();
+  // Format Keyword Overview: Keyword,Position,Search Volume,...
+  if (firstLine.startsWith("keyword,position,")) return true;
+  if (firstLine.startsWith("keyword,") && firstLine.includes("search volume")) return true;
   // Format Organic Research Pages — cherche les colonnes clés (EN et FR)
-  const firstLine = t.split(/\r?\n/)[0].toLowerCase().trim();
-  if (firstLine.startsWith("url,") || firstLine.startsWith('"url",')) {
+  if (firstLine.startsWith("url,") || firstLine.startsWith("url,")) {
     const hasTraffic = firstLine.includes("traffic");
     const hasKeyword = firstLine.includes("keyword") || firstLine.includes("mot") || firstLine.includes("nombre");
     if (hasTraffic && hasKeyword) return true;
-    // Fallback: if it has url + at least 4 columns, likely Semrush
     if (hasTraffic && firstLine.split(",").length >= 4) return true;
   }
   return false;
@@ -118,6 +120,10 @@ export function isSemrushCSV(text) {
 export function semrushFormat(text) {
   const t = text.trimStart();
   if (t.startsWith("-----")) return "position_tracking";
+  const firstLine = t.split(/\r?\n/)[0].toLowerCase().replace(/"/g, "").trim();
+  if (firstLine.startsWith("keyword,position,") || (firstLine.startsWith("keyword,") && firstLine.includes("search volume"))) {
+    return "keyword_overview";
+  }
   return "organic_pages";
 }
 
@@ -137,6 +143,6 @@ export function parseSemrushCSV(text) {
     }
     return parseCSV(lines.slice(headerIdx).join("\n"));
   }
-  // organic_pages : header standard, pas de lignes à sauter
+  // keyword_overview et organic_pages : header standard
   return parseCSV(text);
 }

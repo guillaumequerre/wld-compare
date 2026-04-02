@@ -188,6 +188,22 @@ export function parseSemrush(rows) {
   const cols = Object.keys(rows[0]).map(k => k.toLowerCase());
 
   // ── Détection du format ────────────────────────────────────────
+  // Keyword Overview: Keyword,Position,Previous position,Search Volume,...
+  const isKeywordOverview = cols.includes("keyword") && cols.includes("position") && cols.includes("search volume");
+  if (isKeywordOverview) {
+    // Retourne les données brutes pour usage dans les volumes de mots-clés
+    return rows.map(row => {
+      const keyword  = (key(row, "keyword") || "").trim().toLowerCase();
+      const position = safeNum(key(row, "position") || 0);
+      const volume   = safeNum(key(row, "search volume") || 0);
+      const url      = (key(row, "url") || "").trim();
+      const traffic  = safeNum(key(row, "traffic") || 0);
+      const kd       = safeNum(key(row, "keyword difficulty") || 0);
+      if (!keyword) return null;
+      return { keyword, position, volume, url, traffic, kd, _format: "keyword_overview" };
+    }).filter(Boolean);
+  }
+
   const isOrganicPages = cols.includes("number of keywords") || cols.includes("traffic (%)");
   const datePattern = /^(\d{8})_/;
   const dates = [...new Set(

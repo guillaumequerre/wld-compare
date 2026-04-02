@@ -99,6 +99,7 @@ export async function sbGetLatest(projectId) {
   const rows = await res.json();
   const latest = {};
   for (const row of rows) {
+    if (!row.storage_path) continue; // skip "no storage" imports
     const key = `${row.site_id}_${row.source}`;
     if (!latest[key]) latest[key] = row;
   }
