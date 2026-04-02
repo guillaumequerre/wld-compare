@@ -6,7 +6,7 @@ import {
   sbSaveBrand, sbGetBrand,
   sbSaveKeywords, sbGetKeywords, sbUpdateKeywordStatus, sbDeleteKeyword, sbUpdateKeywordVolume,
   sbSaveQuestions, sbGetQuestions, sbUpdateQuestion, sbDeleteQuestion,
-  sbSaveGeoResult, sbGetGeoResults,
+  sbSaveGeoResult, sbGetGeoResults, sbSaveHint, sbGetHints,
   sbGetCategories, sbSaveCategory, sbDeleteCategory,
   sbSetKeywordCategory, sbSetQuestionCategory,
   sbBulkSetKeywordCategory, sbBulkSetQuestionCategory,
@@ -779,6 +779,7 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
   };
 
   const toggleSelect = (id) => setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const selectAll = () => setSelected(new Set(filtered.map(k => k.id)));
   const clearSel = () => setSelected(new Set());
 
   const applyBulkCat = async () => {
@@ -1083,9 +1084,9 @@ function isBrandPresent(r) {
 
 // ── HintPanel — GEO optimisation hints ───────────────────────────
 
-function HintPanel({ question, sources, brandName, brandAliases, brandDomain: brandDomainProp = "", claudeKey, hasBrand = false }) {
-  const [status, setStatus] = useState("idle"); // idle | loading | done | error
-  const [hint, setHint]     = useState("");
+function HintPanel({ question, sources, brandName, brandAliases, brandDomain: brandDomainProp = "", claudeKey, hasBrand = false, questionId = null, projectId = null, siteId = null, savedHint = "" }) {
+  const [status, setStatus] = useState(() => savedHint ? "done" : "idle");
+  const [hint, setHint]     = useState(savedHint || "");
 
   // Use explicit brand domain first, then try aliases, then brand name
   const brandDomain = brandDomainProp ||
@@ -1151,7 +1152,12 @@ ${hasBrand
         .replace(/^(I will|Let me|Sure[,.]?)[^\n]*/gim, "")
         .replace(/^\s*\n/gm, "")
         .trim();
-      setHint(cleaned || "Aucune recommandation générée.");
+      const finalHint = cleaned || "Aucune recommandation générée.";
+      setHint(finalHint);
+      // Persist hint to DB
+      if (questionId && projectId && siteId) {
+        sbSaveHint(questionId, siteId, projectId, finalHint).catch(() => {});
+      }
       setStatus("done");
     } catch(e) {
       setHint(`Erreur : ${e.message}`);
@@ -1281,6 +1287,10 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
           brandDomain={brandDomain}
           claudeKey={claudeKey}
           hasBrand={hasBrand}
+          questionId={q.id}
+          projectId={projectId}
+          siteId={site?.id}
+          savedHint={hintsMap[q.id] || ""}
         />
       )}
       {open && result && (
@@ -1540,6 +1550,7 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
   );
   const [manualQ, setManualQ]       = useState("");
   const [editingQ, setEditingQ]     = useState(null); // { id, text } — question being edited
+  const [hintsMap, setHintsMap]     = useState({}); // { questionId: hint_text }
   const [filterFav, setFilterFav]             = useState(false);
   const [filterBrand, setFilterBrand]         = useState(false);
   const [filterPositioned, setFilterPositioned] = useState(false); // marque présente dans dernier résultat
@@ -1572,6 +1583,11 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
   useEffect(() => {
     if (!projectId || !site?.id) return;
     sbGetQuestions(projectId, site.id).then(setQuestions);
+    sbGetHints(projectId, site.id).then(rows => {
+      const map = {};
+      rows.forEach(r => { map[r.question_id] = r.hint_text; });
+      setHintsMap(map);
+    }).catch(() => {});
     sbGetKeywords(projectId, site.id).then(setKeywords);
 
   }, [projectId, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps

@@ -15,7 +15,10 @@ export async function sbUpload(path, csvText) {
     headers: { ...authHeaders(), "Content-Type": "text/csv", "x-upsert": "true" },
     body: csvText,
   });
-  if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`Upload failed: ${res.status} — ${body.slice(0, 120)}`);
+  }
   return path;
 }
 
@@ -23,9 +26,12 @@ export async function sbInsertImport({ project_id, site_id, source, filename, st
   const res = await fetch(`${PROXY}/rest/v1/imports`, {
     method: "POST",
     headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
-    body: JSON.stringify({ project_id, site_id, source, filename, storage_path, row_count }),
+    body: JSON.stringify({ project_id, site_id, source, filename, storage_path, row_count, uploaded_at: new Date().toISOString() }),
   });
-  if (!res.ok) throw new Error(`Insert failed: ${res.status}`);
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`Insert failed: ${res.status} — ${body.slice(0, 120)}`);
+  }
   return res.json();
 }
 
@@ -565,4 +571,26 @@ export async function sbGetCalendarEntries(question_id) {
     if (!res.ok) return [];
     return res.json();
   } catch { return []; }
+}
+
+// ── GEO HINTS ────────────────────────────────────────────────────
+
+export async function sbSaveHint(question_id, site_id, project_id, hint_text) {
+  const res = await fetch(`${PROXY}/rest/v1/geo_hints`, {
+    method: "POST",
+    headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
+    body: JSON.stringify({ question_id, site_id, project_id, hint_text, updated_at: new Date().toISOString() }),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    console.warn(`Save hint failed: ${res.status} — ${body.slice(0, 80)}`);
+    return null; // non-blocking
+  }
+  return res.json();
+}
+
+export async function sbGetHints(project_id, site_id) {
+  const res = await fetch(`${PROXY}/rest/v1/geo_hints?project_id=eq.${encodeURIComponent(project_id)}&site_id=eq.${encodeURIComponent(site_id)}&select=question_id,hint_text,updated_at`, { headers: authHeaders() });
+  if (!res.ok) return [];
+  return res.json();
 }
