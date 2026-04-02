@@ -747,6 +747,7 @@ export default function App() {
               projectId={currentProjectId}
               project={currentProject}
               geoAxes={currentProject?.geo_axes || null}
+              user={user}
               onSaveAxes={async (axes) => {
                 await sbSaveGeoAxes(currentProjectId, axes);
                 setProjects(prev => prev.map(p => p.id === currentProjectId ? { ...p, geo_axes: axes } : p));

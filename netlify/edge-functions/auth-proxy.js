@@ -60,6 +60,23 @@ export default async function handler(req) {
       return json({ user: data, isSuperAdmin: SUPERADMINS.includes(data.email) });
     }
 
+    if (action === "update_name") {
+      const token = (req.headers.get("Authorization") || "").replace("Bearer ", "");
+      if (!token) return json({ error: "Non authentifié" }, 401);
+      const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          "apikey": SUPABASE_ANON,
+          "Authorization": `Bearer ${token}`,
+        },
+        body: JSON.stringify({ data: { display_name: body.display_name || "" } }),
+      });
+      const data = await res.json();
+      if (!res.ok) return json({ error: data.message || "Erreur mise à jour" }, 400);
+      return json({ user: data });
+    }
+
     return json({ error: "Action inconnue" }, 400);
   } catch (e) {
     return json({ error: e.message }, 500);

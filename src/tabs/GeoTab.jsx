@@ -7,6 +7,8 @@ import {
   sbSaveKeywords, sbGetKeywords, sbUpdateKeywordStatus, sbDeleteKeyword, sbUpdateKeywordVolume,
   sbSaveQuestions, sbGetQuestions, sbUpdateQuestion, sbDeleteQuestion,
   sbSaveGeoResult, sbGetGeoResults, sbSaveHint, sbGetHints, sbSetKeywordTags, sbBulkSetKeywordTags,
+  sbGetSchedule, sbSaveSchedule, sbUpdateSchedule, sbDeleteSchedule, sbTriggerScheduler,
+  sbSaveProjectSettings,
   sbGetCategories, sbSaveCategory, sbDeleteCategory,
   sbSetKeywordCategory, sbSetQuestionCategory,
   sbBulkSetKeywordCategory, sbBulkSetQuestionCategory,
@@ -1705,14 +1707,36 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
   const [manualQ, setManualQ]       = useState("");
   const [editingQ, setEditingQ]     = useState(null); // { id, text } — question being edited
   const [hintsMap, setHintsMap]     = useState({}); // { questionId: hint_text }
-  const [filterFav, setFilterFav]             = useState(false);
-  const [filterBrand, setFilterBrand]         = useState(false);
-  const [filterPositioned, setFilterPositioned] = useState(false); // marque présente dans dernier résultat
-  const [filterLost, setFilterLost]           = useState(false);   // marque était présente mais ne l'est plus
-  const [filterCat, setFilterCat]             = useState("");
-  const [filterKeyword, setFilterKeyword]     = useState("");
-  const [filterSearch, setFilterSearch]       = useState("");
-  const [filterProviders, setFilterProviders] = useState([]);
+  // Filters — persisted per project+site in localStorage
+  const filtersKey = `geo_filters_${projectId}_${site?.id}`;
+  const loadFilters = () => {
+    try { return JSON.parse(localStorage.getItem(filtersKey) || "{}"); } catch { return {}; }
+  };
+  const savedF = loadFilters();
+  const [filterFav,        setFilterFavRaw]        = useState(savedF.filterFav        || false);
+  const [filterBrand,      setFilterBrandRaw]      = useState(savedF.filterBrand      || false);
+  const [filterPositioned, setFilterPositionedRaw] = useState(savedF.filterPositioned || false);
+  const [filterLost,       setFilterLostRaw]       = useState(savedF.filterLost       || false);
+  const [filterCat,        setFilterCatRaw]        = useState(savedF.filterCat        || "");
+  const [filterKeyword,    setFilterKeywordRaw]    = useState(savedF.filterKeyword    || "");
+  const [filterSearch,     setFilterSearchRaw]     = useState(savedF.filterSearch     || "");
+  const [filterProviders,  setFilterProvidersRaw]  = useState(savedF.filterProviders  || []);
+
+  // Wrap setters to also persist to localStorage
+  const persistFilters = (patch) => {
+    try {
+      const current = loadFilters();
+      localStorage.setItem(filtersKey, JSON.stringify({ ...current, ...patch }));
+    } catch {}
+  };
+  const setFilterFav        = (v) => { setFilterFavRaw(v);        persistFilters({ filterFav: v }); };
+  const setFilterBrand      = (v) => { setFilterBrandRaw(v);      persistFilters({ filterBrand: v }); };
+  const setFilterPositioned = (v) => { setFilterPositionedRaw(v); persistFilters({ filterPositioned: v }); };
+  const setFilterLost       = (v) => { setFilterLostRaw(v);       persistFilters({ filterLost: v }); };
+  const setFilterCat        = (v) => { setFilterCatRaw(v);        persistFilters({ filterCat: v }); };
+  const setFilterKeyword    = (v) => { setFilterKeywordRaw(v);    persistFilters({ filterKeyword: v }); };
+  const setFilterSearch     = (v) => { setFilterSearchRaw(v);     persistFilters({ filterSearch: v }); };
+  const setFilterProviders  = (v) => { setFilterProvidersRaw(v);  persistFilters({ filterProviders: v }); };
   const [running, setRunning]       = useState({});
   const [runAll, setRunAll]         = useState(false);
   const stopAllRef = useRef(false);
@@ -2579,14 +2603,236 @@ function UrlsTab({ projectId, categories, brand, allResults }) {
 
 // ── Main GeoTab ───────────────────────────────────────────────────
 
-export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes, onSaveProviderKeys }) {
+// ── AutomationTab ────────────────────────────────────────────────
+function AutomationTab({ projectId, site, user, providerKeys }) {
+  const [schedule, setSchedule]   = useState(null);
+  const [loading, setLoading]     = useState(true);
+  const [saving, setSaving]       = useState(false);
+  const [triggering, setTriggering] = useState(false);
+  const [triggerResult, setTriggerResult] = useState(null);
+  const [error, setError]         = useState("");
+
+  // Form state
+  const [active, setActive]       = useState(true);
+  const [frequency, setFrequency] = useState("weekly");
+  const [providers, setProviders] = useState(["openai"]);
+  const [maxQ, setMaxQ]           = useState(10);
+
+  const FREQUENCIES = [
+    { key: "daily",    label: "Quotidien",      desc: "Chaque jour", icon: "📅" },
+    { key: "weekly",   label: "Hebdomadaire",   desc: "Chaque semaine", icon: "📆" },
+    { key: "biweekly", label: "Bi-mensuel",     desc: "Toutes les 2 semaines", icon: "🗓️" },
+    { key: "monthly",  label: "Mensuel",        desc: "Chaque mois", icon: "📊" },
+  ];
+
+  useEffect(() => {
+    if (!projectId || !site?.id) return;
+    setLoading(true);
+    sbGetSchedule(projectId, site.id).then(s => {
+      if (s) {
+        setSchedule(s);
+        setActive(s.active);
+        setFrequency(s.frequency);
+        setProviders(s.providers || ["openai"]);
+        setMaxQ(s.max_questions || 10);
+      }
+      setLoading(false);
+    }).catch(() => setLoading(false));
+  }, [projectId, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const availableProviders = PROVIDERS.filter(p => !!providerKeys[p.id]?.dec);
+
+  const save = async () => {
+    if (!providers.length) { setError("Sélectionnez au moins un provider."); return; }
+    setSaving(true); setError("");
+    try {
+      const s = await sbSaveSchedule({
+        project_id: projectId, site_id: site.id,
+        owner_email: user?.email || "",
+        frequency, providers, active, max_questions: maxQ,
+      });
+      setSchedule(s);
+    } catch(e) { setError(e.message); }
+    setSaving(false);
+  };
+
+  const toggleActive = async () => {
+    if (!schedule) return;
+    const next = !active;
+    setActive(next);
+    await sbUpdateSchedule(schedule.id, { active: next });
+    setSchedule(prev => ({ ...prev, active: next }));
+  };
+
+  const trigger = async () => {
+    setTriggering(true); setTriggerResult(null); setError("");
+    try {
+      const res = await sbTriggerScheduler();
+      setTriggerResult(res);
+    } catch(e) { setError(e.message); }
+    setTriggering(false);
+  };
+
+  const toggleProvider = (id) => {
+    setProviders(prev => prev.includes(id) ? prev.filter(p => p !== id) : [...prev, id]);
+  };
+
+  const fmtDate = (d) => d ? new Date(d).toLocaleString("fr-FR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "—";
+
+  if (loading) return (
+    <div style={{ padding: 32, textAlign: "center", color: C.textLight, fontSize: 13 }}>
+      <span style={{ display: "inline-block", animation: "spin 1s linear infinite" }}>⟳</span> Chargement…
+    </div>
+  );
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
+        <div>
+          <div style={{ fontSize: 16, fontWeight: 800, color: C.text, marginBottom: 4 }}>⏰ Automatisation</div>
+          <div style={{ fontSize: 12, color: C.textLight }}>
+            Interrogation automatique des questions ⭐ favoris — sans connexion à l'app
+          </div>
+        </div>
+        {schedule && (
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ fontSize: 12, color: C.textLight }}>
+              {active ? "🟢 Actif" : "⚫ Inactif"}
+            </span>
+            <button onClick={toggleActive}
+              style={{ padding: "6px 14px", border: `1px solid ${active ? "#DC2626" : "#059669"}`, borderRadius: 8, background: "transparent", color: active ? "#DC2626" : "#059669", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+              {active ? "Désactiver" : "Activer"}
+            </button>
+          </div>
+        )}
+      </div>
+
+      {error && (
+        <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 10, padding: "10px 14px", fontSize: 12, color: "#DC2626" }}>{error}</div>
+      )}
+
+      {/* Status card (if schedule exists) */}
+      {schedule && (
+        <div style={{ background: active ? "#ECFDF5" : C.bg, border: `1px solid ${active ? "#BBF7D0" : C.border}`, borderRadius: 12, padding: "16px 20px" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
+            {[
+              { label: "Prochain run", value: fmtDate(schedule.next_run), icon: "⏭️" },
+              { label: "Dernier run", value: fmtDate(schedule.last_run), icon: "✅" },
+              { label: "Questions traitées", value: schedule.last_run_count || 0, icon: "📊" },
+            ].map(k => (
+              <div key={k.label}>
+                <div style={{ fontSize: 10, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 4 }}>{k.icon} {k.label}</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{k.value}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Config form */}
+      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: "20px 24px", display: "flex", flexDirection: "column", gap: 20 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Configuration</div>
+
+        {/* Frequency */}
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>Fréquence</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
+            {FREQUENCIES.map(f => (
+              <button key={f.key} onClick={() => setFrequency(f.key)}
+                style={{ padding: "10px 8px", border: `2px solid ${frequency === f.key ? "#7C3AED" : C.border}`, borderRadius: 10, background: frequency === f.key ? "#F5F3FF" : C.white, cursor: "pointer", textAlign: "center" }}>
+                <div style={{ fontSize: 18, marginBottom: 4 }}>{f.icon}</div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: frequency === f.key ? "#7C3AED" : C.text }}>{f.label}</div>
+                <div style={{ fontSize: 10, color: C.textLight }}>{f.desc}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Providers */}
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>
+            Providers à interroger
+            {availableProviders.length === 0 && (
+              <span style={{ marginLeft: 8, fontSize: 10, color: "#DC2626", textTransform: "none", fontWeight: 400 }}>
+                ⚠ Aucune clé configurée — rendez-vous dans Gestion des Providers
+              </span>
+            )}
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {PROVIDERS.map(p => {
+              const hasKey = !!providerKeys[p.id]?.dec;
+              const selected = providers.includes(p.id);
+              return (
+                <button key={p.id} onClick={() => hasKey && toggleProvider(p.id)}
+                  title={!hasKey ? `Clé ${p.label} manquante` : undefined}
+                  style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", border: `2px solid ${selected && hasKey ? p.color : C.border}`, borderRadius: 8, background: selected && hasKey ? p.color + "18" : C.bg, cursor: hasKey ? "pointer" : "not-allowed", opacity: hasKey ? 1 : 0.4 }}>
+                  <span style={{ fontSize: 14 }}>{p.icon}</span>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: selected && hasKey ? p.color : C.textMid }}>{p.label}</span>
+                  {hasKey ? (selected ? <span style={{ fontSize: 10, color: p.color }}>✓</span> : null) : <span style={{ fontSize: 10 }}>🔑</span>}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Max questions */}
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>
+            Nb max de questions par run
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input type="range" min={1} max={50} value={maxQ} onChange={e => setMaxQ(+e.target.value)}
+              style={{ flex: 1, accentColor: "#7C3AED" }} />
+            <span style={{ fontSize: 14, fontWeight: 700, color: "#7C3AED", minWidth: 30, textAlign: "right" }}>{maxQ}</span>
+          </div>
+          <div style={{ fontSize: 11, color: C.textLight, marginTop: 4 }}>
+            Estimation : ~{maxQ} × {providers.length} provider{providers.length > 1 ? "s" : ""} = {maxQ * providers.length} appels API par run
+          </div>
+        </div>
+
+        {/* Save button */}
+        <button onClick={save} disabled={saving || !providers.length}
+          style={{ padding: "10px 24px", background: saving ? C.bg : "#7C3AED", color: saving ? C.textLight : "#fff", border: "none", borderRadius: 9, fontSize: 13, fontWeight: 700, cursor: saving ? "not-allowed" : "pointer", boxShadow: saving ? "none" : "0 2px 8px #7C3AED44" }}>
+          {saving ? "⏳ Sauvegarde…" : schedule ? "💾 Mettre à jour" : "✅ Activer l'automatisation"}
+        </button>
+      </div>
+
+      {/* Manual trigger */}
+      {schedule && (
+        <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 12, padding: "16px 20px" }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 8 }}>🚀 Test manuel</div>
+          <div style={{ fontSize: 11, color: C.textLight, marginBottom: 12 }}>
+            Déclenche immédiatement l'automatisation pour vérifier que tout fonctionne.
+          </div>
+          <button onClick={trigger} disabled={triggering}
+            style={{ padding: "7px 16px", background: triggering ? C.bg : "#2563EB", color: triggering ? C.textLight : "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: triggering ? "not-allowed" : "pointer" }}>
+            {triggering ? "⏳ En cours…" : "▶ Lancer maintenant"}
+          </button>
+          {triggerResult && (
+            <div style={{ marginTop: 10, background: "#ECFDF5", border: "1px solid #BBF7D0", borderRadius: 8, padding: "8px 12px", fontSize: 11, color: "#059669" }}>
+              ✓ {triggerResult.processed || 0} schedule(s) traité(s) — {triggerResult.results?.[0]?.questions_processed || 0} question(s) interrogée(s)
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes, onSaveProviderKeys, user }) {
   const [subTab, setSubTab]         = useState("keywords"); // keywords | questions | urls
   const [questionsKey, setQuestionsKey] = useState(0); // incremented to force QuestionsTab reload
   const [showQuestionsPopup, setShowQuestionsPopup] = useState(false);
   const [selectedSite, setSelectedSite] = useState(sites[0]?.id || "");
-  const [model] = useState("gpt-4o-mini"); // kept for variation generation (OpenAI completions endpoint)
+  // Parse persisted settings from project
+  const projectSettings = (() => {
+    try { return project?.settings_json ? JSON.parse(project.settings_json) : {}; } catch { return {}; }
+  })();
+
+  const [model] = useState(projectSettings.model || "gpt-4o-mini"); // kept for variation generation (OpenAI completions endpoint)
   const [brand, setBrand]           = useState(null);
-  const [runMode, setRunMode]       = useState("parallel"); // parallel | sequential
+  const [runMode, setRunMode]       = useState(projectSettings.runMode || "parallel"); // parallel | sequential
   const [providerConfigOpen, setProviderConfigOpen] = useState(false);
   const [semrushKeyDec, setSemrushKeyDec] = useState(() => decodeKey(project?.semrush_key_enc || ""));
   // Sync semrush key when project changes
@@ -2596,7 +2842,9 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
   }, [project?.id, project?.semrush_key_enc]); // eslint-disable-line react-hooks/exhaustive-deps
   const [semrushKeyInput, setSemrushKeyInput] = useState("");
   const [activeProviders, setActiveProviders] = useState(() => {
-    // Start with all providers that have keys configured
+    // 1. Load from saved settings
+    if (projectSettings.activeProviders?.length) return projectSettings.activeProviders;
+    // 2. Fallback: all providers that have keys configured
     if (project) {
       const withKeys = PROVIDERS.filter(p => project[p.keyField]).map(p => p.id);
       if (withKeys.length) return withKeys;
@@ -2620,6 +2868,16 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
   });
   const [apiKeyEnc, setApiKeyEnc]   = useState(project?.openai_key_enc || ""); // legacy for variation gen
 
+  // Auto-save UI settings when they change
+  useEffect(() => {
+    if (!projectId) return;
+    const timer = setTimeout(() => {
+      const settings = { runMode, activeProviders, model };
+      sbSaveProjectSettings(projectId, settings).catch(() => {});
+    }, 800); // debounce 800ms
+    return () => clearTimeout(timer);
+  }, [runMode, activeProviders, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Sync all provider keys when project prop updates
   useEffect(() => {
     if (!project) return;
@@ -2636,8 +2894,26 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
     if (project?.openai_key_enc && project.openai_key_enc !== apiKeyEnc) {
       setApiKeyEnc(project.openai_key_enc);
     }
-  }, [project?.id, project?.openai_key_enc, project?.gemini_key_enc, project?.perplexity_key_enc, project?.claude_geo_key_enc]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [project?.id, project?.openai_key_enc, project?.gemini_key_enc, project?.perplexity_key_enc, project?.claude_geo_key_enc, project?.semrush_key_enc]); // eslint-disable-line react-hooks/exhaustive-deps
   const [apiKeyDec, setApiKeyDec]   = useState("");           // decrypted, only in memory
+
+  // When keys load for the first time (project arrives from DB), seed activeProviders
+  const hasSeededProvidersRef = useRef(false);
+  useEffect(() => {
+    if (hasSeededProvidersRef.current) return;
+    if (!project) return;
+    const withKeys = PROVIDERS.filter(p => project[p.keyField]).map(p => p.id);
+    if (!withKeys.length) return;
+    // Only seed if activeProviders is still at default ["openai"] and we have more keys
+    setActiveProviders(prev => {
+      if (prev.length === 1 && prev[0] === "openai" && !project.settings_json) {
+        hasSeededProvidersRef.current = true;
+        return withKeys;
+      }
+      hasSeededProvidersRef.current = true;
+      return prev;
+    });
+  }, [project?.openai_key_enc, project?.gemini_key_enc, project?.perplexity_key_enc, project?.claude_geo_key_enc]); // eslint-disable-line react-hooks/exhaustive-deps
   const [allResults, setAllResults] = useState([]);
   const [brandEditing, setBrandEditing] = useState(false);
   const [brandDraft, setBrandDraft] = useState({ brand_name: "", brand_domain: "", brand_aliases: "", competitors: "", context: "" });
@@ -2913,7 +3189,8 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
       {/* ── Sub-nav ── */}
       <div style={{ display: "flex", gap: 6, marginBottom: 20 }}>
         {[
-          { key: "keywords",  label: "🔑 Mots-clés",         color: "#D97706", count: allResults.filter(r => r.site_id === site?.id).length > 0 ? null : null },
+          { key: "keywords",  label: "🔑 Mots-clés",         color: "#D97706", count: null },
+      { key: "automation", label: "⏰ Automatisation",     color: "#7C3AED", count: null },
           { key: "questions", label: "💬 Questions",          color: "#7C3AED" },
           { key: "urls",      label: "🔗 Sources & Mentions", color: "#2563EB" },
         ].map(t => (
@@ -2961,6 +3238,14 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
           activeProviders={activeProviders}
           providerKeys={providerKeys}
           runMode={runMode}
+        />
+      )}
+      {subTab === "automation" && (
+        <AutomationTab
+          projectId={projectId}
+          site={site}
+          user={user}
+          providerKeys={providerKeys}
         />
       )}
       {subTab === "urls" && (

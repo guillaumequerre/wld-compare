@@ -122,7 +122,8 @@ export async function sbSaveProject(project) {
       perplexity_key_enc:  project.perplexity_key_enc  || null,
       claude_geo_key_enc:  project.claude_geo_key_enc  || null,
       semrush_key_enc:     project.semrush_key_enc     || null,
-      sites_json: JSON.stringify(project.sites.map(s => ({ id: s.id, label: s.label, color: s.color, bg: s.bg }))), geo_axes_json: JSON.stringify(project.geo_axes || ["Meilleur / top / recommandé","Pistes et approches pour utiliser / bénéficier du mot-clé","Avis / fiable / fiabilité","Pour atteindre un objectif lié au mot-clé","Pour résoudre une problématique liée au mot-clé"]), updated_at: new Date().toISOString() }),
+      sites_json: JSON.stringify(project.sites.map(s => ({ id: s.id, label: s.label, color: s.color, bg: s.bg }))),
+      settings_json: project.settings_json || null, geo_axes_json: JSON.stringify(project.geo_axes || ["Meilleur / top / recommandé","Pistes et approches pour utiliser / bénéficier du mot-clé","Avis / fiable / fiabilité","Pour atteindre un objectif lié au mot-clé","Pour résoudre une problématique liée au mot-clé"]), updated_at: new Date().toISOString() }),
   });
   if (!res.ok) console.warn("Save project failed:", res.status);
 }
@@ -131,7 +132,7 @@ export async function sbLoadProjects() {
   const res = await fetch(`${PROXY}/rest/v1/projects?select=*&order=created_at.asc`, { headers: authHeaders() });
   if (!res.ok) return null;
   const rows = await res.json();
-  return rows.map(r => ({ id: r.id, name: r.name, sites: JSON.parse(r.sites_json || "[]"), openai_key_enc: r.openai_key_enc || null, geo_axes: JSON.parse(r.geo_axes_json || "null") || ["Meilleur / top / recommandé","Pistes et approches pour utiliser / bénéficier du mot-clé","Avis / fiable / fiabilité","Pour atteindre un objectif lié au mot-clé","Pour résoudre une problématique liée au mot-clé"], gemini_key_enc: r.gemini_key_enc || null, perplexity_key_enc: r.perplexity_key_enc || null, claude_geo_key_enc: r.claude_geo_key_enc || null, semrush_key_enc: r.semrush_key_enc || null, owner_email: r.owner_email || null, updated_at: r.updated_at || null }));
+  return rows.map(r => ({ id: r.id, name: r.name, sites: JSON.parse(r.sites_json || "[]"), openai_key_enc: r.openai_key_enc || null, geo_axes: JSON.parse(r.geo_axes_json || "null") || ["Meilleur / top / recommandé","Pistes et approches pour utiliser / bénéficier du mot-clé","Avis / fiable / fiabilité","Pour atteindre un objectif lié au mot-clé","Pour résoudre une problématique liée au mot-clé"], gemini_key_enc: r.gemini_key_enc || null, perplexity_key_enc: r.perplexity_key_enc || null, claude_geo_key_enc: r.claude_geo_key_enc || null, semrush_key_enc: r.semrush_key_enc || null, owner_email: r.owner_email || null, updated_at: r.updated_at || null, settings_json: r.settings_json || null }));
 }
 
 export async function sbDeleteProject(projectId) {
@@ -658,5 +659,93 @@ export async function sbSaveHint(question_id, site_id, project_id, hint_text) {
 export async function sbGetHints(project_id, site_id) {
   const res = await fetch(`${PROXY}/rest/v1/geo_hints?project_id=eq.${encodeURIComponent(project_id)}&site_id=eq.${encodeURIComponent(site_id)}&select=question_id,hint_text,updated_at`, { headers: authHeaders() });
   if (!res.ok) return [];
+  return res.json();
+}
+
+// ── PROJECT SETTINGS (UI preferences per project) ────────────────
+export async function sbSaveProjectSettings(project_id, settings) {
+  const res = await fetch(`${PROXY}/rest/v1/projects?id=eq.${encodeURIComponent(project_id)}`, {
+    method: "PATCH",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ settings_json: JSON.stringify(settings) }),
+  });
+  return res.ok;
+}
+
+// ── GEO SCHEDULES (automation) ───────────────────────────────────
+
+export async function sbGetSchedule(project_id, site_id) {
+  const res = await fetch(
+    `${PROXY}/rest/v1/geo_schedules?project_id=eq.${encodeURIComponent(project_id)}&site_id=eq.${encodeURIComponent(site_id)}&select=*&limit=1`,
+    { headers: authHeaders() }
+  );
+  if (!res.ok) return null;
+  const rows = await res.json();
+  return rows[0] || null;
+}
+
+export async function sbSaveSchedule({ project_id, site_id, owner_email, frequency, providers, active, max_questions }) {
+  // Compute initial next_run based on frequency
+  const now = new Date();
+  const nextRun = new Date(now);
+  switch (frequency) {
+    case "daily":    nextRun.setDate(now.getDate() + 1); break;
+    case "weekly":   nextRun.setDate(now.getDate() + 7); break;
+    case "biweekly": nextRun.setDate(now.getDate() + 14); break;
+    case "monthly":  nextRun.setDate(now.getDate() + 30); break;
+    default:         nextRun.setDate(now.getDate() + 7);
+  }
+
+  const payload = {
+    project_id, site_id, owner_email,
+    frequency, providers: providers || ["openai"],
+    active: active !== false,
+    max_questions: max_questions || 10,
+    next_run: nextRun.toISOString(),
+  };
+
+  const res = await fetch(`${PROXY}/rest/v1/geo_schedules`, {
+    method: "POST",
+    headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`Save schedule failed: ${res.status} — ${body.slice(0, 120)}`);
+  }
+  return (await res.json())[0];
+}
+
+export async function sbUpdateSchedule(id, patch) {
+  const res = await fetch(`${PROXY}/rest/v1/geo_schedules?id=eq.${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  return res.ok;
+}
+
+export async function sbDeleteSchedule(id) {
+  const res = await fetch(`${PROXY}/rest/v1/geo_schedules?id=eq.${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  return res.ok;
+}
+
+export async function sbTriggerScheduler() {
+  // Manual trigger — calls the scheduler endpoint with secret header
+  const secret = process.env.REACT_APP_SCHEDULER_SECRET;
+  const res = await fetch("/api/geo-scheduler", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(secret ? { "X-Scheduler-Secret": secret } : {}),
+    },
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`Trigger failed: ${res.status} — ${body.slice(0, 120)}`);
+  }
   return res.json();
 }
