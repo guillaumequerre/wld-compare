@@ -40,7 +40,6 @@ export default async function(request) {
   // Si JWT user disponible, l'utiliser pour les requêtes Supabase (RLS)
   // Sinon, utiliser l'anon key
   headers.set("Authorization", userToken ? `Bearer ${userToken}` : `Bearer ${SUPABASE_ANON}`);
-  headers.delete("authorization"); // évite la transmission du header original
 
   const response = await fetch(targetUrl, {
     method:  request.method,
