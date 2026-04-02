@@ -6,8 +6,8 @@ import {
   sbSaveBrand, sbGetBrand,
   sbSaveKeywords, sbGetKeywords, sbUpdateKeywordStatus, sbDeleteKeyword, sbUpdateKeywordVolume,
   sbSaveQuestions, sbGetQuestions, sbUpdateQuestion, sbDeleteQuestion,
-  sbSaveGeoResult, sbGetGeoResults, sbSaveHint, sbGetHints, sbSetKeywordTags, sbBulkSetKeywordTags,
-  sbGetSchedule, sbSaveSchedule, sbUpdateSchedule, sbDeleteSchedule, sbTriggerScheduler,
+  sbSaveGeoResult, sbGetGeoResults, sbSaveHint, sbGetHints, sbSetKeywordTags,
+  sbGetSchedule, sbSaveSchedule, sbUpdateSchedule, sbTriggerScheduler,
   sbSaveProjectSettings,
   sbGetCategories, sbSaveCategory, sbDeleteCategory,
   sbSetKeywordCategory, sbSetQuestionCategory,
@@ -870,11 +870,6 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
     clearSel();
   };
 
-  const setCatSingle = async (kwId, catId) => {
-    await sbSetKeywordCategory(kwId, catId || null);
-    setKeywords(prev => prev.map(k => k.id === kwId ? { ...k, category_id: catId || null } : k));
-  };
-
   const setTagsSingle = async (kwId, tags) => {
     await sbSetKeywordTags(kwId, tags);
     setKeywords(prev => prev.map(k => k.id === kwId ? { ...k, tags: tags || [] } : k));
@@ -1097,7 +1092,6 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           {filtered.map(kw => {
-            const cat = categories.find(c => c.id === kw.category_id);
             const isSel = selected.has(kw.id);
             return (
               <div key={kw.id} style={{ background: isSel ? "#EFF6FF" : C.white, border: `1px solid ${kw.status === "done_q" ? "#05966933" : isSel ? "#2563EB55" : C.border}`, borderRadius: 10, padding: "10px 14px", display: "flex", alignItems: "center", gap: 10, borderLeft: `3px solid ${kw.status === "done_q" ? "#059669" : kw.status === "generating_q" ? "#D97706" : "transparent"}` }}>
@@ -1248,129 +1242,6 @@ function HintPanelQuestion({ questionId, question, sources, brandName, brandAlia
           <div style={{ fontSize: 11, whiteSpace: "pre-wrap", lineHeight: 1.7, color: status === "error" ? "#DC2626" : "#92400E" }}>
             {hint}
           </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── HintPanel — GEO optimisation hints ───────────────────────────
-
-function HintPanel({ question, sources, brandName, brandAliases, brandDomain: brandDomainProp = "", claudeKey, hasBrand = false, questionId = null, projectId = null, siteId = null, savedHint = "", autoRun = false }) {
-  const [status, setStatus] = useState(() => savedHint ? "done" : "idle");
-  const [hint, setHint]     = useState(savedHint || "");
-
-  const runRef = useRef(null);
-  // Auto-run on open when no saved hint and claudeKey is available
-  useEffect(() => {
-    if (autoRun && status === "idle" && claudeKey && !savedHint) {
-      runRef.current?.();
-    }
-  }, [autoRun]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Use explicit brand domain first, then try aliases, then brand name
-  const brandDomain = brandDomainProp ||
-    [...(brandAliases || [])].map(a => (a || "").trim()).find(a => a.includes(".")) ||
-    brandName;
-
-  const run = async () => {
-    if (!claudeKey) return;
-    setStatus("loading");
-    setHint("");
-    const searchQuery = `${question} site:${brandDomain}`;
-    const sourcesText = (sources || []).length > 0
-      ? `Pages mentionnées dans la réponse :\n${sources.slice(0, 8).map((u, i) => `[${i+1}] ${u}`).join("\n")}`
-      : "Aucune source listée dans la réponse.";
-
-    const prompt = `Tu es un expert en GEO (Generative Engine Optimization).
-
-Un moteur d'IA a répondu à cette question sans mentionner la marque "${brandName}" :
-"${question}"
-
-${sourcesText}
-
-Effectue maintenant une recherche Google avec cette requête exacte : "${searchQuery}"
-
-En te basant sur :
-1. Les pages de ${brandDomain} qui ressortent sur cette recherche
-2. Les pages concurrentes citées dans la réponse du moteur d'IA
-
-RÈGLES STRICTES :
-- Ne dis JAMAIS "Je vais effectuer", "Je recherche", "En effectuant cette recherche" ou toute phrase de transition
-- Commence directement par la recommandation, sans introduction
-- 5 à 8 lignes max, ton direct et actionnable
-
-${hasBrand
-  ? "La marque est présente dans cette réponse. Analyse comment RENFORCER cette présence : améliorer la position, être cité en source, consolider l'autorité de " + brandDomain + " sur ce sujet."
-  : "Si une page de " + brandDomain + " ressort pertinente → explique comment l'optimiser pour être citée par les IA. Si aucune page pertinente → recommande quel contenu créer."
-}`;
-
-    try {
-      const res = await fetch("/api/claude-geo", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Claude-Key": claudeKey },
-        body: JSON.stringify({
-          model: "claude-haiku-4-5-20251001",
-          max_tokens: 600,
-          tools: [{ type: "web_search_20250305", name: "web_search" }],
-          messages: [{ role: "user", content: prompt }],
-        }),
-      });
-      const raw = await res.text();
-      if (raw.trimStart().startsWith("<")) throw new Error("Proxy claude-geo introuvable");
-      const data = JSON.parse(raw);
-      if (!res.ok) throw new Error(data.error?.message || `Claude ${res.status}`);
-      // Extract text from content blocks
-      const text = (data.content || [])
-        .filter(b => b.type === "text")
-        .map(b => b.text)
-        .join("\n")
-        .trim();
-      // Strip common AI preambles before showing
-      const cleaned = (text || "")
-        .replace(/^(Je vais|En effectuant|Je recherche|D'accord[,.]?|Bien s[uû]r[,.]?|Voici|Permettez)[^\n]*/gim, "")
-        .replace(/^(I will|Let me|Sure[,.]?)[^\n]*/gim, "")
-        .replace(/^\s*\n/gm, "")
-        .trim();
-      const finalHint = cleaned || "Aucune recommandation générée.";
-      setHint(finalHint);
-      // Persist hint to DB
-      if (questionId && projectId && siteId) {
-        sbSaveHint(questionId, siteId, projectId, finalHint).catch(e => {
-          console.warn("[HintPanel] sbSaveHint failed:", e.message);
-        });
-      }
-      setStatus("done");
-    } catch(e) {
-      setHint(`Erreur : ${e.message}`);
-      setStatus("error");
-    }
-  };
-  runRef.current = run; // always up to date
-
-  return (
-    <div style={{ borderTop: `1px solid #FEF3C7`, background: "#FFFBEB", padding: "8px 12px" }}>
-      {status === "idle" && (
-        <button onClick={run}
-          style={{ fontSize: 11, fontWeight: 700, color: "#D97706", background: "#FEF3C7", border: "1px solid #FCD34D", borderRadius: 6, padding: "3px 10px", cursor: "pointer" }}>
-          💡 Obtenir des pistes d'optimisation GEO
-        </button>
-      )}
-      {status === "loading" && (
-        <div style={{ fontSize: 11, color: "#D97706", display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ animation: "spin 1s linear infinite", display: "inline-block" }}>⏳</span>
-          Recherche en cours sur {brandDomain}…
-        </div>
-      )}
-      {(status === "done" || status === "error") && (
-        <div>
-          <div style={{ fontSize: 11, whiteSpace: "pre-wrap", lineHeight: 1.6, color: status === "error" ? "#DC2626" : "#92400E" }}>
-            {hint}
-          </div>
-          <button onClick={() => { setStatus("idle"); setHint(""); }}
-            style={{ marginTop: 6, fontSize: 10, color: "#D97706", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>
-            ↺ Relancer
-          </button>
         </div>
       )}
     </div>
