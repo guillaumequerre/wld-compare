@@ -1151,9 +1151,9 @@ function isBrandPresent(r) {
 
 // ── HintPanelQuestion — one hint per question ────────────────────
 function HintPanelQuestion({ questionId, question, sources, brandName, brandAliases, brandDomain, claudeKey, hasBrand, projectId, siteId, savedHint, onHintSaved, initialOpen = false }) {
-  const [open, setOpen]       = useState(initialOpen || !!savedHint);
-  const [status, setStatus]   = useState(savedHint ? "done" : "idle");
-  const [hint, setHint]       = useState(savedHint || "");
+  const [open, setOpen]     = useState(initialOpen || !!savedHint);
+  const [status, setStatus] = useState(savedHint ? "done" : "idle");
+  const [hint, setHint]     = useState(savedHint || "");
   const hasHint = !!hint;
 
   const run = async () => {
@@ -1161,43 +1161,55 @@ function HintPanelQuestion({ questionId, question, sources, brandName, brandAlia
     setStatus("loading");
     const bDomain = brandDomain || brandName;
     const sourcesText = (sources || []).length > 0
-      ? `Pages dans la réponse :
-${sources.slice(0, 6).map((u, i) => `[${i+1}] ${u}`).join("
-")}`
+      ? "Pages dans la réponse :\n" + sources.slice(0, 6).map((u, i) => `[${i+1}] ${u}`).join("\n")
       : "Aucune source listée.";
-    const prompt = `Tu es un expert GEO. Un moteur d'IA a répondu à cette question sans mentionner "${brandName}" :
-"${question}"
-
-${sourcesText}
-
-REGLES STRICTES :
-- Commence directement par la recommandation, sans introduction
-- 5 à 7 lignes max, ton direct et actionnable
-
-${hasBrand
+    const brandContext = hasBrand
       ? `La marque est présente. Analyse comment RENFORCER cette présence sur ${bDomain}.`
-      : `Si une page de ${bDomain} est pertinente → comment l'optimiser. Sinon → quel contenu créer.`}`;
+      : `Si une page de ${bDomain} est pertinente → comment l'optimiser. Sinon → quel contenu créer.`;
+    const prompt = [
+      `Tu es un expert GEO. Un moteur d'IA a répondu à cette question sans mentionner "${brandName}" :`,
+      `"${question}"`,
+      "",
+      sourcesText,
+      "",
+      "REGLES STRICTES :",
+      "- Commence directement par la recommandation, sans introduction",
+      "- 5 à 7 lignes max, ton direct et actionnable",
+      "",
+      brandContext,
+    ].join("\n");
+
     try {
       const res = await fetch("/api/claude-geo", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Claude-Key": claudeKey },
-        body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 500, messages: [{ role: "user", content: prompt }] }),
+        body: JSON.stringify({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 500,
+          messages: [{ role: "user", content: prompt }],
+        }),
       });
       const raw = await res.text();
       const data = JSON.parse(raw);
       if (!res.ok) throw new Error(data.error?.message || `Claude ${res.status}`);
-      const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("
-").trim();
-      const cleaned = text.replace(/^(Je vais|En effectuant|Je recherche|Voici|Permettez)[^
-]*/gim, "").replace(/^\s*
-/gm, "").trim();
+      const text = (data.content || [])
+        .filter(b => b.type === "text")
+        .map(b => b.text)
+        .join("\n")
+        .trim();
+      const cleaned = text
+        .replace(/^(Je vais|En effectuant|Je recherche|Voici|Permettez)[^\n]*/gim, "")
+        .replace(/^\s*\n/gm, "")
+        .trim();
       const finalHint = cleaned || "Aucune recommandation générée.";
       setHint(finalHint);
       setStatus("done");
       setOpen(true);
       onHintSaved?.(finalHint);
       if (questionId && projectId && siteId) {
-        sbSaveHint(questionId, siteId, projectId, finalHint).catch(e => console.warn("[Hint] save failed:", e.message));
+        sbSaveHint(questionId, siteId, projectId, finalHint).catch(e =>
+          console.warn("[Hint] save failed:", e.message)
+        );
       }
     } catch(e) {
       setHint(`Erreur : ${e.message}`);
@@ -1208,8 +1220,8 @@ ${hasBrand
 
   return (
     <div style={{ borderRadius: 8, overflow: "hidden", border: `1px solid ${hasHint ? "#FCD34D" : C.border}` }}>
-      {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: hasHint ? "#FFFBEB" : C.bg, cursor: "pointer" }}
+      <div
+        style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: hasHint ? "#FFFBEB" : C.bg, cursor: "pointer" }}
         onClick={() => hasHint ? setOpen(o => !o) : (!status.includes("loading") && run())}>
         <span style={{ fontSize: 14 }}>💡</span>
         {status === "loading" ? (
@@ -1219,17 +1231,21 @@ ${hasBrand
             <span style={{ fontSize: 11, fontWeight: 700, color: "#D97706", flex: 1 }}>
               {open ? "▲ Masquer le Hint" : "▼ Voir le Hint"}
             </span>
-            <button onClick={(e) => { e.stopPropagation(); setStatus("idle"); setHint(""); setOpen(false); run(); }}
-              style={{ fontSize: 10, color: C.textLight, background: "none", border: "none", cursor: "pointer" }}>↺</button>
+            <button
+              onClick={(e) => { e.stopPropagation(); setStatus("idle"); setHint(""); setOpen(false); setTimeout(run, 0); }}
+              style={{ fontSize: 10, color: C.textLight, background: "none", border: "none", cursor: "pointer" }}>
+              ↺
+            </button>
           </>
         ) : (
           <span style={{ fontSize: 11, fontWeight: 700, color: "#D97706" }}>✨ Générer un Hint</span>
         )}
       </div>
-      {/* Content */}
       {open && hint && (
         <div style={{ padding: "8px 12px", background: "#FFFBEB", borderTop: "1px solid #FEF3C7" }}>
-          <div style={{ fontSize: 11, whiteSpace: "pre-wrap", lineHeight: 1.7, color: status === "error" ? "#DC2626" : "#92400E" }}>{hint}</div>
+          <div style={{ fontSize: 11, whiteSpace: "pre-wrap", lineHeight: 1.7, color: status === "error" ? "#DC2626" : "#92400E" }}>
+            {hint}
+          </div>
         </div>
       )}
     </div>
