@@ -1196,7 +1196,7 @@ ${hasBrand
 
 // ── ProviderRow — calendar + info + accordion + run button ────────
 
-function ProviderRow({ provider, results, allProviderResults, brandName, brandAliases, brandDomain = "", hasKey, isRunning, onRun, questionId, newCalEntry = null, question = "", claudeKey = "" }) {
+function ProviderRow({ provider, results, allProviderResults, brandName, brandAliases, brandDomain = "", hasKey, isRunning, onRun, questionId, newCalEntry = null, question = "", claudeKey = "", projectId = null, siteId = null, savedHint = "" }) {
   const [open, setOpen] = useState(false);
   const [showHint, setShowHint] = useState(false);
   const p = provider;
@@ -1287,10 +1287,10 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
           brandDomain={brandDomain}
           claudeKey={claudeKey}
           hasBrand={hasBrand}
-          questionId={q.id}
+          questionId={questionId}
           projectId={projectId}
-          siteId={site?.id}
-          savedHint={hintsMap[q.id] || ""}
+          siteId={siteId}
+          savedHint={savedHint}
         />
       )}
       {open && result && (
@@ -2029,6 +2029,9 @@ ${question}`;
                         question={q.question}
                         brandDomain={brand?.brand_domain || ""}
                         claudeKey={providerKeysRef.current["claude"]?.dec || ""}
+                        projectId={projectId}
+                        siteId={site?.id}
+                        savedHint={hintsMap[q.id] || ""}
                       />
                     );
                   })}
