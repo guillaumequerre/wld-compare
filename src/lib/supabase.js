@@ -9,11 +9,20 @@ function authHeaders(extra = {}) {
   return extra;
 }
 
+// Cache de la config Supabase publique (URL + anon key)
+let _sbConfig = null;
+async function getDirectConfig() {
+  if (_sbConfig) return _sbConfig;
+  try {
+    const res = await fetch("/api/supabase-info", { headers: authHeaders() });
+    if (res.ok) { _sbConfig = await res.json(); return _sbConfig; }
+  } catch {}
+  return null;
+}
+
 export async function sbUpload(path, csvText) {
   // Upload direct vers Supabase Storage (bypass proxy Netlify — limite 1MB)
-  // Utilise REACT_APP_SUPABASE_URL et REACT_APP_SUPABASE_ANON définis dans Netlify env
-  const supabaseUrl = process.env.REACT_APP_SUPABASE_URL;
-  const anonKey     = process.env.REACT_APP_SUPABASE_ANON;
+  const cfg = await getDirectConfig();
   const jwt = (() => {
     try {
       const s = sessionStorage.getItem("correl_session") || localStorage.getItem("correl_session");
@@ -21,15 +30,15 @@ export async function sbUpload(path, csvText) {
     } catch { return null; }
   })();
 
-  if (supabaseUrl && anonKey) {
+  if (cfg?.url && cfg?.anon) {
     // Upload direct — pas de limite Netlify
-    const res = await fetch(`${supabaseUrl}/storage/v1/object/csv-imports/${path}`, {
+    const res = await fetch(`${cfg.url}/storage/v1/object/csv-imports/${path}`, {
       method: "POST",
       headers: {
         "Content-Type": "text/csv",
         "x-upsert": "true",
-        "apikey": anonKey,
-        "Authorization": jwt ? `Bearer ${jwt}` : `Bearer ${anonKey}`,
+        "apikey": cfg.anon,
+        "Authorization": jwt ? `Bearer ${jwt}` : `Bearer ${cfg.anon}`,
       },
       body: csvText,
     });
