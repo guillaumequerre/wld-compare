@@ -1569,14 +1569,25 @@ RÈGLES :
 
 // ── Questions sub-tab (v2) ────────────────────────────────────────
 
-function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allResults, onResultSaved, activeProviders = ["openai"], providerKeys = {}, runMode = "parallel" }) {
+function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allResults, onResultSaved, activeProviders = ["openai"], providerKeys = {}, runMode = "parallel", keywordsOrder = [] }) {
   const [questions, setQuestions]   = useState([]);
   const [results, setResults]       = useState(allResults || []);
-  // Stable sorted questions — never reorder on state updates
-  const sortedQuestions = useMemo(
-    () => [...questions].sort((a, b) => new Date(a.created_at) - new Date(b.created_at)),
-    [questions]
-  );
+  // Sort: favorites first, then by keyword order, then by creation date
+  const sortedQuestions = useMemo(() => {
+    const kwIndexMap = {};
+    keywordsOrder.forEach((id, i) => { kwIndexMap[id] = i; });
+    return [...questions].sort((a, b) => {
+      // 1. Favorites first
+      if (a.is_favorite && !b.is_favorite) return -1;
+      if (!a.is_favorite && b.is_favorite) return 1;
+      // 2. Keyword order (undefined → end)
+      const ia = kwIndexMap[a.keyword_id] ?? 9999;
+      const ib = kwIndexMap[b.keyword_id] ?? 9999;
+      if (ia !== ib) return ia - ib;
+      // 3. Creation date within same keyword
+      return new Date(a.created_at) - new Date(b.created_at);
+    });
+  }, [questions, keywordsOrder]); // eslint-disable-line react-hooks/exhaustive-deps
   const [manualQ, setManualQ]       = useState("");
   const [editingQ, setEditingQ]     = useState(null); // { id, text } — question being edited
   const [hintsMap, setHintsMap]     = useState({}); // { questionId: hint_text }
@@ -2862,6 +2873,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
     });
   }, [project?.openai_key_enc, project?.gemini_key_enc, project?.perplexity_key_enc, project?.claude_geo_key_enc]); // eslint-disable-line react-hooks/exhaustive-deps
   const [allResults, setAllResults] = useState([]);
+  const [keywords, setKeywords]     = useState([]); // lifted from KeywordsTab for cross-tab ordering
   const [categories, setCategories] = useState([]);
   const [axes, setAxes]             = useState(geoAxes || DEFAULT_AXES);
 
@@ -2883,9 +2895,8 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
     if (!projectId || !site?.id) return;
     setAllResults([]); // reset before loading to avoid stale data
     sbGetBrand(projectId, site.id).then(b => { setBrand(b); });
-    sbGetGeoResults(projectId, site.id).then(r => {
-      setAllResults(r);
-    });
+    sbGetGeoResults(projectId, site.id).then(r => { setAllResults(r); });
+    sbGetKeywords(projectId, site.id).then(kws => { setKeywords(kws || []); });
   }, [projectId, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Decode key when enc changes
@@ -2967,6 +2978,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
           activeProviders={activeProviders}
           providerKeys={providerKeys}
           runMode={runMode}
+          keywordsOrder={keywords.map(k => k.id)}
         />
       )}
       {subTab === "automation" && (
