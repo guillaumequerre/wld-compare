@@ -37,6 +37,13 @@ export default function ImportTab({ projects, currentProjectId, setCurrentProjec
   }
   const fmtDate = (d) => new Date(d).toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "numeric" });
 
+  // Last import per site+source for "↩ Dernier" buttons
+  const lastImports = {};
+  for (const row of dbHistory) {
+    const key = `${row.site_id}_${row.source}`;
+    if (!lastImports[key] && row.storage_path) lastImports[key] = row;
+  }
+
   return (
     <div>
       {/* Page header */}
