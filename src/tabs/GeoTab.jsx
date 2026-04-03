@@ -1937,9 +1937,9 @@ ${question}`;
             title="Fan-outs où la marque est présente dans le dernier résultat connu">
             📍 Positionné
           </Pill>
-          <Pill color="#DC2626" active={filterLost} onClick={() => setFilterLost(f => !f)}
+          <Pill color="#16A34A" active={filterLost} onClick={() => setFilterLost(f => !f)}
             title="Fan-outs où la marque était présente dans un résultat précédent mais est absente du dernier — position perdue">
-            📉 Position perdue
+            📈 Positionné précédemment
           </Pill>
           {(filterSearch || filterCat || filterKeyword || filterFav || filterBrand || filterPositioned || filterLost || filterProviders.length > 0) && (
             <button onClick={() => { setFilterSearch(""); setFilterCat(""); setFilterKeyword(""); setFilterFav(false); setFilterBrand(false); setFilterPositioned(false); setFilterLost(false); setFilterProviders([]); }}
@@ -2162,7 +2162,9 @@ function UrlsTab({ projectId, categories, brand, allResults }) {
   const [urls, setUrls]         = useState([]);
   const [loading, setLoading]   = useState(true);
   const [error, setError]       = useState(false);
-  const [crawling, setCrawling] = useState({});
+  const [crawling, setCrawling]         = useState({});
+  const [analyzingPage, setAnalyzingPage] = useState({});
+  const [pageAnalysis, setPageAnalysis]   = useState({});
   const [filterType, setFilterType] = useState("all"); // all | brand | competitor | other
   const [filterTpl, setFilterTpl]   = useState("");
   const [sortBy, setSortBy]         = useState("citations"); // citations | domain | alpha
@@ -2302,6 +2304,44 @@ function UrlsTab({ projectId, categories, brand, allResults }) {
     </div>
   );
 
+
+  const analyzePageContent = async (urlEntry) => {
+    const claudeKey = (function() {
+      try {
+        const s = sessionStorage.getItem("correl_session") || localStorage.getItem("correl_session");
+        const sess = s ? JSON.parse(s) : null;
+        return sess?.__claude_key || "";
+      } catch { return ""; }
+    })();
+    setAnalyzingPage(prev => ({ ...prev, [urlEntry.id]: true }));
+    try {
+      const sections = (urlEntry.crawl_sections || []).slice(0, 20);
+      const pageContent = sections.map(s => `[${s.type || "section"}] ${(s.text || s.title || s.content || "").slice(0, 300)}`).join("\n").slice(0, 3000);
+      const prompt = [
+        `Tu es expert GEO. Analyse cette page : ${urlEntry.url}`,
+        "",
+        pageContent ? `CONTENU :${("\n" + pageContent)}` : "(page non crawlée — analyse à partir de l'URL uniquement)",
+        "",
+        "Réponds UNIQUEMENT avec ce JSON (sans markdown) :",
+        JSON.stringify({summary:"2 phrases",geo_signals:["signal"],opportunities:["action"],content_type:"type",seo_score:7}),
+      ].join("\n");
+      const res = await fetch("/api/claude-geo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Claude-Key": claudeKey },
+        body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 600, messages: [{ role: "user", content: prompt }] }),
+      });
+      const raw = await res.text();
+      if (!res.ok) throw new Error(`Claude ${res.status}`);
+      const data = JSON.parse(raw);
+      const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("").trim();
+      const analysis = JSON.parse(text.replace(/```json|```/g, "").trim());
+      setPageAnalysis(prev => ({ ...prev, [urlEntry.id]: analysis }));
+    } catch(e) {
+      setPageAnalysis(prev => ({ ...prev, [urlEntry.id]: { error: e.message } }));
+    }
+    setAnalyzingPage(prev => ({ ...prev, [urlEntry.id]: false }));
+  };
+
   return (
     <div>
       {/* ── Legend strip ── */}
@@ -2380,7 +2420,7 @@ function UrlsTab({ projectId, categories, brand, allResults }) {
                   {/* Counts */}
                   <div style={{ display: "flex", gap: 5, flexShrink: 0 }}>
                     <span style={{ fontSize: 11, fontWeight: 700, background: `${meta.color}22`, color: meta.color, borderRadius: 5, padding: "2px 7px" }} title="Source">📎 {u.count_as_source}</span>
-                    <span style={{ fontSize: 11, fontWeight: 700, background: "#F5F3FF", color: "#7C3AED", borderRadius: 5, padding: "2px 7px" }} title="Dans réponse">💬 {u.count_in_answer}</span>
+  
                   </div>
                   {/* Class badge */}
                   <span style={{ fontSize: 10, fontWeight: 700, color: meta.color, background: meta.bg, border: `1px solid ${meta.color}44`, borderRadius: 10, padding: "1px 8px", flexShrink: 0 }}>
@@ -2414,9 +2454,17 @@ function UrlsTab({ projectId, categories, brand, allResults }) {
                       </button>
                     )}
                     <button onClick={() => launchCrawl(u)} disabled={crawling[u.id]}
+                      title={u.crawl_status === "done" ? "Recrawler la page" : "Analyser le contenu de la page"}
                       style={{ padding: "3px 8px", border: `1px solid ${meta.color}`, borderRadius: 6, fontSize: 10, cursor: crawling[u.id] ? "wait" : "pointer", background: meta.bg, color: meta.color, fontWeight: 600 }}>
                       {crawling[u.id] ? "⏳" : u.crawl_status === "done" ? "🔄" : "🕷️"}
                     </button>
+                    {u.crawl_status === "done" && (
+                      <button onClick={() => analyzePageContent(u)} disabled={!!analyzingPage[u.id]}
+                        title="Lire la page et identifier les particularités (structure, contenu GEO, opportunités)"
+                        style={{ padding: "3px 8px", border: "1px solid #7C3AED", borderRadius: 6, fontSize: 10, cursor: analyzingPage[u.id] ? "wait" : "pointer", background: "#F5F3FF", color: "#7C3AED", fontWeight: 600 }}>
+                        {analyzingPage[u.id] ? "⏳" : "✦ Analyser"}
+                      </button>
+                    )}
                   </div>
                 </div>
                 {/* Crawl sections */}
@@ -2437,7 +2485,30 @@ function UrlsTab({ projectId, categories, brand, allResults }) {
                     </div>
                   </div>
                 )}
-              </div>
+              {/* GEO page analysis results */}
+              {pageAnalysis[u.id] && (
+                <div style={{ borderTop: "1px solid #E9D5FF", background: "#F5F3FF", padding: "10px 14px" }}>
+                  {pageAnalysis[u.id].error ? (
+                    <div style={{ fontSize: 11, color: "#DC2626" }}>Erreur : {pageAnalysis[u.id].error}</div>
+                  ) : (
+                    <>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: "#7C3AED", marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.7 }}>✦ Analyse GEO</div>
+                      <div style={{ fontSize: 11, color: "#5B21B6", marginBottom: 8, lineHeight: 1.5 }}>{pageAnalysis[u.id].summary}</div>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                        <div>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: "#059669", marginBottom: 4 }}>✓ Signaux GEO</div>
+                          {(pageAnalysis[u.id].geo_signals || []).map((s, i) => <div key={i} style={{ fontSize: 11, color: "#065F46", marginBottom: 2 }}>• {s}</div>)}
+                        </div>
+                        <div>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: "#D97706", marginBottom: 4 }}>→ Opportunités</div>
+                          {(pageAnalysis[u.id].opportunities || []).map((o, i) => <div key={i} style={{ fontSize: 11, color: "#92400E", marginBottom: 2 }}>• {o}</div>)}
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
             );
           })}
         </div>
@@ -2467,7 +2538,7 @@ function UrlsTab({ projectId, categories, brand, allResults }) {
                     </div>
                     <div style={{ display: "flex", gap: 10, fontSize: 11, color: C.textLight }}>
                       <span>📎 {d.count_as_source} source{d.count_as_source > 1 ? "s" : ""}</span>
-                      <span>💬 {d.count_in_answer} dans réponse</span>
+
                     </div>
                   </div>
                 </div>
@@ -2807,13 +2878,14 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
     sbGetCategories(projectId).then(setCategories);
   }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Load brand + decrypt key + results when site changes
+  // Load brand + results when project or site changes
   useEffect(() => {
     if (!projectId || !site?.id) return;
-    sbGetBrand(projectId, site.id).then(b => {
-      setBrand(b);
+    setAllResults([]); // reset before loading to avoid stale data
+    sbGetBrand(projectId, site.id).then(b => { setBrand(b); });
+    sbGetGeoResults(projectId, site.id).then(r => {
+      setAllResults(r);
     });
-    sbGetGeoResults(projectId, site.id).then(setAllResults);
   }, [projectId, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Decode key when enc changes

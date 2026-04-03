@@ -54,37 +54,41 @@ export default function ImportTab({ projects, currentProjectId, setCurrentProjec
 
           {/* Project selector */}
           <div style={{ marginBottom: 20, paddingBottom: 20, borderBottom: `1px solid ${C.borderLight}` }}>
-            <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, color: C.textLight, fontWeight: 600, marginBottom: 10 }}>Projets</div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              {projects.map(p => (
-                <button key={p.id} onClick={() => setCurrentProjectId(p.id)} style={{
-                  display: "flex", alignItems: "center", gap: 8,
-                  padding: "8px 16px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 600,
-                  border: `2px solid ${p.id === currentProjectId ? C.blue : C.border}`,
-                  background: p.id === currentProjectId ? C.blueLight : C.white,
-                  color: p.id === currentProjectId ? C.blue : C.textMid,
-                }}>
-                  <span style={{ width: 8, height: 8, borderRadius: "50%", background: p.id === currentProjectId ? C.blue : C.textLight, display: "inline-block", flexShrink: 0 }} />
-                  {editingProjectName === p.id ? (
-                    <input autoFocus value={p.name} onClick={e => e.stopPropagation()}
-                      onChange={e => setProjects(prev => prev.map(x => x.id === p.id ? {...x, name: e.target.value} : x))}
-                      onBlur={() => setEditingProjectName(null)}
-                      onKeyDown={e => e.key === "Enter" && setEditingProjectName(null)}
-                      style={{ border: "none", outline: "none", background: "transparent", fontSize: 13, fontWeight: 600, color: C.blue, width: 100 }}
-                    />
-                  ) : <span>{p.name}</span>}
-                  <span style={{ fontSize: 11, color: C.textLight, fontWeight: 400 }}>{p.sites.length} site{p.sites.length > 1 ? "s" : ""}</span>
-                  <button title="Renommer" onClick={e => { e.stopPropagation(); setEditingProjectName(p.id); }}
-                    style={{ padding: "1px 4px", border: "none", background: "transparent", cursor: "pointer", fontSize: 11, color: C.textLight }}>✏️</button>
-                  {projects.length > 1 && (
-                    <button title="Supprimer" onClick={e => { e.stopPropagation(); setConfirmModal({ message: `Supprimer le projet "${p.name}" ?`, onConfirm: () => {
-                      sbDeleteProject(p.id).catch(() => {});
-                      setProjects(prev => { const next = prev.filter(x => x.id !== p.id); if (currentProjectId === p.id) setCurrentProjectId(next[0].id); return next; });
-                    }}); }}
-                    style={{ padding: "1px 4px", border: "none", background: "transparent", cursor: "pointer", fontSize: 11, color: "#DC2626" }}>✕</button>
-                  )}
-                </button>
-              ))}
+            <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, color: C.textLight, fontWeight: 600, marginBottom: 10 }}>Projet actif</div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              {/* Dropdown selector */}
+              <div style={{ position: "relative", flex: 1, minWidth: 200 }}>
+                <select
+                  value={currentProjectId}
+                  onChange={e => setCurrentProjectId(e.target.value)}
+                  style={{ width: "100%", padding: "8px 12px", border: `2px solid ${C.blue}`, borderRadius: 10, fontSize: 13, fontWeight: 600, color: C.blue, background: C.blueLight, cursor: "pointer", appearance: "none" }}>
+                  {projects.map(p => (
+                    <option key={p.id} value={p.id}>{p.name} ({p.sites.length} site{p.sites.length > 1 ? "s" : ""})</option>
+                  ))}
+                </select>
+                <span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: C.blue }}>▾</span>
+              </div>
+              {/* Rename current project */}
+              {editingProjectName === currentProjectId ? (
+                <input autoFocus
+                  value={projects.find(p => p.id === currentProjectId)?.name || ""}
+                  onChange={e => setProjects(prev => prev.map(x => x.id === currentProjectId ? {...x, name: e.target.value} : x))}
+                  onBlur={() => setEditingProjectName(null)}
+                  onKeyDown={e => e.key === "Enter" && setEditingProjectName(null)}
+                  style={{ padding: "7px 10px", border: `1px solid ${C.blue}`, borderRadius: 8, fontSize: 13, fontWeight: 600, color: C.blue, width: 160 }}
+                />
+              ) : (
+                <button title="Renommer le projet" onClick={() => setEditingProjectName(currentProjectId)}
+                  style={{ padding: "7px 10px", border: `1px solid ${C.border}`, borderRadius: 8, background: C.white, cursor: "pointer", fontSize: 12, color: C.textMid }}>✏️ Renommer</button>
+              )}
+              {projects.length > 1 && (
+                <button title="Supprimer ce projet" onClick={() => setConfirmModal({ message: `Supprimer le projet "${projects.find(p=>p.id===currentProjectId)?.name}" ?`, onConfirm: () => {
+                  sbDeleteProject(currentProjectId).catch(() => {});
+                  setProjects(prev => { const next = prev.filter(x => x.id !== currentProjectId); if (next.length) setCurrentProjectId(next[0].id); return next; });
+                }})}
+                  style={{ padding: "7px 10px", border: "1px solid #FECACA", borderRadius: 8, background: "#FEF2F2", cursor: "pointer", fontSize: 12, color: "#DC2626" }}>🗑 Supprimer</button>
+              )}
+
               {projects.length < 20 && (
                 <button onClick={() => {
                   const p = newProject(`Projet ${projects.length + 1}`, [{ id: `site-${Date.now()}`, label: "Nouveau site", ...SITE_PALETTE[0] }], ownerEmail);
@@ -230,30 +234,94 @@ export default function ImportTab({ projects, currentProjectId, setCurrentProjec
               </div>
 
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                <UploadCard label="Screaming Frog" icon="🐸" hint="Export interne SF" color={site.color}
-                  loaded={sfData[site.id]?.length > 0} rows={sfData[site.id]}
-                  onData={rows => setSfData(p => ({...p, [site.id]: rows}))}
-                  onClear={() => setSfData(p => ({...p, [site.id]: []}))}
-                  siteId={site.id} source="sf" projectId={currentProjectId}
-                  onLoadFromHistory={async row => { try { const text = await sbDownload(row.storage_path); setSfData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn("History load error", e); } }} />
-                <UploadCard label="Google Search Console" icon="🔍" hint="Clics, impressions, CTR, position" color={site.color}
-                  loaded={gscData[site.id]?.length > 0} rows={gscData[site.id]}
-                  onData={rows => setGscData(p => ({...p, [site.id]: rows}))}
-                  onClear={() => setGscData(p => ({...p, [site.id]: []}))}
-                  siteId={site.id} source="gsc" projectId={currentProjectId}
-                  onLoadFromHistory={async row => { try { const text = await sbDownload(row.storage_path); setGscData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn("History load error", e); } }} />
-                <UploadCard label="Google Analytics 4" icon="📊" hint="Sessions, vues" color={site.color}
-                  loaded={gaData[site.id]?.length > 0} rows={gaData[site.id]}
-                  onData={rows => setGaData(p => ({...p, [site.id]: rows}))}
-                  onClear={() => setGaData(p => ({...p, [site.id]: []}))}
-                  siteId={site.id} source="ga" projectId={currentProjectId}
-                  onLoadFromHistory={async row => { try { const text = await sbDownload(row.storage_path); setGaData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn("History load error", e); } }} />
-                <UploadCard label="Bing AI Performance" icon="🤖" hint="Citations dans Bing Copilot" color={site.color}
-                  loaded={bingData[site.id]?.length > 0} rows={bingData[site.id]}
-                  onData={rows => setBingData(p => ({...p, [site.id]: rows}))}
-                  onClear={() => setBingData(p => ({...p, [site.id]: []}))}
-                  siteId={site.id} source="bing" projectId={currentProjectId}
-                  onLoadFromHistory={async row => { try { const text = await sbDownload(row.storage_path); setBingData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn("History load error", e); } }} />
+                {(() => {
+                  const lastSf = lastImports[`${site.id}_sf`];
+                  return (
+                    <div style={{ display: "flex", gap: 6, alignItems: "stretch" }}>
+                      <div style={{ flex: 1 }}>
+                        <UploadCard label="Screaming Frog" icon="🐸" hint="Export interne SF" color={site.color}
+                          loaded={sfData[site.id]?.length > 0} rows={sfData[site.id]}
+                          onData={rows => setSfData(p => ({...p, [site.id]: rows}))}
+                          onClear={() => setSfData(p => ({...p, [site.id]: []}))}
+                          siteId={site.id} source="sf" projectId={currentProjectId}
+                          onLoadFromHistory={async row => { try { const text = await sbDownload(row.storage_path); setSfData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn("History load error", e); } }} />
+                      </div>
+                      {lastSf?.storage_path && !sfData[site.id]?.length && (
+                        <button onClick={async () => { try { const text = await sbDownload(lastSf.storage_path); setSfData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn(e); } }}
+                          title={`Recharger : ${lastSf.filename} (${lastSf.row_count} lignes)`}
+                          style={{ padding: "0 10px", border: `1px solid ${site.color}`, borderRadius: 9, background: site.bg, color: site.color, fontSize: 11, fontWeight: 700, cursor: "pointer", flexShrink: 0, whiteSpace: "nowrap" }}>
+                          ↩ Dernier
+                        </button>
+                      )}
+                    </div>
+                  );
+                })()}
+                {(() => {
+                  const last_gsc = lastImports[`${site.id}_gsc`];
+                  return (
+                    <div style={{ display: "flex", gap: 6, alignItems: "stretch" }}>
+                      <div style={{ flex: 1 }}>
+                        <UploadCard label="Google Search Console" icon="🔍" hint="Clics, impressions, CTR, position" color={site.color}
+                          loaded={gscData[site.id]?.length > 0} rows={gscData[site.id]}
+                          onData={rows => setGscData(p => ({...p, [site.id]: rows}))}
+                          onClear={() => setGscData(p => ({...p, [site.id]: []}))}
+                          siteId={site.id} source="gsc" projectId={currentProjectId}
+                          onLoadFromHistory={async row => { try { const text = await sbDownload(row.storage_path); setGscData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn("History load error", e); } }} />
+                      </div>
+                      {last_gsc?.storage_path && !gscData[site.id]?.length && (
+                        <button onClick={async () => { try { const text = await sbDownload(last_gsc.storage_path); setGscData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn(e); } }}
+                          title={`Recharger : ${last_gsc.filename} (${last_gsc.row_count} lignes)`}
+                          style={{ padding: "0 10px", border: `1px solid ${site.color}`, borderRadius: 9, background: site.bg, color: site.color, fontSize: 11, fontWeight: 700, cursor: "pointer", flexShrink: 0, whiteSpace: "nowrap" }}>
+                          ↩ Dernier
+                        </button>
+                      )}
+                    </div>
+                  );
+                })()}
+                {(() => {
+                  const last_ga = lastImports[`${site.id}_ga`];
+                  return (
+                    <div style={{ display: "flex", gap: 6, alignItems: "stretch" }}>
+                      <div style={{ flex: 1 }}>
+                        <UploadCard label="Google Analytics 4" icon="📊" hint="Sessions, vues" color={site.color}
+                          loaded={gaData[site.id]?.length > 0} rows={gaData[site.id]}
+                          onData={rows => setGaData(p => ({...p, [site.id]: rows}))}
+                          onClear={() => setGaData(p => ({...p, [site.id]: []}))}
+                          siteId={site.id} source="ga" projectId={currentProjectId}
+                          onLoadFromHistory={async row => { try { const text = await sbDownload(row.storage_path); setGaData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn("History load error", e); } }} />
+                      </div>
+                      {last_ga?.storage_path && !gaData[site.id]?.length && (
+                        <button onClick={async () => { try { const text = await sbDownload(last_ga.storage_path); setGaData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn(e); } }}
+                          title={`Recharger : ${last_ga.filename} (${last_ga.row_count} lignes)`}
+                          style={{ padding: "0 10px", border: `1px solid ${site.color}`, borderRadius: 9, background: site.bg, color: site.color, fontSize: 11, fontWeight: 700, cursor: "pointer", flexShrink: 0, whiteSpace: "nowrap" }}>
+                          ↩ Dernier
+                        </button>
+                      )}
+                    </div>
+                  );
+                })()}
+                {(() => {
+                  const last_bing = lastImports[`${site.id}_bing`];
+                  return (
+                    <div style={{ display: "flex", gap: 6, alignItems: "stretch" }}>
+                      <div style={{ flex: 1 }}>
+                        <UploadCard label="Bing AI Performance" icon="🤖" hint="Citations dans Bing Copilot" color={site.color}
+                          loaded={bingData[site.id]?.length > 0} rows={bingData[site.id]}
+                          onData={rows => setBingData(p => ({...p, [site.id]: rows}))}
+                          onClear={() => setBingData(p => ({...p, [site.id]: []}))}
+                          siteId={site.id} source="bing" projectId={currentProjectId}
+                          onLoadFromHistory={async row => { try { const text = await sbDownload(row.storage_path); setBingData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn("History load error", e); } }} />
+                      </div>
+                      {last_bing?.storage_path && !bingData[site.id]?.length && (
+                        <button onClick={async () => { try { const text = await sbDownload(last_bing.storage_path); setBingData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn(e); } }}
+                          title={`Recharger : ${last_bing.filename} (${last_bing.row_count} lignes)`}
+                          style={{ padding: "0 10px", border: `1px solid ${site.color}`, borderRadius: 9, background: site.bg, color: site.color, fontSize: 11, fontWeight: 700, cursor: "pointer", flexShrink: 0, whiteSpace: "nowrap" }}>
+                          ↩ Dernier
+                        </button>
+                      )}
+                    </div>
+                  );
+                })()}
                 <UploadCard label="Semrush Organic Pages" icon="📈" hint="Positions, trafic estimé, volumes" color={site.color}
                   loaded={smData[site.id]?.length > 0} rows={smData[site.id]}
                   onData={(_, rawText) => {
