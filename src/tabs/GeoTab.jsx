@@ -2894,9 +2894,8 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
   // Load brand + results when project or site changes
   useEffect(() => {
     if (!projectId || !site?.id) return;
-    setAllResults([]); // reset before loading to avoid stale data
     sbGetBrand(projectId, site.id).then(b => { setBrand(b); });
-    sbGetGeoResults(projectId, site.id).then(r => { setAllResults(r); });
+    sbGetGeoResults(projectId, site.id).then(r => { setAllResults(r); }); // keep previous data while loading
     sbGetKeywords(projectId, site.id).then(kws => { setKeywords(kws || []); });
   }, [projectId, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -2906,9 +2905,6 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
     const k = decodeKey(apiKeyEnc);
     setApiKeyDec(k);
   }, [apiKeyEnc]); // eslint-disable-line react-hooks/exhaustive-deps
-
-;
-
 
   return (
     <div>
@@ -2965,7 +2961,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
           onQuestionsGenerated={() => { setQuestionsKey(k => k + 1); }}
         />
       )}
-      {subTab === "questions" && (
+      <div style={{ display: subTab === "questions" ? "block" : "none" }}>
         <QuestionsTab
           site={site}
           projectId={projectId}
@@ -2981,7 +2977,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
           keywordsOrder={keywords.map(k => k.id)}
           refreshTrigger={questionsKey}
         />
-      )}
+      </div>
       {subTab === "automation" && (
         <AutomationTab
           projectId={projectId}
