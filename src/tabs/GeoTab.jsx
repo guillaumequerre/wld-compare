@@ -1569,7 +1569,7 @@ RÈGLES :
 
 // ── Questions sub-tab (v2) ────────────────────────────────────────
 
-function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allResults, onResultSaved, activeProviders = ["openai"], providerKeys = {}, runMode = "parallel", keywordsOrder = [] }) {
+function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allResults, onResultSaved, activeProviders = ["openai"], providerKeys = {}, runMode = "parallel", keywordsOrder = [], refreshTrigger = 0 }) {
   const [questions, setQuestions]   = useState([]);
   const [results, setResults]       = useState(allResults || []);
   // Sort: favorites first, then by keyword order, then by creation date
@@ -1651,8 +1651,9 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
       setHintsMap(map);
     }).catch(() => {});
     sbGetKeywords(projectId, site.id).then(setKeywords);
-
-  }, [projectId, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+    // Also reload results when refreshTrigger changes (after question generation)
+    sbGetGeoResults(projectId, site.id).then(r => { if (r.length) setResults(r); });
+  }, [projectId, site?.id, refreshTrigger]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const resultsByQ = useMemo(() => {
     const m = {};
@@ -2966,7 +2967,6 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
       )}
       {subTab === "questions" && (
         <QuestionsTab
-          key={questionsKey}
           site={site}
           projectId={projectId}
           apiKey={apiKeyDec}
@@ -2979,6 +2979,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
           providerKeys={providerKeys}
           runMode={runMode}
           keywordsOrder={keywords.map(k => k.id)}
+          refreshTrigger={questionsKey}
         />
       )}
       {subTab === "automation" && (

@@ -241,94 +241,74 @@ export default function ImportTab({ projects, currentProjectId, setCurrentProjec
               </div>
 
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {(() => {
-                  const lastSf = lastImports[`${site.id}_sf`];
-                  return (
-                    <div style={{ display: "flex", gap: 6, alignItems: "stretch" }}>
-                      <div style={{ flex: 1 }}>
-                        <UploadCard label="Screaming Frog" icon="🐸" hint="Export interne SF" color={site.color}
-                          loaded={sfData[site.id]?.length > 0} rows={sfData[site.id]}
-                          onData={rows => setSfData(p => ({...p, [site.id]: rows}))}
-                          onClear={() => setSfData(p => ({...p, [site.id]: []}))}
-                          siteId={site.id} source="sf" projectId={currentProjectId}
-                          onLoadFromHistory={async row => { try { const text = await sbDownload(row.storage_path); setSfData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn("History load error", e); } }} />
-                      </div>
-                      {lastSf?.storage_path && !sfData[site.id]?.length && (
-                        <button onClick={async () => { try { const text = await sbDownload(lastSf.storage_path); setSfData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn(e); } }}
-                          title={`Recharger : ${lastSf.filename} (${lastSf.row_count} lignes)`}
-                          style={{ padding: "0 10px", border: `1px solid ${site.color}`, borderRadius: 9, background: site.bg, color: site.color, fontSize: 11, fontWeight: 700, cursor: "pointer", flexShrink: 0, whiteSpace: "nowrap" }}>
-                          ↩ Dernier
-                        </button>
-                      )}
-                    </div>
-                  );
-                })()}
-                {(() => {
-                  const last_gsc = lastImports[`${site.id}_gsc`];
-                  return (
-                    <div style={{ display: "flex", gap: 6, alignItems: "stretch" }}>
-                      <div style={{ flex: 1 }}>
-                        <UploadCard label="Google Search Console" icon="🔍" hint="Clics, impressions, CTR, position" color={site.color}
-                          loaded={gscData[site.id]?.length > 0} rows={gscData[site.id]}
-                          onData={rows => setGscData(p => ({...p, [site.id]: rows}))}
-                          onClear={() => setGscData(p => ({...p, [site.id]: []}))}
-                          siteId={site.id} source="gsc" projectId={currentProjectId}
-                          onLoadFromHistory={async row => { try { const text = await sbDownload(row.storage_path); setGscData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn("History load error", e); } }} />
-                      </div>
-                      {last_gsc?.storage_path && !gscData[site.id]?.length && (
-                        <button onClick={async () => { try { const text = await sbDownload(last_gsc.storage_path); setGscData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn(e); } }}
-                          title={`Recharger : ${last_gsc.filename} (${last_gsc.row_count} lignes)`}
-                          style={{ padding: "0 10px", border: `1px solid ${site.color}`, borderRadius: 9, background: site.bg, color: site.color, fontSize: 11, fontWeight: 700, cursor: "pointer", flexShrink: 0, whiteSpace: "nowrap" }}>
-                          ↩ Dernier
-                        </button>
-                      )}
-                    </div>
-                  );
-                })()}
-                {(() => {
-                  const last_ga = lastImports[`${site.id}_ga`];
-                  return (
-                    <div style={{ display: "flex", gap: 6, alignItems: "stretch" }}>
-                      <div style={{ flex: 1 }}>
-                        <UploadCard label="Google Analytics 4" icon="📊" hint="Sessions, vues" color={site.color}
-                          loaded={gaData[site.id]?.length > 0} rows={gaData[site.id]}
-                          onData={rows => setGaData(p => ({...p, [site.id]: rows}))}
-                          onClear={() => setGaData(p => ({...p, [site.id]: []}))}
-                          siteId={site.id} source="ga" projectId={currentProjectId}
-                          onLoadFromHistory={async row => { try { const text = await sbDownload(row.storage_path); setGaData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn("History load error", e); } }} />
-                      </div>
-                      {last_ga?.storage_path && !gaData[site.id]?.length && (
-                        <button onClick={async () => { try { const text = await sbDownload(last_ga.storage_path); setGaData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn(e); } }}
-                          title={`Recharger : ${last_ga.filename} (${last_ga.row_count} lignes)`}
-                          style={{ padding: "0 10px", border: `1px solid ${site.color}`, borderRadius: 9, background: site.bg, color: site.color, fontSize: 11, fontWeight: 700, cursor: "pointer", flexShrink: 0, whiteSpace: "nowrap" }}>
-                          ↩ Dernier
-                        </button>
-                      )}
-                    </div>
-                  );
-                })()}
-                {(() => {
-                  const last_bing = lastImports[`${site.id}_bing`];
-                  return (
-                    <div style={{ display: "flex", gap: 6, alignItems: "stretch" }}>
-                      <div style={{ flex: 1 }}>
-                        <UploadCard label="Bing AI Performance" icon="🤖" hint="Citations dans Bing Copilot" color={site.color}
-                          loaded={bingData[site.id]?.length > 0} rows={bingData[site.id]}
-                          onData={rows => setBingData(p => ({...p, [site.id]: rows}))}
-                          onClear={() => setBingData(p => ({...p, [site.id]: []}))}
-                          siteId={site.id} source="bing" projectId={currentProjectId}
-                          onLoadFromHistory={async row => { try { const text = await sbDownload(row.storage_path); setBingData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn("History load error", e); } }} />
-                      </div>
-                      {last_bing?.storage_path && !bingData[site.id]?.length && (
-                        <button onClick={async () => { try { const text = await sbDownload(last_bing.storage_path); setBingData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn(e); } }}
-                          title={`Recharger : ${last_bing.filename} (${last_bing.row_count} lignes)`}
-                          style={{ padding: "0 10px", border: `1px solid ${site.color}`, borderRadius: 9, background: site.bg, color: site.color, fontSize: 11, fontWeight: 700, cursor: "pointer", flexShrink: 0, whiteSpace: "nowrap" }}>
-                          ↩ Dernier
-                        </button>
-                      )}
-                    </div>
-                  );
-                })()}
+                <div style={{ display: "flex", gap: 6, alignItems: "stretch" }}>
+                  <div style={{ flex: 1 }}>
+                    <UploadCard label="Screaming Frog" icon="🐸" hint="Export interne SF" color={site.color}
+                      loaded={sfData[site.id]?.length > 0} rows={sfData[site.id]}
+                      onData={rows => setSfData(p => ({...p, [site.id]: rows}))}
+                      onClear={() => setSfData(p => ({...p, [site.id]: []}))}
+                      siteId={site.id} source="sf" projectId={currentProjectId}
+                      onLoadFromHistory={async row => { try { const text = await sbDownload(row.storage_path); setSfData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn("History load error", e); } }} />
+                  </div>
+                  {lastImports[`${site.id}_sf`]?.storage_path && !sfData[site.id]?.length && (
+                    <button onClick={async () => { try { const text = await sbDownload(lastImports[`${site.id}_sf`].storage_path); setSfData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn(e); } }}
+                      title={`Recharger : ${lastImports[`${site.id}_sf`].filename}`}
+                      style={{ padding: "0 10px", border: `1px solid ${site.color}`, borderRadius: 9, background: site.bg, color: site.color, fontSize: 11, fontWeight: 700, cursor: "pointer", flexShrink: 0, whiteSpace: "nowrap" }}>
+                      ↩ Dernier
+                    </button>
+                  )}
+                </div>
+                <div style={{ display: "flex", gap: 6, alignItems: "stretch" }}>
+                  <div style={{ flex: 1 }}>
+                    <UploadCard label="Google Search Console" icon="🔍" hint="Clics, impressions, CTR, position" color={site.color}
+                      loaded={gscData[site.id]?.length > 0} rows={gscData[site.id]}
+                      onData={rows => setGscData(p => ({...p, [site.id]: rows}))}
+                      onClear={() => setGscData(p => ({...p, [site.id]: []}))}
+                      siteId={site.id} source="gsc" projectId={currentProjectId}
+                      onLoadFromHistory={async row => { try { const text = await sbDownload(row.storage_path); setGscData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn("History load error", e); } }} />
+                  </div>
+                  {lastImports[`${site.id}_gsc`]?.storage_path && !gscData[site.id]?.length && (
+                    <button onClick={async () => { try { const text = await sbDownload(lastImports[`${site.id}_gsc`].storage_path); setGscData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn(e); } }}
+                      title={`Recharger : ${lastImports[`${site.id}_gsc`].filename}`}
+                      style={{ padding: "0 10px", border: `1px solid ${site.color}`, borderRadius: 9, background: site.bg, color: site.color, fontSize: 11, fontWeight: 700, cursor: "pointer", flexShrink: 0, whiteSpace: "nowrap" }}>
+                      ↩ Dernier
+                    </button>
+                  )}
+                </div>
+                <div style={{ display: "flex", gap: 6, alignItems: "stretch" }}>
+                  <div style={{ flex: 1 }}>
+                    <UploadCard label="Google Analytics 4" icon="📊" hint="Sessions, vues" color={site.color}
+                      loaded={gaData[site.id]?.length > 0} rows={gaData[site.id]}
+                      onData={rows => setGaData(p => ({...p, [site.id]: rows}))}
+                      onClear={() => setGaData(p => ({...p, [site.id]: []}))}
+                      siteId={site.id} source="ga" projectId={currentProjectId}
+                      onLoadFromHistory={async row => { try { const text = await sbDownload(row.storage_path); setGaData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn("History load error", e); } }} />
+                  </div>
+                  {lastImports[`${site.id}_ga`]?.storage_path && !gaData[site.id]?.length && (
+                    <button onClick={async () => { try { const text = await sbDownload(lastImports[`${site.id}_ga`].storage_path); setGaData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn(e); } }}
+                      title={`Recharger : ${lastImports[`${site.id}_ga`].filename}`}
+                      style={{ padding: "0 10px", border: `1px solid ${site.color}`, borderRadius: 9, background: site.bg, color: site.color, fontSize: 11, fontWeight: 700, cursor: "pointer", flexShrink: 0, whiteSpace: "nowrap" }}>
+                      ↩ Dernier
+                    </button>
+                  )}
+                </div>
+                <div style={{ display: "flex", gap: 6, alignItems: "stretch" }}>
+                  <div style={{ flex: 1 }}>
+                    <UploadCard label="Bing AI Performance" icon="🤖" hint="Citations dans Bing Copilot" color={site.color}
+                      loaded={bingData[site.id]?.length > 0} rows={bingData[site.id]}
+                      onData={rows => setBingData(p => ({...p, [site.id]: rows}))}
+                      onClear={() => setBingData(p => ({...p, [site.id]: []}))}
+                      siteId={site.id} source="bing" projectId={currentProjectId}
+                      onLoadFromHistory={async row => { try { const text = await sbDownload(row.storage_path); setBingData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn("History load error", e); } }} />
+                  </div>
+                  {lastImports[`${site.id}_bing`]?.storage_path && !bingData[site.id]?.length && (
+                    <button onClick={async () => { try { const text = await sbDownload(lastImports[`${site.id}_bing`].storage_path); setBingData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn(e); } }}
+                      title={`Recharger : ${lastImports[`${site.id}_bing`].filename}`}
+                      style={{ padding: "0 10px", border: `1px solid ${site.color}`, borderRadius: 9, background: site.bg, color: site.color, fontSize: 11, fontWeight: 700, cursor: "pointer", flexShrink: 0, whiteSpace: "nowrap" }}>
+                      ↩ Dernier
+                    </button>
+                  )}
+                </div>
                 <UploadCard label="Semrush Organic Pages" icon="📈" hint="Positions, trafic estimé, volumes" color={site.color}
                   loaded={smData[site.id]?.length > 0} rows={smData[site.id]}
                   onData={(_, rawText) => {
