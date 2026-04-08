@@ -248,6 +248,7 @@ export default function ImportTab({ projects, currentProjectId, setCurrentProjec
                       onData={rows => setSfData(p => ({...p, [site.id]: rows}))}
                       onClear={() => setSfData(p => ({...p, [site.id]: []}))}
                       siteId={site.id} source="sf" projectId={currentProjectId}
+                      onAfterUpload={refreshHistory}
                       onLoadFromHistory={async row => { try { const text = await sbDownload(row.storage_path); setSfData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn("History load error", e); } }} />
                   </div>
                   {lastImports[`${site.id}_sf`]?.storage_path && !sfData[site.id]?.length && (
@@ -265,6 +266,7 @@ export default function ImportTab({ projects, currentProjectId, setCurrentProjec
                       onData={rows => setGscData(p => ({...p, [site.id]: rows}))}
                       onClear={() => setGscData(p => ({...p, [site.id]: []}))}
                       siteId={site.id} source="gsc" projectId={currentProjectId}
+                      onAfterUpload={refreshHistory}
                       onLoadFromHistory={async row => { try { const text = await sbDownload(row.storage_path); setGscData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn("History load error", e); } }} />
                   </div>
                   {lastImports[`${site.id}_gsc`]?.storage_path && !gscData[site.id]?.length && (
@@ -282,6 +284,7 @@ export default function ImportTab({ projects, currentProjectId, setCurrentProjec
                       onData={rows => setGaData(p => ({...p, [site.id]: rows}))}
                       onClear={() => setGaData(p => ({...p, [site.id]: []}))}
                       siteId={site.id} source="ga" projectId={currentProjectId}
+                      onAfterUpload={refreshHistory}
                       onLoadFromHistory={async row => { try { const text = await sbDownload(row.storage_path); setGaData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn("History load error", e); } }} />
                   </div>
                   {lastImports[`${site.id}_ga`]?.storage_path && !gaData[site.id]?.length && (
@@ -299,6 +302,7 @@ export default function ImportTab({ projects, currentProjectId, setCurrentProjec
                       onData={rows => setBingData(p => ({...p, [site.id]: rows}))}
                       onClear={() => setBingData(p => ({...p, [site.id]: []}))}
                       siteId={site.id} source="bing" projectId={currentProjectId}
+                      onAfterUpload={refreshHistory}
                       onLoadFromHistory={async row => { try { const text = await sbDownload(row.storage_path); setBingData(p => ({...p, [site.id]: parseCSV(text)})); } catch(e) { console.warn("History load error", e); } }} />
                   </div>
                   {lastImports[`${site.id}_bing`]?.storage_path && !bingData[site.id]?.length && (
@@ -322,6 +326,7 @@ export default function ImportTab({ projects, currentProjectId, setCurrentProjec
                   }}
                   onClear={() => setSmData(p => ({...p, [site.id]: []}))}
                   rawMode siteId={site.id} source="sm" projectId={currentProjectId}
+                  onAfterUpload={refreshHistory}
                   onLoadFromHistory={async row => { try { const text = await sbDownload(row.storage_path); const rows = parseSemrush(parseSemrushCSV(text)); setSmData(p => ({...p, [site.id]: rows})); } catch(e) { console.warn("History load error", e); } }} />
               </div>
 

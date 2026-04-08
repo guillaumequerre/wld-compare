@@ -113,7 +113,7 @@ function LargeFileModal({ file, text, onTruncate, onSkipStorage, onCancel }) {
 }
 
 // ── Main component ────────────────────────────────────────────────
-export default function UploadCard({ label, icon, hint, onData, onClear, loaded, color, siteId, source, projectId, onLoadFromHistory, rawMode, rows }) {
+export default function UploadCard({ label, icon, hint, onData, onClear, loaded, color, siteId, source, projectId, onLoadFromHistory, rawMode, rows, onAfterUpload }) {
   const [drag, setDrag]               = useState(false);
   const [dragHistory, setDragHistory] = useState(false);
   const [uploading, setUploading]     = useState(false);
@@ -193,6 +193,7 @@ export default function UploadCard({ label, icon, hint, onData, onClear, loaded,
         setUploading(true);
         try {
           await saveToStorage(file, text);
+          onAfterUpload?.();
         } catch (err) {
           setUploadErr(`Sauvegarde échouée — ${(err?.message || String(err)).slice(0, 80)}`);
           console.warn("Upload error:", err);
@@ -217,6 +218,7 @@ export default function UploadCard({ label, icon, hint, onData, onClear, loaded,
       const lastNewline = truncated.lastIndexOf("\n");
       const safe = lastNewline > 0 ? truncated.slice(0, lastNewline) : truncated;
       await saveToStorage({ ...file, name: file.name }, safe);
+      onAfterUpload?.();
     } catch (err) {
       setUploadErr(`Sauvegarde tronquée échouée — ${(err?.message || String(err)).slice(0, 80)}`);
     } finally {
@@ -232,6 +234,7 @@ export default function UploadCard({ label, icon, hint, onData, onClear, loaded,
     try {
       const rowCount = parseCSV(text).length;
       await saveMetaOnly(file, rowCount);
+      onAfterUpload?.();
     } catch (err) {
       setUploadErr(`Erreur métadonnées — ${(err?.message || String(err)).slice(0, 80)}`);
     } finally {

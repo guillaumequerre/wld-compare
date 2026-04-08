@@ -352,8 +352,9 @@ export async function sbSaveQuestions(rows) {
   const res = await fetch(`${PROXY}/rest/v1/geo_questions`, {
     method: "POST",
     headers: {
+      ...authHeaders(),
       "Content-Type": "application/json",
-      "Prefer": "return=representation,resolution=ignore-duplicates",
+      "Prefer": "return=representation,resolution=merge-duplicates",
     },
     body: JSON.stringify(rows),
   });
@@ -432,9 +433,20 @@ export async function sbGetGeoResultsAll(project_id) {
 }
 
 export async function sbGetGeoResults(project_id, site_id) {
-  const res = await fetch(`${PROXY}/rest/v1/geo_results?project_id=eq.${encodeURIComponent(project_id)}&site_id=eq.${encodeURIComponent(site_id)}&order=created_at.desc`, { headers: authHeaders() });
-  if (!res.ok) return [];
-  return res.json();
+  const res = await fetch(
+    `${PROXY}/rest/v1/geo_results?select=*&project_id=eq.${encodeURIComponent(project_id)}&site_id=eq.${encodeURIComponent(site_id)}&order=created_at.desc&limit=2000`,
+    { headers: authHeaders() }
+  );
+  if (!res.ok) {
+    console.warn("[sbGetGeoResults] failed:", res.status, await res.text().catch(() => ""));
+    return [];
+  }
+  const data = await res.json();
+  if (!Array.isArray(data)) {
+    console.warn("[sbGetGeoResults] unexpected response:", data);
+    return [];
+  }
+  return data;
 }
 
 export async function sbGetResultsForQuestion(question_id) {
@@ -657,9 +669,16 @@ export async function sbSaveHint(question_id, site_id, project_id, hint_text) {
 }
 
 export async function sbGetHints(project_id, site_id) {
-  const res = await fetch(`${PROXY}/rest/v1/geo_hints?project_id=eq.${encodeURIComponent(project_id)}&site_id=eq.${encodeURIComponent(site_id)}&select=question_id,hint_text,updated_at`, { headers: authHeaders() });
-  if (!res.ok) return [];
-  return res.json();
+  const res = await fetch(
+    `${PROXY}/rest/v1/geo_hints?select=question_id,hint_text,updated_at&project_id=eq.${encodeURIComponent(project_id)}&site_id=eq.${encodeURIComponent(site_id)}`,
+    { headers: authHeaders() }
+  );
+  if (!res.ok) {
+    console.warn("[sbGetHints] failed:", res.status);
+    return [];
+  }
+  const data = await res.json();
+  return Array.isArray(data) ? data : [];
 }
 
 // ── PROJECT SETTINGS (UI preferences per project) ────────────────

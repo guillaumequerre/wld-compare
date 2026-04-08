@@ -1635,24 +1635,23 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
   const [keywords, setKeywords]     = useState([]);
   const [newCalEntries, setNewCalEntries] = useState({}); // { `${q.id}|${p.id}` → last newEntry for PresenceCalendar }
 
-  // Sync results from parent prop — but don't overwrite optimistic updates.
-  // Reload results fresh from DB on mount and site change (catches cross-session data)
-  useEffect(() => {
-    if (!projectId || !site?.id) { setResults(allResults || []); return; }
-    sbGetGeoResults(projectId, site.id).then(r => setResults(r.length ? r : (allResults || [])));
-  }, [site?.id, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
-
+  // Load all data on mount and when project/site/refreshTrigger changes
   useEffect(() => {
     if (!projectId || !site?.id) return;
-    sbGetQuestions(projectId, site.id).then(setQuestions);
-    sbGetHints(projectId, site.id).then(rows => {
+    // Load in parallel
+    Promise.all([
+      sbGetGeoResults(projectId, site.id),
+      sbGetQuestions(projectId, site.id),
+      sbGetHints(projectId, site.id),
+      sbGetKeywords(projectId, site.id),
+    ]).then(([results, questions, hints, keywords]) => {
+      setResults(results.length ? results : (allResults || []));
+      setQuestions(questions);
       const map = {};
-      rows.forEach(r => { map[r.question_id] = r.hint_text; });
+      hints.forEach(r => { map[r.question_id] = r.hint_text; });
       setHintsMap(map);
-    }).catch(() => {});
-    sbGetKeywords(projectId, site.id).then(setKeywords);
-    // Also reload results when refreshTrigger changes (after question generation)
-    sbGetGeoResults(projectId, site.id).then(r => { if (r.length) setResults(r); });
+      setKeywords(keywords);
+    }).catch(e => console.warn("[QuestionsTab] load error:", e));
   }, [projectId, site?.id, refreshTrigger]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const resultsByQ = useMemo(() => {
