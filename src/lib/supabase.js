@@ -404,9 +404,25 @@ export async function sbDeleteQuestion(id) {
 export async function sbSaveGeoResult(result) {
   // Derive provider_id from model label for upsert deduplication
   // Only include provider_id if column exists (optional)
-  // Send only columns that exist in the table
-  const { updated_at: _drop, ...cleanResult } = result;
-  const row = cleanResult;
+  // Explicitly pick only columns that exist in geo_results table
+  const row = {
+    question_id:          result.question_id,
+    project_id:           result.project_id,
+    site_id:              result.site_id,
+    model:                result.model,
+    answer:               result.answer,
+    answer_type:          result.answer_type   || null,
+    intent_type:          result.intent_type   || null,
+    sources:              result.sources       || [],
+    source_types:         result.source_types  || [],
+    brand_mentioned:      result.brand_mentioned    ?? false,
+    brand_position:       result.brand_position     ?? null,
+    brand_in_sources:     result.brand_in_sources   ?? false,
+    competitors_mentioned: result.competitors_mentioned || [],
+    input_tokens:         result.input_tokens  ?? null,
+    output_tokens:        result.output_tokens ?? null,
+    created_at:           result.created_at    || new Date().toISOString(),
+  };
 
   const res = await fetch(`${PROXY}/rest/v1/geo_results`, {
     method: "POST",
