@@ -1,3 +1,4 @@
+// lib/auth.js
 // Auth helpers — talk to /api/auth edge function
 // Session stored in sessionStorage (clears on tab close) + localStorage for remember-me
 
@@ -52,13 +53,21 @@ export async function authSignup(email, password) {
     body: JSON.stringify({ email, password }),
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error || "Erreur lors de la création du compte");
-  // Auto-login after signup if token returned
+
+  if (!res.ok) {
+    // Erreur 409 = email déjà utilisé
+    if (res.status === 409) throw new Error("Un compte existe déjà avec cet email.");
+    throw new Error(data.error || "Erreur lors de la création du compte");
+  }
+
+  // Le serveur retourne toujours un token après signup désormais
   if (data.access_token) {
-    storeSession({ access_token: data.access_token, refresh_token: data.refresh_token, user: data.user });
+    storeSession({ access_token: data.access_token, refresh_token: data.refresh_token, user: data.user }, true);
     return data.user;
   }
-  return data.user;
+
+  // Cas de repli : compte créé sans token (ne devrait pas arriver)
+  return null;
 }
 
 export async function authLogout() {
@@ -81,12 +90,13 @@ export async function authRefresh() {
   } catch { clearSession(); return null; }
 }
 
-// Project access control
+// ── Project access control ────────────────────────────────────────
+
 export async function sbGetProjectMembers(projectId) {
   const token = getToken();
   const headers = { "Content-Type": "application/json" };
   if (token) headers["Authorization"] = `Bearer ${token}`;
-  const res = await fetch(`/api/supabase/rest/v1/project_members?project_id=eq.${encodeURIComponent(projectId)}&select=*`);
+  const res = await fetch(`/api/supabase/rest/v1/project_members?project_id=eq.${encodeURIComponent(projectId)}&select=*`, { headers });
   if (!res.ok) return [];
   return res.json();
 }
@@ -115,7 +125,6 @@ export async function sbSetProjectOwner(projectId, ownerEmail) {
   });
 }
 
-// Load projects accessible to this user — direct Supabase query
 export async function sbLoadAccessibleProjects(userEmail) {
   const token = getToken();
   if (!token || !userEmail) return [];
@@ -126,13 +135,11 @@ export async function sbLoadAccessibleProjects(userEmail) {
     const authH = { "Authorization": `Bearer ${token}` };
 
     if (admin) {
-      // Super admin: all projects
       const res = await fetch(`/api/supabase/rest/v1/projects?select=*&order=updated_at.desc`, { headers: authH });
       if (!res.ok) return [];
       return (await res.json()).map(parseProject);
     }
 
-    // Regular user: own projects + member projects
     const [ownedRes, memberRes] = await Promise.all([
       fetch(`/api/supabase/rest/v1/projects?owner_email=eq.${encodeURIComponent(email)}&select=*&order=updated_at.desc`, { headers: authH }),
       fetch(`/api/supabase/rest/v1/project_members?user_email=eq.${encodeURIComponent(email)}&select=project_id`, { headers: authH }),
