@@ -155,7 +155,7 @@ export default function UploadCard({ label, icon, hint, onData, onClear, loaded,
     const rc     = rawMode ? parseCSV(text).length : parseCSV(text).length;
     const result = await sbInsertImport({ project_id: projectId || "proj-default", site_id: siteId, source, filename: file.name, storage_path: path, row_count: rc });
     if (result?.[0]) { setLastImportId(result[0].id); setLastStoragePath(result[0].storage_path); }
-  }, [projectId, siteId, source, rawMode]);
+  }, [projectId, siteId, source, rawMode, onAfterUpload]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Insert record only (no file storage)
   const saveMetaOnly = useCallback(async (file, rowCount) => {
@@ -165,7 +165,7 @@ export default function UploadCard({ label, icon, hint, onData, onClear, loaded,
       storage_path: "", row_count: rowCount,
     });
     if (result?.[0]) { setLastImportId(result[0].id); setLastStoragePath(""); }
-  }, [projectId, siteId, source]);
+  }, [projectId, siteId, source, onAfterUpload]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handle = useCallback(async (file) => {
     if (!file) return;
@@ -224,7 +224,7 @@ export default function UploadCard({ label, icon, hint, onData, onClear, loaded,
     } finally {
       setUploading(false);
     }
-  }, [largeFileModal, saveToStorage]);
+  }, [largeFileModal, saveToStorage]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSkipStorage = useCallback(async () => {
     if (!largeFileModal) return;

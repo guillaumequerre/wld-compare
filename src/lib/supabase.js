@@ -403,13 +403,6 @@ export async function sbDeleteQuestion(id) {
 
 export async function sbSaveGeoResult(result) {
   // Derive provider_id from model label for upsert deduplication
-  const model = result.model || "";
-  let provider_id = "other";
-  if (model.toLowerCase().includes("openai") || model.toLowerCase().includes("gpt")) provider_id = "openai";
-  else if (model.toLowerCase().includes("gemini")) provider_id = "gemini";
-  else if (model.toLowerCase().includes("perplexity") || model.toLowerCase().includes("sonar")) provider_id = "perplexity";
-  else if (model.toLowerCase().includes("claude")) provider_id = "claude";
-
   // Only include provider_id if column exists (optional)
   const row = { ...result, updated_at: new Date().toISOString() };
 
