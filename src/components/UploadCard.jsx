@@ -148,12 +148,14 @@ export default function UploadCard({ label, icon, hint, onData, onClear, loaded,
 
   // Upload to Supabase Storage + insert import record
   const saveToStorage = useCallback(async (file, text) => {
-    const ts       = new Date().toISOString().replace(/[:.]/g, "-");
-    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-    const path     = `${projectId || "proj-default"}/${siteId}/${source}/${ts}_${safeName}`;
+    // Fixed path: 1 file per project/site/source — replaces previous import
+    const path = `${projectId || "proj-default"}/${siteId}/${source}/latest.csv`;
     await sbUpload(path, text);
-    const rc     = rawMode ? parseCSV(text).length : parseCSV(text).length;
-    const result = await sbInsertImport({ project_id: projectId || "proj-default", site_id: siteId, source, filename: file.name, storage_path: path, row_count: rc });
+    const rc = rawMode ? parseCSV(text).length : parseCSV(text).length;
+    const result = await sbInsertImport({
+      project_id: projectId || "proj-default", site_id: siteId, source,
+      filename: file.name, storage_path: path, row_count: rc,
+    });
     if (result?.[0]) { setLastImportId(result[0].id); setLastStoragePath(result[0].storage_path); }
   }, [projectId, siteId, source, rawMode, onAfterUpload]); // eslint-disable-line react-hooks/exhaustive-deps
 

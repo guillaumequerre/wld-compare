@@ -1,6 +1,6 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import { C, SF_DIMS, RES_KPIS, RADAR_DIMS, DEFAULT_SITES, SEMRUSH_DIMS } from "./lib/constants";
-import { emptyDataMap, makeInitialProject, parseCSV } from "./lib/helpers";
+import { emptyDataMap, makeInitialProject, parseCSV, parseSemrushCSV } from "./lib/helpers";
 import { extractSF, extractGSC, extractGA, extractBing, extractSemrush, parseSemrush, filterByMode } from "./lib/parsers";
 import { buildUrlMaps, buildSfPageVectors, intraCorrFast, smIntraCorr } from "./lib/correlations";
 import { sbSaveProject, sbGetHistory, sbGetLatest, sbDownload, sbGetPageTypes, sbSaveGeoAxes, sbGetGeoResultsAll, sbGetUrlIndex } from "./lib/supabase";
@@ -236,8 +236,12 @@ export default function App() {
         const src = row.source;
         const key = src === "sf" ? "sfData" : src === "gsc" ? "gscData" : src === "ga" ? "gaData" : src === "bing" ? "bingData" : src === "sm" ? "smData" : null;
         if (!key) return null;
-        const rawRows = parseCSV(text);
-        const rows = src === "sm" ? parseSemrush(rawRows) : rawRows;
+        let rows;
+        if (src === "sm") {
+          rows = parseSemrush(parseSemrushCSV(text));
+        } else {
+          rows = parseCSV(text);
+        }
         return { key, storedSid: row.site_id, rows };
       } catch (e) { console.warn("Auto-load failed:", row.source, e); return null; }
     }));
@@ -361,16 +365,16 @@ export default function App() {
     })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Reload imports every time user switches project
   useEffect(() => {
-    if (loadedProjectsRef.current.has(currentProjectId)) return;
-    loadedProjectsRef.current.add(currentProjectId);
+    if (!currentProjectId) return;
     (async () => {
       setDbLoading(true);
       try { await loadProjectData(currentProjectId); }
       catch (e) { console.warn("Supabase project switch error", e); }
       finally { setDbLoading(false); }
     })();
-  }, [currentProjectId, loadProjectData]);
+  }, [currentProjectId, loadProjectData]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     // Don't save EMPTY_PROJECT (no real id) or when not logged in

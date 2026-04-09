@@ -12,10 +12,19 @@ function authHeaders(extra = {}) {
 
 export async function sbUpload(path, csvText) {
   // Upload via proxy Netlify — auth gérée côté serveur
-  const res = await fetch(`${PROXY}/storage/v1/object/imports/${path}`, {
+  const token = (() => {
+    try {
+      const s = sessionStorage.getItem("correl_session") || localStorage.getItem("correl_session");
+      return s ? JSON.parse(s).access_token : null;
+    } catch { return null; }
+  })();
+
+  if (!token) throw new Error("Non authentifié — reconnectez-vous");
+
+  const res = await fetch(`${PROXY}/storage/v1/object/csv-imports/${path}`, {
     method: "POST",
     headers: {
-      ...authHeaders(),
+      "Authorization": `Bearer ${token}`,
       "Content-Type": "text/csv",
       "x-upsert": "true",
     },
@@ -23,6 +32,7 @@ export async function sbUpload(path, csvText) {
   });
   if (!res.ok) {
     const body = await res.text().catch(() => "");
+    console.error("[sbUpload] failed:", res.status, body);
     throw new Error(`Upload failed: ${res.status} — ${body.slice(0, 120)}`);
   }
   return path;
@@ -30,9 +40,15 @@ export async function sbUpload(path, csvText) {
 
 
 export async function sbInsertImport({ project_id, site_id, source, filename, storage_path, row_count }) {
+  // UPSERT: 1 row max per (project_id, site_id, source) — replaces previous
   const res = await fetch(`${PROXY}/rest/v1/imports`, {
     method: "POST",
-    headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
+    headers: {
+      ...authHeaders(),
+      "Content-Type": "application/json",
+      "Prefer": "resolution=merge-duplicates,return=representation",
+      "on-conflict": "project_id,site_id,source",
+    },
     body: JSON.stringify({ project_id, site_id, source, filename, storage_path, row_count, uploaded_at: new Date().toISOString() }),
   });
   if (!res.ok) {
@@ -48,7 +64,7 @@ export async function sbDeleteImport(id) {
 }
 
 export async function sbDeleteFile(storage_path) {
-  const res = await fetch(`${PROXY}/storage/v1/object/imports/${storage_path}`, { method: "DELETE", headers: authHeaders() });
+  const res = await fetch(`${PROXY}/storage/v1/object/csv-imports/${storage_path}`, { method: "DELETE", headers: authHeaders() });
   if (!res.ok) throw new Error(`Delete file failed: ${res.status}`);
 }
 
@@ -61,12 +77,13 @@ export async function sbGetHistory(projectId, limit = 50) {
 
 export async function sbGetLatest(projectId) {
   const filter = projectId ? `&project_id=eq.${encodeURIComponent(projectId)}` : "";
-  const res = await fetch(`${PROXY}/rest/v1/imports?select=*&order=uploaded_at.desc&limit=200${filter}`, { headers: authHeaders() });
+  // With fixed path strategy, there's only 1 row per (project, site, source)
+  const res = await fetch(`${PROXY}/rest/v1/imports?select=*&order=uploaded_at.desc&limit=50${filter}`, { headers: authHeaders() });
   if (!res.ok) return {};
   const rows = await res.json();
   const latest = {};
   for (const row of rows) {
-    if (!row.storage_path) continue; // skip "no storage" imports
+    if (!row.storage_path) continue;
     const key = `${row.site_id}_${row.source}`;
     if (!latest[key]) latest[key] = row;
   }
@@ -74,8 +91,14 @@ export async function sbGetLatest(projectId) {
 }
 
 export async function sbDownload(storage_path) {
-  const res = await fetch(`${PROXY}/storage/v1/object/imports/${storage_path}`, { headers: authHeaders() });
-  if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+  const res = await fetch(`${PROXY}/storage/v1/object/csv-imports/${storage_path}`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    console.error("[sbDownload] failed:", res.status, body);
+    throw new Error(`Download failed: ${res.status}`);
+  }
   return res.text();
 }
 
