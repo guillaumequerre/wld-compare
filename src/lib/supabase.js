@@ -32,7 +32,7 @@ export async function sbUpload(path, csvText) {
 
   if (cfg?.url && cfg?.anon) {
     // Upload direct — pas de limite Netlify
-    const res = await fetch(`${cfg.url}/storage/v1/object/csv-imports/${path}`, {
+    const res = await fetch(`${cfg.url}/storage/v1/object/imports/${path}`, {
       method: "POST",
       headers: {
         "Content-Type": "text/csv",
@@ -50,7 +50,7 @@ export async function sbUpload(path, csvText) {
   }
 
   // Fallback: proxy Netlify (limité ~1MB)
-  const res = await fetch(`${PROXY}/storage/v1/object/csv-imports/${path}`, {
+  const res = await fetch(`${PROXY}/storage/v1/object/imports/${path}`, {
     method: "POST",
     headers: { ...authHeaders(), "Content-Type": "text/csv", "x-upsert": "true" },
     body: csvText,
@@ -81,7 +81,7 @@ export async function sbDeleteImport(id) {
 }
 
 export async function sbDeleteFile(storage_path) {
-  const res = await fetch(`${PROXY}/storage/v1/object/csv-imports/${storage_path}`, { method: "DELETE", headers: authHeaders() });
+  const res = await fetch(`${PROXY}/storage/v1/object/imports/${storage_path}`, { method: "DELETE", headers: authHeaders() });
   if (!res.ok) throw new Error(`Delete file failed: ${res.status}`);
 }
 
@@ -107,7 +107,7 @@ export async function sbGetLatest(projectId) {
 }
 
 export async function sbDownload(storage_path) {
-  const res = await fetch(`${PROXY}/storage/v1/object/csv-imports/${storage_path}`, { headers: authHeaders() });
+  const res = await fetch(`${PROXY}/storage/v1/object/imports/${storage_path}`, { headers: authHeaders() });
   if (!res.ok) throw new Error(`Download failed: ${res.status}`);
   return res.text();
 }
