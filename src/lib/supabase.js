@@ -410,19 +410,22 @@ export async function sbSaveGeoResult(result) {
   else if (model.toLowerCase().includes("perplexity") || model.toLowerCase().includes("sonar")) provider_id = "perplexity";
   else if (model.toLowerCase().includes("claude")) provider_id = "claude";
 
-  const row = { ...result, provider_id, updated_at: new Date().toISOString() };
+  // Only include provider_id if column exists (optional)
+  const row = { ...result, updated_at: new Date().toISOString() };
 
   const res = await fetch(`${PROXY}/rest/v1/geo_results`, {
     method: "POST",
     headers: {
+      ...authHeaders(),
       "Content-Type": "application/json",
-      // Upsert on (question_id, provider_id) — updates existing card instead of creating new
       "Prefer": "return=representation,resolution=merge-duplicates",
-      "on-conflict": "question_id,provider_id",
     },
     body: JSON.stringify(row),
   });
-  if (!res.ok) throw new Error(`Save geo result failed: ${res.status}`);
+  if (!res.ok) {
+    const errBody = await res.text().catch(() => "");
+    throw new Error(`Save geo result failed: ${res.status} — ${errBody.slice(0, 200)}`);
+  }
   return res.json();
 }
 
