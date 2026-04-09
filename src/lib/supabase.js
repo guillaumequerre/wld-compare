@@ -9,50 +9,16 @@ function authHeaders(extra = {}) {
   return extra;
 }
 
-// Cache de la config Supabase publique (URL + anon key)
-let _sbConfig = null;
-async function getDirectConfig() {
-  if (_sbConfig) return _sbConfig;
-  try {
-    const res = await fetch("/api/supabase-info"); // pas d'auth nécessaire
-    if (res.ok) { _sbConfig = await res.json(); return _sbConfig; }
-  } catch {}
-  return null;
-}
 
 export async function sbUpload(path, csvText) {
-  // Upload direct vers Supabase Storage (bypass proxy Netlify — limite 1MB)
-  const cfg = await getDirectConfig();
-  const jwt = (() => {
-    try {
-      const s = sessionStorage.getItem("correl_session") || localStorage.getItem("correl_session");
-      return s ? JSON.parse(s).access_token : null;
-    } catch { return null; }
-  })();
-
-  if (cfg?.url && cfg?.anon) {
-    // Upload direct — pas de limite Netlify
-    const res = await fetch(`${cfg.url}/storage/v1/object/imports/${path}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "text/csv",
-        "x-upsert": "true",
-        "apikey": cfg.anon,
-        "Authorization": jwt ? `Bearer ${jwt}` : `Bearer ${cfg.anon}`,
-      },
-      body: csvText,
-    });
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      throw new Error(`Upload failed: ${res.status} — ${body.slice(0, 120)}`);
-    }
-    return path;
-  }
-
-  // Fallback: proxy Netlify (limité ~1MB)
+  // Upload via proxy Netlify — auth gérée côté serveur
   const res = await fetch(`${PROXY}/storage/v1/object/imports/${path}`, {
     method: "POST",
-    headers: { ...authHeaders(), "Content-Type": "text/csv", "x-upsert": "true" },
+    headers: {
+      ...authHeaders(),
+      "Content-Type": "text/csv",
+      "x-upsert": "true",
+    },
     body: csvText,
   });
   if (!res.ok) {
@@ -61,6 +27,7 @@ export async function sbUpload(path, csvText) {
   }
   return path;
 }
+
 
 export async function sbInsertImport({ project_id, site_id, source, filename, storage_path, row_count }) {
   const res = await fetch(`${PROXY}/rest/v1/imports`, {
