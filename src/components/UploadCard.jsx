@@ -203,7 +203,7 @@ export default function UploadCard({ label, icon, hint, onData, onClear, loaded,
       }
     };
     reader.readAsText(file);
-  }, [siteId, source, loadData, saveToStorage]);
+  }, [siteId, source, loadData, saveToStorage]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Modal actions
   const handleTruncate = useCallback(async () => {
@@ -240,7 +240,7 @@ export default function UploadCard({ label, icon, hint, onData, onClear, loaded,
     } finally {
       setUploading(false);
     }
-  }, [largeFileModal, saveMetaOnly]);
+  }, [largeFileModal, saveMetaOnly]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleCancelLarge = useCallback(() => {
     setLargeFileModal(null);
