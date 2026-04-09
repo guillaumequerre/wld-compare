@@ -1148,8 +1148,8 @@ function isBrandPresent(r) {
 // results: current geo_results for this provider (for today's optimistic update)
 
 // ── HintPanelQuestion — one hint per question ────────────────────
-function HintPanelQuestion({ questionId, question, sources, brandName, brandAliases, brandDomain, claudeKey, hasBrand, projectId, siteId, savedHint, onHintSaved, initialOpen = false }) {
-  const [open, setOpen]     = useState(initialOpen || !!savedHint);
+function HintPanelQuestion({ questionId, question, sources, brandName, brandAliases, brandDomain, claudeKey, hasBrand, projectId, siteId, savedHint, savedHintDate = null, onHintSaved, initialOpen = false }) {
+  const [open, setOpen]     = useState(false); // always start closed
   const [status, setStatus] = useState(savedHint ? "done" : "idle");
   const [hint, setHint]     = useState(savedHint || "");
   const hasHint = !!hint;
@@ -1229,6 +1229,11 @@ function HintPanelQuestion({ questionId, question, sources, brandName, brandAlia
             <span style={{ fontSize: 11, fontWeight: 700, color: "#D97706", flex: 1 }}>
               {open ? "▲ Masquer le Hint" : "▼ Voir le Hint"}
             </span>
+            {savedHintDate && (
+              <span style={{ fontSize: 10, color: "#B45309" }}>
+                {new Date(savedHintDate).toLocaleDateString("fr-FR", { day: "2-digit", month: "short" })}
+              </span>
+            )}
             <button
               onClick={(e) => { e.stopPropagation(); setStatus("idle"); setHint(""); setOpen(false); setTimeout(run, 0); }}
               style={{ fontSize: 10, color: C.textLight, background: "none", border: "none", cursor: "pointer" }}>
@@ -1241,6 +1246,11 @@ function HintPanelQuestion({ questionId, question, sources, brandName, brandAlia
       </div>
       {open && hint && (
         <div style={{ padding: "8px 12px", background: "#FFFBEB", borderTop: "1px solid #FEF3C7" }}>
+          {(savedHintDate || status === "done") && (
+            <div style={{ fontSize: 10, color: "#B45309", marginBottom: 6 }}>
+              🕐 {savedHintDate ? new Date(savedHintDate).toLocaleString("fr-FR", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : new Date().toLocaleString("fr-FR", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
+            </div>
+          )}
           <div style={{ fontSize: 11, whiteSpace: "pre-wrap", lineHeight: 1.7, color: status === "error" ? "#DC2626" : "#92400E" }}>
             {hint}
           </div>
@@ -1648,7 +1658,7 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
       setResults(results.length ? results : (allResults || []));
       setQuestions(questions);
       const map = {};
-      hints.forEach(r => { map[r.question_id] = r.hint_text; });
+      hints.forEach(r => { map[r.question_id] = { text: r.hint_text, date: r.updated_at }; });
       setHintsMap(map);
       setKeywords(keywords);
     }).catch(e => console.warn("[QuestionsTab] load error:", e));
@@ -2099,7 +2109,8 @@ ${question}`;
                         claudeKey={providerKeysRef.current["claude"]?.dec || ""}
                         projectId={projectId}
                         siteId={site?.id}
-                        savedHint={hintsMap[q.id] || ""}
+                        savedHint={hintsMap[q.id]?.text || ""}
+                        savedHintDate={hintsMap[q.id]?.date || null}
                       />
                     );
                   })}
