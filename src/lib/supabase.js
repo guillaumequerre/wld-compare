@@ -404,19 +404,24 @@ export async function sbDeleteQuestion(id) {
 export async function sbSaveGeoResult(result) {
   // Derive provider_id from model label for upsert deduplication
   // Only include provider_id if column exists (optional)
-  const row = { ...result, updated_at: new Date().toISOString() };
+  // Send only columns that exist in the table
+  const { updated_at: _drop, ...cleanResult } = result;
+  const row = cleanResult;
 
   const res = await fetch(`${PROXY}/rest/v1/geo_results`, {
     method: "POST",
     headers: {
       ...authHeaders(),
       "Content-Type": "application/json",
+      // UPSERT: replace existing result for same question+model
       "Prefer": "return=representation,resolution=merge-duplicates",
+      "on-conflict": "question_id,model",
     },
     body: JSON.stringify(row),
   });
   if (!res.ok) {
     const errBody = await res.text().catch(() => "");
+    console.error("[sbSaveGeoResult] failed:", res.status, errBody);
     throw new Error(`Save geo result failed: ${res.status} — ${errBody.slice(0, 200)}`);
   }
   return res.json();
