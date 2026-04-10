@@ -162,7 +162,6 @@ function buildFanoutPDF({ questions, results, hintsMap = {}, brandName, brandAli
   });
   const kwMap = {};
   keywords.forEach(k => { kwMap[k.id] = k.keyword; });
-  const allBrandTerms = [brandName, ...brandAliases].filter(Boolean).map(t => t.toLowerCase());
 
   // Filtrer par providers si sélection
   const filterByProvider = (rs) => {
@@ -195,7 +194,6 @@ function buildFanoutPDF({ questions, results, hintsMap = {}, brandName, brandAli
   const avgPos      = positions.length ? (positions.reduce((a,b)=>a+b,0)/positions.length).toFixed(1) : null;
   const presence    = totalRes ? Math.round(withBrand/totalRes*100) : 0;
   const dateStr     = new Date().toLocaleDateString("fr-FR", { day:"2-digit", month:"long", year:"numeric" });
-  const slug        = projectName.replace(/[^a-z0-9]/gi,"_").toLowerCase();
 
   // Top concurrents
   const compCount = {};
