@@ -12,7 +12,7 @@ import {
   sbSetQuestionCategory,
   sbBulkSetKeywordCategory, sbBulkSetQuestionCategory,
   sbGetUrlIndex, sbUpdateUrlMeta, sbIncrementUrlCounts,
-  sbAddCalendarEntry, sbGetCalendarEntries,
+  sbAddCalendarEntry, sbGetCalendarEntriesBatch,
 } from "../lib/supabase";
 // Note: sbSaveGeoAxes is called via onSaveAxes prop from App.jsx
 
@@ -2180,7 +2180,7 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
       sbGetQuestions(projectId, site.id),
       sbGetHints(projectId, site.id),
       sbGetKeywords(projectId, site.id),
-      sbGetCalendarEntries(projectId, site.id),
+      sbGetCalendarEntriesBatch(projectId, site.id),
     ]).then(([results, questions, hints, keywords, calEntries]) => {
       setResults(results.length ? results : (allResults || []));
       setQuestions(questions);
@@ -2189,6 +2189,7 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
       setHintsMap(map);
       setKeywords(keywords);
       setCalendarEntries(calEntries || []);
+      console.log("[GeoTab] calendarEntries chargées:", (calEntries || []).length, "entrées — vertes:", (calEntries || []).filter(e => e.brand_present === true || e.brand_present === 1).length);
     }).catch(e => console.warn("[QuestionsTab] load error:", e));
   }, [projectId, site?.id, refreshTrigger]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -2336,36 +2337,42 @@ ${question}`;
     return out;
   }, [resultsByQ]);
 
-  // Per question: was brand present (green in calendar) in last 30 days but absent in latest result?
-  // Source de vérité = geo_presence_calendar (même table que PresenceCalendar)
+  // Per question: était positionnée dans les 30 derniers jours (carré vert calendrier)
+  // mais absente du dernier résultat → "Positionnée précédemment"
   const lostByQ = useMemo(() => {
     const out = {};
-    const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000); // 30 jours
+
+    // Cutoff en string YYYY-MM-DD pour comparer directement avec test_date (évite les bugs timezone)
+    const cutoffStr = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
     // Grouper les entrées calendar par question_id
     const calByQ = {};
     calendarEntries.forEach(e => {
+      if (!e.question_id) return;
       if (!calByQ[e.question_id]) calByQ[e.question_id] = [];
       calByQ[e.question_id].push(e);
     });
 
-    // Pour chaque question, vérifier la condition "perdue"
-    Object.keys({ ...resultsByQ, ...calByQ }).forEach(qId => {
-      // Condition 1 : la marque est absente du dernier résultat connu
+    // Parcourir toutes les questions qui ont des entrées calendar OU des résultats
+    const allQIds = new Set([...Object.keys(resultsByQ), ...Object.keys(calByQ)]);
+
+    allQIds.forEach(qId => {
+      // Condition 1 : marque absente du dernier résultat connu
       const latest = latestResultByQ[qId];
       const latestAbsent = !latest || !(latest.brand_mentioned === true || latest.brand_mentioned === 1);
       if (!latestAbsent) return; // encore positionnée → pas "perdue"
 
-      // Condition 2 : au moins une entrée verte (brand_present=true) dans les 30 derniers jours
-      // → c'est exactement ce qui fait un carré vert dans PresenceCalendar
+      // Condition 2 : au moins un carré vert dans les 30 derniers jours
+      // test_date est une string "YYYY-MM-DD" — comparaison string directe, pas de Date()
       const entries = calByQ[qId] || [];
       const hadGreenIn30d = entries.some(e => {
-        const d = new Date(e.test_date || e.created_at || 0);
-        return d >= cutoff && (e.brand_present === true || e.brand_present === 1);
+        const dateStr = e.test_date || (e.created_at || "").slice(0, 10);
+        return dateStr >= cutoffStr && (e.brand_present === true || e.brand_present === 1);
       });
 
-      out[qId] = hadGreenIn30d;
+      if (hadGreenIn30d) out[qId] = true;
     });
+
     return out;
   }, [calendarEntries, resultsByQ, latestResultByQ]);
 

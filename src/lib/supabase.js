@@ -669,31 +669,33 @@ export async function sbGetCalendarEntriesBatch(project_id, site_id) {
     const since = new Date(); since.setDate(since.getDate() - 30);
     const sinceStr = since.toISOString().slice(0, 10);
 
-    // geo_calendar_dates n'a pas de project_id/site_id directement —
-    // on passe par geo_questions pour obtenir les question_ids du projet/site,
-    // puis on filtre les entrées calendar sur ces IDs.
-    // Alternative plus simple : joindre via PostgREST embedded resource.
-    // On utilise la table geo_questions comme pivot.
-
     // Étape 1 : récupérer les question_ids du projet/site
     const qRes = await fetch(
       `${PROXY}/rest/v1/geo_questions?project_id=eq.${encodeURIComponent(project_id)}&site_id=eq.${encodeURIComponent(site_id)}&select=id`,
       { headers: authHeaders() }
     );
-    if (!qRes.ok) return [];
+    if (!qRes.ok) {
+      console.warn("[sbGetCalendarEntriesBatch] geo_questions fetch failed:", qRes.status);
+      return [];
+    }
     const questions = await qRes.json();
-    if (!questions.length) return [];
+    if (!Array.isArray(questions) || !questions.length) return [];
 
     // Étape 2 : récupérer les entrées calendar pour ces question_ids
+    // PostgREST : in.(uuid1,uuid2,...) — les UUIDs n'ont pas besoin d'être quotés
     const ids = questions.map(q => q.id).join(",");
-    const res = await fetch(
-      `${PROXY}/rest/v1/geo_calendar_dates?question_id=in.(${ids})&test_date=gte.${sinceStr}&order=test_date.asc&select=question_id,provider_id,test_date,brand_present`,
-      { headers: authHeaders() }
-    );
-    if (!res.ok) return [];
-    return res.json();
+    const url = `${PROXY}/rest/v1/geo_calendar_dates?question_id=in.(${ids})&test_date=gte.${sinceStr}&order=test_date.asc&select=question_id,provider_id,test_date,brand_present`;
+    const res = await fetch(url, { headers: authHeaders() });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      console.warn("[sbGetCalendarEntriesBatch] calendar fetch failed:", res.status, body.slice(0, 120));
+      return [];
+    }
+    const data = await res.json();
+    console.log("[sbGetCalendarEntriesBatch] chargé:", data.length, "entrées pour", questions.length, "questions");
+    return data;
   } catch(e) {
-    console.warn("sbGetCalendarEntriesBatch error:", e.message);
+    console.warn("[sbGetCalendarEntriesBatch] error:", e.message);
     return [];
   }
 }
