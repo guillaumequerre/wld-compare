@@ -84,7 +84,7 @@ function getProviderLabel(model) {
   return model || "Inconnu";
 }
 
-function exportFanoutCSV({ questions, results, brandName, brandAliases = [], keywords = [], projectName = "export" }) {
+function exportFanoutCSV({ questions, results, brandName, brandAliases = [], keywords = [], projectName = "export", selectedProviders = [] }) {
   const byQ = {};
   results.forEach(r => {
     if (!byQ[r.question_id]) byQ[r.question_id] = [];
@@ -112,7 +112,13 @@ function exportFanoutCSV({ questions, results, brandName, brandAliases = [], key
 
   questions.forEach(q => {
     const qResults = byQ[q.id] || [];
-    const branded = qResults.filter(r => r.brand_mentioned === true || r.brand_mentioned === 1);
+    // Filtre par provider si une sélection est active
+    const branded = qResults.filter(r => {
+      const isBrand = r.brand_mentioned === true || r.brand_mentioned === 1;
+      if (!isBrand) return false;
+      if (selectedProviders.length === 0) return true;
+      return selectedProviders.includes(getProviderId(r.model));
+    });
     branded.forEach(r => {
       const sources = r.sources || [];
       const brandSources = sources.filter(u => allBrandTerms.some(t => u.toLowerCase().includes(t)));
@@ -146,77 +152,362 @@ function exportFanoutCSV({ questions, results, brandName, brandAliases = [], key
   return rows.length - 1;
 }
 
-// ── ExportFanoutBtn ───────────────────────────────────────────────
+// ── PDF export helpers ────────────────────────────────────────────
 
-function ExportFanoutBtn({ questions, results, brandName, brandAliases = [], keywords = [], projectName = "export" }) {
-  const [exporting, setExporting] = useState(false);
-  const [lastCount, setLastCount] = useState(null);
+function buildFanoutPDF({ questions, results, hintsMap = {}, brandName, brandAliases = [], keywords = [], projectName = "export", latestResultByQ = {}, lostByQ = {}, selectedProviders = [] }) {
+  const byQ = {};
+  results.forEach(r => {
+    if (!byQ[r.question_id]) byQ[r.question_id] = [];
+    byQ[r.question_id].push(r);
+  });
+  const kwMap = {};
+  keywords.forEach(k => { kwMap[k.id] = k.keyword; });
+  const allBrandTerms = [brandName, ...brandAliases].filter(Boolean).map(t => t.toLowerCase());
+
+  // Filtrer par providers si sélection
+  const filterByProvider = (rs) => {
+    if (selectedProviders.length === 0) return rs;
+    return rs.filter(r => selectedProviders.includes(getProviderId(r.model)));
+  };
+
+  // Catégoriser chaque question
+  const presentQs  = []; // marque présente dans le dernier résultat
+  const lostQs     = []; // marque déjà présente mais absente maintenant
+  const absentQs   = []; // marque jamais présente
+
+  questions.forEach(q => {
+    const allRes = filterByProvider(byQ[q.id] || []);
+    const latest = latestResultByQ[q.id];
+    const latestFiltered = latest && (selectedProviders.length === 0 || selectedProviders.includes(getProviderId(latest.model))) ? latest : [...allRes].sort((a,b)=>new Date(b.created_at||0)-new Date(a.created_at||0))[0];
+    const isPresent = latestFiltered && (latestFiltered.brand_mentioned === true || latestFiltered.brand_mentioned === 1);
+    const isLost = lostByQ[q.id] && !isPresent;
+
+    if (isPresent) presentQs.push({ q, latest: latestFiltered, allRes });
+    else if (isLost) lostQs.push({ q, latest: latestFiltered, allRes });
+    else absentQs.push({ q, latest: latestFiltered, allRes });
+  });
+
+  // Métriques
+  const totalRes    = filterByProvider(results).length;
+  const withBrand   = filterByProvider(results).filter(r => r.brand_mentioned === true || r.brand_mentioned === 1).length;
+  const withSources = filterByProvider(results).filter(r => r.brand_in_sources).length;
+  const positions   = filterByProvider(results).filter(r => r.brand_position).map(r => r.brand_position);
+  const avgPos      = positions.length ? (positions.reduce((a,b)=>a+b,0)/positions.length).toFixed(1) : null;
+  const presence    = totalRes ? Math.round(withBrand/totalRes*100) : 0;
+  const dateStr     = new Date().toLocaleDateString("fr-FR", { day:"2-digit", month:"long", year:"numeric" });
+  const slug        = projectName.replace(/[^a-z0-9]/gi,"_").toLowerCase();
+
+  // Top concurrents
+  const compCount = {};
+  filterByProvider(results).forEach(r => {
+    const seen = new Set();
+    (r.competitors_mentioned||[]).forEach(c => { if(c.name && !seen.has(c.name)) { seen.add(c.name); compCount[c.name]=(compCount[c.name]||0)+1; } });
+  });
+  const topComps = Object.entries(compCount).sort((a,b)=>b[1]-a[1]).slice(0,5);
+
+  // ── HTML du PDF ──────────────────────────────────────────────────
+  const esc = (s) => String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+
+  const badge = (color, bg, text) =>
+    `<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;background:${bg};color:${color};border:1px solid ${color}44">${esc(text)}</span>`;
+
+  const sectionTitle = (emoji, text, color = "#1E293B") =>
+    `<div style="margin:28px 0 14px;padding:10px 16px;background:${color}08;border-left:4px solid ${color};border-radius:0 8px 8px 0;">
+      <span style="font-size:16px;font-weight:800;color:${color}">${emoji} ${esc(text)}</span>
+    </div>`;
+
+  const questionBlock = ({ q, latest, allRes }, showHint = true, showDate = false) => {
+    const kw = kwMap[q.keyword_id] || "";
+    const hint = hintsMap[q.id]?.text || "";
+    const hintDate = hintsMap[q.id]?.date || "";
+    const comps = (latest?.competitors_mentioned || []).map(c => c.name).join(", ");
+    const sources = (latest?.sources || []).slice(0, 3);
+    const dateLabel = latest?.created_at ? new Date(latest.created_at).toLocaleDateString("fr-FR", {day:"2-digit",month:"short",year:"numeric"}) : "";
+
+    return `<div style="margin-bottom:14px;padding:14px 18px;border:1px solid #E2E8F0;border-radius:10px;break-inside:avoid;page-break-inside:avoid;">
+      <div style="font-size:13px;font-weight:700;color:#0F172A;margin-bottom:8px;line-height:1.4">${esc(q.question)}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:${(comps||sources.length||hint) ? "10px":"0"}">
+        ${kw ? badge("#6366F1","#EEF2FF",`🔑 ${kw}`) : ""}
+        ${latest?.brand_position ? badge("#059669","#ECFDF5",`Position #${latest.brand_position}`) : ""}
+        ${latest?.brand_in_sources ? badge("#2563EB","#EFF6FF","🔗 Dans les sources") : ""}
+        ${showDate && dateLabel ? badge("#64748B","#F8FAFC",`Dernière parution : ${dateLabel}`) : ""}
+      </div>
+      ${comps ? `<div style="font-size:11px;color:#64748B;margin-bottom:6px">Concurrents cités : <strong>${esc(comps)}</strong></div>` : ""}
+      ${sources.length ? `<div style="font-size:10px;color:#94A3B8">${sources.map(u=>`<a href="${esc(u)}" style="color:#6366F1">${esc(u.length>60?u.slice(0,60)+"…":u)}</a>`).join("  ·  ")}</div>` : ""}
+      ${showHint && hint ? `<div style="margin-top:10px;padding:10px 12px;background:#FFFBEB;border:1px solid #FCD34D;border-radius:7px;">
+        <div style="font-size:10px;font-weight:700;color:#B45309;margin-bottom:4px">💡 HINT GEO${hintDate ? " · "+new Date(hintDate).toLocaleDateString("fr-FR",{day:"2-digit",month:"short"}) : ""}</div>
+        <div style="font-size:11px;color:#92400E;line-height:1.6;white-space:pre-wrap">${esc(hint.slice(0,400))}${hint.length>400?"…":""}</div>
+      </div>` : ""}
+    </div>`;
+  };
+
+  const html = `<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Fan-outs GEO — ${esc(projectName)} — ${dateStr}</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: #0F172A; background: #fff; }
+    @media print {
+      body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .no-print { display: none !important; }
+      .page-break { page-break-before: always; }
+    }
+  </style>
+</head>
+<body style="padding:32px 40px;max-width:900px;margin:0 auto">
+
+  <!-- Bouton imprimer -->
+  <div class="no-print" style="text-align:right;margin-bottom:16px">
+    <button onclick="window.print()" style="padding:8px 18px;background:#6366F1;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">
+      🖨️ Imprimer / Enregistrer en PDF
+    </button>
+  </div>
+
+  <!-- ── En-tête ── -->
+  <div style="border-bottom:3px solid #6366F1;padding-bottom:20px;margin-bottom:28px">
+    <div style="font-size:11px;font-weight:700;color:#6366F1;letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">Rapport GEO — Fan-outs</div>
+    <div style="font-size:26px;font-weight:800;color:#0F172A;margin-bottom:4px">${esc(projectName)}</div>
+    <div style="font-size:13px;color:#64748B">Généré le ${dateStr}${selectedProviders.length > 0 ? " · Providers : "+selectedProviders.join(", ") : " · Tous les providers"}</div>
+  </div>
+
+  <!-- ── Chiffres clés ── -->
+  ${sectionTitle("📊","Chiffres clés","#6366F1")}
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px">
+    ${[
+      { label:"Présence marque", value: presence+"%", sub:`${withBrand}/${totalRes} réponses`, color: presence>=50?"#059669":presence>0?"#D97706":"#DC2626" },
+      { label:"Position moyenne", value: avgPos ? "#"+avgPos : "—", sub:"dans les fan-outs", color:"#6366F1" },
+      { label:"Dans les sources", value: withSources, sub:"questions citées", color:"#2563EB" },
+      { label:"Questions analysées", value: questions.length, sub:`${presentQs.length} positionnées`, color:"#0F172A" },
+    ].map(k=>`<div style="padding:16px;border:1px solid #E2E8F0;border-radius:12px;text-align:center">
+      <div style="font-size:10px;font-weight:700;color:#94A3B8;text-transform:uppercase;letter-spacing:.7px;margin-bottom:6px">${esc(k.label)}</div>
+      <div style="font-size:28px;font-weight:800;color:${k.color};margin-bottom:3px">${esc(String(k.value))}</div>
+      <div style="font-size:10px;color:#94A3B8">${esc(k.sub)}</div>
+    </div>`).join("")}
+  </div>
+
+  ${topComps.length > 0 ? `<div style="padding:12px 16px;border:1px solid #E2E8F0;border-radius:10px;margin-bottom:24px">
+    <div style="font-size:11px;font-weight:700;color:#64748B;margin-bottom:8px;text-transform:uppercase;letter-spacing:.7px">Top concurrents cités</div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px">
+      ${topComps.map(([name,cnt])=>`<span style="padding:4px 12px;background:#FEF2F2;border:1px solid #FECACA;border-radius:20px;font-size:12px;font-weight:600;color:#DC2626">${esc(name)} <span style="opacity:.7">${cnt}×</span></span>`).join("")}
+    </div>
+  </div>` : ""}
+
+  <!-- ── Questions positionnées ── -->
+  ${presentQs.length > 0 ? `
+  ${sectionTitle("✅",`Questions positionnées (${presentQs.length})`, "#059669")}
+  ${presentQs.map(item => questionBlock(item, true, false)).join("")}
+  ` : `<div style="padding:16px;background:#F8FAFC;border-radius:8px;color:#94A3B8;font-size:13px;margin-bottom:20px">Aucune question positionnée pour l'instant.</div>`}
+
+  <!-- ── Questions déjà positionnées (perdues) ── -->
+  ${lostQs.length > 0 ? `
+  <div class="page-break"></div>
+  ${sectionTitle("📈",`Positionnées précédemment — position perdue (${lostQs.length})`, "#D97706")}
+  ${lostQs.map(item => questionBlock(item, true, true)).join("")}
+  ` : ""}
+
+  <!-- ── Questions sans présence ── -->
+  ${absentQs.length > 0 ? `
+  <div class="page-break"></div>
+  ${sectionTitle("❌",`Marque absente (${absentQs.length})`, "#DC2626")}
+  ${absentQs.map(item => questionBlock(item, true, false)).join("")}
+  ` : ""}
+
+  <!-- Pied de page -->
+  <div style="margin-top:40px;padding-top:16px;border-top:1px solid #E2E8F0;font-size:10px;color:#94A3B8;text-align:center">
+    Rapport CorrelDash GEO · ${esc(projectName)} · ${dateStr}
+  </div>
+
+</body>
+</html>`;
+
+  // Ouvrir dans un nouvel onglet pour impression
+  const win = window.open("", "_blank");
+  if (!win) { alert("Autorisez les pop-ups pour générer le PDF"); return; }
+  win.document.write(html);
+  win.document.close();
+  // Déclencher l'impression après chargement
+  win.onload = () => { setTimeout(() => win.print(), 300); };
+  return true;
+}
+
+// ── ExportFanoutBtn (avec sélection provider + CSV + PDF) ─────────
+
+function ExportFanoutBtn({ questions, results, brandName, brandAliases = [], keywords = [], projectName = "export", hintsMap = {}, latestResultByQ = {}, lostByQ = {} }) {
+  const [open, setOpen]               = useState(false);     // popover ouvert
+  const [selectedProviders, setSel]   = useState([]);        // [] = tous
+  const [exportStatus, setStatus]     = useState("idle");    // idle | exporting | done | error
+  const [lastCount, setLastCount]     = useState(null);
+  const popRef                        = useRef();
+
+  // Fermer le popover en cliquant ailleurs
+  useEffect(() => {
+    if (!open) return;
+    const h = (e) => { if (!popRef.current?.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [open]);
 
   const byQ = {};
   results.forEach(r => {
     if (!byQ[r.question_id]) byQ[r.question_id] = [];
     byQ[r.question_id].push(r);
   });
+
+  // Providers disponibles dans les résultats
+  const presentProviders = [...new Set(results.map(r => getProviderId(r.model)).filter(Boolean))];
+
   const brandedCount = questions.reduce((acc, q) => {
-    const qRes = byQ[q.id] || [];
-    return acc + qRes.filter(r => r.brand_mentioned === true || r.brand_mentioned === 1).length;
+    const qRes = (byQ[q.id] || []).filter(r => {
+      if (!( r.brand_mentioned === true || r.brand_mentioned === 1)) return false;
+      if (selectedProviders.length === 0) return true;
+      return selectedProviders.includes(getProviderId(r.model));
+    });
+    return acc + qRes.length;
   }, 0);
 
-  const handleExport = () => {
-    setExporting(true);
+  const toggleProvider = (pid) => {
+    setSel(prev => prev.includes(pid) ? prev.filter(p => p !== pid) : [...prev, pid]);
+  };
+
+  const doCSV = () => {
+    setStatus("exporting");
     setTimeout(() => {
-      const n = exportFanoutCSV({ questions, results, brandName, brandAliases, keywords, projectName });
+      const n = exportFanoutCSV({ questions, results, brandName, brandAliases, keywords, projectName, selectedProviders });
       setLastCount(n);
-      setExporting(false);
-      if (n > 0) setTimeout(() => setLastCount(null), 4000);
+      setStatus(n > 0 ? "done" : "idle");
+      if (n > 0) setTimeout(() => { setStatus("idle"); setLastCount(null); }, 4000);
+      setOpen(false);
     }, 0);
   };
 
-  const disabled = exporting || brandedCount === 0;
+  const doPDF = () => {
+    setStatus("exporting");
+    setTimeout(() => {
+      buildFanoutPDF({ questions, results, hintsMap, brandName, brandAliases, keywords, projectName, latestResultByQ, lostByQ, selectedProviders });
+      setStatus("idle");
+      setOpen(false);
+    }, 0);
+  };
+
+  const providerColors = { openai:"#059669", gemini:"#2563EB", perplexity:"#7C3AED", claude:"#D97706", other:"#64748B" };
+  const providerIcons  = { openai:"🟢", gemini:"🔵", perplexity:"🟣", claude:"🟠", other:"⚪" };
+  const providerLabels = { openai:"OpenAI", gemini:"Gemini", perplexity:"Perplexity", claude:"Claude", other:"Autre" };
 
   return (
-    <button
-      onClick={handleExport}
-      disabled={disabled}
-      title={
-        brandedCount === 0
-          ? "Aucune citation de marque dans la sélection actuelle"
-          : `Exporter ${brandedCount} résultat${brandedCount > 1 ? "s" : ""} avec citation de ${brandName || "la marque"} (CSV)`
-      }
-      style={{
-        display: "inline-flex", alignItems: "center", gap: 6,
-        padding: "6px 14px",
-        border: `1.5px solid ${disabled ? C.border : "#059669"}`,
-        borderRadius: 8,
-        background: disabled ? C.bg : "#ECFDF5",
-        color: disabled ? C.textLight : "#059669",
-        fontSize: 12, fontWeight: 700,
-        cursor: disabled ? "not-allowed" : "pointer",
-        opacity: disabled ? 0.6 : 1,
-        transition: "all 0.15s",
-        whiteSpace: "nowrap", flexShrink: 0,
-      }}
-    >
-      {exporting ? (
-        <>⏳ Export…</>
-      ) : lastCount !== null ? (
-        <>{lastCount} lignes exportées ✓</>
-      ) : (
-        <>
-          <span style={{ fontSize: 14 }}>📥</span>
-          Exporter citations marque
-          {brandedCount > 0 && (
-            <span style={{
-              fontSize: 10, fontWeight: 800,
-              background: "#059669", color: "#fff",
-              borderRadius: 10, padding: "1px 6px", marginLeft: 2,
-            }}>
-              {brandedCount}
-            </span>
+    <div ref={popRef} style={{ position: "relative", display: "inline-block" }}>
+      {/* Bouton principal */}
+      <button
+        onClick={() => setOpen(o => !o)}
+        title="Exporter les fan-outs (CSV ou PDF)"
+        style={{
+          display: "inline-flex", alignItems: "center", gap: 6,
+          padding: "6px 14px",
+          border: `1.5px solid ${open ? "#6366F1" : "#059669"}`,
+          borderRadius: 8,
+          background: open ? "#EEF2FF" : "#ECFDF5",
+          color: open ? "#6366F1" : "#059669",
+          fontSize: 12, fontWeight: 700,
+          cursor: "pointer",
+          transition: "all 0.15s",
+          whiteSpace: "nowrap", flexShrink: 0,
+        }}
+      >
+        {exportStatus === "exporting" ? <>⏳ Export…</> :
+         exportStatus === "done" && lastCount !== null ? <>{lastCount} lignes exportées ✓</> : (
+          <>
+            <span style={{ fontSize: 14 }}>📤</span>
+            Exporter
+            {brandedCount > 0 && (
+              <span style={{ fontSize: 10, fontWeight: 800, background: "#059669", color: "#fff", borderRadius: 10, padding: "1px 6px", marginLeft: 2 }}>
+                {brandedCount}
+              </span>
+            )}
+            <span style={{ fontSize: 10, opacity: 0.6 }}>{open ? "▲" : "▼"}</span>
+          </>
+        )}
+      </button>
+
+      {/* ── Popover ── */}
+      {open && (
+        <div style={{
+          position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 300,
+          background: "#fff", border: "1px solid #E2E8F0", borderRadius: 12,
+          boxShadow: "0 8px 32px rgba(0,0,0,0.14)", padding: 16, minWidth: 260,
+        }}>
+          {/* Sélection providers */}
+          {presentProviders.length > 1 && (
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: ".7px", marginBottom: 8 }}>
+                Providers à inclure
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {presentProviders.map(pid => {
+                  const active = selectedProviders.includes(pid);
+                  const col = providerColors[pid] || providerColors.other;
+                  return (
+                    <button key={pid} onClick={() => toggleProvider(pid)}
+                      style={{
+                        padding: "3px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600,
+                        border: `2px solid ${active ? col : "#E2E8F0"}`,
+                        background: active ? col+"18" : "transparent",
+                        color: active ? col : "#64748B", cursor: "pointer",
+                      }}
+                    >
+                      {providerIcons[pid]||"⚪"} {providerLabels[pid]||pid}
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={{ fontSize: 10, color: "#94A3B8", marginTop: 5 }}>
+                {selectedProviders.length === 0 ? "Tous les providers inclus" : `${selectedProviders.length} provider${selectedProviders.length>1?"s":""} sélectionné${selectedProviders.length>1?"s":""}`}
+              </div>
+            </div>
           )}
-        </>
+
+          {/* Résumé */}
+          <div style={{ fontSize: 11, color: "#64748B", marginBottom: 14, padding: "8px 10px", background: "#F8FAFC", borderRadius: 7 }}>
+            <strong style={{ color: "#059669" }}>{brandedCount}</strong> résultat{brandedCount>1?"s":""} avec citation marque
+            <br/><strong style={{ color: "#0F172A" }}>{questions.length}</strong> questions · <strong>{results.length}</strong> réponses total
+          </div>
+
+          {/* Boutons d'export */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <button onClick={doCSV} disabled={brandedCount === 0}
+              style={{
+                padding: "9px 14px", borderRadius: 8, border: "none",
+                background: brandedCount === 0 ? "#F1F5F9" : "#059669",
+                color: brandedCount === 0 ? "#94A3B8" : "#fff",
+                fontSize: 12, fontWeight: 700, cursor: brandedCount === 0 ? "not-allowed" : "pointer",
+                display: "flex", alignItems: "center", gap: 8,
+              }}
+            >
+              <span style={{ fontSize: 16 }}>📥</span>
+              <div style={{ textAlign: "left" }}>
+                <div>Exporter CSV — citations marque</div>
+                <div style={{ fontSize: 10, opacity: .8 }}>Toutes les réponses où la marque est citée</div>
+              </div>
+            </button>
+
+            <button onClick={doPDF}
+              style={{
+                padding: "9px 14px", borderRadius: 8, border: "none",
+                background: "#6366F1", color: "#fff",
+                fontSize: 12, fontWeight: 700, cursor: "pointer",
+                display: "flex", alignItems: "center", gap: 8,
+              }}
+            >
+              <span style={{ fontSize: 16 }}>📄</span>
+              <div style={{ textAlign: "left" }}>
+                <div>Exporter PDF — rapport complet</div>
+                <div style={{ fontSize: 10, opacity: .8 }}>Chiffres clés · positionnées · perdues · absentes</div>
+              </div>
+            </button>
+          </div>
+        </div>
       )}
-    </button>
+    </div>
   );
 }
 
@@ -2175,7 +2466,7 @@ ${question}`;
             )}
           </div>
 
-          {/* ── Export CSV citations marque ── */}
+          {/* ── Export CSV / PDF ── */}
           <ExportFanoutBtn
             questions={filtered}
             results={results}
@@ -2183,6 +2474,9 @@ ${question}`;
             brandAliases={brand?.brand_aliases || []}
             keywords={keywords}
             projectName={site?.name || "export"}
+            hintsMap={hintsMap}
+            latestResultByQ={latestResultByQ}
+            lostByQ={lostByQ}
           />
 
           <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>

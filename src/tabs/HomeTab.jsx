@@ -1,21 +1,123 @@
 import { useState, useEffect } from "react";
 import { C } from "../lib/constants";
-import { authLogin, authSignup, isSuperAdmin } from "../lib/auth";
+import { authLogin, authSignup, authForgotPassword, isSuperAdmin } from "../lib/auth";
 
 const PURPLE = "#7C3AED";
 const PURPLE_LIGHT = "#F5F3FF";
 const PURPLE_BORDER = "#DDD6FE";
 
+// ── Forgot Password Modal ─────────────────────────────────────────
+function ForgotPasswordModal({ onClose }) {
+  const [email, setEmail]   = useState("");
+  const [status, setStatus] = useState("idle"); // idle | loading | sent | error
+  const [error, setError]   = useState("");
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!email.trim()) return;
+    setStatus("loading");
+    setError("");
+    try {
+      await authForgotPassword(email.trim());
+      setStatus("sent");
+    } catch (err) {
+      setError(err.message);
+      setStatus("error");
+    }
+  };
+
+  return (
+    <div
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}
+      style={{
+        position: "fixed", inset: 0, zIndex: 1000,
+        background: "rgba(0,0,0,0.40)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        padding: 20,
+      }}
+    >
+      <div style={{
+        background: "#fff", borderRadius: 16, padding: "32px 36px",
+        width: "100%", maxWidth: 420,
+        boxShadow: "0 20px 60px rgba(0,0,0,0.18)",
+        position: "relative",
+      }}>
+        {/* Close */}
+        <button onClick={onClose} style={{
+          position: "absolute", top: 14, right: 14,
+          background: "none", border: "none", fontSize: 18,
+          cursor: "pointer", color: "#94A3B8", lineHeight: 1,
+        }}>✕</button>
+
+        <div style={{ fontSize: 20, fontWeight: 800, color: C.text, marginBottom: 6 }}>🔑 Mot de passe oublié</div>
+        <div style={{ fontSize: 12, color: C.textLight, lineHeight: 1.6, marginBottom: 22 }}>
+          Entrez votre email. Si un compte existe, vous recevrez un lien de réinitialisation.
+        </div>
+
+        {status === "sent" ? (
+          <div style={{ background: "#ECFDF5", border: "1px solid #BBF7D0", borderRadius: 10, padding: "20px", textAlign: "center" }}>
+            <div style={{ fontSize: 28, marginBottom: 8 }}>📧</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#065F46", marginBottom: 6 }}>Email envoyé !</div>
+            <div style={{ fontSize: 12, color: "#047857", lineHeight: 1.6, marginBottom: 16 }}>
+              Si <strong>{email}</strong> correspond à un compte, vous recevrez le lien sous peu. Vérifiez vos spams.
+            </div>
+            <button onClick={onClose} style={{
+              padding: "9px 22px", background: "#059669", color: "#fff",
+              border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer",
+            }}>Fermer</button>
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <input
+              type="email" value={email} onChange={e => setEmail(e.target.value)}
+              placeholder="votre@email.com" autoFocus required
+              style={{
+                padding: "10px 14px", border: `1.5px solid ${C.border}`,
+                borderRadius: 9, fontSize: 13, color: C.text, outline: "none",
+              }}
+              onFocus={e => e.target.style.borderColor = PURPLE}
+              onBlur={e => e.target.style.borderColor = C.border}
+            />
+            {error && (
+              <div style={{ background: "#FEF2F2", border: "1px solid #DC262633", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#DC2626" }}>
+                {error}
+              </div>
+            )}
+            <button type="submit" disabled={status === "loading" || !email.trim()}
+              style={{
+                padding: "10px", background: status === "loading" ? C.bg : PURPLE,
+                color: status === "loading" ? C.textLight : "#fff",
+                border: "none", borderRadius: 9, fontSize: 13, fontWeight: 700,
+                cursor: status === "loading" ? "not-allowed" : "pointer",
+                boxShadow: status === "loading" ? "none" : `0 2px 8px ${PURPLE}44`,
+              }}>
+              {status === "loading" ? "⏳ Envoi…" : "Envoyer le lien de réinitialisation"}
+            </button>
+            <button type="button" onClick={onClose}
+              style={{
+                padding: "9px", background: "transparent", color: C.textLight,
+                border: `1px solid ${C.border}`, borderRadius: 9, fontSize: 12, cursor: "pointer",
+              }}>
+              Annuler
+            </button>
+          </form>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Login / Signup form ──────────────────────────────────────────
 function LoginForm({ onLogin }) {
-  const [mode, setMode]         = useState("login");
-  const [email, setEmail]       = useState("");
-  const [password, setPassword] = useState("");
-  const [confirm, setConfirm]   = useState("");
-  const [remember, setRemember] = useState(true);
-  const [loading, setLoading]   = useState(false);
-  const [error, setError]       = useState("");
-  const [success, setSuccess]   = useState("");
+  const [mode, setMode]           = useState("login");
+  const [email, setEmail]         = useState("");
+  const [password, setPassword]   = useState("");
+  const [confirm, setConfirm]     = useState("");
+  const [remember, setRemember]   = useState(true);
+  const [loading, setLoading]     = useState(false);
+  const [error, setError]         = useState("");
+  const [success, setSuccess]     = useState("");
+  const [showForgot, setShowForgot] = useState(false);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -39,52 +141,75 @@ function LoginForm({ onLogin }) {
   const isLogin = mode === "login";
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      {/* Tab toggle */}
-      <div style={{ display: "flex", background: C.bg, borderRadius: 10, padding: 3, gap: 3 }}>
-        {[{key:"login",label:"Se connecter"},{key:"signup",label:"Créer un compte"}].map(m => (
-          <button key={m.key} onClick={() => { setMode(m.key); setError(""); setSuccess(""); }}
-            style={{ flex: 1, padding: "8px", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer",
-              background: mode === m.key ? "#fff" : "transparent",
-              color: mode === m.key ? PURPLE : C.textLight,
-              boxShadow: mode === m.key ? "0 1px 4px rgba(0,0,0,0.08)" : "none",
-              transition: "all 0.15s" }}>
-            {m.label}
+    <>
+      {/* Modale mot de passe oublié */}
+      {showForgot && <ForgotPasswordModal onClose={() => setShowForgot(false)} />}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        {/* Tab toggle */}
+        <div style={{ display: "flex", background: C.bg, borderRadius: 10, padding: 3, gap: 3 }}>
+          {[{key:"login",label:"Se connecter"},{key:"signup",label:"Créer un compte"}].map(m => (
+            <button key={m.key} onClick={() => { setMode(m.key); setError(""); setSuccess(""); }}
+              style={{
+                flex: 1, padding: "8px", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer",
+                background: mode === m.key ? "#fff" : "transparent",
+                color: mode === m.key ? PURPLE : C.textLight,
+                boxShadow: mode === m.key ? "0 1px 4px rgba(0,0,0,0.08)" : "none",
+                transition: "all 0.15s",
+              }}>
+              {m.label}
+            </button>
+          ))}
+        </div>
+
+        {error   && <div style={{ background: "#FEF2F2", border: "1px solid #DC262633", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#DC2626" }}>{error}</div>}
+        {success && <div style={{ background: "#ECFDF5", border: "1px solid #05966633", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#059669" }}>{success}</div>}
+
+        <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <input type="email" value={email} onChange={e => setEmail(e.target.value)} required
+            placeholder="adresse@email.com"
+            style={{ padding: "10px 14px", border: `1.5px solid ${C.border}`, borderRadius: 9, fontSize: 13, color: C.text, outline: "none" }} />
+          <input type="password" value={password} onChange={e => setPassword(e.target.value)} required
+            placeholder="Mot de passe (8 caractères min.)"
+            style={{ padding: "10px 14px", border: `1.5px solid ${C.border}`, borderRadius: 9, fontSize: 13, color: C.text }} />
+          {!isLogin && (
+            <input type="password" value={confirm} onChange={e => setConfirm(e.target.value)} required
+              placeholder="Confirmer le mot de passe"
+              style={{ padding: "10px 14px", border: `1.5px solid ${confirm && confirm !== password ? "#DC2626" : C.border}`, borderRadius: 9, fontSize: 13, color: C.text }} />
+          )}
+          {isLogin && (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: C.textLight, cursor: "pointer" }}>
+                <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} />
+                Se souvenir de moi
+              </label>
+              {/* ── Lien "Mot de passe oublié" ── */}
+              <button
+                type="button"
+                onClick={() => setShowForgot(true)}
+                style={{
+                  background: "none", border: "none", cursor: "pointer",
+                  fontSize: 11, color: PURPLE, fontWeight: 600,
+                  textDecoration: "underline", padding: 0,
+                }}
+              >
+                Mot de passe oublié ?
+              </button>
+            </div>
+          )}
+          <button type="submit" disabled={loading || !email || !password || (!isLogin && !confirm)}
+            style={{
+              padding: "11px", background: loading ? C.bg : PURPLE, color: loading ? C.textLight : "#fff",
+              border: "none", borderRadius: 9, fontSize: 13, fontWeight: 700,
+              cursor: loading ? "not-allowed" : "pointer", marginTop: 4,
+              boxShadow: loading ? "none" : `0 2px 8px ${PURPLE}44`,
+              transition: "all 0.2s",
+            }}>
+            {loading ? (isLogin ? "Connexion…" : "Création…") : (isLogin ? "Se connecter →" : "Créer mon compte →")}
           </button>
-        ))}
+        </form>
       </div>
-
-      {error && <div style={{ background: "#FEF2F2", border: "1px solid #DC262633", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#DC2626" }}>{error}</div>}
-      {success && <div style={{ background: "#ECFDF5", border: "1px solid #05966633", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#059669" }}>{success}</div>}
-
-      <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        <input type="email" value={email} onChange={e => setEmail(e.target.value)} required
-          placeholder="adresse@email.com"
-          style={{ padding: "10px 14px", border: `1.5px solid ${C.border}`, borderRadius: 9, fontSize: 13, color: C.text, outline: "none" }} />
-        <input type="password" value={password} onChange={e => setPassword(e.target.value)} required
-          placeholder="Mot de passe (8 caractères min.)"
-          style={{ padding: "10px 14px", border: `1.5px solid ${C.border}`, borderRadius: 9, fontSize: 13, color: C.text }} />
-        {!isLogin && (
-          <input type="password" value={confirm} onChange={e => setConfirm(e.target.value)} required
-            placeholder="Confirmer le mot de passe"
-            style={{ padding: "10px 14px", border: `1.5px solid ${confirm && confirm !== password ? "#DC2626" : C.border}`, borderRadius: 9, fontSize: 13, color: C.text }} />
-        )}
-        {isLogin && (
-          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: C.textLight, cursor: "pointer" }}>
-            <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} />
-            Se souvenir de moi
-          </label>
-        )}
-        <button type="submit" disabled={loading || !email || !password || (!isLogin && !confirm)}
-          style={{ padding: "11px", background: loading ? C.bg : PURPLE, color: loading ? C.textLight : "#fff",
-            border: "none", borderRadius: 9, fontSize: 13, fontWeight: 700,
-            cursor: loading ? "not-allowed" : "pointer", marginTop: 4,
-            boxShadow: loading ? "none" : `0 2px 8px ${PURPLE}44`,
-            transition: "all 0.2s" }}>
-          {loading ? (isLogin ? "Connexion…" : "Création…") : (isLogin ? "Se connecter →" : "Créer mon compte →")}
-        </button>
-      </form>
-    </div>
+    </>
   );
 }
 
@@ -256,8 +381,8 @@ function ProjectsList({ user, projects, currentProjectId, dbLoading, onSelectPro
 
 // ── HomeTab ───────────────────────────────────────────────────────
 export default function HomeTab({ user, projects, currentProjectId, dbLoading, onLogin, onLogout, onSelectProject, onCreateProject, onGoSetup, onGoFanout, onGoAudit }) {
-  const [visible, setVisible]             = useState(true);
-  const [displayUser, setDisplayUser]     = useState(user);
+  const [visible, setVisible]         = useState(true);
+  const [displayUser, setDisplayUser] = useState(user);
 
   // Smooth transition when user logs in/out
   useEffect(() => {
@@ -272,7 +397,6 @@ export default function HomeTab({ user, projects, currentProjectId, dbLoading, o
 
   const isConnected = !!displayUser;
 
-  // Card style — equal height, same border/shadow
   const cardStyle = {
     background: C.white,
     border: `1px solid ${C.border}`,
@@ -310,7 +434,7 @@ export default function HomeTab({ user, projects, currentProjectId, dbLoading, o
         </div>
       )}
 
-      {/* 2-column grid — equal height */}
+      {/* 2-column grid */}
       <div style={{
         display: "grid",
         gridTemplateColumns: "1fr 1fr",
@@ -318,8 +442,7 @@ export default function HomeTab({ user, projects, currentProjectId, dbLoading, o
         alignItems: "stretch",
         ...transitionStyle,
       }}>
-
-        {/* LEFT column */}
+        {/* LEFT */}
         <div style={cardStyle}>
           {!isConnected ? (
             <>
@@ -343,7 +466,7 @@ export default function HomeTab({ user, projects, currentProjectId, dbLoading, o
           )}
         </div>
 
-        {/* RIGHT column */}
+        {/* RIGHT */}
         <div style={cardStyle}>
           {!isConnected ? (
             <>

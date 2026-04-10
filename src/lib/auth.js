@@ -55,19 +55,47 @@ export async function authSignup(email, password) {
   const data = await res.json();
 
   if (!res.ok) {
-    // Erreur 409 = email déjà utilisé
     if (res.status === 409) throw new Error("Un compte existe déjà avec cet email.");
     throw new Error(data.error || "Erreur lors de la création du compte");
   }
 
-  // Le serveur retourne toujours un token après signup désormais
   if (data.access_token) {
     storeSession({ access_token: data.access_token, refresh_token: data.refresh_token, user: data.user }, true);
     return data.user;
   }
 
-  // Cas de repli : compte créé sans token (ne devrait pas arriver)
   return null;
+}
+
+// ── Mot de passe oublié ───────────────────────────────────────────
+// Envoie un email de réinitialisation. Retourne toujours true
+// (Supabase ne divulgue pas si le compte existe).
+export async function authForgotPassword(email) {
+  const res = await fetch("/api/auth?action=forgot_password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      email: email.toLowerCase().trim(),
+      redirect_url: `${window.location.origin}/reset-password`,
+    }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "Erreur lors de l'envoi de l'email");
+  return data;
+}
+
+// ── Réinitialisation du mot de passe ──────────────────────────────
+// Appelée depuis la page /reset-password.
+// Le token vient du hash de l'URL (#access_token=xxx&type=recovery).
+export async function authResetPassword(accessToken, newPassword) {
+  const res = await fetch("/api/auth?action=reset_password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ access_token: accessToken, new_password: newPassword }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "Erreur lors de la réinitialisation");
+  return data;
 }
 
 export async function authLogout() {

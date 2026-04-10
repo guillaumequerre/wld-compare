@@ -1,5 +1,5 @@
 // netlify/edge-functions/auth-proxy.js
-// Handles Supabase Auth API calls (signup, login, logout, session)
+// Handles Supabase Auth API calls (signup, login, logout, session, password reset)
 
 const SUPABASE_URL        = Deno.env.get("SUPABASE_URL");
 const SUPABASE_ANON       = Deno.env.get("SUPABASE_ANON");
@@ -30,14 +30,12 @@ export default async function handler(req) {
     }
 
     // ── SIGNUP ─────────────────────────────────────────────────────
-    // Utilise la clé service_role pour créer le compte sans email de confirmation,
-    // puis connecte immédiatement l'utilisateur avec ses identifiants.
     if (action === "signup") {
       if (!SUPABASE_SERVICE_KEY) {
         return json({ error: "Configuration serveur manquante (SUPABASE_SERVICE_KEY)" }, 500);
       }
 
-      // 1. Créer le compte via Admin API (pas d'email de confirmation)
+      // 1. Créer le compte via Admin API (sans email de confirmation)
       const createRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/users`, {
         method: "POST",
         headers: {
@@ -48,19 +46,18 @@ export default async function handler(req) {
         body: JSON.stringify({
           email: body.email,
           password: body.password,
-          email_confirm: true, // compte confirmé d'emblée, pas d'email requis
+          email_confirm: true,
         }),
       });
       const createData = await createRes.json();
 
       if (!createRes.ok) {
-        // Supabase renvoie 422 si l'email existe déjà
         const msg = createData.message || createData.msg || createData.error_description || "Erreur lors de la création du compte";
         const status = createRes.status === 422 ? 409 : 400;
         return json({ error: msg }, status);
       }
 
-      // 2. Connecter immédiatement avec les identifiants
+      // 2. Connecter immédiatement
       const loginRes = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "apikey": SUPABASE_ANON },
@@ -69,7 +66,6 @@ export default async function handler(req) {
       const loginData = await loginRes.json();
 
       if (!loginRes.ok) {
-        // Compte créé mais connexion échouée — cas rare
         return json({ error: "Compte créé mais connexion automatique échouée. Connectez-vous manuellement.", user: createData }, 200);
       }
 
@@ -78,6 +74,58 @@ export default async function handler(req) {
         refresh_token: loginData.refresh_token,
         user: loginData.user,
       });
+    }
+
+    // ── FORGOT PASSWORD ────────────────────────────────────────────
+    // Envoie un email de réinitialisation via l'API Supabase.
+    // L'email doit exister dans auth.users, sinon Supabase renvoie 200 quand même
+    // (pour ne pas divulguer l'existence du compte).
+    if (action === "forgot_password") {
+      if (!body.email) return json({ error: "Email requis" }, 400);
+
+      const redirectTo = body.redirect_url || `${url.origin}/reset-password`;
+
+      const res = await fetch(`${SUPABASE_URL}/auth/v1/recover`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "apikey": SUPABASE_ANON,
+        },
+        body: JSON.stringify({
+          email: body.email.toLowerCase().trim(),
+          gotrue_meta_security: {},
+        }),
+      });
+
+      // Supabase retourne toujours 200 (sécurité anti-enumeration)
+      // On retourne toujours un succès côté client
+      return json({ success: true, message: "Si ce compte existe, un email de réinitialisation a été envoyé." });
+    }
+
+    // ── RESET PASSWORD ─────────────────────────────────────────────
+    // Appelé depuis la page /reset-password avec le token de l'email.
+    // Le token est dans le hash de l'URL (#access_token=...) — le client
+    // l'extrait et l'envoie ici pour changer le mot de passe.
+    if (action === "reset_password") {
+      if (!body.access_token || !body.new_password) {
+        return json({ error: "Token et nouveau mot de passe requis" }, 400);
+      }
+      if (body.new_password.length < 8) {
+        return json({ error: "Le mot de passe doit faire au moins 8 caractères" }, 400);
+      }
+
+      const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          "apikey": SUPABASE_ANON,
+          "Authorization": `Bearer ${body.access_token}`,
+        },
+        body: JSON.stringify({ password: body.new_password }),
+      });
+      const data = await res.json();
+      if (!res.ok) return json({ error: data.message || data.error_description || "Erreur lors de la réinitialisation" }, 400);
+      return json({ success: true, user: data });
     }
 
     // ── REFRESH ────────────────────────────────────────────────────
