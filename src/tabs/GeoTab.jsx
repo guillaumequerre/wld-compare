@@ -12,7 +12,7 @@ import {
   sbSetQuestionCategory,
   sbBulkSetKeywordCategory, sbBulkSetQuestionCategory,
   sbGetUrlIndex, sbUpdateUrlMeta, sbIncrementUrlCounts,
-  sbAddCalendarEntry,
+  sbAddCalendarEntry, sbGetCalendarEntries,
 } from "../lib/supabase";
 // Note: sbSaveGeoAxes is called via onSaveAxes prop from App.jsx
 
@@ -2169,6 +2169,7 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
   const [bulkCat, setBulkCat]       = useState("");
   const [keywords, setKeywords]     = useState([]);
   const [newCalEntries, setNewCalEntries] = useState({}); // { `${q.id}|${p.id}` → last newEntry for PresenceCalendar }
+  const [calendarEntries, setCalendarEntries] = useState([]); // entrées de la table geo_presence_calendar
 
   // Load all data on mount and when project/site/refreshTrigger changes
   useEffect(() => {
@@ -2179,13 +2180,15 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
       sbGetQuestions(projectId, site.id),
       sbGetHints(projectId, site.id),
       sbGetKeywords(projectId, site.id),
-    ]).then(([results, questions, hints, keywords]) => {
+      sbGetCalendarEntries(projectId, site.id),
+    ]).then(([results, questions, hints, keywords, calEntries]) => {
       setResults(results.length ? results : (allResults || []));
       setQuestions(questions);
       const map = {};
       hints.forEach(r => { map[r.question_id] = { text: r.hint_text, date: r.updated_at }; });
       setHintsMap(map);
       setKeywords(keywords);
+      setCalendarEntries(calEntries || []);
     }).catch(e => console.warn("[QuestionsTab] load error:", e));
   }, [projectId, site?.id, refreshTrigger]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -2333,25 +2336,38 @@ ${question}`;
     return out;
   }, [resultsByQ]);
 
-  // Per question: was brand present in last 30 days but absent in latest result?
+  // Per question: was brand present (green in calendar) in last 30 days but absent in latest result?
+  // Source de vérité = geo_presence_calendar (même table que PresenceCalendar)
   const lostByQ = useMemo(() => {
     const out = {};
     const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000); // 30 jours
-    Object.entries(resultsByQ).forEach(([qId, results]) => {
-      if (!results.length) return;
-      const sorted = [...results].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-      const latest = sorted[0];
-      const latestAbsent = !(latest.brand_mentioned === true || latest.brand_mentioned === 1);
-      if (!latestAbsent) return; // présente dans le dernier → pas "perdue"
-      // A-t-on eu une présence dans les 30 derniers jours (hors dernier résultat) ?
-      const hadBrandIn30d = sorted.slice(1).some(r => {
-        const d = new Date(r.created_at || 0);
-        return d >= cutoff && (r.brand_mentioned === true || r.brand_mentioned === 1);
+
+    // Grouper les entrées calendar par question_id
+    const calByQ = {};
+    calendarEntries.forEach(e => {
+      if (!calByQ[e.question_id]) calByQ[e.question_id] = [];
+      calByQ[e.question_id].push(e);
+    });
+
+    // Pour chaque question, vérifier la condition "perdue"
+    Object.keys({ ...resultsByQ, ...calByQ }).forEach(qId => {
+      // Condition 1 : la marque est absente du dernier résultat connu
+      const latest = latestResultByQ[qId];
+      const latestAbsent = !latest || !(latest.brand_mentioned === true || latest.brand_mentioned === 1);
+      if (!latestAbsent) return; // encore positionnée → pas "perdue"
+
+      // Condition 2 : au moins une entrée verte (brand_present=true) dans les 30 derniers jours
+      // → c'est exactement ce qui fait un carré vert dans PresenceCalendar
+      const entries = calByQ[qId] || [];
+      const hadGreenIn30d = entries.some(e => {
+        const d = new Date(e.test_date || e.created_at || 0);
+        return d >= cutoff && (e.brand_present === true || e.brand_present === 1);
       });
-      out[qId] = hadBrandIn30d;
+
+      out[qId] = hadGreenIn30d;
     });
     return out;
-  }, [resultsByQ]);
+  }, [calendarEntries, resultsByQ, latestResultByQ]);
 
   const filtered = useMemo(() => sortedQuestions.filter(q => {
     // Filtres cumulatifs (ET)

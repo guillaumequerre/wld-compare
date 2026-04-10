@@ -626,7 +626,7 @@ export async function sbGetPresenceHistoryBatch(project_id, site_id) {
 }
 
 // ── GEO — CALENDAR ENTRIES ──────────────────────────────────────
-// Single table: geo_calendar_dates
+// Table : geo_calendar_dates
 // Columns: id, question_id, provider_id, brand_present, test_date, created_at
 
 export async function sbAddCalendarEntry(question_id, provider_id, brand_present) {
@@ -647,16 +647,55 @@ export async function sbAddCalendarEntry(question_id, provider_id, brand_present
   } catch(e) { console.warn("sbAddCalendarEntry error:", e.message); return null; }
 }
 
+// Par question (utilisé par PresenceCalendar)
 export async function sbGetCalendarEntries(question_id) {
   try {
     const since = new Date(); since.setDate(since.getDate() - 30);
     const sinceStr = since.toISOString().slice(0, 10);
     const res = await fetch(
-      `${PROXY}/rest/v1/geo_calendar_dates?question_id=eq.${encodeURIComponent(question_id)}&test_date=gte.${sinceStr}&order=test_date.asc&select=provider_id,test_date,brand_present`
+      `${PROXY}/rest/v1/geo_calendar_dates?question_id=eq.${encodeURIComponent(question_id)}&test_date=gte.${sinceStr}&order=test_date.asc&select=provider_id,test_date,brand_present`,
+      { headers: authHeaders() }
     );
     if (!res.ok) return [];
     return res.json();
   } catch { return []; }
+}
+
+// ── NOUVEAU : batch pour tout un projet/site (utilisé par QuestionsTab pour lostByQ) ──
+// Charge toutes les entrées des 30 derniers jours pour calculer "Positionnée précédemment"
+// en utilisant la même source de vérité que PresenceCalendar.
+export async function sbGetCalendarEntriesBatch(project_id, site_id) {
+  try {
+    const since = new Date(); since.setDate(since.getDate() - 30);
+    const sinceStr = since.toISOString().slice(0, 10);
+
+    // geo_calendar_dates n'a pas de project_id/site_id directement —
+    // on passe par geo_questions pour obtenir les question_ids du projet/site,
+    // puis on filtre les entrées calendar sur ces IDs.
+    // Alternative plus simple : joindre via PostgREST embedded resource.
+    // On utilise la table geo_questions comme pivot.
+
+    // Étape 1 : récupérer les question_ids du projet/site
+    const qRes = await fetch(
+      `${PROXY}/rest/v1/geo_questions?project_id=eq.${encodeURIComponent(project_id)}&site_id=eq.${encodeURIComponent(site_id)}&select=id`,
+      { headers: authHeaders() }
+    );
+    if (!qRes.ok) return [];
+    const questions = await qRes.json();
+    if (!questions.length) return [];
+
+    // Étape 2 : récupérer les entrées calendar pour ces question_ids
+    const ids = questions.map(q => q.id).join(",");
+    const res = await fetch(
+      `${PROXY}/rest/v1/geo_calendar_dates?question_id=in.(${ids})&test_date=gte.${sinceStr}&order=test_date.asc&select=question_id,provider_id,test_date,brand_present`,
+      { headers: authHeaders() }
+    );
+    if (!res.ok) return [];
+    return res.json();
+  } catch(e) {
+    console.warn("sbGetCalendarEntriesBatch error:", e.message);
+    return [];
+  }
 }
 
 // ── GEO HINTS ────────────────────────────────────────────────────
