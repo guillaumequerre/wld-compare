@@ -17,6 +17,7 @@ import GeoTab from "./tabs/GeoTab";
 import GeoAuditTab from "./tabs/GeoAuditTab";
 import HomeTab from "./tabs/HomeTab";
 import ManageTab from "./tabs/ManageTab";
+import ResetPasswordPage from "./ResetPasswordPage"; // ← AJOUTÉ
 import { getCurrentUser, authLogout } from "./lib/auth";
 
 const NAV_TABS = [
@@ -58,14 +59,13 @@ function NavBar({ tab, setTab, user, onLogout }) {
     }}>{t.label}</button>
   );
 
-  const burgerItems = BURGER_TABS.slice(0, 3); // Compte, Analyse IA, Accueil
-  const moreTabs    = BURGER_TABS.slice(3);     // Évolution, Matrice, Semrush, Tous les projets
+  const burgerItems = BURGER_TABS.slice(0, 3);
+  const moreTabs    = BURGER_TABS.slice(3);
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
       {NAV_TABS.map(tabBtn)}
 
-      {/* Burger */}
       <div ref={burgerRef} style={{ position: "relative" }}>
         <button onClick={() => setBurgerOpen(o => !o)} style={{
           padding: "6px 10px", border: "none", borderRadius: 7, cursor: "pointer", fontSize: 13,
@@ -84,7 +84,6 @@ function NavBar({ tab, setTab, user, onLogout }) {
             boxShadow: "0 8px 24px rgba(0,0,0,0.1)", padding: "6px", minWidth: 200,
             display: "flex", flexDirection: "column", gap: 2,
           }}>
-            {/* Primary burger items */}
             {burgerItems.map(t => (
               <button key={t.key} onClick={() => { setTab(t.key); setBurgerOpen(false); }} style={{
                 padding: "9px 14px", border: "none", borderRadius: 7, cursor: "pointer",
@@ -96,7 +95,6 @@ function NavBar({ tab, setTab, user, onLogout }) {
                 onMouseLeave={e => { if (tab !== t.key) e.currentTarget.style.background = "transparent"; }}
               >{t.label}</button>
             ))}
-            {/* Separator + more tabs */}
             <div style={{ height: 1, background: C.border, margin: "4px 6px" }} />
             {moreTabs.map(t => (
               <button key={t.key} onClick={() => { setTab(t.key); setBurgerOpen(false); }} style={{
@@ -109,7 +107,6 @@ function NavBar({ tab, setTab, user, onLogout }) {
                 onMouseLeave={e => { if (tab !== t.key) e.currentTarget.style.background = "transparent"; }}
               >{t.label}</button>
             ))}
-            {/* User section */}
             {user && (
               <>
                 <div style={{ height: 1, background: C.border, margin: "4px 6px" }} />
@@ -147,6 +144,13 @@ function NavBar({ tab, setTab, user, onLogout }) {
 }
 
 export default function App() {
+  // ── Reset password flow — doit être AVANT tout autre état ────────
+  // Détecte le hash Supabase #access_token=xxx&type=recovery au chargement
+  const [isResetFlow, setIsResetFlow] = useState(() => { // ← AJOUTÉ
+    const params = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+    return params.get("type") === "recovery" && !!params.get("access_token");
+  });
+
   // ── Projects ─────────────────────────────────────────────────────
   const [projects, setProjects]             = useState([]);
   const [currentProjectId, setCurrentProjectId] = useState(null);
@@ -187,21 +191,19 @@ export default function App() {
   const [confirmModal, setConfirmModal] = useState(null);
   const [tab, setTab]                   = useState("home");
 
-  // Gate: redirect to home if not connected and trying to access protected tabs
   const goTo = (t) => {
     if (!user && t !== "home") { setTab("home"); return; }
     setTab(t);
   };
   const [pageMode, setPageMode]         = useState("all");
-  const [templateFilter, setTemplateFilter] = useState([]); // [] = all types, array for multi-select
-  const [pageTypes, setPageTypes]           = useState({}); // { siteId: { urlPath: type } }
+  const [templateFilter, setTemplateFilter] = useState([]);
+  const [pageTypes, setPageTypes]           = useState({});
   const [matrixSites, setMatrixSites]   = useState(DEFAULT_SITES.map(s => s.id));
   const [radarSites, setRadarSites]     = useState(DEFAULT_SITES.map(s => s.id));
   const [analysis, setAnalysis]         = useState(null);
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [analysisError, setAnalysisError]     = useState(null);
 
-  // Sync selection states when project or sites change
   useEffect(() => {
     const ids = (sites || []).map(s => s.id);
     if (ids.length) { setMatrixSites(ids); setRadarSites(ids); }
@@ -259,9 +261,7 @@ export default function App() {
         return { ...p, ...patch };
       }));
     }
-    // Load page types for all sites (use project's site list, not just those with imports)
     const ptSiteIds = new Set([...Object.keys(latest)]);
-    // Also get site IDs from the setProjects call above
     const ptUpdates = await Promise.all(
       [...ptSiteIds].map(async sid => {
         const rows = await sbGetPageTypes(pid, sid);
@@ -279,7 +279,7 @@ export default function App() {
         return next;
       });
     }
-    return valid.length; // return import count so caller can pick best project
+    return valid.length;
   }, []);
 
   useEffect(() => {
@@ -289,7 +289,7 @@ export default function App() {
         const currentUser = getCurrentUser();
         if (!currentUser) {
           setDbLoading(false);
-          return; // No projects until logged in
+          return;
         }
         const savedProjects = await sbLoadAccessibleProjects(currentUser.email);
           if (savedProjects && savedProjects.length > 0) {
@@ -301,7 +301,6 @@ export default function App() {
             bingData: emptyDataMap(p.sites),
             smData:   emptyDataMap(p.sites),
           }));
-          // Load all CSV data first (before touching state)
           const allData = await Promise.all(restored.map(async (p) => {
             loadedProjectsRef.current.add(p.id);
             const [latest, history] = await Promise.all([sbGetLatest(p.id), sbGetHistory(p.id)]);
@@ -318,7 +317,6 @@ export default function App() {
             const valid = updates.filter(Boolean);
             return { id: p.id, count: valid.length, valid };
           }));
-          // Build fully-loaded projects in one shot, then set state once
           const loaded = restored.map(p => {
             const { valid } = allData.find(d => d.id === p.id) || { valid: [] };
             const patch = {};
@@ -326,7 +324,6 @@ export default function App() {
             for (const { key, sid, rows } of valid) {
               if (siteIds.has(sid)) patch[key] = { ...(patch[key] || p[key]), [sid]: rows };
             }
-            // Re-apply SITE_COLORS if saved sites are missing color/bg
             const sites = p.sites.map(s => ({
               ...s,
               color: s.color || DEFAULT_SITES[0].color,
@@ -336,7 +333,6 @@ export default function App() {
           });
           setProjects(loaded);
 
-          // Load page_types for all projects/sites
           const allPt = await Promise.all(restored.flatMap(p =>
             p.sites.map(s => sbGetPageTypes(p.id, s.id).then(rows => ({ pid: p.id, sid: s.id, rows })))
           ));
@@ -349,14 +345,11 @@ export default function App() {
             ptMap[pid][sid] = map;
           });
 
-          // Activate the project with the most imports
           const bestId = allData.sort((a, b) => b.count - a.count)[0]?.id || restored[0].id;
           setCurrentProjectId(bestId);
 
-          // Set page_types for the active project immediately
           if (ptMap[bestId]) setPageTypes(ptMap[bestId]);
         } else {
-          // No projects yet — leave state empty, user will create via UI
           setProjects([]);
           setCurrentProjectId(null);
         }
@@ -365,7 +358,6 @@ export default function App() {
     })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Reload imports every time user switches project
   useEffect(() => {
     if (!currentProjectId) return;
     (async () => {
@@ -377,8 +369,6 @@ export default function App() {
   }, [currentProjectId, loadProjectData]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    // Don't save EMPTY_PROJECT (no real id) or when not logged in
-    // Only save real projects that belong to the user's project list
     if (!currentProject?.id || !currentProjectId) return;
     if (!projects.some(p => p.id === currentProject.id)) return;
     const t = setTimeout(() => sbSaveProject(currentProject), 800);
@@ -390,7 +380,6 @@ export default function App() {
     setDbHistory(history);
   }, [currentProjectId]);
 
-  // Load GEO results when project changes
   useEffect(() => {
     if (!currentProjectId) { setGeoResults([]); setGeoUrlIndex([]); return; }
     sbGetGeoResultsAll(currentProjectId).then(setGeoResults).catch(() => setGeoResults([]));
@@ -441,8 +430,6 @@ export default function App() {
       }),
     }));
   }, [matrixSites, smData, gscData, gaData, bingData]);
-
-
 
   const baseMatrix = useMemo(() => {
     const sfRows = matrixSites.flatMap(id => sfData[id] || []);
@@ -540,6 +527,13 @@ export default function App() {
   }, [projects]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Render ───────────────────────────────────────────────────────
+
+  // ── RESET PASSWORD — intercepte le lien Supabase avant tout ─────
+  // Doit être LE PREMIER return conditionnel, avant le JSX normal  ← AJOUTÉ
+  if (isResetFlow) {
+    return <ResetPasswordPage onDone={() => setIsResetFlow(false)} />;
+  }
+
   return (
     <>
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
@@ -561,7 +555,6 @@ export default function App() {
 
         {/* ── CONTENT ── */}
         <div style={{ maxWidth: 1400, margin: "0 auto", padding: "32px 28px" }}>
-          {/* Gate: redirect to home if accessing protected tab without login */}
           {!user && tab !== "home" && (() => { setTimeout(() => setTab("home"), 0); return null; })()}
 
           {tab === "home" && (
@@ -575,7 +568,6 @@ export default function App() {
               onGoAudit={() => goTo("geo_audit")}
               onLogin={async (u) => {
                 setUser(u);
-                // Reload accessible projects for this user
                 try {
                   const { sbLoadAccessibleProjects: loadAP } = await import("./lib/auth");
                   const ps = await loadAP(u.email);
@@ -589,7 +581,6 @@ export default function App() {
                     setCurrentProjectId(restored[0].id);
                   }
                 } catch(e) { console.warn("Project reload failed:", e); }
-                // After login, go to Setup to configure the project
                 goTo("import");
               }}
               onLogout={() => { authLogout(); setUser(null); }}
@@ -632,24 +623,24 @@ export default function App() {
               showHistory={showHistory}
               setShowHistory={setShowHistory}
               refreshHistory={refreshHistory}
-            pageTypes={pageTypes}
-            setPageTypes={setPageTypes}
-            onSemrushVolumes={async (siteId, semrushRows) => {
-              try {
-                const { sbGetKeywords, sbUpdateKeywordVolume } = await import("./lib/supabase");
-                const kws = await sbGetKeywords(currentProjectId, siteId);
-                const volMap = {};
-                semrushRows.forEach(r => {
-                  const kw = (r.keyword || r.Keyword || "").toLowerCase().trim();
-                  const vol = parseInt(r.volume || r.Volume || r["search volume"] || 0, 10);
-                  if (kw && !isNaN(vol) && vol > 0) volMap[kw] = vol;
-                });
-                for (const kw of kws) {
-                  const vol = volMap[kw.keyword?.toLowerCase()];
-                  if (vol !== undefined) await sbUpdateKeywordVolume(kw.id, vol, "semrush_csv");
-                }
-              } catch(e) { console.warn("Semrush volume match failed:", e); }
-            }}
+              pageTypes={pageTypes}
+              setPageTypes={setPageTypes}
+              onSemrushVolumes={async (siteId, semrushRows) => {
+                try {
+                  const { sbGetKeywords, sbUpdateKeywordVolume } = await import("./lib/supabase");
+                  const kws = await sbGetKeywords(currentProjectId, siteId);
+                  const volMap = {};
+                  semrushRows.forEach(r => {
+                    const kw = (r.keyword || r.Keyword || "").toLowerCase().trim();
+                    const vol = parseInt(r.volume || r.Volume || r["search volume"] || 0, 10);
+                    if (kw && !isNaN(vol) && vol > 0) volMap[kw] = vol;
+                  });
+                  for (const kw of kws) {
+                    const vol = volMap[kw.keyword?.toLowerCase()];
+                    if (vol !== undefined) await sbUpdateKeywordVolume(kw.id, vol, "semrush_csv");
+                  }
+                } catch(e) { console.warn("Semrush volume match failed:", e); }
+              }}
             />
           )}
 
@@ -773,6 +764,7 @@ export default function App() {
               bingData={bingData}
             />
           )}
+
           {tab === "manage" && (
             <ManageTab
               user={user}
@@ -796,7 +788,6 @@ export default function App() {
               pageTypes={pageTypes}
             />
           )}
-
         </div>
 
         {/* ── CONFIRM MODAL ── */}
@@ -816,7 +807,6 @@ export default function App() {
             </div>
           </div>
         )}
-
       </div>
     </>
   );
