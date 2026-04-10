@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { authResetPassword } from "./lib/auth"; // ajustez le chemin si besoin
+import { authResetPassword } from "../lib/auth";
 
 // onDone : callback optionnel appelé après succès (retour à l'accueil dans App.jsx)
 export default function ResetPasswordPage({ onDone }) {

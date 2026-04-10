@@ -17,7 +17,7 @@ import GeoTab from "./tabs/GeoTab";
 import GeoAuditTab from "./tabs/GeoAuditTab";
 import HomeTab from "./tabs/HomeTab";
 import ManageTab from "./tabs/ManageTab";
-import ResetPasswordPage from "./ResetPasswordPage"; // ← AJOUTÉ
+import ResetPasswordPage from "./components/ResetPasswordPage"; // ← AJOUTÉ
 import { getCurrentUser, authLogout } from "./lib/auth";
 
 const NAV_TABS = [
