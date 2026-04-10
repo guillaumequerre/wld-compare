@@ -84,7 +84,8 @@ function getProviderLabel(model) {
   return model || "Inconnu";
 }
 
-function exportFanoutCSV({ questions, results, brandName, brandAliases = [], keywords = [], projectName = "export", selectedProviders = [] }) {
+// questionScope : "brand" (marque présente) | "favorites" (favoris) | "all" (toutes)
+function exportFanoutCSV({ questions, results, brandName, brandAliases = [], keywords = [], projectName = "export", selectedProviders = [], questionScope = "brand" }) {
   const byQ = {};
   results.forEach(r => {
     if (!byQ[r.question_id]) byQ[r.question_id] = [];
@@ -96,9 +97,11 @@ function exportFanoutCSV({ questions, results, brandName, brandAliases = [], key
 
   const header = [
     "Question",
+    "Favori",
     "Mot-clé",
     "Provider",
     "Modèle",
+    "Marque présente",
     "Position marque",
     "Marque dans sources",
     "Concurrents cités",
@@ -110,26 +113,41 @@ function exportFanoutCSV({ questions, results, brandName, brandAliases = [], key
 
   const rows = [header];
 
-  questions.forEach(q => {
-    const qResults = byQ[q.id] || [];
-    // Filtre par provider si une sélection est active
-    const branded = qResults.filter(r => {
-      const isBrand = r.brand_mentioned === true || r.brand_mentioned === 1;
-      if (!isBrand) return false;
-      if (selectedProviders.length === 0) return true;
-      return selectedProviders.includes(getProviderId(r.model));
-    });
-    branded.forEach(r => {
+  // Filtrer les questions selon le scope
+  const scopedQuestions = questions.filter(q => {
+    if (questionScope === "favorites") return !!q.is_favorite;
+    if (questionScope === "brand") {
+      const qRes = byQ[q.id] || [];
+      return qRes.some(r => r.brand_mentioned === true || r.brand_mentioned === 1);
+    }
+    return true; // "all"
+  });
+
+  scopedQuestions.forEach(q => {
+    const qResults = (byQ[q.id] || []).filter(r =>
+      selectedProviders.length === 0 || selectedProviders.includes(getProviderId(r.model))
+    );
+
+    if (qResults.length === 0) {
+      // Question sans résultat — ligne vide pour tracer la question
+      rows.push([q.question, q.is_favorite ? "⭐" : "", kwMap[q.keyword_id] || "", "", "", "Non", "", "", "", "", "", "", ""]);
+      return;
+    }
+
+    qResults.forEach(r => {
       const sources = r.sources || [];
       const brandSources = sources.filter(u => allBrandTerms.some(t => u.toLowerCase().includes(t)));
+      const isBrand = r.brand_mentioned === true || r.brand_mentioned === 1;
       const comps = (r.competitors_mentioned || [])
         .map(c => c.position ? `${c.name} (#${c.position})` : c.name)
         .join(", ");
       rows.push([
         q.question,
+        q.is_favorite ? "⭐" : "",
         kwMap[q.keyword_id] || "",
         getProviderLabel(r.model),
         r.model || "",
+        isBrand ? "✓ Oui" : "Non",
         r.brand_position ? `#${r.brand_position}` : "",
         brandSources.length > 0 ? brandSources.join(" | ") : "Non",
         comps || "—",
@@ -142,19 +160,21 @@ function exportFanoutCSV({ questions, results, brandName, brandAliases = [], key
   });
 
   if (rows.length === 1) {
-    alert("Aucune question avec citation de la marque trouvée dans la sélection actuelle.");
+    alert("Aucun résultat à exporter pour la sélection actuelle.");
     return 0;
   }
 
+  const scopeLabel = questionScope === "brand" ? "marque" : questionScope === "favorites" ? "favoris" : "toutes";
   const slug    = projectName.replace(/[^a-z0-9]/gi, "_").toLowerCase();
   const dateStr = new Date().toISOString().slice(0, 10);
-  downloadText(toCSV(rows), `fanout_${slug}_marque_${dateStr}.csv`);
+  downloadText(toCSV(rows), `fanout_${slug}_${scopeLabel}_${dateStr}.csv`);
   return rows.length - 1;
 }
 
 // ── PDF export helpers ────────────────────────────────────────────
 
-function buildFanoutPDF({ questions, results, hintsMap = {}, brandName, brandAliases = [], keywords = [], projectName = "export", latestResultByQ = {}, lostByQ = {}, selectedProviders = [] }) {
+// questionScope : "brand" | "favorites" | "all"
+function buildFanoutPDF({ questions, results, hintsMap = {}, brandName, brandAliases = [], keywords = [], projectName = "export", latestResultByQ = {}, lostByQ = {}, selectedProviders = [], questionScope = "brand" }) {
   const byQ = {};
   results.forEach(r => {
     if (!byQ[r.question_id]) byQ[r.question_id] = [];
@@ -174,7 +194,17 @@ function buildFanoutPDF({ questions, results, hintsMap = {}, brandName, brandAli
   const lostQs     = []; // marque déjà présente mais absente maintenant
   const absentQs   = []; // marque jamais présente
 
-  questions.forEach(q => {
+  // Filtrer les questions selon le scope
+  const scopedQuestions = questions.filter(q => {
+    if (questionScope === "favorites") return !!q.is_favorite;
+    if (questionScope === "brand") {
+      const qRes = byQ[q.id] || [];
+      return qRes.some(r => r.brand_mentioned === true || r.brand_mentioned === 1);
+    }
+    return true; // "all"
+  });
+
+  scopedQuestions.forEach(q => {
     const allRes = filterByProvider(byQ[q.id] || []);
     const latest = latestResultByQ[q.id];
     const latestFiltered = latest && (selectedProviders.length === 0 || selectedProviders.includes(getProviderId(latest.model))) ? latest : [...allRes].sort((a,b)=>new Date(b.created_at||0)-new Date(a.created_at||0))[0];
@@ -333,13 +363,13 @@ function buildFanoutPDF({ questions, results, hintsMap = {}, brandName, brandAli
 // ── ExportFanoutBtn (avec sélection provider + CSV + PDF) ─────────
 
 function ExportFanoutBtn({ questions, results, brandName, brandAliases = [], keywords = [], projectName = "export", hintsMap = {}, latestResultByQ = {}, lostByQ = {} }) {
-  const [open, setOpen]               = useState(false);     // popover ouvert
-  const [selectedProviders, setSel]   = useState([]);        // [] = tous
-  const [exportStatus, setStatus]     = useState("idle");    // idle | exporting | done | error
-  const [lastCount, setLastCount]     = useState(null);
-  const popRef                        = useRef();
+  const [open, setOpen]             = useState(false);
+  const [selectedProviders, setSel] = useState([]);        // [] = tous
+  const [questionScope, setScope]   = useState("brand");   // "brand" | "favorites" | "all"
+  const [exportStatus, setStatus]   = useState("idle");
+  const [lastCount, setLastCount]   = useState(null);
+  const popRef                      = useRef();
 
-  // Fermer le popover en cliquant ailleurs
   useEffect(() => {
     if (!open) return;
     const h = (e) => { if (!popRef.current?.contains(e.target)) setOpen(false); };
@@ -353,17 +383,20 @@ function ExportFanoutBtn({ questions, results, brandName, brandAliases = [], key
     byQ[r.question_id].push(r);
   });
 
-  // Providers disponibles dans les résultats
   const presentProviders = [...new Set(results.map(r => getProviderId(r.model)).filter(Boolean))];
 
-  const brandedCount = questions.reduce((acc, q) => {
-    const qRes = (byQ[q.id] || []).filter(r => {
-      if (!( r.brand_mentioned === true || r.brand_mentioned === 1)) return false;
-      if (selectedProviders.length === 0) return true;
-      return selectedProviders.includes(getProviderId(r.model));
-    });
-    return acc + qRes.length;
-  }, 0);
+  // Compter les questions selon le scope courant
+  const scopedCount = questions.filter(q => {
+    if (questionScope === "favorites") return !!q.is_favorite;
+    if (questionScope === "brand") {
+      const qRes = byQ[q.id] || [];
+      return qRes.some(r =>
+        (r.brand_mentioned === true || r.brand_mentioned === 1) &&
+        (selectedProviders.length === 0 || selectedProviders.includes(getProviderId(r.model)))
+      );
+    }
+    return true;
+  }).length;
 
   const toggleProvider = (pid) => {
     setSel(prev => prev.includes(pid) ? prev.filter(p => p !== pid) : [...prev, pid]);
@@ -372,7 +405,7 @@ function ExportFanoutBtn({ questions, results, brandName, brandAliases = [], key
   const doCSV = () => {
     setStatus("exporting");
     setTimeout(() => {
-      const n = exportFanoutCSV({ questions, results, brandName, brandAliases, keywords, projectName, selectedProviders });
+      const n = exportFanoutCSV({ questions, results, brandName, brandAliases, keywords, projectName, selectedProviders, questionScope });
       setLastCount(n);
       setStatus(n > 0 ? "done" : "idle");
       if (n > 0) setTimeout(() => { setStatus("idle"); setLastCount(null); }, 4000);
@@ -383,7 +416,7 @@ function ExportFanoutBtn({ questions, results, brandName, brandAliases = [], key
   const doPDF = () => {
     setStatus("exporting");
     setTimeout(() => {
-      buildFanoutPDF({ questions, results, hintsMap, brandName, brandAliases, keywords, projectName, latestResultByQ, lostByQ, selectedProviders });
+      buildFanoutPDF({ questions, results, hintsMap, brandName, brandAliases, keywords, projectName, latestResultByQ, lostByQ, selectedProviders, questionScope });
       setStatus("idle");
       setOpen(false);
     }, 0);
@@ -392,6 +425,13 @@ function ExportFanoutBtn({ questions, results, brandName, brandAliases = [], key
   const providerColors = { openai:"#059669", gemini:"#2563EB", perplexity:"#7C3AED", claude:"#D97706", other:"#64748B" };
   const providerIcons  = { openai:"🟢", gemini:"🔵", perplexity:"🟣", claude:"🟠", other:"⚪" };
   const providerLabels = { openai:"OpenAI", gemini:"Gemini", perplexity:"Perplexity", claude:"Claude", other:"Autre" };
+
+  const SCOPES = [
+    { key: "brand",     label: "✓ Marque présente",  desc: "Questions où la marque est citée",   color: "#059669", bg: "#ECFDF5" },
+    { key: "favorites", label: "⭐ Favoris",           desc: "Questions marquées comme favoris",   color: "#F59E0B", bg: "#FFFBEB" },
+    { key: "all",       label: "◉ Toutes",            desc: "Toutes les questions et réponses",   color: "#6366F1", bg: "#EEF2FF" },
+  ];
+  const currentScope = SCOPES.find(s => s.key === questionScope);
 
   return (
     <div ref={popRef} style={{ position: "relative", display: "inline-block" }}>
@@ -413,13 +453,13 @@ function ExportFanoutBtn({ questions, results, brandName, brandAliases = [], key
         }}
       >
         {exportStatus === "exporting" ? <>⏳ Export…</> :
-         exportStatus === "done" && lastCount !== null ? <>{lastCount} lignes exportées ✓</> : (
+         exportStatus === "done" && lastCount !== null ? <>{lastCount} lignes ✓</> : (
           <>
             <span style={{ fontSize: 14 }}>📤</span>
             Exporter
-            {brandedCount > 0 && (
-              <span style={{ fontSize: 10, fontWeight: 800, background: "#059669", color: "#fff", borderRadius: 10, padding: "1px 6px", marginLeft: 2 }}>
-                {brandedCount}
+            {scopedCount > 0 && (
+              <span style={{ fontSize: 10, fontWeight: 800, background: currentScope?.color || "#059669", color: "#fff", borderRadius: 10, padding: "1px 6px", marginLeft: 2 }}>
+                {scopedCount}
               </span>
             )}
             <span style={{ fontSize: 10, opacity: 0.6 }}>{open ? "▲" : "▼"}</span>
@@ -432,9 +472,34 @@ function ExportFanoutBtn({ questions, results, brandName, brandAliases = [], key
         <div style={{
           position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 300,
           background: "#fff", border: "1px solid #E2E8F0", borderRadius: 12,
-          boxShadow: "0 8px 32px rgba(0,0,0,0.14)", padding: 16, minWidth: 260,
+          boxShadow: "0 8px 32px rgba(0,0,0,0.14)", padding: 16, minWidth: 290,
         }}>
-          {/* Sélection providers */}
+
+          {/* ── Périmètre des questions ── */}
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: ".7px", marginBottom: 8 }}>
+              Questions à exporter
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+              {SCOPES.map(s => (
+                <button key={s.key} onClick={() => setScope(s.key)}
+                  style={{
+                    padding: "8px 12px", borderRadius: 8, fontSize: 12, fontWeight: 600,
+                    border: `2px solid ${questionScope === s.key ? s.color : "#E2E8F0"}`,
+                    background: questionScope === s.key ? s.bg : "transparent",
+                    color: questionScope === s.key ? s.color : "#64748B",
+                    cursor: "pointer", textAlign: "left",
+                    display: "flex", alignItems: "center", justifyContent: "space-between",
+                  }}
+                >
+                  <span>{s.label}</span>
+                  <span style={{ fontSize: 10, opacity: 0.7, fontWeight: 400 }}>{s.desc}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* ── Providers ── */}
           {presentProviders.length > 1 && (
             <div style={{ marginBottom: 14 }}>
               <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: ".7px", marginBottom: 8 }}>
@@ -464,27 +529,27 @@ function ExportFanoutBtn({ questions, results, brandName, brandAliases = [], key
             </div>
           )}
 
-          {/* Résumé */}
+          {/* ── Résumé ── */}
           <div style={{ fontSize: 11, color: "#64748B", marginBottom: 14, padding: "8px 10px", background: "#F8FAFC", borderRadius: 7 }}>
-            <strong style={{ color: "#059669" }}>{brandedCount}</strong> résultat{brandedCount>1?"s":""} avec citation marque
-            <br/><strong style={{ color: "#0F172A" }}>{questions.length}</strong> questions · <strong>{results.length}</strong> réponses total
+            <strong style={{ color: currentScope?.color }}>{scopedCount}</strong> question{scopedCount>1?"s":""} · {currentScope?.desc?.toLowerCase()}
+            <br/><span style={{ color: "#94A3B8" }}>{questions.length} questions au total · {results.length} réponses</span>
           </div>
 
-          {/* Boutons d'export */}
+          {/* ── Boutons d'export ── */}
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <button onClick={doCSV} disabled={brandedCount === 0}
+            <button onClick={doCSV} disabled={scopedCount === 0}
               style={{
                 padding: "9px 14px", borderRadius: 8, border: "none",
-                background: brandedCount === 0 ? "#F1F5F9" : "#059669",
-                color: brandedCount === 0 ? "#94A3B8" : "#fff",
-                fontSize: 12, fontWeight: 700, cursor: brandedCount === 0 ? "not-allowed" : "pointer",
+                background: scopedCount === 0 ? "#F1F5F9" : "#059669",
+                color: scopedCount === 0 ? "#94A3B8" : "#fff",
+                fontSize: 12, fontWeight: 700, cursor: scopedCount === 0 ? "not-allowed" : "pointer",
                 display: "flex", alignItems: "center", gap: 8,
               }}
             >
               <span style={{ fontSize: 16 }}>📥</span>
               <div style={{ textAlign: "left" }}>
-                <div>Exporter CSV — citations marque</div>
-                <div style={{ fontSize: 10, opacity: .8 }}>Toutes les réponses où la marque est citée</div>
+                <div>Exporter CSV</div>
+                <div style={{ fontSize: 10, opacity: .8 }}>Questions + réponses + hints en tableau</div>
               </div>
             </button>
 
@@ -498,8 +563,8 @@ function ExportFanoutBtn({ questions, results, brandName, brandAliases = [], key
             >
               <span style={{ fontSize: 16 }}>📄</span>
               <div style={{ textAlign: "left" }}>
-                <div>Exporter PDF — rapport complet</div>
-                <div style={{ fontSize: 10, opacity: .8 }}>Chiffres clés · positionnées · perdues · absentes</div>
+                <div>Exporter PDF</div>
+                <div style={{ fontSize: 10, opacity: .8 }}>Rapport mise en page · chiffres clés · hints</div>
               </div>
             </button>
           </div>
@@ -2070,7 +2135,6 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
   };
   const savedF = loadFilters();
   const [filterFav,        setFilterFavRaw]        = useState(savedF.filterFav        || false);
-  const [filterBrand,      setFilterBrandRaw]      = useState(savedF.filterBrand      || false);
   const [filterPositioned, setFilterPositionedRaw] = useState(savedF.filterPositioned || false);
   const [filterLost,       setFilterLostRaw]       = useState(savedF.filterLost       || false);
   const [filterCat,        setFilterCatRaw]        = useState(savedF.filterCat        || "");
@@ -2086,7 +2150,6 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
     } catch {}
   };
   const setFilterFav        = (v) => { setFilterFavRaw(v);        persistFilters({ filterFav: v }); };
-  const setFilterBrand      = (v) => { setFilterBrandRaw(v);      persistFilters({ filterBrand: v }); };
   const setFilterPositioned = (v) => { setFilterPositionedRaw(v); persistFilters({ filterPositioned: v }); };
   const setFilterLost       = (v) => { setFilterLostRaw(v);       persistFilters({ filterLost: v }); };
   const setFilterCat        = (v) => { setFilterCatRaw(v);        persistFilters({ filterCat: v }); };
@@ -2270,21 +2333,28 @@ ${question}`;
     return out;
   }, [resultsByQ]);
 
-  // Per question: was brand ever present in older results but not in latest?
+  // Per question: was brand present in last 30 days but absent in latest result?
   const lostByQ = useMemo(() => {
     const out = {};
+    const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000); // 30 jours
     Object.entries(resultsByQ).forEach(([qId, results]) => {
-      if (results.length < 2) return;
+      if (!results.length) return;
       const sorted = [...results].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
       const latest = sorted[0];
-      const hadBrandBefore = sorted.slice(1).some(r => r.brand_mentioned === true || r.brand_mentioned === 1);
       const latestAbsent = !(latest.brand_mentioned === true || latest.brand_mentioned === 1);
-      out[qId] = hadBrandBefore && latestAbsent;
+      if (!latestAbsent) return; // présente dans le dernier → pas "perdue"
+      // A-t-on eu une présence dans les 30 derniers jours (hors dernier résultat) ?
+      const hadBrandIn30d = sorted.slice(1).some(r => {
+        const d = new Date(r.created_at || 0);
+        return d >= cutoff && (r.brand_mentioned === true || r.brand_mentioned === 1);
+      });
+      out[qId] = hadBrandIn30d;
     });
     return out;
   }, [resultsByQ]);
 
   const filtered = useMemo(() => sortedQuestions.filter(q => {
+    // Filtres cumulatifs (ET)
     if (filterFav && !q.is_favorite) return false;
     if (filterCat && q.category_id !== filterCat) return false;
     if (filterKeyword && q.keyword_id !== filterKeyword) return false;
@@ -2294,23 +2364,22 @@ ${question}`;
         if (!rx.test(q.question)) return false;
       } catch { if (!q.question.toLowerCase().includes(filterSearch.toLowerCase())) return false; }
     }
-    if (filterBrand) {
-      const qRes = resultsByQ[q.id] || [];
-      if (!qRes.some(r => r.brand_mentioned === true || r.brand_mentioned === 1)) return false;
-    }
     if (filterProviders.length > 0) {
       const qRes = resultsByQ[q.id] || [];
       if (!qRes.some(r => filterProviders.includes(getProviderId(r.model)))) return false;
     }
-    if (filterPositioned) {
+    // Positionné ET/OU Positionné précédemment — condition OU non-exclusif si les deux sont actifs
+    if (filterPositioned || filterLost) {
       const latest = latestResultByQ[q.id];
-      if (!latest || !(latest.brand_mentioned === true || latest.brand_mentioned === 1)) return false;
-    }
-    if (filterLost) {
-      if (!lostByQ[q.id]) return false;
+      const isPositioned = !!(latest && (latest.brand_mentioned === true || latest.brand_mentioned === 1));
+      const isLost = !!lostByQ[q.id];
+      // OU non-exclusif : la question doit matcher au moins un des filtres actifs
+      const matchPositioned = filterPositioned && isPositioned;
+      const matchLost = filterLost && isLost;
+      if (!matchPositioned && !matchLost) return false;
     }
     return true;
-  }), [questions, filterFav, filterBrand, filterCat, filterKeyword, filterSearch, filterProviders, filterPositioned, filterLost, resultsByQ, latestResultByQ, lostByQ]); // eslint-disable-line react-hooks/exhaustive-deps
+  }), [questions, filterFav, filterCat, filterKeyword, filterSearch, filterProviders, filterPositioned, filterLost, resultsByQ, latestResultByQ, lostByQ]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Returns providers that still need to be called for a question today
   const getProvidersToRun = (q, force = false) => {
@@ -2415,17 +2484,16 @@ ${question}`;
             {keywords.map(k => <option key={k.id} value={k.id}>{k.keyword}</option>)}
           </select>
           <Pill color="#F59E0B" active={filterFav} onClick={() => setFilterFav(f => !f)}>⭐ Favoris</Pill>
-          <Pill color="#059669" active={filterBrand} onClick={() => setFilterBrand(f => !f)}>✓ Marque</Pill>
-          <Pill color="#2563EB" active={filterPositioned} onClick={() => setFilterPositioned(f => !f)}
-            title="Fan-outs où la marque est présente dans le dernier résultat connu">
-            📍 Positionné
+          <Pill color="#059669" active={filterPositioned} onClick={() => setFilterPositioned(f => !f)}
+            title="Questions dont le dernier résultat en date montre la marque présente">
+            📍 Positionnée
           </Pill>
-          <Pill color="#16A34A" active={filterLost} onClick={() => setFilterLost(f => !f)}
-            title="Fan-outs où la marque était présente dans un résultat précédent mais est absente du dernier — position perdue">
-            📈 Positionné précédemment
+          <Pill color="#D97706" active={filterLost} onClick={() => setFilterLost(f => !f)}
+            title="Questions positionnées dans les 30 derniers jours mais absentes du dernier résultat (OU avec Positionnée si les deux sont actifs)">
+            📉 Positionnée précédemment
           </Pill>
-          {(filterSearch || filterCat || filterKeyword || filterFav || filterBrand || filterPositioned || filterLost || filterProviders.length > 0) && (
-            <button onClick={() => { setFilterSearch(""); setFilterCat(""); setFilterKeyword(""); setFilterFav(false); setFilterBrand(false); setFilterPositioned(false); setFilterLost(false); setFilterProviders([]); }}
+          {(filterSearch || filterCat || filterKeyword || filterFav || filterPositioned || filterLost || filterProviders.length > 0) && (
+            <button onClick={() => { setFilterSearch(""); setFilterCat(""); setFilterKeyword(""); setFilterFav(false); setFilterPositioned(false); setFilterLost(false); setFilterProviders([]); }}
               style={{ fontSize: 11, padding: "3px 8px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.bg, cursor: "pointer", color: C.textMid }}>
               ✕ Réinitialiser
             </button>
