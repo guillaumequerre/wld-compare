@@ -2,9 +2,9 @@ import { useState, useEffect } from "react";
 import { C } from "../lib/constants";
 import { authLogin, authSignup, authForgotPassword, isSuperAdmin } from "../lib/auth";
 
-const PURPLE = "#7C3AED";
-const PURPLE_LIGHT = "#F5F3FF";
-const PURPLE_BORDER = "#DDD6FE";
+const PURPLE = "#1A3C2E";
+const PURPLE_LIGHT = "#EAF0EC";
+const PURPLE_BORDER = "#B2CCBC";
 
 // ── Forgot Password Modal ─────────────────────────────────────────
 function ForgotPasswordModal({ onClose }) {
@@ -419,18 +419,30 @@ export default function HomeTab({ user, projects, currentProjectId, dbLoading, o
       {/* Header — only shown when not connected */}
       {!isConnected && (
         <div style={{ textAlign: "center", marginBottom: 40, ...transitionStyle }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: PURPLE, textTransform: "uppercase", letterSpacing: 2, marginBottom: 10 }}>CorrelDash GEO</div>
-          <h1 style={{ fontSize: 30, fontWeight: 900, color: C.text, margin: "0 0 8px", lineHeight: 1.2 }}>
-            Pilotez votre visibilité dans les moteurs d'IA
+          {/* Logo Sonate */}
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+            <div style={{ width: 40, height: 40, background: "#1A3C2E", borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <span style={{ color: "#F0EBE0", fontSize: 22, fontWeight: 900, fontStyle: "italic", lineHeight: 1 }}>S</span>
+            </div>
+            <span style={{ fontSize: 24, fontWeight: 900, color: "#1A3C2E", letterSpacing: -0.5 }}>Dashboard GEO <span style={{ fontStyle: "italic" }}>par Sonate</span></span>
+          </div>
+          <h1 style={{ fontSize: 20, fontWeight: 400, color: "#1A3C2E", margin: "0 0 6px", letterSpacing: 0.5 }}>
+            Votre croissance est clé
           </h1>
+          <div style={{ fontSize: 13, color: C.textLight }}>Plateforme GEO Intelligence</div>
         </div>
       )}
 
       {/* Connected header */}
       {isConnected && (
-        <div style={{ marginBottom: 32, ...transitionStyle }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: PURPLE, textTransform: "uppercase", letterSpacing: 2, marginBottom: 6 }}>CorrelDash GEO</div>
-          <h1 style={{ fontSize: 22, fontWeight: 800, color: C.text, margin: 0 }}>Tableau de bord</h1>
+        <div style={{ marginBottom: 32, ...transitionStyle, display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ width: 32, height: 32, background: "#1A3C2E", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+            <span style={{ color: "#F0EBE0", fontSize: 17, fontWeight: 900, fontStyle: "italic" }}>S</span>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 600, color: "#1A3C2E", letterSpacing: 1, textTransform: "uppercase", marginBottom: 1 }}>Dashboard GEO par Sonate</div>
+            <h1 style={{ fontSize: 20, fontWeight: 800, color: C.text, margin: 0 }}>Tableau de bord</h1>
+          </div>
         </div>
       )}
 
@@ -487,7 +499,7 @@ export default function HomeTab({ user, projects, currentProjectId, dbLoading, o
       {/* Footer */}
       <div style={{ textAlign: "center", paddingTop: 28, marginTop: 36, borderTop: `1px solid ${C.border}` }}>
         <div style={{ fontSize: 11, color: C.textLight }}>
-          CorrelDash · GEO Intelligence Platform · par <a href="mailto:guillaume@deux.io" style={{ color: PURPLE }}>deux.io</a>
+          Dashboard GEO par Sonate · par <a href="mailto:guillaume@deux.io" style={{ color: PURPLE }}>deux.io</a>
         </div>
       </div>
 

@@ -543,11 +543,11 @@ export default function App() {
         <div style={{ background: C.white, borderBottom: `1px solid ${C.border}`, position: "sticky", top: 0, zIndex: 100 }}>
           <div style={{ maxWidth: 1400, margin: "0 auto", padding: "0 28px", display: "flex", alignItems: "center", justifyContent: "space-between", height: 56 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <div style={{ width: 28, height: 28, background: C.blue, borderRadius: 7, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <span style={{ color: "#fff", fontSize: 14, fontWeight: 800 }}>C</span>
+              <div style={{ width: 28, height: 28, background: "#1A3C2E", borderRadius: 7, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <span style={{ color: "#F0EBE0", fontSize: 15, fontWeight: 900, fontStyle: "italic" }}>S</span>
               </div>
-              <span style={{ fontWeight: 700, fontSize: 15, letterSpacing: -0.3 }}>CorrelDash</span>
-              <span style={{ color: C.textLight, fontSize: 13 }}>· SEO × GEO</span>
+              <span style={{ fontWeight: 800, fontSize: 15, letterSpacing: -0.3, color: "#1A3C2E" }}>Dashboard GEO par Sonate</span>
+              <span style={{ color: C.textLight, fontSize: 12 }}>· Votre croissance est clé</span>
             </div>
             <NavBar tab={tab} setTab={goTo} user={user} onLogout={() => { authLogout(); setUser(null); setTab("home"); }} />
           </div>
