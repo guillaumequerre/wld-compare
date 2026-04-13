@@ -922,19 +922,6 @@ function detectBrand(answer, sources, brandName, brandAliases = [], competitors 
   return { brandMentioned, brandPosition, brandInSources, competitorsMentioned };
 }
 
-// Highlight brand terms in text
-function highlightBrand(text, brandName, brandAliases = []) {
-  const terms = [brandName, ...brandAliases].filter(Boolean);
-  if (!terms.length) return text;
-  const escaped = terms.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
-  const re = new RegExp(`(${escaped})`, "gi");
-  const parts = text.split(re);
-  return parts.map((part, i) =>
-    re.test(part)
-      ? <mark key={i} style={{ background: "#FEF08A", color: "#92400E", borderRadius: 2, padding: "0 2px" }}>{part}</mark>
-      : part
-  );
-}
 
 // ── Small UI helpers ──────────────────────────────────────────────
 
