@@ -43,6 +43,56 @@ function extractDomain(url) {
   try { return new URL(url).hostname.replace("www.", ""); } catch { return url; }
 }
 
+// Retire les query strings et fragments des URLs pour l'affichage
+function stripQuery(url) {
+  try {
+    const u = new URL(url);
+    return u.origin + u.pathname;
+  } catch { return url; }
+}
+
+// Convertit le markdown basique (gras, italique, listes) en éléments React
+function renderMarkdown(text) {
+  if (!text) return null;
+  const lines = text.split("\n");
+  return lines.map((line, li) => {
+    // Transformer **bold** et *italic* dans chaque ligne
+    const parts = [];
+    let remaining = line;
+    let key = 0;
+    while (remaining.length > 0) {
+      const boldMatch = remaining.match(/^(.*?)\*\*(.+?)\*\*/s);
+      const italicMatch = remaining.match(/^(.*?)\*(.+?)\*/s);
+      // Choisir le match le plus proche
+      const useBold = boldMatch && (!italicMatch || boldMatch[1].length <= italicMatch[1].length);
+      if (useBold) {
+        if (boldMatch[1]) parts.push(<span key={key++}>{boldMatch[1]}</span>);
+        parts.push(<strong key={key++}>{boldMatch[2]}</strong>);
+        remaining = remaining.slice(boldMatch[0].length);
+      } else if (italicMatch) {
+        if (italicMatch[1]) parts.push(<span key={key++}>{italicMatch[1]}</span>);
+        parts.push(<em key={key++}>{italicMatch[2]}</em>);
+        remaining = remaining.slice(italicMatch[0].length);
+      } else {
+        parts.push(<span key={key++}>{remaining}</span>);
+        remaining = "";
+      }
+    }
+    // Détecter les lignes de liste (- xxx ou * xxx ou ## titre)
+    const trimmed = line.trimStart();
+    const isHeading = trimmed.startsWith("## ") || trimmed.startsWith("### ");
+    const isList = /^[-*•]\s/.test(trimmed) || /^\d+\.\s/.test(trimmed);
+    if (isHeading) {
+      return <div key={li} style={{ fontWeight: 700, fontSize: 13, marginTop: 8, marginBottom: 2 }}>{parts}</div>;
+    }
+    if (isList) {
+      return <div key={li} style={{ paddingLeft: 12, marginBottom: 2, display: "flex", gap: 6 }}><span style={{ flexShrink: 0 }}>•</span><span>{parts}</span></div>;
+    }
+    if (!line.trim()) return <div key={li} style={{ height: 6 }} />;
+    return <div key={li} style={{ marginBottom: 2 }}>{parts}</div>;
+  });
+}
+
 function parseCSV(text) {
   return text.split(/\r?\n/).map(l => l.split(",").map(c => c.trim().replace(/^"|"$/g, ""))).filter(r => r[0]);
 }
@@ -261,7 +311,7 @@ function buildFanoutPDF({ questions, results, hintsMap = {}, brandName, brandAli
         ${showDate && dateLabel ? badge("#64748B","#F8FAFC",`Dernière parution : ${dateLabel}`) : ""}
       </div>
       ${comps ? `<div style="font-size:11px;color:#64748B;margin-bottom:6px">Concurrents cités : <strong>${esc(comps)}</strong></div>` : ""}
-      ${sources.length ? `<div style="font-size:10px;color:#94A3B8">${sources.map(u=>`<a href="${esc(u)}" style="color:#6366F1">${esc(u.length>60?u.slice(0,60)+"…":u)}</a>`).join("  ·  ")}</div>` : ""}
+      ${sources.length ? `<div style="font-size:10px;color:#94A3B8">${sources.map(u=>{ const clean=stripQuery(u); return `<a href="${esc(u)}" style="color:#6366F1">${esc(clean.length>60?clean.slice(0,60)+"…":clean)}</a>`; }).join("  ·  ")}</div>` : ""}
       ${showHint && hint ? `<div style="margin-top:10px;padding:10px 12px;background:#FFFBEB;border:1px solid #FCD34D;border-radius:7px;">
         <div style="font-size:10px;font-weight:700;color:#B45309;margin-bottom:4px">💡 HINT GEO${hintDate ? " · "+new Date(hintDate).toLocaleDateString("fr-FR",{day:"2-digit",month:"short"}) : ""}</div>
         <div style="font-size:11px;color:#92400E;line-height:1.6;white-space:pre-wrap">${esc(hint.slice(0,400))}${hint.length>400?"…":""}</div>
@@ -1778,8 +1828,8 @@ function HintPanelQuestion({ questionId, question, sources, brandName, brandAlia
               🕐 {savedHintDate ? new Date(savedHintDate).toLocaleString("fr-FR", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : new Date().toLocaleString("fr-FR", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
             </div>
           )}
-          <div style={{ fontSize: 11, whiteSpace: "pre-wrap", lineHeight: 1.7, color: status === "error" ? "#DC2626" : "#92400E" }}>
-            {hint}
+          <div style={{ fontSize: 11, lineHeight: 1.7, color: status === "error" ? "#DC2626" : "#92400E" }}>
+            {status === "error" ? hint : renderMarkdown(hint)}
           </div>
         </div>
       )}
@@ -1861,8 +1911,8 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
 
       {open && result && (
         <div style={{ borderTop: `1px solid ${C.border}`, padding: '10px 12px', background: C.bg }}>
-          <div style={{ fontSize: 12, color: C.text, lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
-            {highlightBrand(result.answer || '', brandName, brandAliases)}
+          <div style={{ fontSize: 12, color: C.text, lineHeight: 1.7 }}>
+            {renderMarkdown(result.answer || '')}
           </div>
           {sources.length > 0 && (
             <div style={{ marginTop: 10 }}>
@@ -1872,7 +1922,7 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
                 return (
                   <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 3 }}>
                     <span style={{ fontSize: 10, color: C.textLight, minWidth: 18 }}>[{i+1}]</span>
-                    <a href={url} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: ib ? '#059669' : '#2563EB', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{url}</a>
+                    <a href={url} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: ib ? '#059669' : '#2563EB', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{stripQuery(url)}</a>
                     {ib && <span style={{ fontSize: 9, background: '#ECFDF5', color: '#059669', borderRadius: 4, padding: '1px 4px', flexShrink: 0 }}>marque</span>}
                   </div>
                 );
@@ -2090,7 +2140,7 @@ RÈGLES :
             return (
               <div key={i} style={{ background: col.bg, border: `1px solid ${col.border}`, borderRadius: 10, padding: "12px 16px" }}>
                 <div style={{ fontSize: 12, fontWeight: 800, color: col.title, marginBottom: 8 }}>{title}</div>
-                <div style={{ fontSize: 12, color: C.text, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{body}</div>
+                <div style={{ fontSize: 12, color: C.text, lineHeight: 1.7 }}>{renderMarkdown(body)}</div>
               </div>
             );
           })}
@@ -2639,12 +2689,12 @@ ${question}`;
                       title="Modifier la question">✏️</button>
                     <button
                       onClick={() => {
-                        const toRun = getProvidersToRun(q, false); // skip already done today
+                        const toRun = getProvidersToRun(q, true); // force=true : relance tous les providers configurés
                         if (!toRun.length) return;
                         toRun.forEach(p => runProvider(q, p));
                       }}
                       disabled={isRunning}
-                      title="Lancer les providers non encore interrogés aujourd'hui"
+                      title="Lancer tous les providers configurés"
                       style={{ padding: "3px 10px", border: `1px solid ${site.color}`, borderRadius: 6, background: site.color, color: "#fff", fontSize: 11, fontWeight: 700, cursor: isRunning ? "wait" : "pointer", opacity: isRunning ? 0.6 : 1 }}>
                       {isRunning ? "⏳" : "▶ Tous"}
                     </button>
@@ -2684,7 +2734,9 @@ ${question}`;
                 {/* ── Hint at question level ── */}
                 {(() => {
                   const claudeKey = providerKeysRef.current["claude"]?.dec || "";
-                  const savedH = hintsMap[q.id] || "";
+                  // hintsMap[q.id] est toujours { text, date } ou undefined
+                  const savedH     = hintsMap[q.id]?.text || "";
+                  const savedHDate = hintsMap[q.id]?.date || null;
                   const anyResult = qResults.length > 0;
                   if (!anyResult) return null;
                   // Get sources from latest result across all providers
@@ -2706,7 +2758,8 @@ ${question}`;
                           projectId={projectId}
                           siteId={site?.id}
                           savedHint={savedH}
-                          onHintSaved={(text) => setHintsMap(prev => ({ ...prev, [q.id]: text }))}
+                          savedHintDate={savedHDate}
+                          onHintSaved={(text) => setHintsMap(prev => ({ ...prev, [q.id]: { text, date: new Date().toISOString() } }))}
                           initialOpen={false}
                         />
                       ) : claudeKey ? (
@@ -2723,7 +2776,8 @@ ${question}`;
                           projectId={projectId}
                           siteId={site?.id}
                           savedHint=""
-                          onHintSaved={(text) => setHintsMap(prev => ({ ...prev, [q.id]: text }))}
+                          savedHintDate={null}
+                          onHintSaved={(text) => setHintsMap(prev => ({ ...prev, [q.id]: { text, date: new Date().toISOString() } }))}
                           initialOpen={false}
                         />
                       ) : (
@@ -3017,7 +3071,7 @@ function UrlsTab({ projectId, categories, brand, allResults }) {
                   {/* URL */}
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                      <span style={{ fontSize: 12, color: meta.color, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{u.url}</span>
+                      <span style={{ fontSize: 12, color: meta.color, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{stripQuery(u.url)}</span>
                       <a href={u.url} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}
                         style={{ flexShrink: 0, fontSize: 10, color: C.textLight, border: `1px solid ${C.border}`, borderRadius: 4, padding: "1px 5px", textDecoration: "none" }}>↗</a>
                     </div>
@@ -3432,21 +3486,16 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
   }, [project?.id, project?.openai_key_enc, project?.gemini_key_enc, project?.perplexity_key_enc, project?.claude_geo_key_enc, project?.semrush_key_enc]); // eslint-disable-line react-hooks/exhaustive-deps
   const [apiKeyDec, setApiKeyDec]   = useState("");           // decrypted, only in memory
 
-  // When keys load for the first time (project arrives from DB), seed activeProviders
-  const hasSeededProvidersRef = useRef(false);
+  // Sync activeProviders : ajouter automatiquement tout provider dont la clé est configurée
+  // (s'exécute quand les clés changent — ne retire jamais un provider, ajoute seulement)
   useEffect(() => {
-    if (hasSeededProvidersRef.current) return;
     if (!project) return;
     const withKeys = PROVIDERS.filter(p => project[p.keyField]).map(p => p.id);
     if (!withKeys.length) return;
-    // Only seed if activeProviders is still at default ["openai"] and we have more keys
     setActiveProviders(prev => {
-      if (prev.length === 1 && prev[0] === "openai" && !project.settings_json) {
-        hasSeededProvidersRef.current = true;
-        return withKeys;
-      }
-      hasSeededProvidersRef.current = true;
-      return prev;
+      const missing = withKeys.filter(id => !prev.includes(id));
+      if (!missing.length) return prev; // rien à ajouter
+      return [...prev, ...missing];
     });
   }, [project?.openai_key_enc, project?.gemini_key_enc, project?.perplexity_key_enc, project?.claude_geo_key_enc]); // eslint-disable-line react-hooks/exhaustive-deps
   const [allResults, setAllResults] = useState([]);
