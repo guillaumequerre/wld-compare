@@ -487,6 +487,10 @@ export default function GeoAuditTab({
 }) {
   const [mainTab, setMainTab]           = useState("audit");
   const [selectedSite, setSelectedSite] = useState(sites[0]?.id || "");
+  // Sync selectedSite quand le projet change
+  useEffect(() => {
+    setSelectedSite(sites[0]?.id || "");
+  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
   const [aiText, setAiText]             = useState("");
   const [exporting, setExporting]       = useState(false);
   const [brand, setBrand]               = useState(null);
@@ -531,6 +535,7 @@ export default function GeoAuditTab({
       {/* ── Setup ── */}
       {mainTab === "setup" && (
         <AuditSetupPanel
+          key={currentProjectId}
           projects={projects} currentProjectId={currentProjectId} setCurrentProjectId={setCurrentProjectId}
           setProjects={setProjects} ownerEmail={ownerEmail} sites={sites} setSites={setSites}
           sfData={sfData} setSfData={setSfData} gscData={gscData} setGscData={setGscData}

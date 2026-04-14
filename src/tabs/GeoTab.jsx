@@ -3613,7 +3613,11 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
   const [mainTab, setMainTab]       = useState("analyse"); // "setup" | "analyse"
   const [subTab, setSubTab]         = useState("keywords"); // keywords | questions | urls
   const [questionsKey, setQuestionsKey] = useState(0); // incremented to force QuestionsTab reload
-  const [selectedSite] = useState(sites[0]?.id || "");
+  const [selectedSite, setSelectedSite] = useState(sites[0]?.id || "");
+  // Sync selectedSite quand le projet change
+  useEffect(() => {
+    setSelectedSite(sites[0]?.id || "");
+  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
   // Parse persisted settings from project
   const projectSettings = (() => {
     try { return project?.settings_json ? JSON.parse(project.settings_json) : {}; } catch { return {}; }
@@ -3754,6 +3758,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
       {/* ── Setup ── */}
       {mainTab === "setup" && (
         <FanoutSetupPanel
+          key={currentProjectId}
           projects={projects}
           currentProjectId={currentProjectId}
           setCurrentProjectId={setCurrentProjectId}
@@ -3775,6 +3780,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
             onSaveProviderKeys?.(keyPatch);
           }}
           axes={axes}
+          onSaveAxes={onSaveAxes}
           onAxesChange={(a) => setAxes(a)}
         />
       )}
