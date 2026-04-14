@@ -12,7 +12,7 @@ import {
   sbBulkSetKeywordCategory, sbBulkSetQuestionCategory,
   sbGetUrlIndex, sbUpdateUrlMeta, sbIncrementUrlCounts,
   sbAddCalendarEntry, sbGetCalendarEntriesBatch,
-  sbDownload,
+  sbDownload, sbSaveProject, sbDeleteProject,
 } from "../lib/supabase";
 import { ProviderConfigPanel, BrandConfigPanel } from "../components/GeoConfig";
 import UploadCard from "../components/UploadCard";
@@ -3429,7 +3429,7 @@ function FanoutSetupPanel({
   project, projectId,
   onSaveProviderKeys,
 }) {
-  const [showHistory, setShowHistory] = React.useState(false);
+  const [showHistory, setShowHistory] = useState(false);
 
   // Last import per site+source
   const lastImports = {};
