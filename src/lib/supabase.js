@@ -53,9 +53,25 @@ export async function sbInsertImport({ project_id, site_id, source, filename, st
   });
   if (!res.ok) {
     const body = await res.text().catch(() => "");
+    // 409 = contrainte unique non configurée en DB → fallback ignore-duplicates
+    if (res.status === 409) {
+      const res2 = await fetch(`${PROXY}/rest/v1/imports`, {
+        method: "POST",
+        headers: {
+          ...authHeaders(),
+          "Content-Type": "application/json",
+          "Prefer": "resolution=ignore-duplicates,return=representation",
+        },
+        body: JSON.stringify({ project_id, site_id, source, filename, storage_path, row_count, uploaded_at: new Date().toISOString() }),
+      });
+      if (!res2.ok) return null; // silencieux si toujours KO
+      const data = await res2.json();
+      return Array.isArray(data) ? data[0] || null : data;
+    }
     throw new Error(`Insert failed: ${res.status} — ${body.slice(0, 120)}`);
   }
-  return res.json();
+  const data = await res.json();
+  return Array.isArray(data) ? data[0] || null : data;
 }
 
 export async function sbDeleteImport(id) {
@@ -298,13 +314,26 @@ export async function sbSaveGeoAxes(project_id, axes) {
 
 export async function sbSaveKeywords(rows) {
   // rows: [{ project_id, site_id, keyword }]
+  // Filtre les lignes vides ou invalides
+  const valid = rows.filter(r => r.keyword?.trim());
+  if (!valid.length) return [];
   const res = await fetch(`${PROXY}/rest/v1/geo_keywords`, {
     method: "POST",
-    headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
-    body: JSON.stringify(rows),
+    headers: {
+      ...authHeaders(),
+      "Content-Type": "application/json",
+      "Prefer": "resolution=ignore-duplicates,return=representation",
+    },
+    body: JSON.stringify(valid),
   });
-  if (!res.ok) throw new Error(`Save keywords failed: ${res.status}`);
-  return res.json();
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    // 409 = duplicate unique key — retourner tableau vide plutôt que planter
+    if (res.status === 409) return [];
+    throw new Error(`Save keywords failed: ${res.status} — ${body.slice(0, 120)}`);
+  }
+  const data = await res.json();
+  return Array.isArray(data) ? data : [];
 }
 
 export async function sbGetKeywords(project_id, site_id) {
@@ -339,17 +368,26 @@ export async function sbDeleteKeyword(id) {
 
 export async function sbSaveQuestions(rows) {
   if (!rows.length) return [];
+  // Filtre les questions vides
+  const valid = rows.filter(r => r.question?.trim());
+  if (!valid.length) return [];
   const res = await fetch(`${PROXY}/rest/v1/geo_questions`, {
     method: "POST",
     headers: {
       ...authHeaders(),
       "Content-Type": "application/json",
-      "Prefer": "return=representation,resolution=merge-duplicates",
+      "Prefer": "return=representation,resolution=ignore-duplicates",
     },
-    body: JSON.stringify(rows),
+    body: JSON.stringify(valid),
   });
   if (!res.ok) {
-    const errText = await res.text();
+    const errText = await res.text().catch(() => "");
+    // 409 = contrainte unique — les questions existent déjà, récupérer depuis la base
+    if (res.status === 409) {
+      const pid = valid[0].project_id; const sid = valid[0].site_id;
+      const res2 = await fetch(`${PROXY}/rest/v1/geo_questions?project_id=eq.${encodeURIComponent(pid)}&site_id=eq.${encodeURIComponent(sid)}&select=*&order=created_at.asc`, { headers: authHeaders() });
+      return res2.ok ? res2.json() : [];
+    }
     throw new Error(`Save questions failed: ${res.status} — ${errText.slice(0, 200)}`);
   }
   const saved = await res.json();
@@ -815,4 +853,4 @@ export async function sbTriggerScheduler() {
     throw new Error(`Trigger failed: ${res.status} — ${body.slice(0, 120)}`);
   }
   return res.json();
-}
+} 

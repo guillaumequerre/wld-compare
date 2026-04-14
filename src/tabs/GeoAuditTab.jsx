@@ -8,7 +8,6 @@ import { newProject, parseCSV } from "../lib/helpers";
 import { C, SITE_PALETTE } from "../lib/constants";
 
 const ANTHROPIC_PROXY = "/api/anthropic";
-// const GREEN = "#1A3C2E";
 
 function pct(a, b) { return b ? Math.round(a / b * 100) : 0; }
 function getDomain(url) { try { return new URL(url).hostname.replace("www.", ""); } catch { return url; } }
@@ -23,21 +22,6 @@ function getProviderId(model) {
   return "other";
 }
 
-// ── Setup Section wrapper ─────────────────────────────────────────
-// function SectionBlock({ number, title, sub, children, color = GREEN }) {
-//   return (
-//     <div style={{ marginBottom: 28 }}>
-//       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
-//         <div style={{ width: 26, height: 26, borderRadius: 8, background: color, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 800, flexShrink: 0 }}>{number}</div>
-//         <div>
-//           <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{title}</div>
-//           {sub && <div style={{ fontSize: 11, color: C.textLight, marginTop: 1 }}>{sub}</div>}
-//         </div>
-//       </div>
-//       {children}
-//     </div>
-//   );
-// }
 
 // ── AuditSetupPanel compact ───────────────────────────────────────
 function SetupSection({ icon, title, children }) {

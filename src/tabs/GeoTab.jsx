@@ -1171,7 +1171,7 @@ function CatSelect({ value, categories, onChange, placeholder = "Catégorie…" 
 
 // ── Keywords sub-tab (v2) ─────────────────────────────────────────
 
-function KeywordsTab({ site, projectId, apiKey, model, axes, context, categories, setCategories, onSaveAxes, onAxesChange, onQuestionsGenerated, semrushKey = "", providerKeys = {} }) {
+function KeywordsTab({ site, projectId, apiKey, model, axes, context, categories, setCategories, onAxesChange, onQuestionsGenerated, semrushKey = "", providerKeys = {} }) {
   const [keywords, setKeywords] = useState([]);
   const [input, setInput]       = useState("");
   const [loading, setLoading]   = useState(false);
@@ -1302,27 +1302,32 @@ function KeywordsTab({ site, projectId, apiKey, model, axes, context, categories
     await sbUpdateKeywordStatus(kw.id, "generating_q");
     setKeywords(prev => prev.map(k => k.id === kw.id ? { ...k, status: "generating_q" } : k));
     try {
-      const numQ = (axes && axes.length ? axes : DEFAULT_AXES).length;
-      const axesWithInstructions = (axes && axes.length ? axes : DEFAULT_AXES).map((axe, i) => `${i+1}. [${axe}] → formule une question dont la réponse cite des entreprises, acteurs ou prestataires liés à "${kw.keyword}"`).join("\n");
-      const prompt = `Tu es un expert GEO. Ton rôle : générer des questions qui amènent ChatGPT ou Google SGE à répondre avec des NOMS D'ENTREPRISES, D'ACTEURS ou DE PRESTATAIRES — jamais des réponses génériques.
+      const activeAxes = (axes && axes.length ? axes : DEFAULT_AXES);
+      const numQ = activeAxes.length;
+      const axesWithInstructions = activeAxes.map((axe, i) => `${i+1}. [${axe}]`).join("\n");
+      const prompt = `Tu es un expert GEO. Pour le mot-clé "${kw.keyword}", génère exactement ${numQ} questions de recherche — une par axe ci-dessous.
 
-Mot-clé : "${kw.keyword}"
+OBJECTIF : chaque question doit naturellement amener un moteur IA (ChatGPT, Gemini, Perplexity) à citer des noms de marques, d'enseignes, de sites ou d'entreprises concrètes — jamais une réponse générique ou des conseils.
 
-RÈGLE ABSOLUE : chaque question doit être formulée pour que la réponse naturelle soit du type :
-"Voici les meilleurs [acteurs] pour [mot-clé]..." / "Je vous recommande [entreprise]..." / "Les [acteurs] à considérer sont..."
+TERMINOLOGIE : adapte au contexte du mot-clé :
+- Commerce / retail → privilégie "magasins", "enseignes", "boutiques"
+- Services / B2B → privilégie "entreprises", "prestataires", "agences"
+- E-commerce / web → privilégie "sites", "plateformes", "marques"
+- Mixte → utilise le terme le plus naturel pour ce secteur
 
-IMPORTANT sur le sens des axes :
-- "Alternative / pistes" = des façons d'utiliser ou des acteurs qui proposent le mot-clé — PAS des substituts au mot-clé
-- Exemple ✅ pour "agence SEO" : "Quelles agences SEO sont recommandées pour une startup ?"
-- Exemple ❌ pour "agence SEO" : "Quelles alternatives à une agence SEO existent ?"
+RÈGLE sur les axes :
+- Chaque axe définit l'angle de la question, pas son sujet
+- La réponse attendue doit toujours être une liste de noms (marques, sites, entreprises)
+- "Alternative / pistes" = qui propose ce produit/service — PAS quoi remplace ce produit
 
-Génère exactement ${numQ} questions, une par axe :
+AXES À TRAITER :
 ${axesWithInstructions}
 
-Contraintes :
-- Privilégier "qui", "quels", "quelle", "lesquels", "quel acteur", "quelle entreprise"
-- Maximum 15 mots
-- Ton décideur / professionnel qui cherche un prestataire ou une recommandation concrète
+CONTRAINTES :
+- Une question par axe, dans l'ordre
+- Maximum 12 mots par question
+- Commence par "Quelles", "Quel", "Qui", "Lesquels" de préférence
+- Ton naturel, comme une vraie requête de recherche
 
 Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgules (;), sans numérotation, sans texte avant ou après.`;
 
@@ -1450,57 +1455,9 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
     return kws;
   }, [keywords, filterCat, filterSearch]);
 
-  const [axesOpen, setAxesOpen] = useState(false);
 
   return (
     <div>
-      {/* ── Axes de génération (editable accordion) ── */}
-      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, marginBottom: 14, overflow: "hidden" }}>
-        <button onClick={() => setAxesOpen(o => !o)}
-          style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", background: "none", border: "none", cursor: "pointer" }}>
-          <div>
-            <span style={{ fontSize: 12, fontWeight: 700, color: C.textMid }}>🎯 Axes de génération des questions</span>
-            {!axesOpen && (
-              <span style={{ fontSize: 11, color: C.textLight, marginLeft: 8 }}>
-                {(axes || []).length} axe{(axes || []).length > 1 ? "s" : ""} configuré{(axes || []).length > 1 ? "s" : ""}
-              </span>
-            )}
-          </div>
-          <span style={{ fontSize: 12, color: C.textLight }}>{axesOpen ? "▲" : "▼"}</span>
-        </button>
-        {axesOpen && (
-          <div style={{ padding: "0 16px 16px", borderTop: `1px solid ${C.border}` }}>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
-              {(axes || []).map((a, i) => (
-                <div key={i} style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                  <span style={{ fontSize: 11, color: C.textLight, minWidth: 18 }}>{i + 1}.</span>
-                  <input value={a} onChange={e => {
-                    const updated = [...(axes || [])];
-                    updated[i] = e.target.value;
-                    onAxesChange?.(updated);
-                  }}
-                    style={{ flex: 1, padding: "5px 9px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 12, color: C.text }} />
-                  <button onClick={() => {
-                    const updated = (axes || []).filter((_, j) => j !== i);
-                    onAxesChange?.(updated);
-                  }} style={{ fontSize: 11, color: C.textLight, background: "none", border: "none", cursor: "pointer", padding: "0 4px" }}>✕</button>
-                </div>
-              ))}
-              <button onClick={() => onAxesChange?.([...(axes || []), ""])}
-                style={{ fontSize: 11, color: "#2563EB", background: "none", border: `1px dashed ${C.border}`, borderRadius: 7, padding: "5px 12px", cursor: "pointer", textAlign: "left" }}>
-                + Ajouter un axe
-              </button>
-            </div>
-            <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end" }}>
-              <button onClick={async () => { if (onSaveAxes) { await onSaveAxes(axes); setAxesOpen(false); } }}
-                style={{ padding: "6px 16px", background: "#2563EB", color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-                💾 Sauvegarder les axes
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-
       {/* ── Volume enrichment toolbar ── */}
       {keywords.length > 0 && (
         <div style={{ background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 10, padding: "10px 14px", marginBottom: 12, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -3401,6 +3358,67 @@ function AutomationTab({ projectId, site, user, providerKeys }) {
 }
 
 
+// ── BrandConfigAccordion — wrapper qui ferme la card après save ───
+function BrandConfigAccordion({ sites, projectId }) {
+  const [openId, setOpenId] = useState(null);
+  const [keys, setKeys] = useState({});
+
+  if (!sites?.length) {
+    return <div style={{ fontSize: 12, color: "#94A3B8", fontStyle: "italic" }}>Ajoutez un site pour configurer sa marque.</div>;
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {sites.map(site => {
+        const isOpen = openId === site.id;
+        const cardKey = keys[site.id] || site.id;
+        return (
+          <div key={site.id} style={{ border: `1px solid ${site.color}33`, borderRadius: 10, overflow: "hidden" }}>
+            {/* Header accordéon */}
+            <div onClick={() => setOpenId(isOpen ? null : site.id)}
+              style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: isOpen ? site.bg : "#F8FAFC", cursor: "pointer", borderBottom: isOpen ? `1px solid ${site.color}22` : "none" }}>
+              <div style={{ width: 8, height: 8, borderRadius: "50%", background: site.color, flexShrink: 0 }} />
+              <span style={{ fontSize: 13, fontWeight: 700, color: site.color, flex: 1 }}>{site.label}</span>
+              <span style={{ fontSize: 11, color: "#94A3B8" }}>{isOpen ? "▲" : "▼"}</span>
+            </div>
+            {/* Contenu BrandConfigPanel */}
+            {isOpen && (
+              <div
+                ref={el => {
+                  if (!el) return;
+                  // Intercepter le clic sur le bouton "Sauvegarder" de BrandConfigPanel
+                  const handler = (e) => {
+                    const btn = e.target.closest("button");
+                    if (!btn) return;
+                    const label = btn.textContent?.trim().toLowerCase();
+                    if (label.includes("sauvegarder") || label.includes("save") || label.includes("enregistrer")) {
+                      // Fermer l'accordéon après un court délai (laisse le save se terminer)
+                      setTimeout(() => {
+                        setOpenId(null);
+                        // Reset la key pour forcer remount la prochaine fois
+                        setKeys(prev => ({ ...prev, [site.id]: `${site.id}-${Date.now()}` }));
+                      }, 300);
+                    }
+                    // Bouton Annuler → fermer immédiatement
+                    if (label.includes("annuler") || label.includes("cancel")) {
+                      setOpenId(null);
+                    }
+                  };
+                  el.addEventListener("click", handler);
+                  return () => el.removeEventListener("click", handler);
+                }}
+                style={{ padding: "12px 14px", background: "#fff" }}>
+                <BrandConfigPanel key={cardKey} site={site} projectId={projectId} />
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+
 // ── FanoutSetupPanel compact ─────────────────────────────────────
 function SetupSection({ icon, title, children }) {
   return (
@@ -3418,6 +3436,7 @@ function FanoutSetupPanel({
   sites, setSites, smData, setSmData,
   dbHistory, dbLoading, refreshHistory, confirmModal, setConfirmModal,
   project, projectId, onSaveProviderKeys,
+  axes, onSaveAxes, onAxesChange,
 }) {
   const [showHistory, setShowHistory] = useState(false);
   const lastImports = {};
@@ -3540,12 +3559,45 @@ function FanoutSetupPanel({
         </div>
       </SetupSection>
 
+      {/* ── Axes de génération ── */}
+      <SetupSection icon="🎯" title="Axes de génération des questions">
+        <div style={{ background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 10, padding: "12px 16px" }}>
+          <div style={{ fontSize: 11, color: "#64748B", marginBottom: 10 }}>
+            Chaque mot-clé génère une question par axe. Adaptez les angles à votre secteur.
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {(axes || []).map((a, i) => (
+              <div key={i} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <span style={{ fontSize: 11, color: "#94A3B8", minWidth: 18, flexShrink: 0 }}>{i + 1}.</span>
+                <input value={a} onChange={e => {
+                  const updated = [...(axes || [])];
+                  updated[i] = e.target.value;
+                  onAxesChange?.(updated);
+                }}
+                  style={{ flex: 1, padding: "5px 9px", border: "1px solid #E2E8F0", borderRadius: 7, fontSize: 12, color: "#1E293B" }} />
+                <button onClick={() => {
+                  const updated = (axes || []).filter((_, j) => j !== i);
+                  onAxesChange?.(updated);
+                }} style={{ fontSize: 11, color: "#94A3B8", background: "none", border: "none", cursor: "pointer", padding: "0 4px", flexShrink: 0 }}>✕</button>
+              </div>
+            ))}
+            <button onClick={() => onAxesChange?.([...(axes || []), ""])}
+              style={{ fontSize: 11, color: "#2563EB", background: "none", border: "1px dashed #E2E8F0", borderRadius: 7, padding: "5px 12px", cursor: "pointer", textAlign: "left", marginTop: 2 }}>
+              + Ajouter un axe
+            </button>
+          </div>
+          <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end" }}>
+            <button onClick={async () => { if (onSaveAxes) await onSaveAxes(axes); }}
+              style={{ padding: "6px 16px", background: "#1A3C2E", color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+              💾 Sauvegarder les axes
+            </button>
+          </div>
+        </div>
+      </SetupSection>
+
       {/* ── Configuration marques ── */}
       <SetupSection icon="🏷️" title="Configuration des marques">
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {(sites||[]).map(site => <BrandConfigPanel key={site.id} site={site} projectId={projectId} />)}
-          {!(sites||[]).length && <div style={{ fontSize: 12, color: C.textLight, fontStyle: "italic" }}>Ajoutez un site pour configurer sa marque.</div>}
-        </div>
+        <BrandConfigAccordion sites={sites} projectId={projectId} />
       </SetupSection>
 
     </div>
@@ -3677,7 +3729,6 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
     setApiKeyDec(k);
   }, [apiKeyEnc]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // const GREEN = "#1A3C2E";
 
   return (
     <div>
@@ -3723,6 +3774,8 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
             setProjects?.(prev => prev.map(p => p.id === projectId ? { ...p, ...keyPatch } : p));
             onSaveProviderKeys?.(keyPatch);
           }}
+          axes={axes}
+          onAxesChange={(a) => setAxes(a)}
         />
       )}
 
@@ -3760,7 +3813,6 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
           context={brand?.context || ""}
           categories={categories}
           setCategories={setCategories}
-          onSaveAxes={onSaveAxes}
           onAxesChange={(a) => setAxes(a)}
           semrushKey={semrushKeyDec}
           providerKeys={providerKeys}
