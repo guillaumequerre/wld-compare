@@ -8,7 +8,7 @@ import { newProject, parseCSV } from "../lib/helpers";
 import { C, SITE_PALETTE } from "../lib/constants";
 
 const ANTHROPIC_PROXY = "/api/anthropic";
-const GREEN = "#1A3C2E";
+// const GREEN = "#1A3C2E";
 
 function pct(a, b) { return b ? Math.round(a / b * 100) : 0; }
 function getDomain(url) { try { return new URL(url).hostname.replace("www.", ""); } catch { return url; } }
