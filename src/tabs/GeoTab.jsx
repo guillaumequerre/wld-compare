@@ -98,10 +98,6 @@ function renderMarkdown(text) {
   });
 }
 
-function parseCSV(text) {
-  return text.split(/\r?\n/).map(l => l.split(",").map(c => c.trim().replace(/^"|"$/g, ""))).filter(r => r[0]);
-}
-
 // ── Export CSV helpers ────────────────────────────────────────────
 
 function csvCell(val) {
