@@ -36,9 +36,9 @@ function SetupSection({ icon, title, children }) {
 }
 
 function AuditSetupPanel({
-  projects, currentProjectId, setCurrentProjectId, setProjects, ownerEmail,
-  sites, setSites, sfData, setSfData, gscData, setGscData, gaData, setGaData, bingData, setBingData,
-  dbHistory, dbLoading, refreshHistory, confirmModal, setConfirmModal,
+  projects = [], currentProjectId, setCurrentProjectId, setProjects, ownerEmail,
+  sites = [], setSites, sfData = {}, setSfData, gscData = {}, setGscData, gaData = {}, setGaData, bingData = {}, setBingData,
+  dbHistory = [], dbLoading, refreshHistory, confirmModal, setConfirmModal,
   pageTypes, setPageTypes, project, projectId,
 }) {
   const [showHistory, setShowHistory] = useState(false);
@@ -57,30 +57,30 @@ function AuditSetupPanel({
             <div style={{ position: "relative", flex: 1, minWidth: 180 }}>
               <select value={safeProjectId} onChange={e => setCurrentProjectId(e.target.value)}
                 style={{ width: "100%", padding: "7px 28px 7px 10px", border: "1.5px solid #2563EB", borderRadius: 8, fontSize: 13, fontWeight: 600, color: "#2563EB", background: "#EFF6FF", cursor: "pointer", appearance: "none" }}>
-                {(projects || []).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                {(Array.isArray(projects) ? projects : []).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
               <span style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: "#2563EB", fontSize: 11 }}>▾</span>
             </div>
-            {(projects || []).length > 1 && (
-              <button onClick={() => setConfirmModal?.({ message: `Supprimer "${(projects||[]).find(p=>p.id===safeProjectId)?.name}" ?`, onConfirm: () => {
+            {(Array.isArray(projects) ? projects : []).length > 1 && (
+              <button onClick={() => setConfirmModal?.({ message: `Supprimer "${(Array.isArray(projects) ? projects : []).find(p=>p.id===safeProjectId)?.name}" ?`, onConfirm: () => {
                 sbDeleteProject(safeProjectId).catch(() => {});
                 setProjects(prev => { const next = prev.filter(x => x.id !== safeProjectId); if (next.length) setCurrentProjectId(next[0].id); return next; });
               }})} style={{ padding: "6px 10px", border: "1px solid #FECACA", borderRadius: 7, background: "#FEF2F2", cursor: "pointer", fontSize: 11, color: "#DC2626" }}>🗑</button>
             )}
-            {(projects || []).length < 20 && (
+            {(Array.isArray(projects) ? projects : []).length < 20 && (
               <button onClick={() => {
-                const p = newProject(`Projet ${(projects||[]).length + 1}`, [{ id: `site-${Date.now()}`, label: "Nouveau site", ...SITE_PALETTE[0] }], ownerEmail);
+                const p = newProject(`Projet ${(Array.isArray(projects) ? projects : []).length + 1}`, [{ id: `site-${Date.now()}`, label: "Nouveau site", ...SITE_PALETTE[0] }], ownerEmail);
                 setProjects(prev => [...prev, p]); setCurrentProjectId(p.id); sbSaveProject(p).catch(() => {});
               }} style={{ padding: "6px 10px", borderRadius: 7, border: "1.5px dashed #2563EB", background: "#EFF6FF", color: "#2563EB", cursor: "pointer", fontSize: 11, fontWeight: 600 }}>+ Nouveau</button>
             )}
           </div>
           <div style={{ marginTop: 10, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-            {(sites || []).map(site => (
+            {(Array.isArray(sites) ? sites : []).map(site => (
               <div key={site.id} style={{ display: "flex", alignItems: "center", gap: 5, padding: "4px 10px", borderRadius: 20, border: `1px solid ${site.color}44`, background: site.bg }}>
                 <div style={{ width: 7, height: 7, borderRadius: "50%", background: site.color, flexShrink: 0 }} />
                 <input value={site.label} onChange={e => setSites(prev => prev.map(s => s.id === site.id ? {...s, label: e.target.value} : s))}
                   style={{ fontSize: 12, fontWeight: 600, color: site.color, border: "none", outline: "none", background: "transparent", width: 100 }} />
-                {(sites||[]).length > 1 && (
+                {(Array.isArray(sites) ? sites : []).length > 1 && (
                   <button onClick={() => setConfirmModal?.({ message: `Supprimer "${site.label}" ?`, onConfirm: () => {
                     setSites(prev => prev.filter(s => s.id !== site.id));
                     [setSfData, setGscData, setGaData, setBingData].forEach(s => s?.(p => { const n={...p}; delete n[site.id]; return n; }));
@@ -88,19 +88,19 @@ function AuditSetupPanel({
                 )}
               </div>
             ))}
-            {(sites||[]).length < 3 && (
+            {(Array.isArray(sites) ? sites : []).length < 3 && (
               <button onClick={() => {
-                const palette = SITE_PALETTE[(sites||[]).length] || SITE_PALETTE[0];
+                const palette = SITE_PALETTE[(Array.isArray(sites) ? sites : []).length] || SITE_PALETTE[0];
                 const newId = `site-${Date.now()}`;
-                setSites(prev => [...prev, { id: newId, label: `Site ${(prev||[]).length+1}`, ...palette }]);
+                setSites(prev => [...prev, { id: newId, label: `Site ${(Array.isArray(prev) ? prev : []).length+1}`, ...palette }]);
                 [setSfData, setGscData, setGaData, setBingData].forEach(s => s?.(p => ({...p, [newId]: []})));
               }} style={{ padding: "4px 10px", borderRadius: 20, border: "1px dashed #E2E8F0", background: "#fff", color: "#2563EB", cursor: "pointer", fontSize: 11, fontWeight: 600 }}>+ Site</button>
             )}
           </div>
           <div style={{ marginTop: 10, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <span style={{ fontSize: 11, color: "#94A3B8" }}>
-              <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: dbLoading ? "#F59E0B" : (dbHistory||[]).length > 0 ? "#059669" : "#CBD5E1", marginRight: 5 }} />
-              {dbLoading ? "Chargement…" : `${(dbHistory||[]).length} imports en base`}
+              <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: dbLoading ? "#F59E0B" : (Array.isArray(dbHistory) ? dbHistory : []).length > 0 ? "#059669" : "#CBD5E1", marginRight: 5 }} />
+              {dbLoading ? "Chargement…" : `${(Array.isArray(dbHistory) ? dbHistory : []).length} imports en base`}
             </span>
             <button onClick={() => { setShowHistory(h => !h); refreshHistory?.(); }}
               style={{ fontSize: 11, color: showHistory ? "#2563EB" : "#94A3B8", background: "none", border: "none", cursor: "pointer", padding: 0 }}>
@@ -109,8 +109,8 @@ function AuditSetupPanel({
           </div>
           {showHistory && (
             <div style={{ marginTop: 8, maxHeight: 140, overflowY: "auto", display: "flex", flexDirection: "column", gap: 3 }}>
-              {(dbHistory||[]).slice(0,20).map(row => {
-                const site = (sites||[]).find(s => s.id === row.site_id);
+              {(Array.isArray(dbHistory) ? dbHistory : []).slice(0,20).map(row => {
+                const site = (Array.isArray(sites) ? sites : []).find(s => s.id === row.site_id);
                 const srcLabel = { sf:"🐸 SF", gsc:"🔍 GSC", ga:"📊 GA4", bing:"🤖 Bing" }[row.source] || row.source;
                 return (
                   <div key={row.id} style={{ display: "flex", gap: 8, padding: "4px 8px", background: "#F1F5F9", borderRadius: 5, fontSize: 10, alignItems: "center" }}>
@@ -127,7 +127,7 @@ function AuditSetupPanel({
 
       <SetupSection icon="📥" title="Imports CSV — SF, GSC, GA4, Bing">
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          {(sites || []).map(site => (
+          {(Array.isArray(sites) ? sites : []).map(site => (
             <div key={site.id} style={{ flex: "1 1 200px", background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 10, padding: "10px 14px" }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: site.color, marginBottom: 8 }}>{site.label}</div>
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -170,13 +170,13 @@ function AuditSetupPanel({
       </SetupSection>
 
       <SetupSection icon="🏷️" title="Classification des pages">
-        {(sites||[]).filter(site => (sfData||{})[site.id]?.length > 0).length === 0 ? (
+        {(Array.isArray(sites) ? sites : []).filter(site => (sfData||{})[site.id]?.length > 0).length === 0 ? (
           <div style={{ background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, padding: "10px 14px", fontSize: 12, color: "#92400E" }}>
             🐸 Importez Screaming Frog pour activer la classification
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {(sites||[]).filter(site => (sfData||{})[site.id]?.length > 0).map(site => (
+            {(Array.isArray(sites) ? sites : []).filter(site => (sfData||{})[site.id]?.length > 0).map(site => (
               <div key={site.id} style={{ background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 10, padding: "10px 14px" }}>
                 <div style={{ fontSize: 11, fontWeight: 700, color: site.color, marginBottom: 8 }}>{site.label} · {(sfData||{})[site.id].length} pages</div>
                 <PageTypeClassifier siteId={site.id} projectId={projectId} sfRows={(sfData||{})[site.id]} pageTypes={pageTypes} setPageTypes={setPageTypes} />
@@ -499,7 +499,7 @@ export default function GeoAuditTab({
   const [urlIndex, setUrlIndex]         = useState([]);
   const [loading, setLoading]           = useState(true);
 
-  const site = sites.find(s => s.id === selectedSite) || sites[0];
+  const site = (Array.isArray(sites) ? sites : []).find(s => s.id === selectedSite) || (Array.isArray(sites) ? sites : [])[0];
   const claudeKey = decodeKey(project?.claude_geo_key_enc || "");
 
   useEffect(() => {
@@ -551,7 +551,7 @@ export default function GeoAuditTab({
         <div>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              {sites.length > 1 && sites.map(s => (
+              {(Array.isArray(sites) ? sites : []).length > 1 && (Array.isArray(sites) ? sites : []).map(s => (
                 <button key={s.id} onClick={() => setSelectedSite(s.id)} style={{ padding: "5px 12px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer", border: `2px solid ${s.color}`, background: selectedSite === s.id ? s.color : "transparent", color: selectedSite === s.id ? "#fff" : s.color }}>{s.label}</button>
               ))}
             </div>

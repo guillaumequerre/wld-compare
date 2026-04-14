@@ -881,7 +881,7 @@ function detectBrand(answer, sources, brandName, brandAliases = [], competitors 
   const urlRe = /https?:\/\/[^\s\])"'>]+/g;
   const answerUrls = [...(answer || "").matchAll(urlRe)].map(m => m[0].toLowerCase());
   // Merge sources array with URLs found in text
-  const allSources = [...new Set([...(sources || []).map(s => s.toLowerCase()), ...answerUrls])];
+  const allSources = [...new Set([...(Array.isArray(sources) ? sources : []).map(s => s.toLowerCase()), ...answerUrls])];
 
   // Find brand position in numbered/bulleted list
   const lines = (answer || "").split("\n").map(l => l.trim()).filter(Boolean);
@@ -1164,7 +1164,7 @@ function CatSelect({ value, categories, onChange, placeholder = "Catégorie…" 
     <select value={value || ""} onChange={e => onChange(e.target.value || null)}
       style={{ padding: "4px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11, color: C.text, background: C.white, cursor: "pointer" }}>
       <option value="">{placeholder}</option>
-      {(categories || []).filter(c => c.id && c.name).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+      {(Array.isArray(categories) ? categories : []).filter(c => c.id && c.name).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
     </select>
   );
 }
@@ -1680,7 +1680,7 @@ function HintPanelQuestion({ questionId, question, sources, brandName, brandAlia
     if (!claudeKey) return;
     setStatus("loading");
     const bDomain = brandDomain || brandName;
-    const sourcesText = (sources || []).length > 0
+    const sourcesText = (Array.isArray(sources) ? sources : []).length > 0
       ? "Pages dans la réponse :\n" + sources.slice(0, 6).map((u, i) => `[${i+1}] ${u}`).join("\n")
       : "Aucune source listée.";
     const brandContext = hasBrand
@@ -2184,7 +2184,7 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
       setHintsMap(map);
       setKeywords(keywords);
       setCalendarEntries(calEntries || []);
-      console.log("[GeoTab] calendarEntries chargées:", (calEntries || []).length, "entrées — vertes:", (calEntries || []).filter(e => e.brand_present === true || e.brand_present === 1).length);
+      console.log("[GeoTab] calendarEntries chargées:", (Array.isArray(calEntries) ? calEntries : []).length, "entrées — vertes:", (Array.isArray(calEntries) ? calEntries : []).filter(e => e.brand_present === true || e.brand_present === 1).length);
     }).catch(e => console.warn("[QuestionsTab] load error:", e));
   }, [projectId, site?.id, refreshTrigger]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -3432,11 +3432,11 @@ function SetupSection({ icon, title, children }) {
 }
 
 function FanoutSetupPanel({
-  projects, currentProjectId, setCurrentProjectId, setProjects, ownerEmail,
-  sites, setSites, smData, setSmData,
-  dbHistory, dbLoading, refreshHistory, confirmModal, setConfirmModal,
+  projects = [], currentProjectId, setCurrentProjectId, setProjects, ownerEmail,
+  sites = [], setSites, smData = {}, setSmData,
+  dbHistory = [], dbLoading, refreshHistory, confirmModal, setConfirmModal,
   project, projectId, onSaveProviderKeys,
-  axes, onSaveAxes, onAxesChange,
+  axes = [], onSaveAxes, onAxesChange,
 }) {
   const [showHistory, setShowHistory] = useState(false);
   const lastImports = {};
@@ -3456,19 +3456,19 @@ function FanoutSetupPanel({
             <div style={{ position: "relative", flex: 1, minWidth: 180 }}>
               <select value={safeProjectId} onChange={e => setCurrentProjectId(e.target.value)}
                 style={{ width: "100%", padding: "7px 28px 7px 10px", border: `1.5px solid ${C.blue}`, borderRadius: 8, fontSize: 13, fontWeight: 600, color: C.blue, background: C.blueLight, cursor: "pointer", appearance: "none" }}>
-                {(projects || []).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                {(Array.isArray(projects) ? projects : []).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
               <span style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: C.blue, fontSize: 11 }}>▾</span>
             </div>
-            {(projects || []).length > 1 && (
-              <button onClick={() => setConfirmModal?.({ message: `Supprimer "${(projects||[]).find(p=>p.id===safeProjectId)?.name}" ?`, onConfirm: () => {
+            {(Array.isArray(projects) ? projects : []).length > 1 && (
+              <button onClick={() => setConfirmModal?.({ message: `Supprimer "${(Array.isArray(projects) ? projects : []).find(p=>p.id===safeProjectId)?.name}" ?`, onConfirm: () => {
                 sbDeleteProject(safeProjectId).catch(() => {});
                 setProjects(prev => { const next = prev.filter(x => x.id !== safeProjectId); if (next.length) setCurrentProjectId(next[0].id); return next; });
               }})} style={{ padding: "6px 10px", border: "1px solid #FECACA", borderRadius: 7, background: "#FEF2F2", cursor: "pointer", fontSize: 11, color: "#DC2626" }}>🗑</button>
             )}
-            {(projects || []).length < 20 && (
+            {(Array.isArray(projects) ? projects : []).length < 20 && (
               <button onClick={() => {
-                const p = newProject(`Projet ${(projects||[]).length + 1}`, [{ id: `site-${Date.now()}`, label: "Nouveau site", ...SITE_PALETTE[0] }], ownerEmail);
+                const p = newProject(`Projet ${(Array.isArray(projects) ? projects : []).length + 1}`, [{ id: `site-${Date.now()}`, label: "Nouveau site", ...SITE_PALETTE[0] }], ownerEmail);
                 setProjects(prev => [...prev, p]); setCurrentProjectId(p.id); sbSaveProject(p).catch(() => {});
               }} style={{ padding: "6px 10px", borderRadius: 7, border: `1.5px dashed ${C.blue}`, background: C.blueLight, color: C.blue, cursor: "pointer", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>+ Nouveau</button>
             )}
@@ -3476,12 +3476,12 @@ function FanoutSetupPanel({
 
           {/* Sites inline */}
           <div style={{ marginTop: 10, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-            {(sites || []).map(site => (
+            {(Array.isArray(sites) ? sites : []).map(site => (
               <div key={site.id} style={{ display: "flex", alignItems: "center", gap: 5, padding: "4px 10px", borderRadius: 20, border: `1px solid ${site.color}44`, background: site.bg }}>
                 <div style={{ width: 7, height: 7, borderRadius: "50%", background: site.color, flexShrink: 0 }} />
                 <input value={site.label} onChange={e => setSites(prev => prev.map(s => s.id === site.id ? {...s, label: e.target.value} : s))}
                   style={{ fontSize: 12, fontWeight: 600, color: site.color, border: "none", outline: "none", background: "transparent", width: 100 }} />
-                {(sites||[]).length > 1 && (
+                {(Array.isArray(sites) ? sites : []).length > 1 && (
                   <button onClick={() => setConfirmModal?.({ message: `Supprimer "${site.label}" ?`, onConfirm: () => {
                     setSites(prev => prev.filter(s => s.id !== site.id));
                     setSmData(p => { const n = {...p}; delete n[site.id]; return n; });
@@ -3489,11 +3489,11 @@ function FanoutSetupPanel({
                 )}
               </div>
             ))}
-            {(sites||[]).length < 3 && (
+            {(Array.isArray(sites) ? sites : []).length < 3 && (
               <button onClick={() => {
-                const palette = SITE_PALETTE[(sites||[]).length] || SITE_PALETTE[0];
+                const palette = SITE_PALETTE[(Array.isArray(sites) ? sites : []).length] || SITE_PALETTE[0];
                 const newId = `site-${Date.now()}`;
-                setSites(prev => [...prev, { id: newId, label: `Site ${(prev||[]).length + 1}`, ...palette }]);
+                setSites(prev => [...prev, { id: newId, label: `Site ${(Array.isArray(prev) ? prev : []).length + 1}`, ...palette }]);
                 setSmData(p => ({...p, [newId]: []}));
               }} style={{ padding: "4px 10px", borderRadius: 20, border: `1px dashed ${C.border}`, background: "#fff", color: C.blue, cursor: "pointer", fontSize: 11, fontWeight: 600 }}>+ Site</button>
             )}
@@ -3502,8 +3502,8 @@ function FanoutSetupPanel({
           {/* Historique compact */}
           <div style={{ marginTop: 10, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <span style={{ fontSize: 11, color: C.textLight }}>
-              <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: dbLoading ? "#F59E0B" : (dbHistory||[]).length > 0 ? "#059669" : "#CBD5E1", marginRight: 5 }} />
-              {dbLoading ? "Chargement…" : `${(dbHistory||[]).length} imports en base`}
+              <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: dbLoading ? "#F59E0B" : (Array.isArray(dbHistory) ? dbHistory : []).length > 0 ? "#059669" : "#CBD5E1", marginRight: 5 }} />
+              {dbLoading ? "Chargement…" : `${(Array.isArray(dbHistory) ? dbHistory : []).length} imports en base`}
             </span>
             <button onClick={() => { setShowHistory(h => !h); refreshHistory?.(); }}
               style={{ fontSize: 11, color: showHistory ? C.blue : C.textLight, background: "none", border: "none", cursor: "pointer", padding: 0 }}>
@@ -3512,8 +3512,8 @@ function FanoutSetupPanel({
           </div>
           {showHistory && (
             <div style={{ marginTop: 8, maxHeight: 140, overflowY: "auto", display: "flex", flexDirection: "column", gap: 3 }}>
-              {(dbHistory||[]).slice(0, 20).map(row => {
-                const site = (sites||[]).find(s => s.id === row.site_id);
+              {(Array.isArray(dbHistory) ? dbHistory : []).slice(0, 20).map(row => {
+                const site = (Array.isArray(sites) ? sites : []).find(s => s.id === row.site_id);
                 const srcLabel = { sf:"🐸 SF", gsc:"🔍 GSC", ga:"📊 GA4", bing:"🤖 Bing", sm:"📈 SM" }[row.source] || row.source;
                 return (
                   <div key={row.id} style={{ display: "flex", gap: 8, padding: "4px 8px", background: C.bg, borderRadius: 5, fontSize: 10, alignItems: "center" }}>
@@ -3531,7 +3531,7 @@ function FanoutSetupPanel({
       {/* ── Import Semrush ── */}
       <SetupSection icon="📈" title="Import Semrush — volumes de recherche">
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          {(sites || []).map(site => (
+          {(Array.isArray(sites) ? sites : []).map(site => (
             <div key={site.id} style={{ flex: "1 1 200px", background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 10, padding: "10px 14px" }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: site.color, marginBottom: 8 }}>{site.label}</div>
               <UploadCard label="Semrush" icon="📈" hint="Organic pages export" color={site.color}
@@ -3566,22 +3566,22 @@ function FanoutSetupPanel({
             Chaque mot-clé génère une question par axe. Adaptez les angles à votre secteur.
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {(axes || []).map((a, i) => (
+            {(Array.isArray(axes) ? axes : []).map((a, i) => (
               <div key={i} style={{ display: "flex", gap: 6, alignItems: "center" }}>
                 <span style={{ fontSize: 11, color: "#94A3B8", minWidth: 18, flexShrink: 0 }}>{i + 1}.</span>
                 <input value={a} onChange={e => {
-                  const updated = [...(axes || [])];
+                  const updated = [...(Array.isArray(axes) ? axes : [])];
                   updated[i] = e.target.value;
                   onAxesChange?.(updated);
                 }}
                   style={{ flex: 1, padding: "5px 9px", border: "1px solid #E2E8F0", borderRadius: 7, fontSize: 12, color: "#1E293B" }} />
                 <button onClick={() => {
-                  const updated = (axes || []).filter((_, j) => j !== i);
+                  const updated = (Array.isArray(axes) ? axes : []).filter((_, j) => j !== i);
                   onAxesChange?.(updated);
                 }} style={{ fontSize: 11, color: "#94A3B8", background: "none", border: "none", cursor: "pointer", padding: "0 4px", flexShrink: 0 }}>✕</button>
               </div>
             ))}
-            <button onClick={() => onAxesChange?.([...(axes || []), ""])}
+            <button onClick={() => onAxesChange?.([...(Array.isArray(axes) ? axes : []), ""])}
               style={{ fontSize: 11, color: "#2563EB", background: "none", border: "1px dashed #E2E8F0", borderRadius: 7, padding: "5px 12px", cursor: "pointer", textAlign: "left", marginTop: 2 }}>
               + Ajouter un axe
             </button>
@@ -3703,13 +3703,13 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
   const [allResults, setAllResults] = useState([]);
   const [keywords, setKeywords]     = useState([]); // lifted from KeywordsTab for cross-tab ordering
   const [categories, setCategories] = useState([]);
-  const [axes, setAxes]             = useState(geoAxes || DEFAULT_AXES);
+  const [axes, setAxes]             = useState(Array.isArray(geoAxes) ? geoAxes : DEFAULT_AXES);
 
-  const site = sites.find(s => s.id === selectedSite) || sites[0];
+  const site = (Array.isArray(sites) ? sites : []).find(s => s.id === selectedSite) || (Array.isArray(sites) ? sites : [])[0];
 
   // Sync axes when project changes
   useEffect(() => {
-    setAxes(geoAxes || DEFAULT_AXES);
+    setAxes(Array.isArray(geoAxes) ? geoAxes : DEFAULT_AXES);
   }, [geoAxes]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load categories (project-wide, once)
