@@ -3677,7 +3677,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
     setApiKeyDec(k);
   }, [apiKeyEnc]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const GREEN = "#1A3C2E";
+  // const GREEN = "#1A3C2E";
 
   return (
     <div>

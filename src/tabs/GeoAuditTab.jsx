@@ -24,20 +24,20 @@ function getProviderId(model) {
 }
 
 // ── Setup Section wrapper ─────────────────────────────────────────
-function SectionBlock({ number, title, sub, children, color = GREEN }) {
-  return (
-    <div style={{ marginBottom: 28 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
-        <div style={{ width: 26, height: 26, borderRadius: 8, background: color, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 800, flexShrink: 0 }}>{number}</div>
-        <div>
-          <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{title}</div>
-          {sub && <div style={{ fontSize: 11, color: C.textLight, marginTop: 1 }}>{sub}</div>}
-        </div>
-      </div>
-      {children}
-    </div>
-  );
-}
+// function SectionBlock({ number, title, sub, children, color = GREEN }) {
+//   return (
+//     <div style={{ marginBottom: 28 }}>
+//       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+//         <div style={{ width: 26, height: 26, borderRadius: 8, background: color, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 800, flexShrink: 0 }}>{number}</div>
+//         <div>
+//           <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{title}</div>
+//           {sub && <div style={{ fontSize: 11, color: C.textLight, marginTop: 1 }}>{sub}</div>}
+//         </div>
+//       </div>
+//       {children}
+//     </div>
+//   );
+// }
 
 // ── AuditSetupPanel compact ───────────────────────────────────────
 function SetupSection({ icon, title, children }) {
