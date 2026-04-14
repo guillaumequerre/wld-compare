@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { C } from "../lib/constants";
 import { authLogin, authSignup, authForgotPassword, isSuperAdmin } from "../lib/auth";
+import TutorialModal from "./TutorialModal";
 
 const PURPLE = "#1A3C2E";
 const PURPLE_LIGHT = "#EAF0EC";
@@ -382,6 +383,7 @@ function ProjectsList({ user, projects, currentProjectId, dbLoading, onSelectPro
 // ── HomeTab ───────────────────────────────────────────────────────
 export default function HomeTab({ user, projects, currentProjectId, dbLoading, onLogin, onLogout, onSelectProject, onCreateProject, onGoSetup, onGoFanout, onGoAudit }) {
   const [visible, setVisible]         = useState(true);
+  const [showTutorial, setShowTutorial] = useState(false);
   const [displayUser, setDisplayUser] = useState(user);
 
   // Smooth transition when user logs in/out
@@ -497,11 +499,38 @@ export default function HomeTab({ user, projects, currentProjectId, dbLoading, o
       </div>
 
       {/* Footer */}
-      <div style={{ textAlign: "center", paddingTop: 28, marginTop: 36, borderTop: `1px solid ${C.border}` }}>
+      <div style={{ textAlign: "center", paddingTop: 28, marginTop: 36, borderTop: `1px solid ${C.border}`, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
         <div style={{ fontSize: 11, color: C.textLight }}>
           Dashboard GEO par Sonate · par <a href="mailto:guillaume@deux.io" style={{ color: PURPLE }}>deux.io</a>
         </div>
+        <button
+          onClick={() => setShowTutorial(true)}
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 6,
+            padding: "7px 14px", borderRadius: 20,
+            border: `1.5px solid ${PURPLE}`, background: PURPLE_LIGHT,
+            color: PURPLE, fontSize: 12, fontWeight: 700, cursor: "pointer",
+            transition: "all 0.15s",
+          }}
+          onMouseEnter={e => { e.currentTarget.style.background = PURPLE; e.currentTarget.style.color = "#fff"; }}
+          onMouseLeave={e => { e.currentTarget.style.background = PURPLE_LIGHT; e.currentTarget.style.color = PURPLE; }}
+        >
+          🎓 Guide de démarrage
+        </button>
       </div>
+
+      {/* Tutorial modal */}
+      {showTutorial && (
+        <TutorialModal
+          onClose={() => setShowTutorial(false)}
+          onNavigate={(tab) => {
+            setShowTutorial(false);
+            if (tab === "import" && onGoSetup) onGoSetup();
+            else if (tab === "geo" && onGoFanout) onGoFanout();
+            else if (tab === "geo_audit" && onGoAudit) onGoAudit();
+          }}
+        />
+      )}
 
       <style>{`
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }

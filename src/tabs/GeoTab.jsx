@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { C } from "../lib/constants";
 import PresenceCalendar from "../components/PresenceCalendar";
 import {
   sbGetBrand,
@@ -13,7 +12,13 @@ import {
   sbBulkSetKeywordCategory, sbBulkSetQuestionCategory,
   sbGetUrlIndex, sbUpdateUrlMeta, sbIncrementUrlCounts,
   sbAddCalendarEntry, sbGetCalendarEntriesBatch,
+  sbDownload,
 } from "../lib/supabase";
+import { ProviderConfigPanel, BrandConfigPanel } from "../components/GeoConfig";
+import UploadCard from "../components/UploadCard";
+import { newProject, parseCSV, parseSemrushCSV } from "../lib/helpers";
+import { parseSemrush } from "../lib/parsers";
+import { C, SITE_PALETTE } from "../lib/constants";
 // Note: sbSaveGeoAxes is called via onSaveAxes prop from App.jsx
 
 
@@ -3399,7 +3404,222 @@ function AutomationTab({ projectId, site, user, providerKeys }) {
   );
 }
 
-export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes, onSaveProviderKeys, user }) {
+
+// ── FanoutSetupPanel — Setup embarqué dans GeoTab ────────────────
+// Sections transverses : Projet + Sites + Historique imports
+// Sections Fan-outs   : Import Semrush + Clés providers + Marque
+
+function SectionBlock({ number, title, sub, children, color = "#7C3AED" }) {
+  return (
+    <div style={{ marginBottom: 28 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+        <div style={{ width: 26, height: 26, borderRadius: 8, background: color, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 800, flexShrink: 0 }}>{number}</div>
+        <div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{title}</div>
+          {sub && <div style={{ fontSize: 11, color: C.textLight, marginTop: 1 }}>{sub}</div>}
+        </div>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function FanoutSetupPanel({
+  projects, currentProjectId, setCurrentProjectId, setProjects, ownerEmail,
+  sites, setSites,
+  smData, setSmData,
+  dbHistory, dbLoading, refreshHistory,
+  confirmModal, setConfirmModal,
+  project, projectId,
+  onSaveProviderKeys,
+}) {
+  const [showHistory, setShowHistory] = React.useState(false);
+
+  // Last import per site+source
+  const lastImports = {};
+  for (const row of (dbHistory || [])) {
+    const key = `${row.site_id}_${row.source}`;
+    if (!lastImports[key] && row.storage_path) lastImports[key] = row;
+  }
+  const fmtDate = (d) => new Date(d).toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "numeric" });
+  const lastBySrc = {};
+  for (const row of (dbHistory || [])) {
+    if (!lastBySrc[row.source] || row.uploaded_at > lastBySrc[row.source].uploaded_at) lastBySrc[row.source] = row;
+  }
+
+  return (
+    <div>
+      {/* ── 1. Projet & Sites ── */}
+      <SectionBlock number="1" title="Projet & Sites" sub="Gérez vos projets et les sites associés" color="#1A3C2E">
+        <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: "20px 24px" }}>
+
+          {/* Project selector */}
+          <div style={{ marginBottom: 20, paddingBottom: 20, borderBottom: `1px solid ${C.borderLight}` }}>
+            <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, color: C.textLight, fontWeight: 600, marginBottom: 10 }}>Projet actif</div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <div style={{ position: "relative", flex: 1, minWidth: 200 }}>
+                <select value={currentProjectId} onChange={e => setCurrentProjectId(e.target.value)}
+                  style={{ width: "100%", padding: "8px 12px", border: `2px solid ${C.blue}`, borderRadius: 10, fontSize: 13, fontWeight: 600, color: C.blue, background: C.blueLight, cursor: "pointer", appearance: "none" }}>
+                  {(projects || []).map(p => (
+                    <option key={p.id} value={p.id}>{p.name} ({p.sites.length} site{p.sites.length > 1 ? "s" : ""})</option>
+                  ))}
+                </select>
+                <span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: C.blue }}>▾</span>
+              </div>
+              {(projects || []).length > 1 && (
+                <button onClick={() => setConfirmModal?.({ message: `Supprimer le projet "${(projects || []).find(p=>p.id===currentProjectId)?.name}" ?`, onConfirm: () => {
+                  sbDeleteProject(currentProjectId).catch(() => {});
+                  setProjects(prev => { const next = prev.filter(x => x.id !== currentProjectId); if (next.length) setCurrentProjectId(next[0].id); return next; });
+                }})}
+                  style={{ padding: "7px 10px", border: "1px solid #FECACA", borderRadius: 8, background: "#FEF2F2", cursor: "pointer", fontSize: 12, color: "#DC2626" }}>🗑</button>
+              )}
+              {(projects || []).length < 20 && (
+                <button onClick={() => {
+                  const p = newProject(`Projet ${(projects||[]).length + 1}`, [{ id: `site-${Date.now()}`, label: "Nouveau site", ...SITE_PALETTE[0] }], ownerEmail);
+                  setProjects(prev => [...prev, p]);
+                  setCurrentProjectId(p.id);
+                  sbSaveProject(p).catch(() => {});
+                }} style={{ padding: "8px 14px", borderRadius: 10, border: `2px dashed ${C.blue}`, background: C.blueLight, color: C.blue, cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
+                  + Nouveau projet
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Sites */}
+          <div>
+            <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, color: C.textLight, fontWeight: 600, marginBottom: 10 }}>Sites du projet</div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {(sites || []).map(site => (
+                <div key={site.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 14px", borderRadius: 10, border: `1px solid ${site.color}33`, background: site.bg }}>
+                  <div style={{ width: 10, height: 10, borderRadius: "50%", background: site.color, flexShrink: 0 }} />
+                  <input value={site.label}
+                    onChange={e => setSites(prev => prev.map(s => s.id === site.id ? {...s, label: e.target.value} : s))}
+                    style={{ fontWeight: 600, fontSize: 13, color: site.color, border: "none", outline: "none", background: "transparent", width: 120 }} />
+                  {(sites||[]).length > 1 && (
+                    <button onClick={() => setConfirmModal?.({ message: `Supprimer le site "${site.label}" ?`, onConfirm: () => {
+                      setSites(prev => prev.filter(s => s.id !== site.id));
+                      setSmData(p => { const n = {...p}; delete n[site.id]; return n; });
+                    }})} style={{ padding: "2px 6px", border: "1px solid #FCA5A5", borderRadius: 5, background: "#FFF5F5", cursor: "pointer", fontSize: 11, color: "#DC2626" }}>✕</button>
+                  )}
+                </div>
+              ))}
+              {(sites||[]).length < 3 && (
+                <button onClick={() => {
+                  const palette = SITE_PALETTE[(sites||[]).length] || SITE_PALETTE[0];
+                  const newId = `site-${Date.now()}`;
+                  setSites(prev => [...prev, { id: newId, label: `Site ${(prev||[]).length + 1}`, ...palette }]);
+                  setSmData(p => ({...p, [newId]: []}));
+                }} style={{ padding: "8px 14px", borderRadius: 10, border: `2px dashed ${C.border}`, background: C.white, color: C.blue, cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
+                  + Ajouter un site
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* History */}
+          <div style={{ marginTop: 20, paddingTop: 16, borderTop: `1px solid ${C.borderLight}`, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div style={{ width: 7, height: 7, borderRadius: "50%", background: dbLoading ? C.amber : (dbHistory||[]).length > 0 ? C.green : C.textLight }} />
+              <span style={{ fontSize: 12, color: C.textMid }}>
+                {dbLoading ? "Chargement…" : (dbHistory||[]).length > 0 ? `${(dbHistory||[]).length} import${(dbHistory||[]).length > 1 ? "s" : ""} en base` : "Aucun import en base"}
+              </span>
+            </div>
+            <button onClick={() => { setShowHistory(h => !h); refreshHistory?.(); }} style={{
+              padding: "5px 14px", background: showHistory ? C.blue : C.white, color: showHistory ? "#fff" : C.textMid,
+              border: `1px solid ${showHistory ? C.blue : C.border}`, borderRadius: 7, cursor: "pointer", fontSize: 12, fontWeight: 500,
+            }}>📋 Historique {(dbHistory||[]).length > 0 ? `(${(dbHistory||[]).length})` : ""}</button>
+          </div>
+          {showHistory && (
+            <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 5, maxHeight: 200, overflowY: "auto" }}>
+              {(dbHistory||[]).length === 0 ? (
+                <div style={{ fontSize: 12, color: C.textLight }}>Aucun import enregistré</div>
+              ) : (dbHistory||[]).map(row => {
+                const site = (sites||[]).find(s => s.id === row.site_id);
+                const srcLabel = { sf: "🐸 SF", gsc: "🔍 GSC", ga: "📊 GA4", bing: "🤖 Bing", sm: "📈 Semrush" }[row.source] || row.source;
+                return (
+                  <div key={row.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 12px", background: C.bg, borderRadius: 7, fontSize: 11 }}>
+                    <span style={{ fontWeight: 600, color: site?.color || C.text, minWidth: 80 }}>{site?.label || row.site_id}</span>
+                    <span style={{ color: C.textMid, minWidth: 60 }}>{srcLabel}</span>
+                    <span style={{ color: C.textLight, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.filename}</span>
+                    <span style={{ color: C.textLight }}>{fmtDate(row.uploaded_at)}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </SectionBlock>
+
+      {/* ── 2. Import Semrush ── */}
+      <SectionBlock number="2" title="Import Semrush" sub="Volumes de recherche pour enrichir les mots-clés" color="#059669">
+        <div style={{ display: "grid", gridTemplateColumns: `repeat(${Math.min((sites||[]).length || 1, 3)}, 1fr)`, gap: 16 }}>
+          {(sites||[]).map(site => (
+            <div key={site.id} style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: 18 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, paddingBottom: 10, borderBottom: `1px solid ${C.borderLight}` }}>
+                <div style={{ width: 9, height: 9, borderRadius: "50%", background: site.color }} />
+                <span style={{ fontWeight: 700, fontSize: 13, color: site.color }}>{site.label}</span>
+              </div>
+              <UploadCard label="Semrush Organic Pages" icon="📈" hint="Positions, trafic estimé, volumes" color={site.color}
+                loaded={(smData||{})[site.id]?.length > 0} rows={(smData||{})[site.id]}
+                onData={(_, rawText) => {
+                  const rows = parseSemrush(parseSemrushCSV(rawText));
+                  setSmData(p => ({...p, [site.id]: rows}));
+                }}
+                onClear={() => setSmData(p => ({...p, [site.id]: []}))}
+                rawMode siteId={site.id} source="sm" projectId={projectId}
+                onAfterUpload={refreshHistory}
+                onLoadFromHistory={async row => { try { const text = await sbDownload(row.storage_path); const rows = parseSemrush(parseSemrushCSV(text)); setSmData(p => ({...p, [site.id]: rows})); } catch(e) { console.warn(e); } }}
+              />
+              {(smData||{})[site.id]?.length > 0 && (
+                <div style={{ marginTop: 8, fontSize: 10, color: site.color, fontWeight: 600 }}>
+                  ✓ {(smData||{})[site.id].length} pages importées
+                </div>
+              )}
+              {lastImports[`${site.id}_sm`]?.storage_path && !(smData||{})[site.id]?.length && (
+                <button onClick={async () => { try { const text = await sbDownload(lastImports[`${site.id}_sm`].storage_path); const rows = parseSemrush(parseSemrushCSV(text)); setSmData(p => ({...p, [site.id]: rows})); } catch(e) { console.warn(e); } }}
+                  style={{ marginTop: 8, width: "100%", padding: "5px 0", border: `1px solid ${site.color}`, borderRadius: 7, background: site.bg, color: site.color, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                  ↩ Recharger le dernier import
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      </SectionBlock>
+
+      {/* ── 3. Clés providers ── */}
+      <SectionBlock number="3" title="Clés API des providers" sub="OpenAI, Gemini, Perplexity, Claude — pour interroger les IA" color="#7C3AED">
+        <ProviderConfigPanel
+          project={project}
+          projectId={projectId}
+          sites={sites}
+          onSaveProviderKeys={onSaveProviderKeys}
+        />
+      </SectionBlock>
+
+      {/* ── 4. Configuration marques ── */}
+      <SectionBlock number="4" title="Configuration des marques" sub="Nom, domaine, alias et concurrents à surveiller" color="#D97706">
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {(sites||[]).map(site => (
+            <BrandConfigPanel key={site.id} site={site} projectId={projectId} />
+          ))}
+          {!(sites||[]).length && (
+            <div style={{ fontSize: 12, color: C.textLight, fontStyle: "italic" }}>
+              Ajoutez un site ci-dessus pour configurer sa marque.
+            </div>
+          )}
+        </div>
+      </SectionBlock>
+    </div>
+  );
+}
+
+export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes, onSaveProviderKeys, user,
+  // Props setup (nouvelles — passées depuis App.jsx)
+  projects, currentProjectId, setCurrentProjectId, setProjects, ownerEmail,
+  setSites, smData, setSmData, dbHistory, dbLoading, refreshHistory, confirmModal, setConfirmModal,
+}) {
+  const [mainTab, setMainTab]       = useState("analyse"); // "setup" | "analyse"
   const [subTab, setSubTab]         = useState("keywords"); // keywords | questions | urls
   const [questionsKey, setQuestionsKey] = useState(0); // incremented to force QuestionsTab reload
   const [selectedSite] = useState(sites[0]?.id || "");
@@ -3518,29 +3738,66 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
     setApiKeyDec(k);
   }, [apiKeyEnc]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const GREEN = "#1A3C2E";
+
   return (
     <div>
-      {/* ── Header ── */}
+      {/* ── Header + onglets principaux Setup / Analyse ── */}
       <div style={{ marginBottom: 24 }}>
-        <div style={{ fontSize: 20, fontWeight: 800, color: C.text, marginBottom: 4 }}>🔍 Étude des Fan-outs</div>
-        <div style={{ fontSize: 12, color: C.textLight }}>Analysez la présence de vos marques dans les réponses ChatGPT</div>
-      </div>
-
-      {/* ── Config notice ── */}
-      <div style={{ background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 12, padding: "10px 16px", marginBottom: 20, display: "flex", alignItems: "center", gap: 10 }}>
-        <span style={{ fontSize: 16 }}>⚙️</span>
-        <div style={{ fontSize: 12, color: "#1D4ED8" }}>
-          Gestion des providers et configuration des marques disponibles dans <strong>⚙️ Setup → Section 5</strong>
+        <div style={{ fontSize: 20, fontWeight: 800, color: C.text, marginBottom: 16 }}>🔍 Fan-outs</div>
+        <div style={{ display: "flex", gap: 4, background: "#F1F5F9", borderRadius: 12, padding: 4 }}>
+          {[
+            { key: "setup",   label: "⚙️ Setup",           desc: "Configuration" },
+            { key: "analyse", label: "📊 Analyse Fan-outs", desc: "Mots-clés, questions, résultats" },
+          ].map(t => (
+            <button key={t.key} onClick={() => setMainTab(t.key)} style={{
+              flex: 1, padding: "10px 16px", borderRadius: 9, fontSize: 13, fontWeight: 700,
+              border: "none", cursor: "pointer", transition: "all 0.15s",
+              background: mainTab === t.key ? "#fff" : "transparent",
+              color: mainTab === t.key ? GREEN : C.textMid,
+              boxShadow: mainTab === t.key ? "0 2px 8px rgba(0,0,0,0.08)" : "none",
+            }}>
+              {t.label}
+            </button>
+          ))}
         </div>
       </div>
 
+      {/* ── Setup ── */}
+      {mainTab === "setup" && (
+        <FanoutSetupPanel
+          projects={projects}
+          currentProjectId={currentProjectId}
+          setCurrentProjectId={setCurrentProjectId}
+          setProjects={setProjects}
+          ownerEmail={ownerEmail}
+          sites={sites}
+          setSites={setSites}
+          smData={smData}
+          setSmData={setSmData}
+          dbHistory={dbHistory}
+          dbLoading={dbLoading}
+          refreshHistory={refreshHistory}
+          confirmModal={confirmModal}
+          setConfirmModal={setConfirmModal}
+          project={project}
+          projectId={projectId}
+          onSaveProviderKeys={(keyPatch) => {
+            setProjects?.(prev => prev.map(p => p.id === projectId ? { ...p, ...keyPatch } : p));
+            onSaveProviderKeys?.(keyPatch);
+          }}
+        />
+      )}
+
+      {/* ── Analyse Fan-outs ── */}
+      {mainTab === "analyse" && (<div>
 
       {/* ── Sub-nav ── */}
       <div style={{ display: "flex", gap: 6, marginBottom: 20 }}>
         {[
-          { key: "keywords",  label: "🔑 Mots-clés",         color: "#D97706", count: null },
-      { key: "automation", label: "⏰ Automatisation",     color: "#7C3AED", count: null },
+          { key: "keywords",  label: "🔑 Mots-clés",         color: "#D97706" },
           { key: "questions", label: "💬 Questions",          color: "#7C3AED" },
+          { key: "automation", label: "⏰ Automatisation",    color: "#7C3AED" },
           { key: "urls",      label: "🔗 Sources & Mentions", color: "#2563EB" },
         ].map(t => (
           <button key={t.key} onClick={() => setSubTab(t.key)} style={{
@@ -3606,6 +3863,8 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
           allResults={allResults.filter(r => r.site_id === site?.id)}
         />
       )}
+
+      </div>)} {/* end Analyse Fan-outs */}
     </div>
   );
 }

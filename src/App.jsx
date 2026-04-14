@@ -21,7 +21,6 @@ import ResetPasswordPage from "./components/ResetPasswordPage"; // ← AJOUTÉ
 import { getCurrentUser, authLogout } from "./lib/auth";
 
 const NAV_TABS = [
-  { key: "import",      label: "⚙️ Setup"            },
   { key: "geo",         label: "🔍 Fan-outs"         },
   { key: "geo_audit",   label: "📋 Audit GEO"        },
   { key: "pages",       label: "Vue par page"         },
@@ -36,6 +35,7 @@ const BURGER_TABS = [
   { key: "matrix",      label: "Matrice"             },
   { key: "semrush",     label: "📊 Semrush"          },
   { key: "allprojects", label: "◈ Tous les projets"  },
+  { key: "import",      label: "⚙️ Setup avancé"     },
 ];
 
 function NavBar({ tab, setTab, user, onLogout }) {
@@ -750,6 +750,19 @@ export default function App() {
               onSaveProviderKeys={(keyPatch) => {
                 setProjects(prev => prev.map(p => p.id === currentProjectId ? { ...p, ...keyPatch } : p));
               }}
+              projects={projects}
+              currentProjectId={currentProjectId}
+              setCurrentProjectId={setCurrentProjectId}
+              setProjects={setProjects}
+              ownerEmail={user?.email || null}
+              setSites={setSites}
+              smData={smData}
+              setSmData={setSmData}
+              dbHistory={dbHistory}
+              dbLoading={dbLoading}
+              refreshHistory={refreshHistory}
+              confirmModal={confirmModal}
+              setConfirmModal={setConfirmModal}
             />
           )}
 
