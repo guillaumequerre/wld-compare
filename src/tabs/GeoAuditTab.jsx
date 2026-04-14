@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { sbGetBrand, sbGetQuestions, sbGetGeoResults, sbGetUrlIndex,
   sbSaveProject, sbDeleteProject, sbDownload } from "../lib/supabase";
-import { ProviderConfigPanel, BrandConfigPanel } from "../components/GeoConfig";
+import { BrandConfigPanel } from "../components/GeoConfig";
 import UploadCard from "../components/UploadCard";
 import PageTypeClassifier from "../components/PageTypeClassifier";
 import { newProject, parseCSV } from "../lib/helpers";
