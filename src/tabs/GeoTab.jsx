@@ -3419,11 +3419,11 @@ function BrandConfigAccordion({ sites, projectId }) {
 }
 
 
-// ── FanoutSetupPanel compact ─────────────────────────────────────
+// ── FanoutSetupPanel — vue props-only, zéro état local projet ──────
 function SetupSection({ icon, title, children }) {
   return (
-    <div style={{ marginBottom: 14 }}>
-      <div style={{ fontSize: 12, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+    <div style={{ marginBottom: 18 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
         <span>{icon}</span>{title}
       </div>
       {children}
@@ -3432,78 +3432,86 @@ function SetupSection({ icon, title, children }) {
 }
 
 function FanoutSetupPanel({
-  projects = [], currentProjectId, setCurrentProjectId, setProjects, ownerEmail,
-  sites = [], setSites, smData = {}, setSmData,
-  dbHistory = [], dbLoading, refreshHistory, confirmModal, setConfirmModal,
+  projects, currentProjectId, setCurrentProjectId, setProjects, ownerEmail,
+  sites, setSites, smData, setSmData,
+  dbHistory, dbLoading, refreshHistory, confirmModal, setConfirmModal,
   project, projectId, onSaveProviderKeys,
-  axes = [], onSaveAxes, onAxesChange,
+  axes, onSaveAxes, onAxesChange,
 }) {
   const [showHistory, setShowHistory] = useState(false);
+
+  // Tout normalisé ici — jamais de .map() sur une valeur non-array
+  const safeProjects = Array.isArray(projects) ? projects : [];
+  const safeSites    = Array.isArray(sites)    ? sites    : [];
+  const safeHistory  = Array.isArray(dbHistory)? dbHistory: [];
+  const safeAxes     = Array.isArray(axes)     ? axes     : DEFAULT_AXES;
+
   const lastImports = {};
-  for (const row of (dbHistory || [])) {
-    const key = `${row.site_id}_${row.source}`;
-    if (!lastImports[key] && row.storage_path) lastImports[key] = row;
+  for (const row of safeHistory) {
+    const k = `${row.site_id}_${row.source}`;
+    if (!lastImports[k] && row.storage_path) lastImports[k] = row;
   }
-  const safeProjectId = currentProjectId || (projects||[])[0]?.id || "";
 
   return (
     <div style={{ maxWidth: 680 }}>
 
-      {/* ── Projet ── */}
+      {/* ── Projet actif ── */}
       <SetupSection icon="📁" title="Projet actif">
         <div style={{ background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 10, padding: "12px 16px" }}>
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <div style={{ position: "relative", flex: 1, minWidth: 180 }}>
-              <select value={safeProjectId} onChange={e => setCurrentProjectId(e.target.value)}
+              <select value={currentProjectId || ""} onChange={e => setCurrentProjectId(e.target.value)}
                 style={{ width: "100%", padding: "7px 28px 7px 10px", border: `1.5px solid ${C.blue}`, borderRadius: 8, fontSize: 13, fontWeight: 600, color: C.blue, background: C.blueLight, cursor: "pointer", appearance: "none" }}>
-                {(Array.isArray(projects) ? projects : []).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                {safeProjects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
               <span style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: C.blue, fontSize: 11 }}>▾</span>
             </div>
-            {(Array.isArray(projects) ? projects : []).length > 1 && (
-              <button onClick={() => setConfirmModal?.({ message: `Supprimer "${(Array.isArray(projects) ? projects : []).find(p=>p.id===safeProjectId)?.name}" ?`, onConfirm: () => {
-                sbDeleteProject(safeProjectId).catch(() => {});
-                setProjects(prev => { const next = prev.filter(x => x.id !== safeProjectId); if (next.length) setCurrentProjectId(next[0].id); return next; });
+            {safeProjects.length > 1 && (
+              <button onClick={() => setConfirmModal?.({ message: `Supprimer "${safeProjects.find(p => p.id === currentProjectId)?.name}" ?`, onConfirm: () => {
+                sbDeleteProject(currentProjectId).catch(() => {});
+                setProjects(prev => { const next = prev.filter(x => x.id !== currentProjectId); if (next.length) setCurrentProjectId(next[0].id); return next; });
               }})} style={{ padding: "6px 10px", border: "1px solid #FECACA", borderRadius: 7, background: "#FEF2F2", cursor: "pointer", fontSize: 11, color: "#DC2626" }}>🗑</button>
             )}
-            {(Array.isArray(projects) ? projects : []).length < 20 && (
+            {safeProjects.length < 20 && (
               <button onClick={() => {
-                const p = newProject(`Projet ${(Array.isArray(projects) ? projects : []).length + 1}`, [{ id: `site-${Date.now()}`, label: "Nouveau site", ...SITE_PALETTE[0] }], ownerEmail);
-                setProjects(prev => [...prev, p]); setCurrentProjectId(p.id); sbSaveProject(p).catch(() => {});
+                const p = newProject(`Projet ${safeProjects.length + 1}`, [{ id: `site-${Date.now()}`, label: "Nouveau site", ...SITE_PALETTE[0] }], ownerEmail);
+                setProjects(prev => [...prev, p]);
+                setCurrentProjectId(p.id);
+                sbSaveProject(p).catch(() => {});
               }} style={{ padding: "6px 10px", borderRadius: 7, border: `1.5px dashed ${C.blue}`, background: C.blueLight, color: C.blue, cursor: "pointer", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>+ Nouveau</button>
             )}
           </div>
 
-          {/* Sites inline */}
+          {/* Sites */}
           <div style={{ marginTop: 10, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-            {(Array.isArray(sites) ? sites : []).map(site => (
+            {safeSites.map(site => (
               <div key={site.id} style={{ display: "flex", alignItems: "center", gap: 5, padding: "4px 10px", borderRadius: 20, border: `1px solid ${site.color}44`, background: site.bg }}>
                 <div style={{ width: 7, height: 7, borderRadius: "50%", background: site.color, flexShrink: 0 }} />
-                <input value={site.label} onChange={e => setSites(prev => prev.map(s => s.id === site.id ? {...s, label: e.target.value} : s))}
+                <input value={site.label} onChange={e => setSites(prev => (Array.isArray(prev) ? prev : []).map(s => s.id === site.id ? {...s, label: e.target.value} : s))}
                   style={{ fontSize: 12, fontWeight: 600, color: site.color, border: "none", outline: "none", background: "transparent", width: 100 }} />
-                {(Array.isArray(sites) ? sites : []).length > 1 && (
+                {safeSites.length > 1 && (
                   <button onClick={() => setConfirmModal?.({ message: `Supprimer "${site.label}" ?`, onConfirm: () => {
-                    setSites(prev => prev.filter(s => s.id !== site.id));
+                    setSites(prev => (Array.isArray(prev) ? prev : []).filter(s => s.id !== site.id));
                     setSmData(p => { const n = {...p}; delete n[site.id]; return n; });
                   }})} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 10, color: "#DC2626", padding: 0 }}>✕</button>
                 )}
               </div>
             ))}
-            {(Array.isArray(sites) ? sites : []).length < 3 && (
+            {safeSites.length < 3 && (
               <button onClick={() => {
-                const palette = SITE_PALETTE[(Array.isArray(sites) ? sites : []).length] || SITE_PALETTE[0];
+                const palette = SITE_PALETTE[safeSites.length] || SITE_PALETTE[0];
                 const newId = `site-${Date.now()}`;
-                setSites(prev => [...prev, { id: newId, label: `Site ${(Array.isArray(prev) ? prev : []).length + 1}`, ...palette }]);
+                setSites(prev => [...(Array.isArray(prev) ? prev : []), { id: newId, label: `Site ${safeSites.length + 1}`, ...palette }]);
                 setSmData(p => ({...p, [newId]: []}));
               }} style={{ padding: "4px 10px", borderRadius: 20, border: `1px dashed ${C.border}`, background: "#fff", color: C.blue, cursor: "pointer", fontSize: 11, fontWeight: 600 }}>+ Site</button>
             )}
           </div>
 
-          {/* Historique compact */}
+          {/* Historique */}
           <div style={{ marginTop: 10, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <span style={{ fontSize: 11, color: C.textLight }}>
-              <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: dbLoading ? "#F59E0B" : (Array.isArray(dbHistory) ? dbHistory : []).length > 0 ? "#059669" : "#CBD5E1", marginRight: 5 }} />
-              {dbLoading ? "Chargement…" : `${(Array.isArray(dbHistory) ? dbHistory : []).length} imports en base`}
+              <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: dbLoading ? "#F59E0B" : safeHistory.length > 0 ? "#059669" : "#CBD5E1", marginRight: 5 }} />
+              {dbLoading ? "Chargement…" : `${safeHistory.length} imports en base`}
             </span>
             <button onClick={() => { setShowHistory(h => !h); refreshHistory?.(); }}
               style={{ fontSize: 11, color: showHistory ? C.blue : C.textLight, background: "none", border: "none", cursor: "pointer", padding: 0 }}>
@@ -3512,13 +3520,13 @@ function FanoutSetupPanel({
           </div>
           {showHistory && (
             <div style={{ marginTop: 8, maxHeight: 140, overflowY: "auto", display: "flex", flexDirection: "column", gap: 3 }}>
-              {(Array.isArray(dbHistory) ? dbHistory : []).slice(0, 20).map(row => {
-                const site = (Array.isArray(sites) ? sites : []).find(s => s.id === row.site_id);
-                const srcLabel = { sf:"🐸 SF", gsc:"🔍 GSC", ga:"📊 GA4", bing:"🤖 Bing", sm:"📈 SM" }[row.source] || row.source;
+              {safeHistory.slice(0, 20).map(row => {
+                const site = safeSites.find(s => s.id === row.site_id);
+                const lbl = { sf:"🐸 SF", gsc:"🔍 GSC", ga:"📊 GA4", bing:"🤖 Bing", sm:"📈 SM" }[row.source] || row.source;
                 return (
                   <div key={row.id} style={{ display: "flex", gap: 8, padding: "4px 8px", background: C.bg, borderRadius: 5, fontSize: 10, alignItems: "center" }}>
                     <span style={{ color: site?.color || C.text, fontWeight: 600, minWidth: 60 }}>{site?.label || "—"}</span>
-                    <span style={{ color: C.textMid }}>{srcLabel}</span>
+                    <span style={{ color: C.textMid }}>{lbl}</span>
                     <span style={{ color: C.textLight, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.filename}</span>
                   </div>
                 );
@@ -3531,7 +3539,7 @@ function FanoutSetupPanel({
       {/* ── Import Semrush ── */}
       <SetupSection icon="📈" title="Import Semrush — volumes de recherche">
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          {(Array.isArray(sites) ? sites : []).map(site => (
+          {safeSites.map(site => (
             <div key={site.id} style={{ flex: "1 1 200px", background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 10, padding: "10px 14px" }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: site.color, marginBottom: 8 }}>{site.label}</div>
               <UploadCard label="Semrush" icon="📈" hint="Organic pages export" color={site.color}
@@ -3555,7 +3563,7 @@ function FanoutSetupPanel({
       {/* ── Clés API providers ── */}
       <SetupSection icon="🔑" title="Clés API — providers IA">
         <div style={{ background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 10, padding: "12px 16px" }}>
-          <ProviderConfigPanel project={project} projectId={projectId} sites={sites} onSaveProviderKeys={onSaveProviderKeys} />
+          <ProviderConfigPanel project={project} projectId={projectId} sites={safeSites} onSaveProviderKeys={onSaveProviderKeys} />
         </div>
       </SetupSection>
 
@@ -3566,28 +3574,22 @@ function FanoutSetupPanel({
             Chaque mot-clé génère une question par axe. Adaptez les angles à votre secteur.
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {(Array.isArray(axes) ? axes : []).map((a, i) => (
+            {safeAxes.map((a, i) => (
               <div key={i} style={{ display: "flex", gap: 6, alignItems: "center" }}>
                 <span style={{ fontSize: 11, color: "#94A3B8", minWidth: 18, flexShrink: 0 }}>{i + 1}.</span>
-                <input value={a} onChange={e => {
-                  const updated = [...(Array.isArray(axes) ? axes : [])];
-                  updated[i] = e.target.value;
-                  onAxesChange?.(updated);
-                }}
+                <input value={a} onChange={e => { const u = [...safeAxes]; u[i] = e.target.value; onAxesChange?.(u); }}
                   style={{ flex: 1, padding: "5px 9px", border: "1px solid #E2E8F0", borderRadius: 7, fontSize: 12, color: "#1E293B" }} />
-                <button onClick={() => {
-                  const updated = (Array.isArray(axes) ? axes : []).filter((_, j) => j !== i);
-                  onAxesChange?.(updated);
-                }} style={{ fontSize: 11, color: "#94A3B8", background: "none", border: "none", cursor: "pointer", padding: "0 4px", flexShrink: 0 }}>✕</button>
+                <button onClick={() => onAxesChange?.(safeAxes.filter((_, j) => j !== i))}
+                  style={{ fontSize: 11, color: "#94A3B8", background: "none", border: "none", cursor: "pointer", padding: "0 4px", flexShrink: 0 }}>✕</button>
               </div>
             ))}
-            <button onClick={() => onAxesChange?.([...(Array.isArray(axes) ? axes : []), ""])}
+            <button onClick={() => onAxesChange?.([...safeAxes, ""])}
               style={{ fontSize: 11, color: "#2563EB", background: "none", border: "1px dashed #E2E8F0", borderRadius: 7, padding: "5px 12px", cursor: "pointer", textAlign: "left", marginTop: 2 }}>
               + Ajouter un axe
             </button>
           </div>
           <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end" }}>
-            <button onClick={async () => { if (onSaveAxes) await onSaveAxes(axes); }}
+            <button onClick={async () => { if (onSaveAxes) await onSaveAxes(safeAxes); }}
               style={{ padding: "6px 16px", background: "#1A3C2E", color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
               💾 Sauvegarder les axes
             </button>
@@ -3597,7 +3599,7 @@ function FanoutSetupPanel({
 
       {/* ── Configuration marques ── */}
       <SetupSection icon="🏷️" title="Configuration des marques">
-        <BrandConfigAccordion sites={sites} projectId={projectId} />
+        <BrandConfigAccordion sites={safeSites} projectId={projectId} />
       </SetupSection>
 
     </div>
@@ -3758,7 +3760,6 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
       {/* ── Setup ── */}
       {mainTab === "setup" && (
         <FanoutSetupPanel
-          key={currentProjectId}
           projects={projects}
           currentProjectId={currentProjectId}
           setCurrentProjectId={setCurrentProjectId}

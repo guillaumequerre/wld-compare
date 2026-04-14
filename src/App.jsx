@@ -286,7 +286,17 @@ export default function App() {
     (async () => {
       setDbLoading(true);
       try {
-        const currentUser = getCurrentUser();
+        // Retry jusqu'à 3 fois avec 300ms d'intervalle — gère la race condition
+        // où sessionStorage n'est pas encore lisible au premier mount
+        let currentUser = getCurrentUser();
+        if (!currentUser) {
+          await new Promise(r => setTimeout(r, 300));
+          currentUser = getCurrentUser();
+        }
+        if (!currentUser) {
+          await new Promise(r => setTimeout(r, 500));
+          currentUser = getCurrentUser();
+        }
         if (!currentUser) {
           setDbLoading(false);
           return;
@@ -358,8 +368,13 @@ export default function App() {
     })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Ne recharge les données que si le projet est CHANGÉ par l'utilisateur
+  // (pas au chargement initial — déjà fait dans le useEffect [])
+  const initialLoadDoneRef = useRef(false);
   useEffect(() => {
     if (!currentProjectId) return;
+    // Premier passage = juste après le chargement initial, skip
+    if (!initialLoadDoneRef.current) { initialLoadDoneRef.current = true; return; }
     (async () => {
       setDbLoading(true);
       try { await loadProjectData(currentProjectId); }
@@ -568,6 +583,7 @@ export default function App() {
               onGoAudit={() => goTo("geo_audit")}
               onLogin={async (u) => {
                 setUser(u);
+                setDbLoading(true);
                 try {
                   const { sbLoadAccessibleProjects: loadAP } = await import("./lib/auth");
                   const ps = await loadAP(u.email);
@@ -577,11 +593,40 @@ export default function App() {
                       sfData: emptyDataMap(p.sites), gscData: emptyDataMap(p.sites),
                       gaData: emptyDataMap(p.sites), bingData: emptyDataMap(p.sites), smData: emptyDataMap(p.sites),
                     }));
-                    setProjects(restored);
-                    setCurrentProjectId(restored[0].id);
+                    // Charger les données CSV en parallèle pour tous les projets
+                    const allData = await Promise.all(restored.map(async (p) => {
+                      try {
+                        const [latest, history] = await Promise.all([sbGetLatest(p.id), sbGetHistory(p.id)]);
+                        if (p.id === restored[0].id) setDbHistory(history);
+                        const updates = await Promise.all(Object.values(latest).map(async (row) => {
+                          try {
+                            const text = await sbDownload(row.storage_path);
+                            const src = row.source;
+                            const key = src === "sf" ? "sfData" : src === "gsc" ? "gscData" : src === "ga" ? "gaData" : src === "bing" ? "bingData" : src === "sm" ? "smData" : null;
+                            if (!key) return null;
+                            const rows = src === "sm" ? parseSemrush(parseSemrushCSV(text)) : parseCSV(text);
+                            return { key, sid: row.site_id, rows };
+                          } catch(e) { return null; }
+                        }));
+                        return { id: p.id, valid: updates.filter(Boolean) };
+                      } catch(e) { return { id: p.id, valid: [] }; }
+                    }));
+                    // Construire les projets chargés en une seule mise à jour
+                    const loaded = restored.map(p => {
+                      const { valid } = allData.find(d => d.id === p.id) || { valid: [] };
+                      const patch = {};
+                      const siteIds = new Set(p.sites.map(s => s.id));
+                      for (const { key, sid, rows } of valid) {
+                        if (siteIds.has(sid)) patch[key] = { ...(patch[key] || p[key]), [sid]: rows };
+                      }
+                      return { ...p, ...patch };
+                    });
+                    setProjects(loaded);
+                    setCurrentProjectId(loaded[0].id);
                   }
                 } catch(e) { console.warn("Project reload failed:", e); }
-                goTo("import");
+                finally { setDbLoading(false); }
+                goTo("geo");
               }}
               onLogout={() => { authLogout(); setUser(null); }}
               onSelectProject={(id) => { setCurrentProjectId(id); setTab("geo"); }}
@@ -775,6 +820,26 @@ export default function App() {
               metrics={metrics}
               resultVals={resultVals}
               bingData={bingData}
+              projects={projects}
+              currentProjectId={currentProjectId}
+              setCurrentProjectId={setCurrentProjectId}
+              setProjects={setProjects}
+              ownerEmail={user?.email || null}
+              setSites={setSites}
+              sfData={sfData}
+              setSfData={setSfData}
+              gscData={gscData}
+              setGscData={setGscData}
+              gaData={gaData}
+              setGaData={setGaData}
+              setBingData={setBingData}
+              dbHistory={dbHistory}
+              dbLoading={dbLoading}
+              refreshHistory={refreshHistory}
+              confirmModal={confirmModal}
+              setConfirmModal={setConfirmModal}
+              pageTypes={pageTypes}
+              setPageTypes={setPageTypes}
             />
           )}
 
