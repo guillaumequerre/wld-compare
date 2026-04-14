@@ -1,17 +1,10 @@
 // components/TutorialModal.jsx
-// Guide interactif pour nouveaux utilisateurs — 2 parcours
-// Usage dans HomeTab :
-//   import TutorialModal from "../components/TutorialModal";
-//   {showTutorial && <TutorialModal onClose={() => setShowTutorial(false)} onNavigate={(tab) => { onGoSetup(); ... }} />}
-
 import { useState } from "react";
 
-const GREEN      = "#1A3C2E";
-const GREEN_LITE = "#EAF0EC";
-const GREEN_MED  = "#B2CCBC";
-const CREAM      = "#F7F4EF";
-
-// ── Données des parcours ──────────────────────────────────────────
+const GREEN       = "#1A3C2E";
+const GREEN_LITE  = "#EAF0EC";
+const GREEN_MED   = "#B2CCBC";
+const CREAM       = "#F7F4EF";
 
 const TRACKS = [
   {
@@ -22,57 +15,33 @@ const TRACKS = [
     color: GREEN,
     steps: [
       {
-        num: 1,
-        title: "Créez votre projet",
-        icon: "📁",
-        desc: "Dans l'onglet ⚙️ Setup, cliquez sur \"+ Nouveau projet\" et donnez-lui un nom.",
-        detail: "Un projet regroupe tous vos sites, imports et données. Vous pourrez en créer plusieurs.",
-        action: "Aller dans Setup →",
-        tab: "import",
-        tip: "Nommez votre projet par client ou domaine (ex : \"Acme - SEO 2025\")",
+        num: 1, icon: "📁", title: "Créez votre projet",
+        desc: "Dans 📋 Audit GEO → onglet ⚙️ Setup, section « Projet actif », cliquez sur « + Nouveau ».",
+        detail: "Un projet regroupe tous vos sites et données. Donnez-lui un nom parlant (ex : « Acme - 2025 »).",
+        action: "Ouvrir Audit GEO →", tab: "geo_audit",
+        tip: "Le projet est partageable avec des collaborateurs depuis le menu ☰ → Compte & projets",
       },
       {
-        num: 2,
-        title: "Ajoutez vos sites",
-        icon: "🌐",
-        desc: "Dans Setup → section Sites, ajoutez les domaines à analyser.",
-        detail: "Chaque site peut recevoir ses propres imports (Screaming Frog, GSC, GA4…).",
+        num: 2, icon: "🌐", title: "Ajoutez vos sites",
+        desc: "Dans ⚙️ Setup, cliquez sur « + Site » pour ajouter les domaines à analyser.",
+        detail: "Chaque site peut recevoir ses propres imports CSV. Max 3 sites par projet.",
         action: null,
-        tip: "Commencez avec 1 seul site pour votre première prise en main",
+        tip: "Renommez les sites avec des noms courts (ex : « Acme FR »)",
       },
       {
-        num: 3,
-        title: "Importez vos données",
-        icon: "📥",
-        desc: "Glissez vos exports CSV : Screaming Frog, Google Search Console, GA4, Bing Webmaster.",
-        detail: "Au minimum, importez un export Screaming Frog (.csv) pour obtenir un audit. Les autres sources enrichissent l'analyse.",
+        num: 3, icon: "📥", title: "Importez vos données",
+        desc: "Dans ⚙️ Setup → « Imports CSV », glissez-déposez vos exports : Screaming Frog, GSC, GA4, Bing.",
+        detail: "Screaming Frog est indispensable pour l'audit. GSC et GA4 enrichissent l'analyse croisée SEO × GEO.",
         action: null,
-        tip: "SF : export complet en UTF-8 · GSC : export 3 mois · GA4 : export pages",
-        links: [
-          { label: "Screaming Frog", url: "https://www.screamingfrog.co.uk/seo-spider/" },
-        ],
+        tip: "SF : export complet UTF-8 · GSC : 3 mois de données · Le bouton ↩ recharge le dernier import",
+        links: [{ label: "Screaming Frog", url: "https://www.screamingfrog.co.uk/seo-spider/" }],
       },
       {
-        num: 4,
-        title: "Configurez les clés API",
-        icon: "🔑",
-        desc: "Dans Setup → section Providers, collez votre clé API Claude (et optionnellement OpenAI, Gemini…).",
-        detail: "La clé Claude est indispensable pour la génération des recommandations d'audit GEO.",
-        action: null,
-        tip: "Clé Claude → platform.claude.com/settings/keys",
-        links: [
-          { label: "Obtenir une clé Claude", url: "https://platform.claude.com/settings/keys" },
-        ],
-      },
-      {
-        num: 5,
-        title: "Lancez l'audit",
-        icon: "🚀",
-        desc: "Rendez-vous dans l'onglet 📋 Audit GEO et cliquez sur \"Générer l'audit\".",
-        detail: "L'IA analyse vos données et produit un rapport avec chiffres clés, recommandations priorisées et opportunités GEO.",
-        action: "Voir Audit GEO →",
-        tab: "geo_audit",
-        tip: "L'audit prend 30–60 secondes selon le volume de données",
+        num: 4, icon: "🚀", title: "Générez l'audit",
+        desc: "Passez sur l'onglet 📋 Génération Audit GEO. Si vous avez des données Fan-outs, l'audit est immédiat.",
+        detail: "L'audit analyse présence marque, concurrents, URLs à optimiser et génère des pistes d'action. Cliquez « ✦ Générer l'analyse IA » pour le rapport complet.",
+        action: "Voir Audit GEO →", tab: "geo_audit",
+        tip: "L'analyse IA nécessite une clé Claude — configurez-la dans 🔍 Fan-outs → ⚙️ Setup → Clés API",
       },
     ],
   },
@@ -84,61 +53,50 @@ const TRACKS = [
     color: "#059669",
     steps: [
       {
-        num: 1,
-        title: "Configurez la marque",
-        icon: "🏷️",
-        desc: "Dans ⚙️ Setup → section Marque, renseignez le nom de votre marque, son domaine et vos concurrents.",
-        detail: "Ces informations permettent à l'outil de détecter automatiquement la présence de votre marque dans les réponses des IA.",
-        action: "Aller dans Setup →",
-        tab: "import",
-        tip: "Ajoutez aussi vos alias (ex : \"Acme\" + \"Acme.fr\" + \"Acme Technologies\")",
+        num: 1, icon: "🔑", title: "Configurez les providers",
+        desc: "Dans 🔍 Fan-outs → ⚙️ Setup → « Clés API providers », collez vos clés OpenAI, Claude, Gemini et/ou Perplexity.",
+        detail: "Chaque provider interrogé donne une vision différente. Claude est aussi utilisé pour les hints et analyses.",
+        action: "Ouvrir Fan-outs →", tab: "geo",
+        tip: "Clé Claude → platform.claude.com/settings/keys · Clé OpenAI → platform.openai.com/api-keys",
+        links: [
+          { label: "Claude API", url: "https://platform.claude.com/settings/keys" },
+          { label: "OpenAI API", url: "https://platform.openai.com/api-keys" },
+        ],
       },
       {
-        num: 2,
-        title: "Ajoutez des mots-clés",
-        icon: "🔑",
-        desc: "Dans 🔍 Fan-outs → onglet Mots-clés, saisissez vos mots-clés cibles (un par ligne) et cliquez Ajouter.",
-        detail: "Les mots-clés sont la base de l'analyse. Choisissez des requêtes sur lesquelles vous souhaitez apparaître dans ChatGPT, Gemini ou Perplexity.",
-        action: "Aller dans Fan-outs →",
-        tab: "geo",
-        tip: "Commencez par 5–10 mots-clés stratégiques, vous pourrez en ajouter ensuite",
-      },
-      {
-        num: 3,
-        title: "Générez les questions",
-        icon: "💬",
-        desc: "Cliquez sur \"💬 Générer toutes les questions\". L'IA crée automatiquement des questions pertinentes pour chaque mot-clé.",
-        detail: "5 questions par mot-clé sont générées selon des axes prédéfinis (meilleur, recommandé, avis…). Vous pouvez modifier ces axes.",
+        num: 2, icon: "🏷️", title: "Configurez la marque",
+        desc: "Dans ⚙️ Setup → « Configuration des marques », renseignez le nom, le domaine, les alias et vos concurrents.",
+        detail: "Ces infos permettent de détecter automatiquement la présence de votre marque dans les réponses IA.",
         action: null,
-        tip: "Nécessite une clé OpenAI configurée dans Setup → Providers",
+        tip: "Ajoutez tous les alias : « Acme », « acme.fr », « Acme Technologies »",
       },
       {
-        num: 4,
-        title: "Interrogez les IA",
-        icon: "🤖",
-        desc: "Dans l'onglet Questions, cliquez sur \"▶ Lancer tout\" pour interroger tous les providers configurés.",
-        detail: "Chaque question est envoyée à OpenAI, Gemini, Perplexity et/ou Claude. La réponse est analysée pour détecter votre marque.",
-        action: "Voir les questions →",
-        tab: "geo",
-        tip: "Activez au moins 2 providers pour comparer les résultats entre IA",
+        num: 3, icon: "🔑", title: "Ajoutez des mots-clés",
+        desc: "Dans 🔍 Fan-outs → 🔑 Mots-clés, saisissez vos mots-clés cibles et cliquez Ajouter.",
+        detail: "Les mots-clés sont la base de l'analyse. Choisissez des requêtes sur lesquelles vous voulez apparaître dans ChatGPT, Gemini ou Perplexity.",
+        action: "Voir Fan-outs →", tab: "geo",
+        tip: "Commencez par 5–10 mots-clés stratégiques. Importez Semrush pour avoir les volumes de recherche.",
       },
       {
-        num: 5,
-        title: "Analysez les résultats",
-        icon: "📊",
-        desc: "Consultez le tableau de bord : % de présence, position moyenne, questions où vous ressortez.",
-        detail: "Utilisez les filtres \"📍 Positionnée\" et \"📉 Positionnée précédemment\" pour identifier vos opportunités. Générez un export PDF ou CSV.",
+        num: 4, icon: "💬", title: "Générez les questions",
+        desc: "Cliquez « 💬 Générer toutes les questions ». L'IA crée 5 questions par mot-clé selon différents angles.",
+        detail: "Les questions couvrent les intentions : recommandation, comparaison, avis, résolution de problème…",
         action: null,
-        tip: "Cliquez 💡 Générer un Hint sur chaque question pour obtenir des recommandations d'optimisation",
+        tip: "Personnalisez les axes de questions dans ⚙️ Setup si votre secteur a des angles spécifiques",
+      },
+      {
+        num: 5, icon: "🤖", title: "Lancez les fan-outs",
+        desc: "Dans l'onglet 💬 Questions, cliquez « ▶ Lancer tout » pour interroger tous les providers configurés.",
+        detail: "Chaque question est envoyée aux IA. La réponse est analysée automatiquement pour détecter votre marque, sa position et vos concurrents.",
+        action: null,
+        tip: "Utilisez les filtres 📍 Positionnée et 📉 Positionnée précédemment pour prioriser vos actions. Le bouton 📤 Exporter génère CSV et PDF.",
       },
     ],
   },
 ];
 
-// ── Composant principal ───────────────────────────────────────────
-
 export default function TutorialModal({ onClose, onNavigate }) {
-  const [track, setTrack] = useState(null);   // null = choix du parcours
+  const [track, setTrack] = useState(null);
   const [step, setStep]   = useState(0);
 
   const currentTrack = track ? TRACKS.find(t => t.id === track) : null;
@@ -149,227 +107,122 @@ export default function TutorialModal({ onClose, onNavigate }) {
   const reset = () => { setTrack(null); setStep(0); };
 
   return (
-    <div
-      onClick={e => { if (e.target === e.currentTarget) onClose(); }}
-      style={{
-        position: "fixed", inset: 0, zIndex: 2000,
-        background: "rgba(0,0,0,0.5)",
-        display: "flex", alignItems: "center", justifyContent: "center",
-        padding: 20,
-        backdropFilter: "blur(2px)",
-      }}
-    >
-      <div style={{
-        background: "#fff",
-        borderRadius: 20,
-        width: "100%", maxWidth: 560,
-        boxShadow: "0 24px 80px rgba(0,0,0,0.2)",
-        overflow: "hidden",
-        position: "relative",
-      }}>
+    <div onClick={e => { if (e.target === e.currentTarget) onClose(); }}
+      style={{ position: "fixed", inset: 0, zIndex: 2000, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, backdropFilter: "blur(2px)" }}>
+      <div style={{ background: "#fff", borderRadius: 18, width: "100%", maxWidth: 520, boxShadow: "0 20px 60px rgba(0,0,0,0.18)", overflow: "hidden" }}>
 
-        {/* ── Header ── */}
-        <div style={{
-          background: GREEN, padding: "20px 28px 18px",
-          display: "flex", alignItems: "center", justifyContent: "space-between",
-        }}>
+        {/* Header */}
+        <div style={{ background: GREEN, padding: "16px 22px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            {track && (
-              <button onClick={reset} style={{ background: "none", border: "none", cursor: "pointer", color: "#F0EBE0", fontSize: 18, lineHeight: 1, opacity: 0.7, padding: "0 4px 0 0" }}>←</button>
-            )}
-            <div style={{ width: 32, height: 32, background: "#F0EBE0", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <span style={{ color: GREEN, fontSize: 16, fontWeight: 900, fontStyle: "italic" }}>S</span>
+            {track && <button onClick={reset} style={{ background: "none", border: "none", cursor: "pointer", color: "#F0EBE0", fontSize: 16, opacity: 0.7, padding: 0, marginRight: 4 }}>←</button>}
+            <div style={{ width: 28, height: 28, background: "#F0EBE0", borderRadius: 7, display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <span style={{ color: GREEN, fontSize: 13, fontWeight: 900, fontStyle: "italic" }}>S</span>
             </div>
             <div>
-              <div style={{ color: "#F0EBE0", fontSize: 10, fontWeight: 600, letterSpacing: 1.5, textTransform: "uppercase", opacity: 0.7 }}>
+              <div style={{ color: "#F0EBE0", fontSize: 9, fontWeight: 600, letterSpacing: 1.2, textTransform: "uppercase", opacity: 0.7 }}>
                 {track ? `${currentTrack.icon} ${currentTrack.label}` : "Dashboard GEO par Sonate"}
               </div>
-              <div style={{ color: "#fff", fontSize: 15, fontWeight: 700 }}>
-                {track ? `Étape ${step + 1} sur ${totalSteps}` : "Guide de démarrage"}
+              <div style={{ color: "#fff", fontSize: 13, fontWeight: 700 }}>
+                {track ? `Étape ${step + 1} / ${totalSteps}` : "Guide de démarrage"}
               </div>
             </div>
           </div>
-          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: "#fff", fontSize: 22, opacity: 0.7, lineHeight: 1 }}>✕</button>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: "#fff", fontSize: 18, opacity: 0.7 }}>✕</button>
         </div>
 
-        {/* ── Barre de progression (si parcours actif) ── */}
+        {/* Progress bar */}
         {track && (
           <div style={{ height: 3, background: GREEN_LITE }}>
-            <div style={{
-              height: "100%",
-              width: `${((step + 1) / totalSteps) * 100}%`,
-              background: currentTrack.color,
-              transition: "width 0.4s ease",
-            }} />
+            <div style={{ height: "100%", width: `${((step + 1) / totalSteps) * 100}%`, background: currentTrack.color, transition: "width 0.3s" }} />
           </div>
         )}
 
-        {/* ── Contenu ── */}
-        <div style={{ padding: "28px 28px 24px" }}>
+        {/* Content */}
+        <div style={{ padding: "22px 24px" }}>
 
-          {/* Choix du parcours */}
+          {/* Track selection */}
           {!track && (
             <div>
-              <p style={{ fontSize: 14, color: "#64748B", marginBottom: 24, lineHeight: 1.6 }}>
-                Choisissez votre parcours selon votre objectif du moment. Vous pouvez y revenir à tout moment.
+              <p style={{ fontSize: 13, color: "#64748B", marginBottom: 18, lineHeight: 1.5 }}>
+                Choisissez votre parcours selon votre objectif.
               </p>
-              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 {TRACKS.map(t => (
                   <button key={t.id} onClick={() => { setTrack(t.id); setStep(0); }}
-                    style={{
-                      display: "flex", alignItems: "center", gap: 16,
-                      padding: "18px 20px",
-                      border: `2px solid ${GREEN_MED}`,
-                      borderRadius: 14, background: CREAM,
-                      cursor: "pointer", textAlign: "left",
-                      transition: "all 0.15s",
-                    }}
+                    style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 16px", border: `1.5px solid ${GREEN_MED}`, borderRadius: 12, background: CREAM, cursor: "pointer", textAlign: "left", transition: "all 0.15s" }}
                     onMouseEnter={e => { e.currentTarget.style.borderColor = t.color; e.currentTarget.style.background = GREEN_LITE; }}
-                    onMouseLeave={e => { e.currentTarget.style.borderColor = GREEN_MED; e.currentTarget.style.background = CREAM; }}
-                  >
-                    <div style={{
-                      width: 52, height: 52, flexShrink: 0,
-                      background: t.color + "18",
-                      borderRadius: 12,
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      fontSize: 26,
-                    }}>{t.icon}</div>
+                    onMouseLeave={e => { e.currentTarget.style.borderColor = GREEN_MED; e.currentTarget.style.background = CREAM; }}>
+                    <div style={{ width: 44, height: 44, flexShrink: 0, background: t.color + "18", borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>{t.icon}</div>
                     <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 15, fontWeight: 700, color: "#0F172A", marginBottom: 3 }}>{t.label}</div>
-                      <div style={{ fontSize: 12, color: "#64748B", lineHeight: 1.5 }}>{t.tagline}</div>
-                      <div style={{ display: "flex", gap: 4, marginTop: 6, flexWrap: "wrap" }}>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: "#0F172A", marginBottom: 2 }}>{t.label}</div>
+                      <div style={{ fontSize: 12, color: "#64748B" }}>{t.tagline}</div>
+                      <div style={{ display: "flex", gap: 3, marginTop: 5, flexWrap: "wrap" }}>
                         {t.steps.map((s, i) => (
-                          <span key={i} style={{ fontSize: 10, background: t.color + "18", color: t.color, borderRadius: 10, padding: "1px 7px", fontWeight: 600 }}>
-                            {s.num}. {s.title}
-                          </span>
+                          <span key={i} style={{ fontSize: 9, background: t.color + "18", color: t.color, borderRadius: 8, padding: "1px 6px", fontWeight: 600 }}>{s.num}. {s.title}</span>
                         ))}
                       </div>
                     </div>
-                    <span style={{ color: GREEN_MED, fontSize: 20 }}>→</span>
+                    <span style={{ color: GREEN_MED, fontSize: 18 }}>→</span>
                   </button>
                 ))}
               </div>
-              <div style={{ marginTop: 20, padding: "12px 16px", background: GREEN_LITE, borderRadius: 10, fontSize: 12, color: GREEN, display: "flex", gap: 8 }}>
+              <div style={{ marginTop: 16, padding: "10px 14px", background: GREEN_LITE, borderRadius: 8, fontSize: 11, color: GREEN, display: "flex", gap: 7 }}>
                 <span>💡</span>
-                <span>Nouveau sur l'outil ? Commencez par <strong>Fan-outs</strong> pour un résultat rapide, ou par <strong>Audit GEO</strong> si vous avez déjà des exports Screaming Frog.</span>
+                <span>Nouveau ? Commencez par <strong>Fan-outs</strong> pour un résultat rapide, ou <strong>Audit GEO</strong> si vous avez déjà des exports SF.</span>
               </div>
             </div>
           )}
 
-          {/* Étape du parcours */}
+          {/* Step content */}
           {track && currentStep && (
             <div>
-              {/* Icône + titre */}
-              <div style={{ display: "flex", gap: 14, alignItems: "flex-start", marginBottom: 20 }}>
-                <div style={{
-                  width: 56, height: 56, flexShrink: 0,
-                  background: currentTrack.color + "18",
-                  borderRadius: 14,
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  fontSize: 28,
-                }}>{currentStep.icon}</div>
+              <div style={{ display: "flex", gap: 12, alignItems: "flex-start", marginBottom: 16 }}>
+                <div style={{ width: 46, height: 46, flexShrink: 0, background: currentTrack.color + "18", borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>{currentStep.icon}</div>
                 <div>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: currentTrack.color, textTransform: "uppercase", letterSpacing: 1, marginBottom: 3 }}>
-                    Étape {currentStep.num}
-                  </div>
-                  <h2 style={{ fontSize: 20, fontWeight: 800, color: "#0F172A", margin: 0, lineHeight: 1.2 }}>
-                    {currentStep.title}
-                  </h2>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: currentTrack.color, textTransform: "uppercase", letterSpacing: 1, marginBottom: 2 }}>Étape {currentStep.num}</div>
+                  <h2 style={{ fontSize: 17, fontWeight: 800, color: "#0F172A", margin: 0, lineHeight: 1.2 }}>{currentStep.title}</h2>
                 </div>
               </div>
-
-              {/* Description */}
-              <p style={{ fontSize: 14, color: "#374151", lineHeight: 1.7, marginBottom: 12 }}>
-                {currentStep.desc}
-              </p>
-              <p style={{ fontSize: 13, color: "#64748B", lineHeight: 1.6, marginBottom: 16 }}>
-                {currentStep.detail}
-              </p>
-
-              {/* Tip */}
-              <div style={{ background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 10, padding: "10px 14px", fontSize: 12, color: "#92400E", display: "flex", gap: 8, marginBottom: currentStep.links?.length ? 12 : 0 }}>
-                <span style={{ flexShrink: 0 }}>💡</span>
-                <span>{currentStep.tip}</span>
+              <p style={{ fontSize: 13, color: "#374151", lineHeight: 1.6, marginBottom: 10 }}>{currentStep.desc}</p>
+              <p style={{ fontSize: 12, color: "#64748B", lineHeight: 1.6, marginBottom: 12 }}>{currentStep.detail}</p>
+              <div style={{ background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 8, padding: "8px 12px", fontSize: 11, color: "#92400E", display: "flex", gap: 7 }}>
+                <span style={{ flexShrink: 0 }}>💡</span><span>{currentStep.tip}</span>
               </div>
-
-              {/* Liens externes */}
               {currentStep.links?.length > 0 && (
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
                   {currentStep.links.map((l, i) => (
                     <a key={i} href={l.url} target="_blank" rel="noopener noreferrer"
-                      style={{ fontSize: 11, fontWeight: 600, color: currentTrack.color, background: currentTrack.color + "12", border: `1px solid ${currentTrack.color}44`, borderRadius: 8, padding: "4px 10px", textDecoration: "none" }}>
+                      style={{ fontSize: 11, fontWeight: 600, color: currentTrack.color, background: currentTrack.color + "12", border: `1px solid ${currentTrack.color}33`, borderRadius: 6, padding: "3px 9px", textDecoration: "none" }}>
                       🔗 {l.label} ↗
                     </a>
                   ))}
                 </div>
               )}
-
-              {/* Pastilles étapes */}
-              <div style={{ display: "flex", gap: 6, justifyContent: "center", marginTop: 24, marginBottom: 4 }}>
+              {/* Step dots */}
+              <div style={{ display: "flex", gap: 5, justifyContent: "center", marginTop: 20 }}>
                 {currentTrack.steps.map((_, i) => (
-                  <button key={i} onClick={() => setStep(i)}
-                    style={{
-                      width: i === step ? 24 : 8, height: 8,
-                      borderRadius: 4, border: "none",
-                      background: i === step ? currentTrack.color : i < step ? currentTrack.color + "55" : "#E2E8F0",
-                      cursor: "pointer", transition: "all 0.2s",
-                      padding: 0,
-                    }}
-                  />
+                  <button key={i} onClick={() => setStep(i)} style={{ width: i === step ? 20 : 7, height: 7, borderRadius: 4, border: "none", background: i === step ? currentTrack.color : i < step ? currentTrack.color + "55" : "#E2E8F0", cursor: "pointer", transition: "all 0.2s", padding: 0 }} />
                 ))}
               </div>
             </div>
           )}
         </div>
 
-        {/* ── Footer navigation ── */}
+        {/* Footer navigation */}
         {track && (
-          <div style={{
-            padding: "16px 28px 20px",
-            borderTop: "1px solid #F1F5F9",
-            display: "flex", alignItems: "center", gap: 10,
-          }}>
-            {/* Bouton précédent */}
-            <button
-              onClick={() => setStep(s => s - 1)}
-              disabled={step === 0}
-              style={{
-                padding: "9px 16px", borderRadius: 9, fontSize: 13, fontWeight: 600,
-                border: "1px solid #E2E8F0", background: "transparent",
-                color: step === 0 ? "#CBD5E1" : "#64748B",
-                cursor: step === 0 ? "not-allowed" : "pointer",
-              }}
-            >← Précédent</button>
-
-            {/* Bouton navigation vers l'onglet */}
+          <div style={{ padding: "12px 24px 18px", borderTop: "1px solid #F1F5F9", display: "flex", alignItems: "center", gap: 8 }}>
+            <button onClick={() => setStep(s => s - 1)} disabled={step === 0}
+              style={{ padding: "8px 14px", borderRadius: 8, fontSize: 12, fontWeight: 600, border: "1px solid #E2E8F0", background: "transparent", color: step === 0 ? "#CBD5E1" : "#64748B", cursor: step === 0 ? "not-allowed" : "pointer" }}>
+              ← Précédent
+            </button>
             {currentStep?.action && onNavigate && (
-              <button
-                onClick={() => { onNavigate(currentStep.tab); onClose(); }}
-                style={{
-                  flex: 1, padding: "9px 16px", borderRadius: 9, fontSize: 13, fontWeight: 600,
-                  border: `1px solid ${currentTrack.color}44`,
-                  background: currentTrack.color + "12",
-                  color: currentTrack.color, cursor: "pointer",
-                }}
-              >
+              <button onClick={() => { onNavigate(currentStep.tab); onClose(); }}
+                style={{ flex: 1, padding: "8px 12px", borderRadius: 8, fontSize: 12, fontWeight: 600, border: `1px solid ${currentTrack.color}44`, background: currentTrack.color + "12", color: currentTrack.color, cursor: "pointer" }}>
                 {currentStep.action}
               </button>
             )}
-
-            {/* Bouton suivant / terminer */}
-            <button
-              onClick={() => {
-                if (isLast) { onClose(); }
-                else setStep(s => s + 1);
-              }}
-              style={{
-                padding: "9px 20px", borderRadius: 9, fontSize: 13, fontWeight: 700,
-                border: "none",
-                background: isLast ? "#059669" : currentTrack.color,
-                color: "#fff", cursor: "pointer",
-                marginLeft: "auto",
-              }}
-            >
+            <button onClick={() => { if (isLast) onClose(); else setStep(s => s + 1); }}
+              style={{ padding: "8px 18px", borderRadius: 8, fontSize: 12, fontWeight: 700, border: "none", background: isLast ? "#059669" : currentTrack.color, color: "#fff", cursor: "pointer", marginLeft: "auto" }}>
               {isLast ? "✓ Terminer" : "Suivant →"}
             </button>
           </div>

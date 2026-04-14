@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { sbGetBrand, sbGetQuestions, sbGetGeoResults, sbGetUrlIndex,
   sbSaveProject, sbDeleteProject, sbDownload } from "../lib/supabase";
-import { BrandConfigPanel } from "../components/GeoConfig";
+// GeoConfig non requis dans GeoAuditTab — providers et marques gérés dans Fan-outs
 import UploadCard from "../components/UploadCard";
 import PageTypeClassifier from "../components/PageTypeClassifier";
 import { newProject, parseCSV } from "../lib/helpers";
@@ -39,7 +39,18 @@ function SectionBlock({ number, title, sub, children, color = GREEN }) {
   );
 }
 
-// ── AuditSetupPanel ───────────────────────────────────────────────
+// ── AuditSetupPanel compact ───────────────────────────────────────
+function SetupSection({ icon, title, children }) {
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+        <span>{icon}</span>{title}
+      </div>
+      {children}
+    </div>
+  );
+}
+
 function AuditSetupPanel({
   projects, currentProjectId, setCurrentProjectId, setProjects, ownerEmail,
   sites, setSites, sfData, setSfData, gscData, setGscData, gaData, setGaData, bingData, setBingData,
@@ -52,165 +63,149 @@ function AuditSetupPanel({
     const key = `${row.site_id}_${row.source}`;
     if (!lastImports[key] && row.storage_path) lastImports[key] = row;
   }
-  const fmtDate = (d) => new Date(d).toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "numeric" });
+  const safeProjectId = currentProjectId || (projects||[])[0]?.id || "";
 
   return (
-    <div>
-      <SectionBlock number="1" title="Projet & Sites" sub="Gérez vos projets et les sites associés">
-        <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: "20px 24px" }}>
-          <div style={{ marginBottom: 20, paddingBottom: 20, borderBottom: `1px solid ${C.borderLight}` }}>
-            <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, color: C.textLight, fontWeight: 600, marginBottom: 10 }}>Projet actif</div>
-            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-              <div style={{ position: "relative", flex: 1, minWidth: 200 }}>
-                <select value={currentProjectId} onChange={e => setCurrentProjectId(e.target.value)}
-                  style={{ width: "100%", padding: "8px 12px", border: `2px solid ${C.blue}`, borderRadius: 10, fontSize: 13, fontWeight: 600, color: C.blue, background: C.blueLight, cursor: "pointer", appearance: "none" }}>
-                  {(projects || []).map(p => <option key={p.id} value={p.id}>{p.name} ({p.sites.length} site{p.sites.length > 1 ? "s" : ""})</option>)}
-                </select>
-                <span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: C.blue }}>▾</span>
+    <div style={{ maxWidth: 680 }}>
+      <SetupSection icon="📁" title="Projet actif">
+        <div style={{ background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 10, padding: "12px 16px" }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <div style={{ position: "relative", flex: 1, minWidth: 180 }}>
+              <select value={safeProjectId} onChange={e => setCurrentProjectId(e.target.value)}
+                style={{ width: "100%", padding: "7px 28px 7px 10px", border: "1.5px solid #2563EB", borderRadius: 8, fontSize: 13, fontWeight: 600, color: "#2563EB", background: "#EFF6FF", cursor: "pointer", appearance: "none" }}>
+                {(projects || []).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+              <span style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: "#2563EB", fontSize: 11 }}>▾</span>
+            </div>
+            {(projects || []).length > 1 && (
+              <button onClick={() => setConfirmModal?.({ message: `Supprimer "${(projects||[]).find(p=>p.id===safeProjectId)?.name}" ?`, onConfirm: () => {
+                sbDeleteProject(safeProjectId).catch(() => {});
+                setProjects(prev => { const next = prev.filter(x => x.id !== safeProjectId); if (next.length) setCurrentProjectId(next[0].id); return next; });
+              }})} style={{ padding: "6px 10px", border: "1px solid #FECACA", borderRadius: 7, background: "#FEF2F2", cursor: "pointer", fontSize: 11, color: "#DC2626" }}>🗑</button>
+            )}
+            {(projects || []).length < 20 && (
+              <button onClick={() => {
+                const p = newProject(`Projet ${(projects||[]).length + 1}`, [{ id: `site-${Date.now()}`, label: "Nouveau site", ...SITE_PALETTE[0] }], ownerEmail);
+                setProjects(prev => [...prev, p]); setCurrentProjectId(p.id); sbSaveProject(p).catch(() => {});
+              }} style={{ padding: "6px 10px", borderRadius: 7, border: "1.5px dashed #2563EB", background: "#EFF6FF", color: "#2563EB", cursor: "pointer", fontSize: 11, fontWeight: 600 }}>+ Nouveau</button>
+            )}
+          </div>
+          <div style={{ marginTop: 10, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+            {(sites || []).map(site => (
+              <div key={site.id} style={{ display: "flex", alignItems: "center", gap: 5, padding: "4px 10px", borderRadius: 20, border: `1px solid ${site.color}44`, background: site.bg }}>
+                <div style={{ width: 7, height: 7, borderRadius: "50%", background: site.color, flexShrink: 0 }} />
+                <input value={site.label} onChange={e => setSites(prev => prev.map(s => s.id === site.id ? {...s, label: e.target.value} : s))}
+                  style={{ fontSize: 12, fontWeight: 600, color: site.color, border: "none", outline: "none", background: "transparent", width: 100 }} />
+                {(sites||[]).length > 1 && (
+                  <button onClick={() => setConfirmModal?.({ message: `Supprimer "${site.label}" ?`, onConfirm: () => {
+                    setSites(prev => prev.filter(s => s.id !== site.id));
+                    [setSfData, setGscData, setGaData, setBingData].forEach(s => s?.(p => { const n={...p}; delete n[site.id]; return n; }));
+                  }})} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 10, color: "#DC2626", padding: 0 }}>✕</button>
+                )}
               </div>
-              {(projects || []).length > 1 && (
-                <button onClick={() => setConfirmModal?.({ message: `Supprimer "${(projects||[]).find(p=>p.id===currentProjectId)?.name}" ?`, onConfirm: () => {
-                  sbDeleteProject(currentProjectId).catch(() => {});
-                  setProjects(prev => { const next = prev.filter(x => x.id !== currentProjectId); if (next.length) setCurrentProjectId(next[0].id); return next; });
-                }})} style={{ padding: "7px 10px", border: "1px solid #FECACA", borderRadius: 8, background: "#FEF2F2", cursor: "pointer", fontSize: 12, color: "#DC2626" }}>🗑</button>
-              )}
-              {(projects || []).length < 20 && (
-                <button onClick={() => {
-                  const p = newProject(`Projet ${(projects||[]).length + 1}`, [{ id: `site-${Date.now()}`, label: "Nouveau site", ...SITE_PALETTE[0] }], ownerEmail);
-                  setProjects(prev => [...prev, p]); setCurrentProjectId(p.id); sbSaveProject(p).catch(() => {});
-                }} style={{ padding: "8px 14px", borderRadius: 10, border: `2px dashed ${C.blue}`, background: C.blueLight, color: C.blue, cursor: "pointer", fontSize: 13, fontWeight: 600 }}>+ Nouveau projet</button>
-              )}
-            </div>
+            ))}
+            {(sites||[]).length < 3 && (
+              <button onClick={() => {
+                const palette = SITE_PALETTE[(sites||[]).length] || SITE_PALETTE[0];
+                const newId = `site-${Date.now()}`;
+                setSites(prev => [...prev, { id: newId, label: `Site ${(prev||[]).length+1}`, ...palette }]);
+                [setSfData, setGscData, setGaData, setBingData].forEach(s => s?.(p => ({...p, [newId]: []})));
+              }} style={{ padding: "4px 10px", borderRadius: 20, border: "1px dashed #E2E8F0", background: "#fff", color: "#2563EB", cursor: "pointer", fontSize: 11, fontWeight: 600 }}>+ Site</button>
+            )}
           </div>
-          <div>
-            <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.8, color: C.textLight, fontWeight: 600, marginBottom: 10 }}>Sites du projet</div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              {(sites || []).map(site => (
-                <div key={site.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 14px", borderRadius: 10, border: `1px solid ${site.color}33`, background: site.bg }}>
-                  <div style={{ width: 10, height: 10, borderRadius: "50%", background: site.color, flexShrink: 0 }} />
-                  <input value={site.label} onChange={e => setSites(prev => prev.map(s => s.id === site.id ? {...s, label: e.target.value} : s))}
-                    style={{ fontWeight: 600, fontSize: 13, color: site.color, border: "none", outline: "none", background: "transparent", width: 120 }} />
-                  {(sites||[]).length > 1 && (
-                    <button onClick={() => setConfirmModal?.({ message: `Supprimer "${site.label}" ?`, onConfirm: () => {
-                      setSites(prev => prev.filter(s => s.id !== site.id));
-                      [setSfData, setGscData, setGaData, setBingData].forEach(setter => setter?.(p => { const n = {...p}; delete n[site.id]; return n; }));
-                    }})} style={{ padding: "2px 6px", border: "1px solid #FCA5A5", borderRadius: 5, background: "#FFF5F5", cursor: "pointer", fontSize: 11, color: "#DC2626" }}>✕</button>
-                  )}
-                </div>
-              ))}
-              {(sites||[]).length < 3 && (
-                <button onClick={() => {
-                  const palette = SITE_PALETTE[(sites||[]).length] || SITE_PALETTE[0];
-                  const newId = `site-${Date.now()}`;
-                  setSites(prev => [...prev, { id: newId, label: `Site ${(prev||[]).length + 1}`, ...palette }]);
-                  [setSfData, setGscData, setGaData, setBingData].forEach(setter => setter?.(p => ({...p, [newId]: []})));
-                }} style={{ padding: "8px 14px", borderRadius: 10, border: `2px dashed ${C.border}`, background: C.white, color: C.blue, cursor: "pointer", fontSize: 13, fontWeight: 600 }}>+ Ajouter un site</button>
-              )}
-            </div>
-          </div>
-          <div style={{ marginTop: 20, paddingTop: 16, borderTop: `1px solid ${C.borderLight}`, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <div style={{ width: 7, height: 7, borderRadius: "50%", background: dbLoading ? C.amber : (dbHistory||[]).length > 0 ? C.green : C.textLight }} />
-              <span style={{ fontSize: 12, color: C.textMid }}>{dbLoading ? "Chargement…" : `${(dbHistory||[]).length} import${(dbHistory||[]).length !== 1 ? "s" : ""} en base`}</span>
-            </div>
-            <button onClick={() => { setShowHistory(h => !h); refreshHistory?.(); }} style={{ padding: "5px 14px", background: showHistory ? C.blue : C.white, color: showHistory ? "#fff" : C.textMid, border: `1px solid ${showHistory ? C.blue : C.border}`, borderRadius: 7, cursor: "pointer", fontSize: 12 }}>
-              📋 Historique {(dbHistory||[]).length > 0 ? `(${(dbHistory||[]).length})` : ""}
+          <div style={{ marginTop: 10, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span style={{ fontSize: 11, color: "#94A3B8" }}>
+              <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: dbLoading ? "#F59E0B" : (dbHistory||[]).length > 0 ? "#059669" : "#CBD5E1", marginRight: 5 }} />
+              {dbLoading ? "Chargement…" : `${(dbHistory||[]).length} imports en base`}
+            </span>
+            <button onClick={() => { setShowHistory(h => !h); refreshHistory?.(); }}
+              style={{ fontSize: 11, color: showHistory ? "#2563EB" : "#94A3B8", background: "none", border: "none", cursor: "pointer", padding: 0 }}>
+              {showHistory ? "▲ Masquer" : "📋 Historique"}
             </button>
           </div>
           {showHistory && (
-            <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 5, maxHeight: 200, overflowY: "auto" }}>
-              {(dbHistory||[]).length === 0 ? <div style={{ fontSize: 12, color: C.textLight }}>Aucun import</div>
-                : (dbHistory||[]).map(row => {
+            <div style={{ marginTop: 8, maxHeight: 140, overflowY: "auto", display: "flex", flexDirection: "column", gap: 3 }}>
+              {(dbHistory||[]).slice(0,20).map(row => {
                 const site = (sites||[]).find(s => s.id === row.site_id);
-                const srcLabel = { sf: "🐸 SF", gsc: "🔍 GSC", ga: "📊 GA4", bing: "🤖 Bing" }[row.source] || row.source;
+                const srcLabel = { sf:"🐸 SF", gsc:"🔍 GSC", ga:"📊 GA4", bing:"🤖 Bing" }[row.source] || row.source;
                 return (
-                  <div key={row.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 12px", background: C.bg, borderRadius: 7, fontSize: 11 }}>
-                    <span style={{ fontWeight: 600, color: site?.color || C.text, minWidth: 80 }}>{site?.label || row.site_id}</span>
-                    <span style={{ color: C.textMid, minWidth: 60 }}>{srcLabel}</span>
-                    <span style={{ color: C.textLight, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.filename}</span>
-                    <span style={{ color: C.textLight }}>{fmtDate(row.uploaded_at)}</span>
+                  <div key={row.id} style={{ display: "flex", gap: 8, padding: "4px 8px", background: "#F1F5F9", borderRadius: 5, fontSize: 10, alignItems: "center" }}>
+                    <span style={{ color: site?.color || "#1E293B", fontWeight: 600, minWidth: 60 }}>{site?.label || "—"}</span>
+                    <span style={{ color: "#64748B" }}>{srcLabel}</span>
+                    <span style={{ color: "#94A3B8", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.filename}</span>
                   </div>
                 );
               })}
             </div>
           )}
         </div>
-      </SectionBlock>
+      </SetupSection>
 
-      <SectionBlock number="2" title="Imports CSV" sub="Screaming Frog, Google Search Console, GA4, Bing Webmaster" color="#2563EB">
-        <div style={{ display: "grid", gridTemplateColumns: `repeat(${Math.min((sites||[]).length || 1, 3)}, 1fr)`, gap: 16 }}>
+      <SetupSection icon="📥" title="Imports CSV — SF, GSC, GA4, Bing">
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           {(sites || []).map(site => (
-            <div key={site.id} style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: 18 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, paddingBottom: 10, borderBottom: `1px solid ${C.borderLight}` }}>
-                <div style={{ width: 9, height: 9, borderRadius: "50%", background: site.color }} />
-                <span style={{ fontWeight: 700, fontSize: 13, color: site.color }}>{site.label}</span>
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <div key={site.id} style={{ flex: "1 1 200px", background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 10, padding: "10px 14px" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: site.color, marginBottom: 8 }}>{site.label}</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {[
-                  { key: "sf",   label: "Screaming Frog",        icon: "🐸", hint: "Export interne SF",            data: sfData,   setter: setSfData },
-                  { key: "gsc",  label: "Google Search Console", icon: "🔍", hint: "Clics, impressions, CTR",     data: gscData,  setter: setGscData },
-                  { key: "ga",   label: "Google Analytics 4",    icon: "📊", hint: "Sessions, vues",               data: gaData,   setter: setGaData },
-                  { key: "bing", label: "Bing AI Performance",   icon: "🤖", hint: "Citations Bing Copilot",       data: bingData, setter: setBingData },
-                ].map(({ key, label, icon, hint, data, setter }) => (
-                  <div key={key}>
-                    <UploadCard label={label} icon={icon} hint={hint} color={site.color}
-                      loaded={(data||{})[site.id]?.length > 0} rows={(data||{})[site.id]}
-                      onData={rows => setter?.(p => ({...p, [site.id]: rows}))}
-                      onClear={() => setter?.(p => ({...p, [site.id]: []}))}
-                      siteId={site.id} source={key} projectId={projectId}
-                      onAfterUpload={refreshHistory}
-                      onLoadFromHistory={async row => { try { const t = await sbDownload(row.storage_path); setter?.(p => ({...p, [site.id]: parseCSV(t)})); } catch(e) { console.warn(e); } }}
-                    />
-                    {lastImports[`${site.id}_${key}`]?.storage_path && !(data||{})[site.id]?.length && (
-                      <button onClick={async () => { try { const t = await sbDownload(lastImports[`${site.id}_${key}`].storage_path); setter?.(p => ({...p, [site.id]: parseCSV(t)})); } catch(e) { console.warn(e); } }}
-                        style={{ marginTop: 3, width: "100%", padding: "3px 0", border: `1px solid ${site.color}`, borderRadius: 7, background: site.bg, color: site.color, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>
-                        ↩ Dernier {key.toUpperCase()}
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-              <div style={{ marginTop: 10, display: "flex", gap: 4, flexWrap: "wrap" }}>
-                {[["SF", sfData], ["GSC", gscData], ["GA4", gaData], ["Bing", bingData]].map(([src, data]) => {
+                  { key: "sf",   label: "Screaming Frog", icon: "🐸", data: sfData,   setter: setSfData },
+                  { key: "gsc",  label: "Search Console",  icon: "🔍", data: gscData,  setter: setGscData },
+                  { key: "ga",   label: "Analytics 4",     icon: "📊", data: gaData,   setter: setGaData },
+                  { key: "bing", label: "Bing AI",          icon: "🤖", data: bingData, setter: setBingData },
+                ].map(({ key, label, icon, data, setter }) => {
                   const n = (data||{})[site.id]?.length || 0;
-                  return <div key={src} style={{ fontSize: 10, padding: "2px 8px", borderRadius: 20, fontWeight: 600, background: n > 0 ? site.bg : C.borderLight, color: n > 0 ? site.color : C.textLight }}>{src} {n > 0 ? `· ${n}` : "· vide"}</div>;
+                  return (
+                    <div key={key} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                      <div style={{ flex: 1 }}>
+                        <UploadCard label={label} icon={icon} hint="" color={site.color}
+                          loaded={n > 0} rows={(data||{})[site.id]}
+                          onData={rows => setter?.(p => ({...p, [site.id]: rows}))}
+                          onClear={() => setter?.(p => ({...p, [site.id]: []}))}
+                          siteId={site.id} source={key} projectId={projectId}
+                          onAfterUpload={refreshHistory}
+                          onLoadFromHistory={async row => { try { const t = await sbDownload(row.storage_path); setter?.(p => ({...p, [site.id]: parseCSV(t)})); } catch(e) {} }}
+                        />
+                      </div>
+                      {lastImports[`${site.id}_${key}`]?.storage_path && !n && (
+                        <button onClick={async () => { try { const t = await sbDownload(lastImports[`${site.id}_${key}`].storage_path); setter?.(p => ({...p, [site.id]: parseCSV(t)})); } catch(e) {} }}
+                          style={{ padding: "4px 7px", border: `1px solid ${site.color}`, borderRadius: 6, background: site.bg, color: site.color, fontSize: 10, fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>↩</button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{ marginTop: 8, display: "flex", gap: 4, flexWrap: "wrap" }}>
+                {[["SF", sfData], ["GSC", gscData], ["GA4", gaData], ["Bing", bingData]].map(([src, d]) => {
+                  const n = (d||{})[site.id]?.length || 0;
+                  return <span key={src} style={{ fontSize: 9, padding: "1px 6px", borderRadius: 10, fontWeight: 700, background: n>0 ? site.bg : "#F1F5F9", color: n>0 ? site.color : "#94A3B8" }}>{src} {n>0?"✓":"—"}</span>;
                 })}
               </div>
             </div>
           ))}
         </div>
-      </SectionBlock>
+      </SetupSection>
 
-      <SectionBlock number="3" title="Classification des pages" sub="Attribuez un type à chaque page pour filtrer la matrice" color="#059669">
+      <SetupSection icon="🏷️" title="Classification des pages">
         {(sites||[]).filter(site => (sfData||{})[site.id]?.length > 0).length === 0 ? (
-          <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: "28px 24px", textAlign: "center", color: C.textLight }}>
-            <div style={{ fontSize: 28, marginBottom: 10 }}>🐸</div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 4 }}>Importez d'abord un fichier Screaming Frog</div>
+          <div style={{ background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, padding: "10px 14px", fontSize: 12, color: "#92400E" }}>
+            🐸 Importez Screaming Frog pour activer la classification
           </div>
         ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {(sites||[]).filter(site => (sfData||{})[site.id]?.length > 0).map(site => (
-              <div key={site.id} style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: "20px 24px" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, paddingBottom: 10, borderBottom: `1px solid ${C.borderLight}` }}>
-                  <div style={{ width: 9, height: 9, borderRadius: "50%", background: site.color }} />
-                  <span style={{ fontWeight: 700, fontSize: 13, color: site.color }}>{site.label} · {(sfData||{})[site.id].length} pages</span>
-                </div>
+              <div key={site.id} style={{ background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 10, padding: "10px 14px" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: site.color, marginBottom: 8 }}>{site.label} · {(sfData||{})[site.id].length} pages</div>
                 <PageTypeClassifier siteId={site.id} projectId={projectId} sfRows={(sfData||{})[site.id]} pageTypes={pageTypes} setPageTypes={setPageTypes} />
               </div>
             ))}
           </div>
         )}
-      </SectionBlock>
+      </SetupSection>
 
-      <SectionBlock number="4" title="Configuration des marques" sub="Nom, domaine, alias et concurrents — utilisés par l'Audit GEO" color="#D97706">
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {(sites||[]).map(site => <BrandConfigPanel key={site.id} site={site} projectId={projectId} />)}
-          {!(sites||[]).length && <div style={{ fontSize: 12, color: C.textLight, fontStyle: "italic" }}>Ajoutez un site ci-dessus pour configurer sa marque.</div>}
-        </div>
-      </SectionBlock>
     </div>
   );
 }
+
 
 // ── Stat card ─────────────────────────────────────────────────────
 function StatCard({ label, value, sub, color = C.text, bg = C.white }) {
@@ -537,13 +532,13 @@ export default function GeoAuditTab({
       {/* ── Header + onglets principaux ── */}
       <div style={{ marginBottom: 24 }}>
         <div style={{ fontSize: 20, fontWeight: 800, color: C.text, marginBottom: 16 }}>📋 Audit GEO</div>
-        <div style={{ display: "flex", gap: 4, background: "#F1F5F9", borderRadius: 12, padding: 4 }}>
+        <div style={{ display: "inline-flex", gap: 2, background: "#F1F5F9", borderRadius: 20, padding: 3 }}>
           {[{ key: "setup", label: "⚙️ Setup" }, { key: "audit", label: "📋 Génération Audit GEO" }].map(t => (
             <button key={t.key} onClick={() => setMainTab(t.key)} style={{
-              flex: 1, padding: "10px 16px", borderRadius: 9, fontSize: 13, fontWeight: 700, border: "none", cursor: "pointer", transition: "all 0.15s",
+              padding: "6px 16px", borderRadius: 16, fontSize: 12, fontWeight: 700, border: "none", cursor: "pointer", transition: "all 0.15s",
               background: mainTab === t.key ? "#fff" : "transparent",
-              color: mainTab === t.key ? GREEN : C.textMid,
-              boxShadow: mainTab === t.key ? "0 2px 8px rgba(0,0,0,0.08)" : "none",
+              color: mainTab === t.key ? "#1A3C2E" : "#94A3B8",
+              boxShadow: mainTab === t.key ? "0 1px 4px rgba(0,0,0,0.1)" : "none",
             }}>{t.label}</button>
           ))}
         </div>
