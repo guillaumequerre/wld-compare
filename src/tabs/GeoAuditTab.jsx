@@ -3,7 +3,7 @@ import { sbGetBrand, sbGetQuestions, sbGetGeoResults, sbGetUrlIndex,
   sbSaveProject, sbDeleteProject, sbDownload } from "../lib/supabase";
 import UploadCard from "../components/UploadCard";
 import PageTypeClassifier from "../components/PageTypeClassifier";
-import { newProject } from "../lib/helpers";
+import { newProject, parseCSV } from "../lib/helpers";
 import { C, SITE_PALETTE } from "../lib/constants";
 
 const ANTHROPIC_PROXY = "/api/anthropic";
@@ -177,15 +177,15 @@ function AuditSetupPanel({
 
 
 // ── Stat card ─────────────────────────────────────────────────────
-// function StatCard({ label, value, sub, color = C.text, bg = C.white }) {
-//   return (
-//     <div style={{ background: bg, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px" }}>
-//       <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 4 }}>{label}</div>
-//       <div style={{ fontSize: 24, fontWeight: 800, color }}>{value}</div>
-//       {sub && <div style={{ fontSize: 11, color: C.textLight, marginTop: 2 }}>{sub}</div>}
-//     </div>
-//   );
-// }
+function StatCard({ label, value, sub, color = C.text, bg = C.white }) {
+  return (
+    <div style={{ background: bg, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px" }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: 24, fontWeight: 800, color }}>{value}</div>
+      {sub && <div style={{ fontSize: 11, color: C.textLight, marginTop: 2 }}>{sub}</div>}
+    </div>
+  );
+}
 
 function Section({ icon, title, sub, children, accent }) {
   return (
@@ -493,21 +493,196 @@ Commence directement par ## 🔍. Chiffres précis. Actionnable.`;
 }
 
 function exportPDF(audit, brand, site, aiText) {
-  const brandName = brand?.brand_name || "Marque"; const date = new Date().toLocaleDateString("fr-FR");
-  const html = `<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><title>Audit GEO — ${brandName}</title>
-<style>body{font-family:'Segoe UI',sans-serif;max-width:900px;margin:40px auto;color:#1E293B;line-height:1.6}h1{font-size:24px;color:#7C3AED;border-bottom:3px solid #7C3AED;padding-bottom:8px}h2{font-size:17px;margin-top:28px;border-bottom:1px solid #eee;padding-bottom:4px}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:20px 0}.stat{background:#F8FAFC;border:1px solid #E8E8ED;border-radius:8px;padding:12px;text-align:center}.stat-val{font-size:28px;font-weight:800}.stat-label{font-size:10px;color:#94A3B8;text-transform:uppercase}table{width:100%;border-collapse:collapse;margin:12px 0;font-size:12px}th{background:#F1F5F9;padding:8px 12px;text-align:left;font-size:11px;color:#64748B;text-transform:uppercase}td{padding:8px 12px;border-bottom:1px solid #F1F5F9}.lead{padding:8px 12px;border-left:3px solid #7C3AED;background:#F5F3FF;margin:6px 0;border-radius:0 6px 6px 0}pre{white-space:pre-wrap;font-family:inherit;font-size:12px;line-height:1.7}</style></head><body>
-<h1>Audit GEO — ${brandName}</h1><p style="color:#94A3B8;font-size:12px">Site : ${site?.label||"—"} · ${date}</p>
-<h2>Indicateurs clés</h2><div class="stats">
-<div class="stat"><div class="stat-val" style="color:${audit.presenceRate>=50?"#059669":"#DC2626"}">${audit.presenceRate}%</div><div class="stat-label">Présence</div></div>
-<div class="stat"><div class="stat-val">${audit.avgPos||"—"}</div><div class="stat-label">Position moy.</div></div>
-<div class="stat"><div class="stat-val" style="color:#2563EB">${audit.withSources}</div><div class="stat-label">Cité en source</div></div>
-<div class="stat"><div class="stat-val" style="color:#7C3AED">${audit.total}</div><div class="stat-label">Résultats</div></div></div>
-<h2>Concurrents</h2><table><tr><th>Concurrent</th><th>Mentions</th></tr>${Object.entries(audit.compStats).sort((a,b)=>b[1].mentions-a[1].mentions).map(([k,v])=>`<tr><td>${k}</td><td>${v.mentions}</td></tr>`).join("")}</table>
-<h2>Pistes</h2>${audit.leads.map(l=>`<div class="lead"><strong>${l.priority}</strong><br>${l.action}</div>`).join("")}
-${aiText?`<h2>Analyse IA</h2><pre>${aiText}</pre>`:""}
-</body></html>`;
-  const blob = new Blob([html], { type: "text/html;charset=utf-8" }); const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob); a.download = `audit-geo-${brandName.toLowerCase().replace(/\s+/g,"-")}-${date.replace(/\//g,"-")}.html`; a.click(); URL.revokeObjectURL(a.href);
+  const brandName = brand?.brand_name || "Marque";
+  const date = new Date().toLocaleDateString("fr-FR");
+  const scoreColor = audit.presenceRate >= 70 ? "#059669" : audit.presenceRate >= 50 ? "#2563EB" : audit.presenceRate >= 30 ? "#D97706" : "#DC2626";
+  const scoreLabel = audit.presenceRate >= 70 ? "Excellent" : audit.presenceRate >= 50 ? "Bon" : audit.presenceRate >= 30 ? "À améliorer" : "Critique";
+
+  // ── helpers HTML ──────────────────────────────────────────────
+  const h2 = (icon, title) => `<h2><span style="margin-right:8px">${icon}</span>${title}</h2>`;
+  const statCard = (val, label, color = "#1E293B") =>
+    `<div class="stat"><div class="stat-val" style="color:${color}">${val}</div><div class="stat-label">${label}</div></div>`;
+  const bar = (pct, color) =>
+    `<div style="height:6px;background:#E2E8F0;border-radius:3px;margin-top:4px"><div style="height:100%;width:${pct}%;background:${color};border-radius:3px"></div></div>`;
+  const lead = (priority, action, color = "#7C3AED", bg = "#F5F3FF") =>
+    `<div class="lead" style="border-left-color:${color};background:${bg}"><strong style="color:${color}">${priority}</strong><br><span style="color:#4A4A5A">${action}</span></div>`;
+  const table = (headers, rows) =>
+    `<table><thead><tr>${headers.map(h => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+  const urlRow = (url, meta, badge, badgeColor) =>
+    `<div class="url-row"><a href="${url}" target="_blank" style="color:#2563EB;font-size:12px;word-break:break-all">${url}</a><span style="font-size:10px;color:#94A3B8;margin-left:8px">${meta}</span><span class="badge" style="background:${badgeColor}22;color:${badgeColor};border:1px solid ${badgeColor}44">${badge}</span></div>`;
+
+  // ── BLOC 1 : Synthèse exécutive ───────────────────────────────
+  const bloc1 = `
+${h2("🎯", "Synthèse exécutive")}
+<div style="background:${scoreColor}0F;border:1.5px solid ${scoreColor}33;border-radius:12px;padding:20px 24px;margin:12px 0;display:flex;gap:32px;align-items:center;flex-wrap:wrap">
+  <div style="text-align:center;min-width:80px">
+    <div style="font-size:52px;font-weight:900;color:${scoreColor};line-height:1">${audit.presenceRate}%</div>
+    <div style="font-size:12px;font-weight:700;color:${scoreColor}">${scoreLabel}</div>
+    <div style="font-size:10px;color:#94A3B8;margin-top:2px">Score GEO</div>
+  </div>
+  <div style="flex:1;min-width:200px">
+    <div style="height:10px;background:#E2E8F0;border-radius:5px;margin-bottom:12px;overflow:hidden">
+      <div style="height:100%;width:${audit.presenceRate}%;background:${scoreColor};border-radius:5px"></div>
+    </div>
+    <div style="display:flex;gap:20px;flex-wrap:wrap;font-size:12px">
+      <span><span style="color:#94A3B8">Marque</span> <strong>${brandName}</strong></span>
+      <span><span style="color:#94A3B8">Site</span> <strong>${site?.label || "—"}</strong></span>
+      <span><span style="color:#94A3B8">Questions</span> <strong>${audit.questions}</strong></span>
+      <span><span style="color:#94A3B8">Résultats</span> <strong>${audit.total}</strong></span>
+    </div>
+  </div>
+</div>
+<div class="stats">
+  ${statCard(audit.presenceRate + "%", "Présence marque", scoreColor)}
+  ${statCard(audit.avgPos ? "#" + audit.avgPos : "—", "Position moy.")}
+  ${statCard(audit.withSources, "Cité en source", "#2563EB")}
+  ${statCard(audit.withBrand + "/" + audit.total, "Avec mention")}
+  ${statCard(audit.questions, "Questions testées", "#7C3AED")}
+  ${statCard(Object.keys(audit.compStats).length, "Concurrents", "#D97706")}
+</div>`;
+
+  // ── BLOC 2 : Visibilité marque ────────────────────────────────
+  const providerRows = Object.entries(audit.providerStats).map(([pid, s]) => {
+    const rate = pct(s.withBrand, s.total);
+    const c = rate >= 50 ? "#059669" : rate > 0 ? "#D97706" : "#DC2626";
+    return `<tr><td style="font-weight:700">${pid}</td><td style="color:${c};font-weight:700">${rate}%</td><td>${s.withBrand}/${s.total}</td><td>${bar(rate, c)}</td></tr>`;
+  }).join("");
+
+  const presentList = audit.presentBrandQs.map(q =>
+    `<li style="color:#059669;padding:3px 0;border-bottom:1px solid #F0F0F5">✓ ${q}</li>`).join("");
+  const missingList = audit.missingBrandQs.map(q =>
+    `<li style="color:#DC2626;padding:3px 0;border-bottom:1px solid #F0F0F5">✗ ${q}</li>`).join("");
+
+  const bloc2 = `
+${h2("📡", "Visibilité marque")}
+<h3>Présence par provider LLM</h3>
+<table><thead><tr><th>Provider</th><th>Présence</th><th>Ratio</th><th>Barre</th></tr></thead><tbody>${providerRows}</tbody></table>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:16px">
+  <div>
+    <div style="font-size:11px;font-weight:700;color:#059669;text-transform:uppercase;letter-spacing:.7px;margin-bottom:8px">Questions avec présence (${audit.presentBrandQs.length})</div>
+    <ul style="list-style:none;padding:0;margin:0;font-size:12px">${presentList || "<li style='color:#94A3B8;font-style:italic'>Aucune</li>"}</ul>
+  </div>
+  <div>
+    <div style="font-size:11px;font-weight:700;color:#DC2626;text-transform:uppercase;letter-spacing:.7px;margin-bottom:8px">Questions sans présence (${audit.missingBrandQs.length})</div>
+    <ul style="list-style:none;padding:0;margin:0;font-size:12px">${missingList || "<li style='color:#94A3B8;font-style:italic'>Toutes présentes !</li>"}</ul>
+  </div>
+</div>`;
+
+  // ── BLOC 3 : Concurrentiel ────────────────────────────────────
+  const compRows = Object.entries(audit.compStats).sort((a,b) => b[1].mentions - a[1].mentions).map(([name, s]) => [
+    `<strong>${name}</strong>`,
+    s.mentions,
+    `<span style="color:#D97706">${pct(s.mentions, audit.total)}%</span>`,
+    s.positions.length ? (s.positions.reduce((a,b) => a+b,0)/s.positions.length).toFixed(1) : "—",
+  ]);
+  const intentRows = Object.entries(audit.intentCount).sort((a,b) => b[1]-a[1]).map(([k,v]) => [
+    k, v, `<span style="color:#7C3AED">${pct(v, audit.total)}%</span>`, bar(pct(v, audit.total), "#7C3AED"),
+  ]);
+  const typeRows = Object.entries(audit.typeCount).sort((a,b) => b[1]-a[1]).slice(0,6).map(([k,v]) => [
+    k, v, `<span style="color:#2563EB">${pct(v, audit.total)}%</span>`, bar(pct(v, audit.total), "#2563EB"),
+  ]);
+
+  const bloc3 = `
+${h2("⚔️", "Paysage concurrentiel")}
+${compRows.length ? table(["Concurrent","Mentions","% résultats","Pos. moy."], compRows) : "<p style='color:#94A3B8;font-style:italic'>Aucun concurrent détecté</p>"}
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:16px">
+  <div>
+    <h3>Répartition par intention</h3>
+    ${intentRows.length ? table(["Intention","Count","%",""], intentRows) : "<p style='color:#94A3B8;font-style:italic'>—</p>"}
+  </div>
+  <div>
+    <h3>Types de réponses LLM</h3>
+    ${typeRows.length ? table(["Type","Count","%",""], typeRows) : "<p style='color:#94A3B8;font-style:italic'>—</p>"}
+  </div>
+</div>`;
+
+  // ── BLOC 4 : Sources & URLs ───────────────────────────────────
+  const domainRows = Object.entries(audit.topDomains).sort((a,b) => b[1]-a[1]).slice(0,10).map(([d, cnt], i) => {
+    const isBrand = audit.brandUrls.some(u => u.domain === d);
+    const isComp  = audit.competitorUrls.some(u => u.domain === d);
+    const badge   = isBrand ? `<span class="badge" style="background:#ECFDF5;color:#059669;border:1px solid #059669">marque</span>`
+                  : isComp  ? `<span class="badge" style="background:#FEF2F2;color:#DC2626;border:1px solid #DC2626">concurrent</span>` : "";
+    return `<tr><td style="color:#94A3B8;font-weight:700">#${i+1}</td><td style="font-weight:600;color:${isBrand?"#059669":isComp?"#DC2626":"#1E293B"}">${d} ${badge}</td><td style="font-weight:700">${cnt}×</td></tr>`;
+  }).join("");
+
+  const urlsOptimize = audit.urlsToOptimize.slice(0,8).map(u =>
+    urlRow(u.url, `${u.count_as_source} src · ${u.count_in_answer} rép`, "À booster", "#D97706")).join("");
+  const urlsRework = audit.urlsToRework.slice(0,8).map(u =>
+    urlRow(u.url, `${u.count_as_source} src · ${u.count_in_answer} rép`, "À refaire", "#DC2626")).join("");
+  const urlsInspire = audit.urlsToInspire.slice(0,8).map(u =>
+    urlRow(u.url, `${getDomain(u.url)} · ${u.count_as_source} cit.`, "Inspiration", "#2563EB")).join("");
+
+  const bloc4 = `
+${h2("🔗", "Sources & URLs")}
+<h3>Top domaines cités</h3>
+<table><thead><tr><th>#</th><th>Domaine</th><th>Citations</th></tr></thead><tbody>${domainRows}</tbody></table>
+<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-top:16px">
+  <div>
+    <div style="font-size:11px;font-weight:700;color:#D97706;text-transform:uppercase;margin-bottom:6px">⚡ À optimiser</div>
+    ${urlsOptimize || "<p style='color:#94A3B8;font-style:italic;font-size:11px'>Aucune</p>"}
+  </div>
+  <div>
+    <div style="font-size:11px;font-weight:700;color:#DC2626;text-transform:uppercase;margin-bottom:6px">🔄 À reprendre</div>
+    ${urlsRework || "<p style='color:#94A3B8;font-style:italic;font-size:11px'>Aucune</p>"}
+  </div>
+  <div>
+    <div style="font-size:11px;font-weight:700;color:#2563EB;text-transform:uppercase;margin-bottom:6px">💡 Référence</div>
+    ${urlsInspire || "<p style='color:#94A3B8;font-style:italic;font-size:11px'>Aucune</p>"}
+  </div>
+</div>`;
+
+  // ── BLOC 5 : Plan d'action ────────────────────────────────────
+  const leadsHtml = audit.leads.map(l => lead(l.priority + " — " + l.label, l.action)).join("");
+
+  const bloc5 = `
+${h2("🎯", "Plan d'action — Pistes prioritaires")}
+${leadsHtml || "<p style='color:#94A3B8;font-style:italic'>Aucune piste générée</p>"}
+${aiText ? `${h2("✦", "Analyse IA détaillée")}<div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:8px;padding:16px 20px;font-size:12px;line-height:1.8;white-space:pre-wrap">${aiText}</div>` : ""}`;
+
+  // ── Assemblage final ──────────────────────────────────────────
+  const html = `<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Audit GEO — ${brandName} — ${date}</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; max-width: 960px; margin: 40px auto; color: #1E293B; line-height: 1.6; padding: 0 24px; }
+  h1 { font-size: 26px; color: #7C3AED; border-bottom: 3px solid #7C3AED; padding-bottom: 10px; margin-bottom: 4px; }
+  h2 { font-size: 16px; font-weight: 800; margin-top: 32px; margin-bottom: 12px; padding: 10px 16px; background: #F8FAFC; border-left: 4px solid #7C3AED; border-radius: 0 8px 8px 0; }
+  h3 { font-size: 12px; font-weight: 700; color: #64748B; text-transform: uppercase; letter-spacing: .7px; margin: 16px 0 8px; }
+  .stats { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; margin: 16px 0; }
+  .stat { background: #F8FAFC; border: 1px solid #E8E8ED; border-radius: 10px; padding: 12px; text-align: center; }
+  .stat-val { font-size: 22px; font-weight: 800; }
+  .stat-label { font-size: 9px; color: #94A3B8; text-transform: uppercase; letter-spacing: .5px; margin-top: 2px; }
+  table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 12px; }
+  th { background: #F1F5F9; padding: 8px 12px; text-align: left; font-size: 10px; color: #64748B; text-transform: uppercase; letter-spacing: .5px; border-bottom: 1px solid #E2E8F0; }
+  td { padding: 8px 12px; border-bottom: 1px solid #F1F5F9; vertical-align: middle; }
+  tr:last-child td { border-bottom: none; }
+  .lead { padding: 10px 14px; border-left: 3px solid #7C3AED; background: #F5F3FF; margin: 6px 0; border-radius: 0 8px 8px 0; font-size: 12px; }
+  .badge { font-size: 9px; font-weight: 700; border-radius: 4px; padding: 1px 6px; margin-left: 6px; }
+  .url-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid #F0F0F5; flex-wrap: wrap; }
+  .url-row a { flex: 1; min-width: 200px; }
+  @media print { body { margin: 20px; } h2 { break-before: avoid; } }
+</style>
+</head>
+<body>
+<h1>Audit GEO — ${brandName}</h1>
+<p style="color:#94A3B8;font-size:12px;margin-top:4px">Site : <strong style="color:#1E293B">${site?.label || "—"}</strong> · Généré le ${date}</p>
+${bloc1}
+${bloc2}
+${bloc3}
+${bloc4}
+${bloc5}
+</body>
+</html>`;
+
+  const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `audit-geo-${brandName.toLowerCase().replace(/\s+/g, "-")}-${date.replace(/\//g, "-")}.html`;
+  a.click();
+  URL.revokeObjectURL(a.href);
 }
 
 // ── Main export ───────────────────────────────────────────────────
