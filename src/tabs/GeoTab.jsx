@@ -1790,7 +1790,10 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
 
   // Most recent result for this provider
   const result = [...(results || [])].sort((a,b) => new Date(b.created_at||0) - new Date(a.created_at||0))[0] || null;
-  const hasBrand = isBrandPresent(result);
+  const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+  const isRecent = result?.created_at && (Date.now() - new Date(result.created_at).getTime()) < SEVEN_DAYS_MS;
+  const hasBrand = isRecent && isBrandPresent(result);
+  
   const sources = result?.sources || [];
   const comps   = result?.competitors_mentioned || [];
 
@@ -2584,7 +2587,11 @@ ${question}`;
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {filtered.map(q => {
             const qResults = resultsByQ[q.id] || [];
-            const hasBrand = qResults.some(r => r.brand_mentioned === true || r.brand_mentioned === 1);
+            const latestResult = [...qResults].sort((a,b) => new Date(b.created_at||0) - new Date(a.created_at||0))[0];
+            const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+            const hasBrand = !!latestResult?.created_at
+              && (Date.now() - new Date(latestResult.created_at).getTime()) < SEVEN_DAYS_MS
+              && (latestResult.brand_mentioned === true || latestResult.brand_mentioned === 1);
             const isRunning = running[q.id];
             const isSel = selected.has(q.id);
             const cat = categories.find(c => c.id === q.category_id);

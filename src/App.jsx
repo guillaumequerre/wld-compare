@@ -4,7 +4,7 @@ import { emptyDataMap, makeInitialProject, parseCSV, parseSemrushCSV } from "./l
 import { extractSF, extractGSC, extractGA, extractBing, extractSemrush, parseSemrush, filterByMode } from "./lib/parsers";
 import { buildUrlMaps, buildSfPageVectors, intraCorrFast, smIntraCorr } from "./lib/correlations";
 import { sbSaveProject, sbGetHistory, sbGetLatest, sbDownload, sbGetPageTypes, sbSaveGeoAxes, sbGetGeoResultsAll, sbGetUrlIndex } from "./lib/supabase";
-import { sbLoadAccessibleProjects } from "./lib/auth";
+import { sbLoadAccessibleProjects, authRefresh } from "./lib/auth";
 import AnalyseTab from "./tabs/AnalyseTab";
 import ImportTab from "./tabs/ImportTab";
 import MatrixTab from "./tabs/MatrixTab";
@@ -301,6 +301,8 @@ export default function App() {
           setDbLoading(false);
           return;
         }
+        const refreshed = await authRefresh();
+          if (refreshed) currentUser = refreshed;
         const savedProjects = await sbLoadAccessibleProjects(currentUser.email);
           if (savedProjects && savedProjects.length > 0) {
           const restored = savedProjects.map(p => ({
