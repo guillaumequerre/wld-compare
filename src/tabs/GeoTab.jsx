@@ -2554,29 +2554,27 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
   // Auto-enregistrement des marques citées dans les réponses
   const autoRegisterCompetitors = useCallback(async (answer, brandTerms) => {
     if (!answer || !projectId || !site?.id) return;
-    // Extraire les noms de marques potentiels depuis la réponse :
-    // items de liste (-, *, 1.) dont le nom n'est pas la marque
     const lowerBrand = brandTerms.map(t => t.toLowerCase());
     const lines = answer.split('\n');
     const extracted = new Set();
+
     for (const line of lines) {
       const trimmed = line.trimStart();
-      // Lignes de liste : "- NomMarque : ..." ou "1. NomMarque —" ou "**NomMarque**"
-      const listMatch = trimmed.match(/^(?:[-*•]|\d+[.)]) +\**([A-ZÀ-ÿ][A-Za-zÀ-ÿ0-9\-& .]{1,40})\**/);
-      const boldMatch = trimmed.match(/^\*\*([A-ZÀ-ÿ][A-Za-zÀ-ÿ0-9\-& .]{1,40})\*\*/);
-      const name = (listMatch?.[1] || boldMatch?.[1] || '').trim().replace(/[.:,;]+$/, '');
-      if (!name || name.length < 3) continue;
+      // Uniquement les listes numérotées : "1. NomMarque" ou "1) NomMarque"
+      const m = trimmed.match(/^\d+[.)]\s+\**([A-Z\xC0-\xD6\xD8-\xF6][A-Za-z\xC0-\xFF0-9\-& ]{1,40})\**/);
+      if (!m) continue;
+      const name = m[1].trim().replace(/[.:,;\u2013\u2014]+$/, '');
+      if (!name || name.length < 2) continue;
       const lower = name.toLowerCase();
-      // Exclure la marque et les mots courants
-      if (lowerBrand.some(b => lower.includes(b) || b.includes(lower))) continue;
-      if (/^(les|des|une|pour|dans|avec|sans|voici|votre|notre|leur|cette|bien|vous|nous)\b/i.test(lower)) continue;
+      if (lowerBrand.some(b => b && (lower === b || lower.includes(b) || b.includes(lower)))) continue;
       extracted.add(name);
     }
+
     if (!extracted.size) return;
     const currentComps = competitorsRef.current;
     const qualifiedNames = new Set(currentComps.map(c => c.name.toLowerCase()));
     for (const name of extracted) {
-      if (qualifiedNames.has(name.toLowerCase())) continue; // déjà enregistré
+      if (qualifiedNames.has(name.toLowerCase())) continue;
       try {
         const saved = await sbSaveCompetitor({
           project_id: projectId, site_id: site.id,
