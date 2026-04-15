@@ -4,7 +4,7 @@ import { sbGetBrand, sbGetQuestions, sbGetGeoResults, sbGetUrlIndex,
   sbGetCalendarEntriesBatch, sbGetKeywords } from "../lib/supabase";
 import UploadCard from "../components/UploadCard";
 import PageTypeClassifier from "../components/PageTypeClassifier";
-import { newProject, parseCSV } from "../lib/helpers";
+import { newProject } from "../lib/helpers";
 import { C, SITE_PALETTE } from "../lib/constants";
 
 const ANTHROPIC_PROXY = "/api/anthropic";
@@ -186,16 +186,6 @@ function AuditSetupPanel({
 
 
 // ── Stat card ─────────────────────────────────────────────────────
-function StatCard({ label, value, sub, color = C.text, bg = C.white }) {
-  return (
-    <div style={{ background: bg, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px" }}>
-      <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 4 }}>{label}</div>
-      <div style={{ fontSize: 24, fontWeight: 800, color }}>{value}</div>
-      {sub && <div style={{ fontSize: 11, color: C.textLight, marginTop: 2 }}>{sub}</div>}
-    </div>
-  );
-}
-
 function Section({ icon, title, sub, children, accent }) {
   return (
     <div style={{ background: C.white, border: `1px solid ${accent ? accent + "44" : C.border}`, borderRadius: 14, overflow: "hidden", marginBottom: 16 }}>
@@ -620,7 +610,7 @@ function AIAnalysis({ audit, brand, site, questions, onTextReady }) {
       presenceRate: audit.presenceRate + "%", avgPosition: audit.avgPos,
       topIntents: Object.entries(audit.intentCount).sort((a,b)=>b[1]-a[1]).slice(0,3).map(([k,v])=>`${k}(${v})`).join(", "),
       competitors: Object.entries(audit.compStats).sort((a,b)=>b[1].mentions-a[1].mentions).slice(0,5).map(([k,v])=>`${k}(${v.mentions}x)`).join(", "),
-      urlsToOptimize: audit.urlsToOptimize.slice(0,5).map(u=>u.url).join(", "),
+      urlsToOptimize: audit.urlsToOptimize.slice(0,5).map(u => u.norm || u.url).join(", "),
     };
     const prompt = `Tu es un expert GEO. Génère un audit GEO actionnable pour ${summary.site} / "${summary.brand}".
 Données : ${JSON.stringify(summary, null, 2)}
@@ -689,7 +679,11 @@ function FanoutAnalysis({ questions, results, brand, claudeKey }) {
     if (!claudeKey || !results.length) return;
     setStatus("loading"); setAnalysis(""); setOpen(true);
     const total = results.length, withBrand = results.filter(r => r.brand_mentioned).length;
-    const urlCount = {}; results.forEach(r => (r.sources || []).forEach(url => { urlCount[url] = (urlCount[url]||0)+1; }));
+    const urlCount = {};
+    results.forEach(r => (r.sources || []).forEach(rawUrl => {
+      const norm = rawUrl.trim().replace(/[?#].*$/, "").replace(/\/$/, "").replace(/^https?:\/\//i, "").replace(/^www\./i, "").toLowerCase();
+      if (norm) urlCount[norm] = (urlCount[norm] || 0) + 1;
+    }));
     const topUrls = Object.entries(urlCount).sort((a,b)=>b[1]-a[1]).slice(0,15);
     const allBrandTerms = [brandDomain, brandName, ...brandAliases].filter(Boolean).map(t => t.toLowerCase());
     const brandUrls = topUrls.filter(([url]) => allBrandTerms.some(t => url.toLowerCase().includes(t)));
