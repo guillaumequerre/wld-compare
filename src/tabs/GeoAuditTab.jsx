@@ -3,7 +3,7 @@ import { sbGetBrand, sbGetQuestions, sbGetGeoResults, sbGetUrlIndex,
   sbSaveProject, sbDeleteProject, sbDownload } from "../lib/supabase";
 import UploadCard from "../components/UploadCard";
 import PageTypeClassifier from "../components/PageTypeClassifier";
-import { newProject, parseCSV } from "../lib/helpers";
+import { newProject } from "../lib/helpers";
 import { C, SITE_PALETTE } from "../lib/constants";
 
 const ANTHROPIC_PROXY = "/api/anthropic";
@@ -171,18 +171,6 @@ function AuditSetupPanel({
         <PageTypeClassifier projectId={projectId} sites={safeSites} pageTypes={pageTypes} setPageTypes={setPageTypes} />
       </SetupSection>
 
-    </div>
-  );
-}
-
-
-// ── Stat card ─────────────────────────────────────────────────────
-function StatCard({ label, value, sub, color = C.text, bg = C.white }) {
-  return (
-    <div style={{ background: bg, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px" }}>
-      <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 4 }}>{label}</div>
-      <div style={{ fontSize: 24, fontWeight: 800, color }}>{value}</div>
-      {sub && <div style={{ fontSize: 11, color: C.textLight, marginTop: 2 }}>{sub}</div>}
     </div>
   );
 }
@@ -494,193 +482,348 @@ Commence directement par ## 🔍. Chiffres précis. Actionnable.`;
 
 function exportPDF(audit, brand, site, aiText) {
   const brandName = brand?.brand_name || "Marque";
-  const date = new Date().toLocaleDateString("fr-FR");
-  const scoreColor = audit.presenceRate >= 70 ? "#059669" : audit.presenceRate >= 50 ? "#2563EB" : audit.presenceRate >= 30 ? "#D97706" : "#DC2626";
+  const dateStr = new Date().toLocaleDateString("fr-FR", { day: "2-digit", month: "long", year: "numeric" });
+  const dateFile = new Date().toLocaleDateString("fr-FR").replace(/\//g, "-");
+
+  // ── Palette Sonate ────────────────────────────────────────────
+  const S = {
+    green:      "#1A3C2E",
+    greenMid:   "#2D5A42",
+    greenLight: "#4A8C6A",
+    greenPale:  "#EAF2ED",
+    cream:      "#F5F0E8",
+    creamDark:  "#E8E0CE",
+    ink:        "#1C1C1C",
+    inkMid:     "#4A4A4A",
+    inkLight:   "#909090",
+    white:      "#FFFFFF",
+    ok:         "#2D6A4F",   okBg:   "#D8F3DC",
+    warn:       "#92400E",   warnBg: "#FEF3C7",
+    danger:     "#9B2335",   dangerBg:"#FCE4E8",
+    blue:       "#1A4A7A",   blueBg: "#DBEAFE",
+  };
+
+  const scoreColor = audit.presenceRate >= 70 ? S.ok     : audit.presenceRate >= 50 ? S.blue   : audit.presenceRate >= 30 ? S.warn   : S.danger;
+  const scoreBg    = audit.presenceRate >= 70 ? S.okBg   : audit.presenceRate >= 50 ? S.blueBg  : audit.presenceRate >= 30 ? S.warnBg  : S.dangerBg;
   const scoreLabel = audit.presenceRate >= 70 ? "Excellent" : audit.presenceRate >= 50 ? "Bon" : audit.presenceRate >= 30 ? "À améliorer" : "Critique";
 
-  // ── helpers HTML ──────────────────────────────────────────────
-  const h2 = (icon, title) => `<h2><span style="margin-right:8px">${icon}</span>${title}</h2>`;
-  const statCard = (val, label, color = "#1E293B") =>
-    `<div class="stat"><div class="stat-val" style="color:${color}">${val}</div><div class="stat-label">${label}</div></div>`;
-  const bar = (pct, color) =>
-    `<div style="height:6px;background:#E2E8F0;border-radius:3px;margin-top:4px"><div style="height:100%;width:${pct}%;background:${color};border-radius:3px"></div></div>`;
-  const lead = (priority, action, color = "#7C3AED", bg = "#F5F3FF") =>
-    `<div class="lead" style="border-left-color:${color};background:${bg}"><strong style="color:${color}">${priority}</strong><br><span style="color:#4A4A5A">${action}</span></div>`;
-  const table = (headers, rows) =>
-    `<table><thead><tr>${headers.map(h => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
-  const urlRow = (url, meta, badge, badgeColor) =>
-    `<div class="url-row"><a href="${url}" target="_blank" style="color:#2563EB;font-size:12px;word-break:break-all">${url}</a><span style="font-size:10px;color:#94A3B8;margin-left:8px">${meta}</span><span class="badge" style="background:${badgeColor}22;color:${badgeColor};border:1px solid ${badgeColor}44">${badge}</span></div>`;
+  // ── Helpers HTML ──────────────────────────────────────────────
+  const section = (num, title) =>
+    `<div class="section-hd"><div class="section-num">${num}</div><div class="section-title">${title}</div></div>`;
 
-  // ── BLOC 1 : Synthèse exécutive ───────────────────────────────
-  const bloc1 = `
-${h2("🎯", "Synthèse exécutive")}
-<div style="background:${scoreColor}0F;border:1.5px solid ${scoreColor}33;border-radius:12px;padding:20px 24px;margin:12px 0;display:flex;gap:32px;align-items:center;flex-wrap:wrap">
-  <div style="text-align:center;min-width:80px">
-    <div style="font-size:52px;font-weight:900;color:${scoreColor};line-height:1">${audit.presenceRate}%</div>
-    <div style="font-size:12px;font-weight:700;color:${scoreColor}">${scoreLabel}</div>
-    <div style="font-size:10px;color:#94A3B8;margin-top:2px">Score GEO</div>
+  const kpi = (val, label, color = S.green, bg = S.white, border = S.creamDark) =>
+    `<div class="kpi" style="background:${bg};border-color:${border}"><div class="kpi-val" style="color:${color}">${val}</div><div class="kpi-label">${label}</div></div>`;
+
+  const bar = (p, color) =>
+    `<div class="bar-track"><div class="bar-fill" style="width:${Math.min(p,100)}%;background:${color}"></div></div>`;
+
+  const pill = (text, color, bg) =>
+    `<span class="pill" style="color:${color};background:${bg}">${text}</span>`;
+
+  const lead = (title, body, color = S.green, bg = S.greenPale) =>
+    `<div class="lead" style="border-color:${color};background:${bg}"><div class="lead-title" style="color:${color}">${title}</div><div class="lead-body">${body}</div></div>`;
+
+  const tbl = (headers, rows) =>
+    `<table><thead><tr>${headers.map(h => `<th>${h}</th>`).join("")}</tr></thead><tbody>${
+      rows.map((r, i) => `<tr${i % 2 ? ' class="alt"' : ""}>${r.map(c => `<td>${c}</td>`).join("")}</tr>`).join("")
+    }</tbody></table>`;
+
+  const urlRow = (url, meta, badge, bColor, bBg) =>
+    `<div class="url-row"><a href="${url}" target="_blank" class="url-link">${url.replace(/^https?:\/\//, "")}</a><span class="url-meta">${meta}</span>${pill(badge, bColor, bBg)}</div>`;
+
+  // ── CSS ───────────────────────────────────────────────────────
+  const css = `
+    @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=DM+Sans:wght@300;400;500;600;700&display=swap');
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { background: ${S.cream}; }
+    body { font-family: 'DM Sans', system-ui, sans-serif; font-weight: 400; max-width: 960px; margin: 0 auto; color: ${S.ink}; line-height: 1.6; background: ${S.cream}; padding: 0 0 60px; }
+
+    /* ── Cover ── */
+    .cover { background: ${S.green}; padding: 48px 56px 40px; position: relative; overflow: hidden; }
+    .cover::after { content: ""; position: absolute; top: -60px; right: -60px; width: 280px; height: 280px; border-radius: 50%; background: rgba(255,255,255,.04); pointer-events: none; }
+    .cover-logo { display: flex; align-items: center; gap: 14px; margin-bottom: 40px; }
+    .cover-logo-mark { width: 40px; height: 40px; background: ${S.greenLight}; border-radius: 8px; display: flex; align-items: center; justify-content: center; }
+    .cover-logo-mark svg { width: 22px; height: 22px; fill: ${S.white}; }
+    .cover-logo-name { font-family: 'DM Sans', sans-serif; font-size: 13px; font-weight: 600; color: rgba(255,255,255,.7); letter-spacing: 2px; text-transform: uppercase; }
+    .cover-eyebrow { font-size: 10px; font-weight: 600; color: ${S.greenLight}; letter-spacing: 2.5px; text-transform: uppercase; margin-bottom: 10px; }
+    .cover-title { font-family: 'Playfair Display', Georgia, serif; font-size: 38px; font-weight: 900; color: ${S.white}; line-height: 1.15; margin-bottom: 6px; }
+    .cover-sub { font-size: 15px; color: rgba(255,255,255,.55); font-weight: 300; margin-bottom: 32px; }
+    .cover-meta { display: flex; gap: 28px; flex-wrap: wrap; }
+    .cover-meta-item { font-size: 11px; }
+    .cover-meta-label { color: rgba(255,255,255,.4); text-transform: uppercase; letter-spacing: 1px; font-size: 9px; display: block; margin-bottom: 2px; }
+    .cover-meta-val { color: ${S.white}; font-weight: 600; }
+
+    /* ── Score banner ── */
+    .score-banner { margin: 32px 40px 0; background: ${S.white}; border-radius: 16px; padding: 28px 32px; display: flex; gap: 36px; align-items: center; flex-wrap: wrap; box-shadow: 0 4px 24px rgba(26,60,46,.1); }
+    .score-circle { text-align: center; min-width: 90px; }
+    .score-pct { font-family: 'Playfair Display', Georgia, serif; font-size: 56px; font-weight: 900; color: ${S.green}; line-height: 1; }
+    .score-label { font-size: 10px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; margin-top: 4px; }
+    .score-sub { font-size: 9px; color: ${S.inkLight}; }
+    .score-bar-wrap { flex: 1; min-width: 220px; }
+    .score-track { height: 8px; background: ${S.creamDark}; border-radius: 4px; overflow: hidden; margin-bottom: 14px; }
+    .score-fill { height: 100%; border-radius: 4px; }
+    .score-facts { display: flex; gap: 20px; flex-wrap: wrap; font-size: 12px; }
+    .score-fact span { color: ${S.inkLight}; font-size: 10px; display: block; margin-bottom: 1px; }
+    .score-kpis { display: flex; flex-direction: column; gap: 4px; min-width: 130px; font-size: 11px; }
+    .score-kpi-row { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; border-bottom: 1px solid ${S.creamDark}; }
+    .score-kpi-row:last-child { border-bottom: none; }
+
+    /* ── Content wrapper ── */
+    .content { padding: 0 40px; margin-top: 32px; }
+
+    /* ── Section header ── */
+    .section-hd { display: flex; align-items: center; gap: 14px; margin: 36px 0 16px; }
+    .section-num { width: 28px; height: 28px; background: ${S.green}; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: ${S.white}; flex-shrink: 0; }
+    .section-title { font-family: 'Playfair Display', Georgia, serif; font-size: 18px; font-weight: 700; color: ${S.green}; border-bottom: 2px solid ${S.creamDark}; padding-bottom: 8px; flex: 1; }
+
+    /* ── KPI grid ── */
+    .kpi-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; margin: 16px 0; }
+    .kpi { border: 1px solid ${S.creamDark}; border-radius: 12px; padding: 14px 12px; text-align: center; }
+    .kpi-val { font-family: 'Playfair Display', Georgia, serif; font-size: 24px; font-weight: 900; }
+    .kpi-label { font-size: 9px; color: ${S.inkLight}; text-transform: uppercase; letter-spacing: .6px; margin-top: 3px; }
+
+    /* ── Tables ── */
+    table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 10px 0; }
+    th { background: ${S.green}; color: ${S.white}; padding: 9px 14px; text-align: left; font-size: 10px; font-weight: 600; letter-spacing: .8px; text-transform: uppercase; }
+    th:first-child { border-radius: 8px 0 0 0; }
+    th:last-child  { border-radius: 0 8px 0 0; }
+    td { padding: 9px 14px; border-bottom: 1px solid ${S.creamDark}; color: ${S.inkMid}; vertical-align: middle; }
+    tr.alt td { background: ${S.cream}; }
+    tr:last-child td { border-bottom: none; }
+
+    /* ── Bars ── */
+    .bar-track { height: 5px; background: ${S.creamDark}; border-radius: 3px; margin-top: 5px; overflow: hidden; }
+    .bar-fill   { height: 100%; border-radius: 3px; }
+
+    /* ── Pills ── */
+    .pill { font-size: 9px; font-weight: 700; border-radius: 20px; padding: 2px 8px; letter-spacing: .4px; text-transform: uppercase; white-space: nowrap; }
+
+    /* ── Leads ── */
+    .lead { border-left: 3px solid ${S.green}; border-radius: 0 10px 10px 0; padding: 10px 16px; margin: 6px 0; }
+    .lead-title { font-size: 12px; font-weight: 700; margin-bottom: 2px; }
+    .lead-body  { font-size: 12px; color: ${S.inkMid}; line-height: 1.5; }
+
+    /* ── 2-col / 3-col ── */
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 16px; }
+    .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-top: 16px; }
+    .col-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .7px; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid ${S.creamDark}; }
+
+    /* ── URL rows ── */
+    .url-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid ${S.creamDark}; flex-wrap: wrap; }
+    .url-link { font-size: 11px; color: ${S.greenMid}; text-decoration: none; flex: 1; min-width: 160px; word-break: break-all; }
+    .url-link:hover { text-decoration: underline; }
+    .url-meta { font-size: 10px; color: ${S.inkLight}; white-space: nowrap; }
+
+    /* ── Q lists ── */
+    .q-list { list-style: none; padding: 0; margin: 0; font-size: 12px; }
+    .q-list li { padding: 5px 0; border-bottom: 1px solid ${S.creamDark}; display: flex; gap: 8px; }
+    .q-list li:last-child { border-bottom: none; }
+
+    /* ── AI block ── */
+    .ai-block { background: ${S.white}; border: 1px solid ${S.creamDark}; border-left: 4px solid ${S.green}; border-radius: 0 12px 12px 0; padding: 20px 24px; font-size: 12px; line-height: 1.85; color: ${S.inkMid}; white-space: pre-wrap; margin-top: 12px; }
+
+    /* ── Footer ── */
+    .footer { margin: 48px 40px 0; padding-top: 20px; border-top: 1px solid ${S.creamDark}; display: flex; justify-content: space-between; align-items: center; font-size: 10px; color: ${S.inkLight}; }
+    .footer-brand { font-family: 'Playfair Display', serif; font-size: 13px; font-weight: 700; color: ${S.green}; }
+
+    @media print {
+      html, body { background: ${S.white}; }
+      .cover { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .score-banner { box-shadow: none; }
+      .section-hd { break-before: auto; }
+    }
+  `;
+
+  // ── COVER ─────────────────────────────────────────────────────
+  const cover = `
+<div class="cover">
+  <div class="cover-logo">
+    <div class="cover-logo-mark">
+      <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/></svg>
+    </div>
+    <div class="cover-logo-name">Sonate · GEO Monitor</div>
   </div>
-  <div style="flex:1;min-width:200px">
-    <div style="height:10px;background:#E2E8F0;border-radius:5px;margin-bottom:12px;overflow:hidden">
-      <div style="height:100%;width:${audit.presenceRate}%;background:${scoreColor};border-radius:5px"></div>
-    </div>
-    <div style="display:flex;gap:20px;flex-wrap:wrap;font-size:12px">
-      <span><span style="color:#94A3B8">Marque</span> <strong>${brandName}</strong></span>
-      <span><span style="color:#94A3B8">Site</span> <strong>${site?.label || "—"}</strong></span>
-      <span><span style="color:#94A3B8">Questions</span> <strong>${audit.questions}</strong></span>
-      <span><span style="color:#94A3B8">Résultats</span> <strong>${audit.total}</strong></span>
-    </div>
+  <div class="cover-eyebrow">Rapport d'audit</div>
+  <div class="cover-title">Audit GEO<br>${brandName}</div>
+  <div class="cover-sub">Analyse de visibilité générative — IA & LLMs</div>
+  <div class="cover-meta">
+    <div class="cover-meta-item"><span class="cover-meta-label">Site analysé</span><span class="cover-meta-val">${site?.label || "—"}</span></div>
+    <div class="cover-meta-item"><span class="cover-meta-label">Date de génération</span><span class="cover-meta-val">${dateStr}</span></div>
+    <div class="cover-meta-item"><span class="cover-meta-label">Questions testées</span><span class="cover-meta-val">${audit.questions}</span></div>
+    <div class="cover-meta-item"><span class="cover-meta-label">Résultats analysés</span><span class="cover-meta-val">${audit.total}</span></div>
   </div>
 </div>
-<div class="stats">
-  ${statCard(audit.presenceRate + "%", "Présence marque", scoreColor)}
-  ${statCard(audit.avgPos ? "#" + audit.avgPos : "—", "Position moy.")}
-  ${statCard(audit.withSources, "Cité en source", "#2563EB")}
-  ${statCard(audit.withBrand + "/" + audit.total, "Avec mention")}
-  ${statCard(audit.questions, "Questions testées", "#7C3AED")}
-  ${statCard(Object.keys(audit.compStats).length, "Concurrents", "#D97706")}
+
+<div class="score-banner">
+  <div class="score-circle">
+    <div class="score-pct" style="color:${scoreColor}">${audit.presenceRate}%</div>
+    <div class="score-label" style="color:${scoreColor}">${scoreLabel}</div>
+    <div class="score-sub">Score GEO</div>
+  </div>
+  <div class="score-bar-wrap">
+    <div class="score-track"><div class="score-fill" style="width:${audit.presenceRate}%;background:${scoreColor}"></div></div>
+    <div class="score-facts">
+      <div class="score-fact"><span>Marque</span><strong>${brandName}</strong></div>
+      <div class="score-fact"><span>Questions</span><strong>${audit.questions}</strong></div>
+      <div class="score-fact"><span>Résultats</span><strong>${audit.total}</strong></div>
+      <div class="score-fact"><span>Concurrents</span><strong>${Object.keys(audit.compStats).length}</strong></div>
+    </div>
+  </div>
+  <div class="score-kpis">
+    ${[
+      ["Présence marque", audit.withBrand + "/" + audit.total, scoreColor],
+      ["Position moy.",   audit.avgPos ? "#" + audit.avgPos : "—", S.ink],
+      ["Cité en source",  String(audit.withSources), S.blue],
+      ["Concurrents",     String(Object.keys(audit.compStats).length), S.warn],
+    ].map(([l, v, c]) => `<div class="score-kpi-row"><span style="color:${S.inkLight};font-size:10px">${l}</span><strong style="color:${c}">${v}</strong></div>`).join("")}
+  </div>
 </div>`;
 
-  // ── BLOC 2 : Visibilité marque ────────────────────────────────
+  // ── BLOC 1 : KPIs ─────────────────────────────────────────────
+  const bloc1 = `
+${section("01", "Indicateurs clés")}
+<div class="kpi-grid">
+  ${kpi(audit.presenceRate + "%", "Présence marque",  scoreColor, scoreBg)}
+  ${kpi(audit.avgPos ? "#" + audit.avgPos : "—", "Position moy.", S.ink)}
+  ${kpi(audit.withSources, "Cité en source", S.blue, S.blueBg)}
+  ${kpi(audit.withBrand + "/" + audit.total, "Avec mention", S.ink)}
+  ${kpi(audit.questions, "Questions testées", S.green, S.greenPale)}
+  ${kpi(Object.keys(audit.compStats).length, "Concurrents", S.warn, S.warnBg)}
+</div>`;
+
+  // ── BLOC 2 : Visibilité ───────────────────────────────────────
   const providerRows = Object.entries(audit.providerStats).map(([pid, s]) => {
     const rate = pct(s.withBrand, s.total);
-    const c = rate >= 50 ? "#059669" : rate > 0 ? "#D97706" : "#DC2626";
-    return `<tr><td style="font-weight:700">${pid}</td><td style="color:${c};font-weight:700">${rate}%</td><td>${s.withBrand}/${s.total}</td><td>${bar(rate, c)}</td></tr>`;
-  }).join("");
+    const c = rate >= 50 ? S.ok : rate > 0 ? S.warn : S.danger;
+    return [`<strong>${pid}</strong>`, `<span style="color:${c};font-weight:700">${rate}%</span>`, `${s.withBrand}/${s.total}`, bar(rate, c)];
+  });
 
   const presentList = audit.presentBrandQs.map(q =>
-    `<li style="color:#059669;padding:3px 0;border-bottom:1px solid #F0F0F5">✓ ${q}</li>`).join("");
+    `<li><span style="color:${S.ok};font-weight:700">✓</span>${q}</li>`).join("");
   const missingList = audit.missingBrandQs.map(q =>
-    `<li style="color:#DC2626;padding:3px 0;border-bottom:1px solid #F0F0F5">✗ ${q}</li>`).join("");
+    `<li><span style="color:${S.danger};font-weight:700">✗</span>${q}</li>`).join("");
 
   const bloc2 = `
-${h2("📡", "Visibilité marque")}
-<h3>Présence par provider LLM</h3>
-<table><thead><tr><th>Provider</th><th>Présence</th><th>Ratio</th><th>Barre</th></tr></thead><tbody>${providerRows}</tbody></table>
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:16px">
+${section("02", "Visibilité marque")}
+${tbl(["Provider", "Présence", "Ratio", ""], providerRows)}
+<div class="grid-2">
   <div>
-    <div style="font-size:11px;font-weight:700;color:#059669;text-transform:uppercase;letter-spacing:.7px;margin-bottom:8px">Questions avec présence (${audit.presentBrandQs.length})</div>
-    <ul style="list-style:none;padding:0;margin:0;font-size:12px">${presentList || "<li style='color:#94A3B8;font-style:italic'>Aucune</li>"}</ul>
+    <div class="col-label" style="color:${S.ok}">✓ Questions avec présence (${audit.presentBrandQs.length})</div>
+    <ul class="q-list">${presentList || `<li style="color:${S.inkLight};font-style:italic">Aucune présence</li>`}</ul>
   </div>
   <div>
-    <div style="font-size:11px;font-weight:700;color:#DC2626;text-transform:uppercase;letter-spacing:.7px;margin-bottom:8px">Questions sans présence (${audit.missingBrandQs.length})</div>
-    <ul style="list-style:none;padding:0;margin:0;font-size:12px">${missingList || "<li style='color:#94A3B8;font-style:italic'>Toutes présentes !</li>"}</ul>
+    <div class="col-label" style="color:${S.danger}">✗ Questions sans présence (${audit.missingBrandQs.length})</div>
+    <ul class="q-list">${missingList || `<li style="color:${S.inkLight};font-style:italic">Toutes les questions ont une présence !</li>`}</ul>
   </div>
 </div>`;
 
   // ── BLOC 3 : Concurrentiel ────────────────────────────────────
-  const compRows = Object.entries(audit.compStats).sort((a,b) => b[1].mentions - a[1].mentions).map(([name, s]) => [
+  const compRows = Object.entries(audit.compStats).sort((a, b) => b[1].mentions - a[1].mentions).map(([name, s]) => [
     `<strong>${name}</strong>`,
     s.mentions,
-    `<span style="color:#D97706">${pct(s.mentions, audit.total)}%</span>`,
-    s.positions.length ? (s.positions.reduce((a,b) => a+b,0)/s.positions.length).toFixed(1) : "—",
+    `<span style="color:${S.warn}">${pct(s.mentions, audit.total)}%</span>`,
+    s.positions.length ? (s.positions.reduce((a, b) => a + b, 0) / s.positions.length).toFixed(1) : "—",
   ]);
-  const intentRows = Object.entries(audit.intentCount).sort((a,b) => b[1]-a[1]).map(([k,v]) => [
-    k, v, `<span style="color:#7C3AED">${pct(v, audit.total)}%</span>`, bar(pct(v, audit.total), "#7C3AED"),
+  const intentRows = Object.entries(audit.intentCount).sort((a, b) => b[1] - a[1]).map(([k, v]) => [
+    k, v, `<span style="color:${S.green}">${pct(v, audit.total)}%</span>`, bar(pct(v, audit.total), S.green),
   ]);
-  const typeRows = Object.entries(audit.typeCount).sort((a,b) => b[1]-a[1]).slice(0,6).map(([k,v]) => [
-    k, v, `<span style="color:#2563EB">${pct(v, audit.total)}%</span>`, bar(pct(v, audit.total), "#2563EB"),
+  const typeRows = Object.entries(audit.typeCount).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([k, v]) => [
+    k, v, `<span style="color:${S.blue}">${pct(v, audit.total)}%</span>`, bar(pct(v, audit.total), S.blue),
   ]);
 
   const bloc3 = `
-${h2("⚔️", "Paysage concurrentiel")}
-${compRows.length ? table(["Concurrent","Mentions","% résultats","Pos. moy."], compRows) : "<p style='color:#94A3B8;font-style:italic'>Aucun concurrent détecté</p>"}
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:16px">
+${section("03", "Paysage concurrentiel")}
+${compRows.length ? tbl(["Concurrent", "Mentions", "% résultats", "Pos. moy."], compRows) : `<p style="color:${S.inkLight};font-style:italic;font-size:12px">Aucun concurrent détecté dans les réponses LLM</p>`}
+<div class="grid-2">
   <div>
-    <h3>Répartition par intention</h3>
-    ${intentRows.length ? table(["Intention","Count","%",""], intentRows) : "<p style='color:#94A3B8;font-style:italic'>—</p>"}
+    <div class="col-label">Répartition par intention</div>
+    ${intentRows.length ? tbl(["Intention", "Count", "%", ""], intentRows) : `<p style="color:${S.inkLight};font-style:italic;font-size:11px">—</p>`}
   </div>
   <div>
-    <h3>Types de réponses LLM</h3>
-    ${typeRows.length ? table(["Type","Count","%",""], typeRows) : "<p style='color:#94A3B8;font-style:italic'>—</p>"}
+    <div class="col-label">Types de réponses LLM</div>
+    ${typeRows.length ? tbl(["Type", "Count", "%", ""], typeRows) : `<p style="color:${S.inkLight};font-style:italic;font-size:11px">—</p>`}
   </div>
 </div>`;
 
   // ── BLOC 4 : Sources & URLs ───────────────────────────────────
-  const domainRows = Object.entries(audit.topDomains).sort((a,b) => b[1]-a[1]).slice(0,10).map(([d, cnt], i) => {
+  const domainRows = Object.entries(audit.topDomains).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([d, cnt], i) => {
     const isBrand = audit.brandUrls.some(u => u.domain === d);
     const isComp  = audit.competitorUrls.some(u => u.domain === d);
-    const badge   = isBrand ? `<span class="badge" style="background:#ECFDF5;color:#059669;border:1px solid #059669">marque</span>`
-                  : isComp  ? `<span class="badge" style="background:#FEF2F2;color:#DC2626;border:1px solid #DC2626">concurrent</span>` : "";
-    return `<tr><td style="color:#94A3B8;font-weight:700">#${i+1}</td><td style="font-weight:600;color:${isBrand?"#059669":isComp?"#DC2626":"#1E293B"}">${d} ${badge}</td><td style="font-weight:700">${cnt}×</td></tr>`;
-  }).join("");
+    const badge   = isBrand ? pill("marque",     S.ok,     S.okBg)
+                  : isComp  ? pill("concurrent", S.danger, S.dangerBg) : "";
+    return [
+      `<span style="color:${S.inkLight};font-weight:700">#${i+1}</span>`,
+      `<strong style="color:${isBrand ? S.ok : isComp ? S.danger : S.ink}">${d}</strong> ${badge}`,
+      `<strong>${cnt}×</strong>`,
+    ];
+  });
 
-  const urlsOptimize = audit.urlsToOptimize.slice(0,8).map(u =>
-    urlRow(u.url, `${u.count_as_source} src · ${u.count_in_answer} rép`, "À booster", "#D97706")).join("");
-  const urlsRework = audit.urlsToRework.slice(0,8).map(u =>
-    urlRow(u.url, `${u.count_as_source} src · ${u.count_in_answer} rép`, "À refaire", "#DC2626")).join("");
-  const urlsInspire = audit.urlsToInspire.slice(0,8).map(u =>
-    urlRow(u.url, `${getDomain(u.url)} · ${u.count_as_source} cit.`, "Inspiration", "#2563EB")).join("");
+  const urlsOpt     = audit.urlsToOptimize.slice(0, 8).map(u  => urlRow(u.url, `${u.count_as_source} src · ${u.count_in_answer} rép`, "À booster",  S.warn,   S.warnBg)).join("");
+  const urlsRework  = audit.urlsToRework.slice(0, 8).map(u    => urlRow(u.url, `${u.count_as_source} src · ${u.count_in_answer} rép`, "À refaire",  S.danger, S.dangerBg)).join("");
+  const urlsInspire = audit.urlsToInspire.slice(0, 8).map(u   => urlRow(u.url, `${getDomain(u.url)} · ${u.count_as_source} cit.`,     "Inspiration", S.blue,   S.blueBg)).join("");
 
   const bloc4 = `
-${h2("🔗", "Sources & URLs")}
-<h3>Top domaines cités</h3>
-<table><thead><tr><th>#</th><th>Domaine</th><th>Citations</th></tr></thead><tbody>${domainRows}</tbody></table>
-<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-top:16px">
+${section("04", "Sources & URLs")}
+${domainRows.length ? tbl(["#", "Domaine", "Citations"], domainRows) : `<p style="color:${S.inkLight};font-style:italic;font-size:12px">Aucun domaine indexé</p>`}
+<div class="grid-3">
   <div>
-    <div style="font-size:11px;font-weight:700;color:#D97706;text-transform:uppercase;margin-bottom:6px">⚡ À optimiser</div>
-    ${urlsOptimize || "<p style='color:#94A3B8;font-style:italic;font-size:11px'>Aucune</p>"}
+    <div class="col-label" style="color:${S.warn}">⚡ À optimiser</div>
+    ${urlsOpt || `<p style="color:${S.inkLight};font-style:italic;font-size:11px">Aucune</p>`}
   </div>
   <div>
-    <div style="font-size:11px;font-weight:700;color:#DC2626;text-transform:uppercase;margin-bottom:6px">🔄 À reprendre</div>
-    ${urlsRework || "<p style='color:#94A3B8;font-style:italic;font-size:11px'>Aucune</p>"}
+    <div class="col-label" style="color:${S.danger}">🔄 À reprendre</div>
+    ${urlsRework || `<p style="color:${S.inkLight};font-style:italic;font-size:11px">Aucune</p>`}
   </div>
   <div>
-    <div style="font-size:11px;font-weight:700;color:#2563EB;text-transform:uppercase;margin-bottom:6px">💡 Référence</div>
-    ${urlsInspire || "<p style='color:#94A3B8;font-style:italic;font-size:11px'>Aucune</p>"}
+    <div class="col-label" style="color:${S.blue}">💡 Référence</div>
+    ${urlsInspire || `<p style="color:${S.inkLight};font-style:italic;font-size:11px">Aucune</p>`}
   </div>
 </div>`;
 
   // ── BLOC 5 : Plan d'action ────────────────────────────────────
-  const leadsHtml = audit.leads.map(l => lead(l.priority + " — " + l.label, l.action)).join("");
+  const leadsHtml = audit.leads.map(l => lead(
+    l.priority + " — " + l.label, l.action,
+    l.priority.includes("🔴") ? S.danger : l.priority.includes("🟠") ? S.warn : l.priority.includes("🟡") ? "#856404" : S.green,
+    l.priority.includes("🔴") ? S.dangerBg : l.priority.includes("🟠") ? S.warnBg : l.priority.includes("🟡") ? "#FFF9E6" : S.greenPale,
+  )).join("");
 
   const bloc5 = `
-${h2("🎯", "Plan d'action — Pistes prioritaires")}
-${leadsHtml || "<p style='color:#94A3B8;font-style:italic'>Aucune piste générée</p>"}
-${aiText ? `${h2("✦", "Analyse IA détaillée")}<div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:8px;padding:16px 20px;font-size:12px;line-height:1.8;white-space:pre-wrap">${aiText}</div>` : ""}`;
+${section("05", "Plan d'action")}
+${leadsHtml || `<p style="color:${S.inkLight};font-style:italic;font-size:12px">Aucune piste générée</p>`}
+${aiText ? `${section("06", "Analyse IA détaillée")}<div class="ai-block">${aiText}</div>` : ""}`;
+
+  // ── Footer ────────────────────────────────────────────────────
+  const footer = `
+<div class="footer">
+  <div><div class="footer-brand">Sonate</div><div>Rapport généré le ${dateStr}</div></div>
+  <div style="text-align:right">${brandName} · ${site?.label || "—"}</div>
+</div>`;
 
   // ── Assemblage final ──────────────────────────────────────────
   const html = `<!DOCTYPE html>
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
-<title>Audit GEO — ${brandName} — ${date}</title>
-<style>
-  * { box-sizing: border-box; }
-  body { font-family: 'Segoe UI', system-ui, sans-serif; max-width: 960px; margin: 40px auto; color: #1E293B; line-height: 1.6; padding: 0 24px; }
-  h1 { font-size: 26px; color: #7C3AED; border-bottom: 3px solid #7C3AED; padding-bottom: 10px; margin-bottom: 4px; }
-  h2 { font-size: 16px; font-weight: 800; margin-top: 32px; margin-bottom: 12px; padding: 10px 16px; background: #F8FAFC; border-left: 4px solid #7C3AED; border-radius: 0 8px 8px 0; }
-  h3 { font-size: 12px; font-weight: 700; color: #64748B; text-transform: uppercase; letter-spacing: .7px; margin: 16px 0 8px; }
-  .stats { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; margin: 16px 0; }
-  .stat { background: #F8FAFC; border: 1px solid #E8E8ED; border-radius: 10px; padding: 12px; text-align: center; }
-  .stat-val { font-size: 22px; font-weight: 800; }
-  .stat-label { font-size: 9px; color: #94A3B8; text-transform: uppercase; letter-spacing: .5px; margin-top: 2px; }
-  table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 12px; }
-  th { background: #F1F5F9; padding: 8px 12px; text-align: left; font-size: 10px; color: #64748B; text-transform: uppercase; letter-spacing: .5px; border-bottom: 1px solid #E2E8F0; }
-  td { padding: 8px 12px; border-bottom: 1px solid #F1F5F9; vertical-align: middle; }
-  tr:last-child td { border-bottom: none; }
-  .lead { padding: 10px 14px; border-left: 3px solid #7C3AED; background: #F5F3FF; margin: 6px 0; border-radius: 0 8px 8px 0; font-size: 12px; }
-  .badge { font-size: 9px; font-weight: 700; border-radius: 4px; padding: 1px 6px; margin-left: 6px; }
-  .url-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid #F0F0F5; flex-wrap: wrap; }
-  .url-row a { flex: 1; min-width: 200px; }
-  @media print { body { margin: 20px; } h2 { break-before: avoid; } }
-</style>
+<title>Audit GEO — ${brandName} — ${dateStr}</title>
+<style>${css}</style>
 </head>
 <body>
-<h1>Audit GEO — ${brandName}</h1>
-<p style="color:#94A3B8;font-size:12px;margin-top:4px">Site : <strong style="color:#1E293B">${site?.label || "—"}</strong> · Généré le ${date}</p>
+${cover}
+<div class="content">
 ${bloc1}
 ${bloc2}
 ${bloc3}
 ${bloc4}
 ${bloc5}
+</div>
+${footer}
 </body>
 </html>`;
 
   const blob = new Blob([html], { type: "text/html;charset=utf-8" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = `audit-geo-${brandName.toLowerCase().replace(/\s+/g, "-")}-${date.replace(/\//g, "-")}.html`;
+  a.download = `audit-geo-${brandName.toLowerCase().replace(/\s+/g, "-")}-${dateFile}.html`;
   a.click();
   URL.revokeObjectURL(a.href);
 }
