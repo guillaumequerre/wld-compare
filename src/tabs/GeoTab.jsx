@@ -2059,7 +2059,7 @@ function HintPanelQuestion({ questionId, question, sources, brandName, brandAlia
 
 // ── ProviderRow — calendar + info + accordion + run button ────────
 
-function ProviderRow({ provider, results, allProviderResults, brandName, brandAliases, brandDomain = "", hasKey, isRunning, onRun, questionId, newCalEntry = null, question = "", claudeKey = "", projectId = null, siteId = null, savedHint = "", brandTerms = [], competitorMap = {} }) {
+function ProviderRow({ provider, results, allProviderResults, brandName, brandAliases, brandDomain = "", hasKey, isRunning, onRun, questionId, newCalEntry = null, question = "", claudeKey = "", projectId = null, siteId = null, savedHint = "", brandTerms = [], competitorMap = {}, lastCalDate = null }) {
   const [open, setOpen] = useState(false);
   const p = provider;
 
@@ -2068,6 +2068,11 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
   const hasBrand = isBrandPresent(result);
   const sources = result?.sources || [];
   const comps   = result?.competitors_mentioned || [];
+
+  // Date à afficher : la plus récente entre le résultat en mémoire et la dernière entrée de calendrier DB
+  const resultDateStr = result?.created_at?.slice(0, 10) || null;
+  const useCalDate = lastCalDate && (!resultDateStr || lastCalDate > resultDateStr);
+  const displayDate = useCalDate ? lastCalDate : result?.created_at || null;
 
 
 
@@ -2110,11 +2115,11 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
             {(result.input_tokens||0)+(result.output_tokens||0)} tok
           </span>
         )}
-        {result?.created_at && (
-          <span style={{ fontSize: 9, color: C.textLight, flexShrink: 0 }}>
-            {new Date(result.created_at).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' })}
-            {' '}
-            {new Date(result.created_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+        {displayDate && (
+          <span style={{ fontSize: 9, color: useCalDate ? C.blue : C.textLight, flexShrink: 0 }}
+            title={useCalDate ? "Date depuis le calendrier DB (résultat plus récent non chargé en mémoire)" : undefined}>
+            {new Date(displayDate).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' })}
+            {!useCalDate && <>{' '}{new Date(displayDate).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}</>}
           </span>
         )}
 
@@ -2663,6 +2668,18 @@ ${question}`;
     return out;
   }, [resultsByQ]);
 
+  // Dernière date connue (DB) par question+provider — pour corriger l'affichage de date dans ProviderRow
+  const lastCalDateByQP = useMemo(() => {
+    const map = {}; // { `${qId}|${providerId}` → "YYYY-MM-DD HH:MM" }
+    calendarEntries.forEach(e => {
+      if (!e.question_id || !e.provider_id) return;
+      const key = `${e.question_id}|${e.provider_id}`;
+      const dateStr = e.test_date || (e.created_at || "").slice(0, 10);
+      if (!map[key] || dateStr > map[key]) map[key] = dateStr;
+    });
+    return map;
+  }, [calendarEntries]);
+
   // Per question: était positionnée dans les 30 derniers jours (carré vert calendrier)
   // mais absente du dernier résultat → "Positionnée précédemment"
   const lostByQ = useMemo(() => {
@@ -3104,6 +3121,7 @@ ${question}`;
                         savedHintDate={hintsMap[q.id]?.date || null}
                         brandTerms={brandTermsForHighlight}
                         competitorMap={competitorMap}
+                        lastCalDate={lastCalDateByQP[`${q.id}|${p.id}`] || null}
                       />
                     );
                   })}

@@ -38,9 +38,9 @@ export default async function handler(request, context) {
     });
   }
 
-  // Client can specify endpoint: "responses" (default) or "completions"
+  // Client can specify endpoint: "responses" (default) or "chat"/"completions"
   const endpoint = request.headers.get("X-Openai-Endpoint") || "responses";
-  const openaiUrl = endpoint === "completions"
+  const openaiUrl = (endpoint === "completions" || endpoint === "chat")
     ? "https://api.openai.com/v1/chat/completions"
     : "https://api.openai.com/v1/responses";
 
