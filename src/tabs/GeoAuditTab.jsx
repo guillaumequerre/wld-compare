@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { sbGetBrand, sbGetQuestions, sbGetGeoResults, sbGetUrlIndex,
   sbSaveProject, sbDeleteProject, sbDownload,
-  sbGetCalendarEntriesBatch, sbGetKeywords } from "../lib/supabase";
+  sbGetCalendarEntriesBatch, sbGetKeywords, sbGetCategories } from "../lib/supabase";
 import UploadCard from "../components/UploadCard";
 import PageTypeClassifier from "../components/PageTypeClassifier";
 import { newProject } from "../lib/helpers";
@@ -186,6 +186,229 @@ function AuditSetupPanel({
 
 
 // ── Stat card ─────────────────────────────────────────────────────
+// ── Analyse par catégorie de mots-clés ───────────────────────────
+function CategoryAnalysisCard({ siteQuestions, siteResults, keywords, categories, brand, claudeKey }) {
+  const [status, setStatus]   = useState("idle"); // idle | warning | loading | done | error
+  const [analysis, setAnalysis] = useState("");
+  const [open, setOpen]         = useState(false);
+
+  // Construire la map keyword → category pour enrichir les questions
+  const kwCatMap = useMemo(() => {
+    const m = {};
+    keywords.forEach(k => { if (k.category_id) m[k.id] = k.category_id; });
+    return m;
+  }, [keywords]);
+
+  // Vérifier si des catégories sont assignées aux mots-clés
+  const kwWithCat   = keywords.filter(k => k.category_id).length;
+  const kwTotal     = keywords.length;
+  const hasCats     = kwWithCat > 0;
+  const catCoverage = kwTotal > 0 ? Math.round(kwWithCat / kwTotal * 100) : 0;
+
+  // Grouper les questions par catégorie via keyword_id → category_id
+  const byCategory = useMemo(() => {
+    const map = {}; // category_id → { cat, questions, results }
+    siteQuestions.forEach(q => {
+      const catId = kwCatMap[q.keyword_id] || "__none__";
+      if (!map[catId]) map[catId] = { questions: [], results: [] };
+      map[catId].questions.push(q);
+    });
+    siteResults.forEach(r => {
+      const q = siteQuestions.find(q => q.id === r.question_id);
+      const catId = (q && kwCatMap[q.keyword_id]) || "__none__";
+      if (!map[catId]) map[catId] = { questions: [], results: [] };
+      map[catId].results.push(r);
+    });
+    return map;
+  }, [siteQuestions, siteResults, kwCatMap]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const catStats = useMemo(() => {
+    return Object.entries(byCategory)
+      .filter(([id]) => id !== "__none__")
+      .map(([id, { questions, results }]) => {
+        const cat = categories.find(c => c.id === id);
+        const total = results.length;
+        const present = results.filter(r => r.brand_mentioned === true || r.brand_mentioned === 1).length;
+        const pct = total > 0 ? Math.round(present / total * 100) : null;
+        return { id, cat, questions: questions.length, results: total, present, pct };
+      })
+      .sort((a, b) => (b.pct ?? -1) - (a.pct ?? -1));
+  }, [byCategory, categories]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const noneStats = byCategory["__none__"] ? (() => {
+    const { questions, results } = byCategory["__none__"];
+    const present = results.filter(r => r.brand_mentioned === true || r.brand_mentioned === 1).length;
+    return { questions: questions.length, results: results.length, present };
+  })() : null;
+
+  const run = async () => {
+    if (!claudeKey) return;
+    setStatus("loading"); setAnalysis(""); setOpen(true);
+    const brandName = brand?.brand_name || "la marque";
+    const rows = catStats.map(s =>
+      `- ${s.cat?.name || s.id} : ${s.pct !== null ? s.pct + "%" : "—"} présence (${s.present}/${s.results} rép., ${s.questions} questions)`
+    ).join("\n");
+    const prompt = `Tu es un expert GEO (Generative Engine Optimization).
+Voici la présence de "${brandName}" dans les réponses LLM, ventilée par catégorie de mots-clés :
+
+${rows || "Aucune donnée de catégorie disponible."}
+
+${noneStats ? `Questions non catégorisées : ${noneStats.results} réponses, ${Math.round((noneStats.present/Math.max(noneStats.results,1))*100)}% de présence.\n` : ""}
+
+Analyse en 3 sections :
+## Forces par catégorie
+Quelles catégories ont la meilleure présence et pourquoi (2-3 phrases max par catégorie forte).
+
+## Axes prioritaires
+Les 3 catégories avec le plus grand potentiel de progression. Pour chacune : diagnostic et action concrète.
+
+## Recommandation transversale
+Une recommandation de contenu ou de stratégie qui s'applique à toutes les catégories faibles.
+
+Sois direct, concis, actionnable. Pas de généralités.`;
+
+    try {
+      const res = await fetch("/api/anthropic", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 900, messages: [{ role: "user", content: prompt }], apiKey: claudeKey }),
+      });
+      const data = await res.json();
+      const text = data.content?.[0]?.text || data.error?.message || "Erreur de génération.";
+      setAnalysis(text);
+      setStatus("done");
+    } catch(e) {
+      setAnalysis("Erreur : " + e.message);
+      setStatus("error");
+    }
+  };
+
+  const handleCTA = () => {
+    if (!hasCats) {
+      setStatus("warning");
+    } else {
+      run();
+    }
+  };
+
+  // Couleur de présence
+  const pctColor = (p) => p === null ? C.textLight : p >= 60 ? "#059669" : p >= 30 ? "#D97706" : "#DC2626";
+  const pctBg    = (p) => p === null ? C.bg : p >= 60 ? "#ECFDF5" : p >= 30 ? "#FFFBEB" : "#FEF2F2";
+
+  return (
+    <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden", marginBottom: 16 }}>
+      {/* Header */}
+      <div style={{ padding: "14px 20px", borderBottom: `1px solid ${C.border}`, background: C.bg, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 18 }}>📂</span>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Analyse par catégorie</div>
+            <div style={{ fontSize: 11, color: C.textLight, marginTop: 1 }}>
+              Présence de la marque ventilée par catégorie de mots-clés
+            </div>
+          </div>
+        </div>
+        <button
+          onClick={handleCTA}
+          disabled={status === "loading" || !claudeKey}
+          style={{ padding: "8px 18px", background: status === "loading" ? C.bg : "#7C3AED", color: status === "loading" ? C.textLight : "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: status === "loading" || !claudeKey ? "default" : "pointer", opacity: !claudeKey ? 0.5 : 1 }}
+          title={!claudeKey ? "Clé Claude manquante dans ⚙️ Providers" : undefined}
+        >
+          {status === "loading" ? "⏳ Analyse…" : "✦ Analyser par catégorie"}
+        </button>
+      </div>
+
+      {/* Warning — pas de catégories */}
+      {status === "warning" && (
+        <div style={{ padding: "14px 20px", background: "#FFFBEB", borderBottom: `1px solid #FDE68A` }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#92400E", marginBottom: 4 }}>
+            ⚠️ Aucun mot-clé catégorisé ({catCoverage}% des {kwTotal} mots-clés ont une catégorie)
+          </div>
+          <div style={{ fontSize: 11, color: "#B45309", marginBottom: 10 }}>
+            Pour une analyse pertinente, catégorisez vos mots-clés dans <strong>Fan-outs → Mots-clés</strong>.
+            Les catégories s'appliquent aux questions liées au mot-clé.
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={run} style={{ padding: "5px 14px", background: "#D97706", color: "#fff", border: "none", borderRadius: 7, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+              Analyser quand même
+            </button>
+            <button onClick={() => setStatus("idle")} style={{ padding: "5px 14px", background: "none", border: `1px solid #D97706`, color: "#D97706", borderRadius: 7, fontSize: 11, cursor: "pointer" }}>
+              Annuler
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Tableau des catégories — toujours visible */}
+      {catStats.length > 0 && (
+        <div style={{ padding: "14px 20px", borderBottom: status === "done" ? `1px solid ${C.border}` : "none" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: C.bg }}>
+                {["Catégorie", "Questions", "Réponses", "Présence"].map(h => (
+                  <th key={h} style={{ padding: "6px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.5, borderBottom: `1px solid ${C.border}` }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {catStats.map(s => (
+                <tr key={s.id} style={{ borderBottom: `1px solid ${C.borderLight}` }}>
+                  <td style={{ padding: "7px 12px", fontWeight: 600 }}>
+                    <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: s.cat?.color || "#94A3B8", marginRight: 8 }} />
+                    {s.cat?.name || s.id}
+                  </td>
+                  <td style={{ padding: "7px 12px", color: C.textMid }}>{s.questions}</td>
+                  <td style={{ padding: "7px 12px", color: C.textMid }}>{s.results}</td>
+                  <td style={{ padding: "7px 12px" }}>
+                    {s.pct !== null
+                      ? <span style={{ fontWeight: 700, color: pctColor(s.pct), background: pctBg(s.pct), borderRadius: 5, padding: "2px 8px" }}>{s.pct}%</span>
+                      : <span style={{ color: C.textLight, fontSize: 11 }}>—</span>}
+                  </td>
+                </tr>
+              ))}
+              {noneStats && noneStats.questions > 0 && (
+                <tr style={{ borderBottom: `1px solid ${C.borderLight}`, opacity: 0.6 }}>
+                  <td style={{ padding: "7px 12px", fontStyle: "italic", color: C.textLight }}>Non catégorisées</td>
+                  <td style={{ padding: "7px 12px", color: C.textLight }}>{noneStats.questions}</td>
+                  <td style={{ padding: "7px 12px", color: C.textLight }}>{noneStats.results}</td>
+                  <td style={{ padding: "7px 12px", color: C.textLight }}>{noneStats.results > 0 ? Math.round(noneStats.present/noneStats.results*100)+"%" : "—"}</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {catStats.length === 0 && status !== "warning" && (
+        <div style={{ padding: "14px 20px", fontSize: 12, color: C.textLight, fontStyle: "italic" }}>
+          Catégorisez vos mots-clés dans Fan-outs → Mots-clés pour voir la présence par axe thématique.
+        </div>
+      )}
+
+      {/* Résultat analyse IA */}
+      {status === "done" && analysis && (
+        <div style={{ padding: "16px 20px" }}>
+          <button onClick={() => setOpen(o => !o)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "#7C3AED", fontWeight: 700, padding: 0, marginBottom: open ? 10 : 0 }}>
+            {open ? "▲ Masquer l'analyse IA" : "▼ Voir l'analyse IA"}
+          </button>
+          {open && (
+            <div style={{ fontSize: 12, color: C.text, lineHeight: 1.7 }}>
+              {analysis.split("\n").map((line, i) => {
+                if (line.startsWith("## ")) return <div key={i} style={{ fontWeight: 700, fontSize: 13, color: "#7C3AED", marginTop: 14, marginBottom: 4 }}>{line.slice(3)}</div>;
+                if (line.startsWith("- ")) return <div key={i} style={{ paddingLeft: 14, marginBottom: 3 }}>• {line.slice(2)}</div>;
+                if (!line.trim()) return <div key={i} style={{ height: 6 }} />;
+                return <div key={i} style={{ marginBottom: 3 }}>{line}</div>;
+              })}
+            </div>
+          )}
+        </div>
+      )}
+      {status === "error" && (
+        <div style={{ padding: "12px 20px", fontSize: 11, color: "#DC2626" }}>⚠️ {analysis}</div>
+      )}
+    </div>
+  );
+}
+
 function Section({ icon, title, sub, children, accent }) {
   return (
     <div style={{ background: C.white, border: `1px solid ${accent ? accent + "44" : C.border}`, borderRadius: 14, overflow: "hidden", marginBottom: 16 }}>
@@ -1114,6 +1337,7 @@ export default function GeoAuditTab({
   setSites, sfData, setSfData, gscData, setGscData, gaData, setGaData,
   setBingData, dbHistory, dbLoading, refreshHistory,
   confirmModal, setConfirmModal, pageTypes, setPageTypes,
+  isReadOnly = false,
 }) {
   const [mainTab, setMainTab]           = useState("audit");
   const [selectedSite, setSelectedSite] = useState(sites[0]?.id || "");
@@ -1129,6 +1353,7 @@ export default function GeoAuditTab({
   const [urlIndex, setUrlIndex]         = useState([]);
   const [calendarEntries, setCalendarEntries] = useState([]); // geo_calendar_dates — 30 derniers jours
   const [keywords, setKeywords]         = useState([]); // pour tri par volume
+  const [categories, setCategories]     = useState([]); // catégories de mots-clés
   const [loading, setLoading]           = useState(true);
 
   const site = (Array.isArray(sites) ? sites : []).find(s => s.id === selectedSite) || (Array.isArray(sites) ? sites : [])[0];
@@ -1137,8 +1362,8 @@ export default function GeoAuditTab({
   useEffect(() => {
     if (!projectId || !site?.id) return;
     setLoading(true);
-    Promise.all([sbGetBrand(projectId, site.id), sbGetQuestions(projectId, site.id), sbGetGeoResults(projectId, site.id), sbGetUrlIndex(projectId), sbGetCalendarEntriesBatch(projectId, site.id), sbGetKeywords(projectId, site.id)])
-      .then(([b, q, r, u, cal, kws]) => { setBrand(b); setQuestions(q); setResults(r); setUrlIndex(u); setCalendarEntries(cal || []); setKeywords(kws || []); setLoading(false); });
+    Promise.all([sbGetBrand(projectId, site.id), sbGetQuestions(projectId, site.id), sbGetGeoResults(projectId, site.id), sbGetUrlIndex(projectId), sbGetCalendarEntriesBatch(projectId, site.id), sbGetKeywords(projectId, site.id), sbGetCategories(projectId)])
+      .then(([b, q, r, u, cal, kws, cats]) => { setBrand(b); setQuestions(q); setResults(r); setUrlIndex(u); setCalendarEntries(cal || []); setKeywords(kws || []); setCategories(cats || []); setLoading(false); });
   }, [projectId, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const siteResults   = useMemo(() => results.filter(r => r.site_id === site?.id), [results, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1272,6 +1497,18 @@ export default function GeoAuditTab({
                 </div>
               </div>
             </Section>
+
+            {/* ══════════════════════════════════════════════════════
+                BLOC 2B — ANALYSE PAR CATÉGORIE
+            ══════════════════════════════════════════════════════ */}
+            <CategoryAnalysisCard
+              siteQuestions={siteQuestions}
+              siteResults={siteResults}
+              keywords={keywords}
+              categories={categories}
+              brand={brand}
+              claudeKey={claudeKey}
+            />
 
             {/* ══════════════════════════════════════════════════════
                 BLOC 3 — ANALYSE CONCURRENTIELLE

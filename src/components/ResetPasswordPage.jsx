@@ -4,6 +4,7 @@ import { authResetPassword } from "../lib/auth";
 // onDone : callback optionnel appelé après succès (retour à l'accueil dans App.jsx)
 export default function ResetPasswordPage({ onDone }) {
   const [token, setToken]       = useState("");
+  const [isInvite, setIsInvite] = useState(false); // true si type=invite (nouveau compte)
   const [password, setPassword] = useState("");
   const [confirm, setConfirm]   = useState("");
   const [status, setStatus]     = useState("idle");
@@ -15,9 +16,9 @@ export default function ResetPasswordPage({ onDone }) {
     const params = new URLSearchParams(hash.replace(/^#/, ""));
     const t    = params.get("access_token");
     const type = params.get("type");
-    if (t && type === "recovery") {
+    if (t && (type === "recovery" || type === "invite")) {
       setToken(t);
-      // Nettoyer l'URL — le token ne doit pas rester dans l'historique
+      setIsInvite(type === "invite");
       window.history.replaceState(null, "", window.location.pathname);
     } else {
       setStatus("invalid");
@@ -73,9 +74,13 @@ export default function ResetPasswordPage({ onDone }) {
     <div style={{ minHeight: "100vh", background: "#F8FAFC", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
       <div style={{ background: "#fff", borderRadius: 20, padding: "40px 44px", width: "100%", maxWidth: 440, boxShadow: "0 8px 40px rgba(0,0,0,0.10)" }}>
         <div style={{ textAlign: "center", marginBottom: 32 }}>
-          <div style={{ fontSize: 34, marginBottom: 8 }}>🔐</div>
-          <div style={{ fontSize: 22, fontWeight: 800, color: "#0F172A", marginBottom: 4 }}>Nouveau mot de passe</div>
-          <div style={{ fontSize: 12, color: "#64748B" }}>Choisissez un mot de passe sécurisé</div>
+          <div style={{ fontSize: 34, marginBottom: 8 }}>{isInvite ? "👋" : "🔐"}</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: "#0F172A", marginBottom: 4 }}>
+            {isInvite ? "Créer votre mot de passe" : "Nouveau mot de passe"}
+          </div>
+          <div style={{ fontSize: 12, color: "#64748B" }}>
+            {isInvite ? "Bienvenue ! Choisissez un mot de passe pour accéder à votre espace." : "Choisissez un mot de passe sécurisé"}
+          </div>
         </div>
 
         {status === "invalid" && (
@@ -94,9 +99,13 @@ export default function ResetPasswordPage({ onDone }) {
         {status === "success" && (
           <div style={{ background: "#ECFDF5", border: "1px solid #BBF7D0", borderRadius: 12, padding: 24, textAlign: "center" }}>
             <div style={{ fontSize: 34, marginBottom: 10 }}>✅</div>
-            <div style={{ fontSize: 16, fontWeight: 700, color: "#065F46", marginBottom: 8 }}>Mot de passe mis à jour !</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "#065F46", marginBottom: 8 }}>
+              {isInvite ? "Compte créé avec succès !" : "Mot de passe mis à jour !"}
+            </div>
             <div style={{ fontSize: 12, color: "#047857", lineHeight: 1.6, marginBottom: 20 }}>
-              Vous pouvez maintenant vous connecter avec votre nouveau mot de passe.
+              {isInvite
+                ? "Votre compte est prêt. Vous pouvez maintenant vous connecter et accéder au projet partagé."
+                : "Vous pouvez maintenant vous connecter avec votre nouveau mot de passe."}
             </div>
             <button onClick={goHome} style={{ padding: "11px 28px", background: "#059669", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
               Se connecter →

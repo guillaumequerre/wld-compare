@@ -4,7 +4,7 @@ import { emptyDataMap, makeInitialProject, parseCSV, parseSemrushCSV } from "./l
 import { extractSF, extractGSC, extractGA, extractBing, extractSemrush, parseSemrush, filterByMode } from "./lib/parsers";
 import { buildUrlMaps, buildSfPageVectors, intraCorrFast, smIntraCorr } from "./lib/correlations";
 import { sbSaveProject, sbGetHistory, sbGetLatest, sbDownload, sbGetPageTypes, sbSaveGeoAxes, sbGetGeoResultsAll, sbGetUrlIndex } from "./lib/supabase";
-import { sbLoadAccessibleProjects, authRefresh } from "./lib/auth";
+import { sbLoadAccessibleProjects } from "./lib/auth";
 import AnalyseTab from "./tabs/AnalyseTab";
 import ImportTab from "./tabs/ImportTab";
 import MatrixTab from "./tabs/MatrixTab";
@@ -18,7 +18,7 @@ import GeoAuditTab from "./tabs/GeoAuditTab";
 import HomeTab from "./tabs/HomeTab";
 import ManageTab from "./tabs/ManageTab";
 import ResetPasswordPage from "./components/ResetPasswordPage"; // ← AJOUTÉ
-import { getCurrentUser, authLogout } from "./lib/auth";
+import { getCurrentUser, authLogout, sbLoadAccessibleProjects, sbGetMyRole, sbAddProjectMember, sbGetProjectMembers, sbRemoveProjectMember } from "./lib/auth";
 
 const NAV_TABS = [
   { key: "geo",         label: "🔍 Fan-outs"         },
@@ -38,7 +38,7 @@ const BURGER_TABS = [
   { key: "import",      label: "⚙️ Setup avancé"     },
 ];
 
-function NavBar({ tab, setTab, user, onLogout }) {
+function NavBar({ tab, setTab, user, onLogout, isReadOnly = false, visibleNavTabs = NAV_TABS }) {
   const [burgerOpen, setBurgerOpen] = useState(false);
   const burgerRef = useRef(null);
   const isBurgerTab = BURGER_TABS.some(t => t.key === tab);
@@ -64,7 +64,14 @@ function NavBar({ tab, setTab, user, onLogout }) {
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-      {NAV_TABS.map(tabBtn)}
+      {visibleNavTabs.map(tabBtn)}
+
+      {/* Badge lecture seule */}
+      {isReadOnly && (
+        <span style={{ fontSize: 10, fontWeight: 700, color: "#D97706", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 6, padding: "3px 8px", whiteSpace: "nowrap" }}>
+          👁 Lecture
+        </span>
+      )}
 
       <div ref={burgerRef} style={{ position: "relative" }}>
         <button onClick={() => setBurgerOpen(o => !o)} style={{
@@ -148,7 +155,8 @@ export default function App() {
   // Détecte le hash Supabase #access_token=xxx&type=recovery au chargement
   const [isResetFlow, setIsResetFlow] = useState(() => { // ← AJOUTÉ
     const params = new URLSearchParams(window.location.hash.replace(/^#/, ""));
-    return params.get("type") === "recovery" && !!params.get("access_token");
+    const type = params.get("type");
+    return (type === "recovery" || type === "invite") && !!params.get("access_token");
   });
 
   // ── Projects ─────────────────────────────────────────────────────
@@ -156,6 +164,15 @@ export default function App() {
   const [currentProjectId, setCurrentProjectId] = useState(null);
   const [editingProjectName, setEditingProjectName] = useState(null);
   const [user, setUser] = useState(() => getCurrentUser());
+  const [myRole, setMyRole] = useState("owner"); // owner | member | reader
+
+  // Rôle effectif sur le projet courant
+  const isReadOnly = myRole === "reader";
+
+  // Onglets disponibles selon le rôle
+  const visibleNavTabs = isReadOnly
+    ? NAV_TABS.filter(t => t.key === "geo" || t.key === "geo_audit")
+    : NAV_TABS;
 
   const EMPTY_PROJECT = useMemo(() => ({ sites: [], sfData: {}, gscData: {}, gaData: {}, bingData: {}, smData: {} }), []);
   const currentProject = useMemo(
@@ -193,6 +210,8 @@ export default function App() {
 
   const goTo = (t) => {
     if (!user && t !== "home") { setTab("home"); return; }
+    // Readers : accès uniquement à geo et geo_audit
+    if (isReadOnly && t !== "geo" && t !== "geo_audit" && t !== "home") return;
     setTab(t);
   };
   const [pageMode, setPageMode]         = useState("all");
@@ -301,8 +320,6 @@ export default function App() {
           setDbLoading(false);
           return;
         }
-        const refreshed = await authRefresh();
-          if (refreshed) currentUser = refreshed;
         const savedProjects = await sbLoadAccessibleProjects(currentUser.email);
           if (savedProjects && savedProjects.length > 0) {
           const restored = savedProjects.map(p => ({
@@ -384,6 +401,18 @@ export default function App() {
       finally { setDbLoading(false); }
     })();
   }, [currentProjectId, loadProjectData]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Charger le rôle de l'utilisateur sur le projet courant
+  useEffect(() => {
+    if (!currentProjectId || !user?.email) { setMyRole("owner"); return; }
+    const proj = projects.find(p => p.id === currentProjectId);
+    // Si le projet a déjà myRole (depuis sbLoadAccessibleProjects), l'utiliser directement
+    if (proj?.myRole) { setMyRole(proj.myRole); return; }
+    // Sinon calculer
+    sbGetMyRole(currentProjectId, user.email, proj?.owner_email).then(role => {
+      setMyRole(role || "owner");
+    });
+  }, [currentProjectId, user?.email, projects]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!currentProject?.id || !currentProjectId) return;
@@ -566,13 +595,14 @@ export default function App() {
               <span style={{ fontWeight: 800, fontSize: 15, letterSpacing: -0.3, color: "#1A3C2E" }}>Dashboard GEO par Sonate</span>
               <span style={{ color: C.textLight, fontSize: 12 }}>· Votre croissance est clé</span>
             </div>
-            <NavBar tab={tab} setTab={goTo} user={user} onLogout={() => { authLogout(); setUser(null); setTab("home"); }} />
+            <NavBar tab={tab} setTab={goTo} user={user} isReadOnly={isReadOnly} visibleNavTabs={visibleNavTabs} onLogout={() => { authLogout(); setUser(null); setTab("home"); }} />
           </div>
         </div>
 
         {/* ── CONTENT ── */}
         <div style={{ maxWidth: 1400, margin: "0 auto", padding: "32px 28px" }}>
           {!user && tab !== "home" && (() => { setTimeout(() => setTab("home"), 0); return null; })()}
+          {isReadOnly && tab !== "geo" && tab !== "geo_audit" && tab !== "home" && (() => { setTimeout(() => setTab("geo"), 0); return null; })()}
 
           {tab === "home" && (
             <HomeTab
@@ -790,14 +820,7 @@ export default function App() {
               project={currentProject}
               geoAxes={currentProject?.geo_axes || null}
               user={user}
-              sfData={sfData}
-              gscData={gscData}
-              gaData={gaData}
-              bingData={bingData}
-              setSfData={setSfData}
-              setGscData={setGscData}
-              setGaData={setGaData}
-              setBingData={setBingData}
+              isReadOnly={isReadOnly}
               onSaveAxes={async (axes) => {
                 await sbSaveGeoAxes(currentProjectId, axes);
                 setProjects(prev => prev.map(p => p.id === currentProjectId ? { ...p, geo_axes: axes } : p));
@@ -813,6 +836,14 @@ export default function App() {
               setSites={setSites}
               smData={smData}
               setSmData={setSmData}
+              sfData={sfData}
+              setSfData={setSfData}
+              gscData={gscData}
+              setGscData={setGscData}
+              gaData={gaData}
+              setGaData={setGaData}
+              bingData={bingData}
+              setBingData={setBingData}
               dbHistory={dbHistory}
               dbLoading={dbLoading}
               refreshHistory={refreshHistory}
@@ -850,6 +881,7 @@ export default function App() {
               setConfirmModal={setConfirmModal}
               pageTypes={pageTypes}
               setPageTypes={setPageTypes}
+              isReadOnly={isReadOnly}
             />
           )}
 
@@ -861,6 +893,20 @@ export default function App() {
               setCurrentProjectId={setCurrentProjectId}
               onLogin={(u) => setUser(u)}
               onLogout={() => { authLogout(); setUser(null); }}
+              myRole={myRole}
+              onInvite={async (email, role) => {
+                if (!currentProjectId || !user?.email) return { ok: false, error: "Aucun projet sélectionné" };
+                const ok = await sbAddProjectMember(currentProjectId, email, user.email, role);
+                return { ok, error: ok ? null : "Erreur lors de l'invitation" };
+              }}
+              onRemoveMember={async (email) => {
+                if (!currentProjectId) return false;
+                return sbRemoveProjectMember(currentProjectId, email);
+              }}
+              onGetMembers={async () => {
+                if (!currentProjectId) return [];
+                return sbGetProjectMembers(currentProjectId);
+              }}
             />
           )}
 

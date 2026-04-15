@@ -1033,27 +1033,33 @@ function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [] 
   const presence    = total ? Math.round(withBrand / total * 100) : 0;
 
   // Top competitors — enrichis avec catégories qualifiées
-  const compCount = {};
+  const compCount = {}; // lower → count
+  const compNameMap = {}; // lower → display name (première occurrence)
   results.forEach(r => {
     const seen = new Set();
     (r.competitors_mentioned || []).forEach(c => {
-      if (c.name && !seen.has(c.name)) {
-        seen.add(c.name);
-        compCount[c.name] = (compCount[c.name] || 0) + 1;
+      if (!c.name) return;
+      const lower = c.name.toLowerCase();
+      if (!seen.has(lower)) {
+        seen.add(lower);
+        compCount[lower] = (compCount[lower] || 0) + 1;
+        if (!compNameMap[lower]) compNameMap[lower] = c.name;
       }
     });
   });
-  // Fusionner avec concurrents qualifiés (ajouter ceux sans détection auto)
-  const allCompNames = new Set([
+  // Fusionner avec concurrents qualifiés
+  const allCompLowers = new Set([
     ...Object.keys(compCount),
-    ...qualifiedCompetitors.map(c => c.name),
+    ...qualifiedCompetitors.map(c => c.name.toLowerCase()),
   ]);
-  const enrichedComps = [...allCompNames].map(name => {
-    const qual = qualifiedCompetitors.find(c => c.name.toLowerCase() === name.toLowerCase());
+  const enrichedComps = [...allCompLowers].map(lower => {
+    const qual = qualifiedCompetitors.find(c => c.name.toLowerCase() === lower);
     const catDef = qual
       ? (COMP_CATEGORIES.find(c => c.key === qual.category) || COMP_CATEGORIES[3])
       : null;
-    return { name, count: compCount[name] || 0, qual, catDef };
+    const name = qual?.name || compNameMap[lower] || lower;
+    const count = compCount[lower] || 0;
+    return { name, count, qual, catDef };
   }).sort((a, b) => b.count - a.count).slice(0, 8);
 
   // Top domains
@@ -1098,7 +1104,7 @@ function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [] 
                 <span style={{ fontSize: 11, fontWeight: 600, color: catDef?.color || C.text, flex: 1 }}>{name}</span>
                 {catDef && <span style={{ fontSize: 9, color: catDef.color, background: catDef.bg, borderRadius: 4, padding: "1px 5px", fontWeight: 700 }}>{catDef.label}</span>}
                 {!catDef && <span style={{ fontSize: 9, color: C.textLight, fontStyle: "italic" }}>non qualifié</span>}
-                <span style={{ fontSize: 10, color: C.textLight, minWidth: 24, textAlign: "right" }}>{count > 0 ? `${count}×` : ""}</span>
+                <span style={{ fontSize: 10, color: C.textLight, minWidth: 24, textAlign: "right", fontWeight: count > 0 ? 600 : 400 }}>{count > 0 ? `${count}×` : "—"}</span>
               </div>
             ))}
           </div>
@@ -2059,7 +2065,7 @@ function HintPanelQuestion({ questionId, question, sources, brandName, brandAlia
 
 // ── ProviderRow — calendar + info + accordion + run button ────────
 
-function ProviderRow({ provider, results, allProviderResults, brandName, brandAliases, brandDomain = "", hasKey, isRunning, onRun, questionId, newCalEntry = null, question = "", claudeKey = "", projectId = null, siteId = null, savedHint = "", brandTerms = [], competitorMap = {}, lastCalDate = null }) {
+function ProviderRow({ provider, results, allProviderResults, brandName, brandAliases, brandDomain = "", hasKey, isRunning, onRun, questionId, newCalEntry = null, question = "", claudeKey = "", projectId = null, siteId = null, savedHint = "", brandTerms = [], competitorMap = {}, lastCalDate = null, isReadOnly = false }) {
   const [open, setOpen] = useState(false);
   const p = provider;
 
@@ -2123,7 +2129,7 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
           </span>
         )}
 
-        {hasKey && (
+        {hasKey && !isReadOnly && (
           <button onClick={onRun} disabled={isRunning || !hasKey}
             title={!hasKey ? `Clé ${p.label} manquante — ajoutez-la dans ⚙️ Gestion des Providers` : `Interroger ${p.label}`}
             style={{ width: 22, height: 22, borderRadius: '50%', border: 'none', cursor: (!hasKey || isRunning) ? 'not-allowed' : 'pointer', background: !hasKey ? C.bg : isRunning ? C.bg : '#059669', color: (!hasKey || isRunning) ? C.textLight : '#fff', fontSize: 11, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, opacity: (isRunning || !hasKey) ? 0.5 : 1 }}>
@@ -2136,7 +2142,8 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
 
       {open && result && (
         <div style={{ borderTop: `1px solid ${C.border}`, padding: '10px 12px', background: C.bg }}>
-          <div style={{ fontSize: 12, color: C.text, lineHeight: 1.7 }}>
+          {/* Réponse — responsive word-break */}
+          <div style={{ fontSize: 12, color: C.text, lineHeight: 1.7, wordBreak: 'break-word', overflowWrap: 'break-word', minWidth: 0 }}>
             {renderMarkdownHighlighted(result.answer || '', brandTerms, competitorMap)}
           </div>
           {sources.length > 0 && (
@@ -2145,9 +2152,12 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
               {sources.map((url, i) => {
                 const ib = [brandName, ...(brandAliases||[])].some(t => url.toLowerCase().includes((t||'').toLowerCase()));
                 return (
-                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 3 }}>
-                    <span style={{ fontSize: 10, color: C.textLight, minWidth: 18 }}>[{i+1}]</span>
-                    <a href={url} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: ib ? '#059669' : '#2563EB', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{stripQuery(url)}</a>
+                  <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 5, marginBottom: 4, minWidth: 0 }}>
+                    <span style={{ fontSize: 10, color: C.textLight, minWidth: 18, flexShrink: 0, paddingTop: 1 }}>[{i+1}]</span>
+                    <a href={url} target="_blank" rel="noreferrer"
+                      style={{ fontSize: 11, color: ib ? '#059669' : '#2563EB', wordBreak: 'break-all', overflowWrap: 'anywhere', flex: 1, minWidth: 0 }}>
+                      {stripQuery(url)}
+                    </a>
                     {ib && <span style={{ fontSize: 9, background: '#ECFDF5', color: '#059669', borderRadius: 4, padding: '1px 4px', flexShrink: 0 }}>marque</span>}
                   </div>
                 );
@@ -2381,7 +2391,7 @@ RÈGLES :
 
 // ── Questions sub-tab (v2) ────────────────────────────────────────
 
-function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allResults, onResultSaved, activeProviders = ["openai"], providerKeys = {}, runMode = "parallel", keywordsOrder = [], refreshTrigger = 0, competitors: competitorsProp = [], setCompetitors: setCompetitorsProp = null, onSaveKey = null }) {
+function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allResults, onResultSaved, activeProviders = ["openai"], providerKeys = {}, runMode = "parallel", keywordsOrder = [], refreshTrigger = 0, competitors: competitorsProp = [], setCompetitors: setCompetitorsProp = null, onSaveKey = null, isReadOnly = false }) {
   const [questions, setQuestions]   = useState([]);
   const [results, setResults]       = useState(allResults || []);
   // Utiliser le state remonté depuis GeoTab si disponible, sinon local
@@ -2582,6 +2592,9 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
     if (!pk?.dec) { console.warn("No key for provider", provider.id); return; }
     setRunning(r => ({ ...r, [`${q.id}-${provider.id}`]: true }));
     const { brand_name = "", brand_aliases = [], competitors = [], context = "" } = brand || {};
+    // Fusionner brand.competitors (ancienne liste) avec les noms qualifiés de geo_competitors
+    const qualifiedCompNames = competitorsRef.current.map(c => c.name);
+    const allCompetitorNames = [...new Set([...competitors.filter(Boolean), ...qualifiedCompNames])];
     const baseContext = context ? `Contexte : "${context}"\n` : "";
     const question = `Question : ${q.question}`;
     const promptForClaude = `${baseContext}Tu es un expert en recommandation d'entreprises et prestataires. Réponds à la question suivante en te basant sur tes connaissances pour donner une liste de vrais acteurs, entreprises ou prestataires du marché.
@@ -2596,7 +2609,7 @@ ${question}`;
     const prompt = provider.id === "claude" ? promptForClaude : provider.id === "gemini" ? promptForGemini : promptForWeb;
     try {
       const parsed = await callProvider(provider, pk.dec, prompt);
-      const { brandMentioned, brandPosition, brandInSources, competitorsMentioned } = detectBrand(parsed.answer, parsed.sources, brand_name, brand_aliases, competitors);
+      const { brandMentioned, brandPosition, brandInSources, competitorsMentioned } = detectBrand(parsed.answer, parsed.sources, brand_name, brand_aliases, allCompetitorNames);
       const domain_counts = {};
       (parsed.sources || []).forEach(url => {
         if (!domain_counts[url]) domain_counts[url] = { as_source: 0, in_answer: 0, domain: extractDomain(url) };
@@ -2896,15 +2909,14 @@ ${question}`;
               <div key={p.id} style={{ position: "relative" }}>
                 <button
                   onClick={() => {
-                    if (!hasKey) {
-                      // Ouvrir le popover de saisie de clé
+                    if (!hasKey && !isReadOnly) {
                       setKeyInputOpen(isOpen ? null : p.id);
                       setKeyInputVal("");
                     } else {
                       setFilterProviders(prev => active ? prev.filter(id => id !== p.id) : [...prev, p.id]);
                     }
                   }}
-                  title={!hasKey ? `Cliquez pour configurer la clé ${p.label}` : `Filtrer par ${p.label}`}
+                  title={!hasKey && !isReadOnly ? `Cliquez pour configurer la clé ${p.label}` : `Filtrer par ${p.label}`}
                   style={{ padding: "2px 10px", border: `2px solid ${p.color}`, borderRadius: 10, fontSize: 10, fontWeight: 600, cursor: "pointer",
                     background: active && hasKey ? p.color : "transparent",
                     color: active && hasKey ? "#fff" : hasKey ? p.color : C.textLight,
@@ -2985,35 +2997,37 @@ ${question}`;
           <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
             <button
               onClick={async () => {
-                // Recharger : reload questions + résultats sans relancer les providers
                 await Promise.all([
                   sbGetQuestions(projectId, site.id).then(setQuestions),
                   sbGetGeoResults(projectId, site.id).then(setResults),
                 ]);
               }}
-              title="Recharger questions et résultats (sans relancer les providers)"
+              title="Recharger questions et résultats"
               style={{ padding: "4px 8px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.white, color: C.textLight, fontSize: 11, cursor: "pointer" }}>🔄</button>
-            <Btn onClick={runAllQuestions} disabled={runAll || toRunCount === 0} color="#7C3AED"
-              title={!runAll && toRunCount === 0 ? "Toutes les questions ont déjà été interrogées aujourd'hui — utilisez ↺ pour forcer le relancement" : `Interroge uniquement les questions sans réponse aujourd'hui (${toRunCount})`}>
-              {runAll ? "⏳ En cours…" : toRunCount > 0 ? `▶ Lancer tout (${toRunCount})` : "✓ Tout généré"}
-            </Btn>
-            {!runAll && toRunCount === 0 && (
-              <Btn onClick={async () => {
-                // Relancer tout — force=true, ignore le filtre today
-                const toRun = filtered.map(q => ({ q, providers: getProvidersToRun(q, true) })).filter(({ providers }) => providers.length > 0);
-                if (!toRun.length) return;
-                stopAllRef.current = false;
-                setRunAll(true);
-                for (const { q, providers } of toRun) {
-                  if (stopAllRef.current) break;
-                  setRunning(r => ({ ...r, [q.id]: true }));
-                  await Promise.all(providers.map(p => runProvider(q, p)));
-                  setRunning(r => ({ ...r, [q.id]: false }));
-                }
-                setRunAll(false);
-              }} color="#64748B" variant="outline" small title="Relancer toutes les questions même si déjà générées aujourd'hui">↺ Relancer tout</Btn>
+            {!isReadOnly && (
+              <>
+                <Btn onClick={runAllQuestions} disabled={runAll || toRunCount === 0} color="#7C3AED"
+                  title={!runAll && toRunCount === 0 ? "Toutes les questions ont déjà été interrogées aujourd'hui — utilisez ↺ pour forcer le relancement" : `Interroge uniquement les questions sans réponse aujourd'hui (${toRunCount})`}>
+                  {runAll ? "⏳ En cours…" : toRunCount > 0 ? `▶ Lancer tout (${toRunCount})` : "✓ Tout généré"}
+                </Btn>
+                {!runAll && toRunCount === 0 && (
+                  <Btn onClick={async () => {
+                    const toRun = filtered.map(q => ({ q, providers: getProvidersToRun(q, true) })).filter(({ providers }) => providers.length > 0);
+                    if (!toRun.length) return;
+                    stopAllRef.current = false;
+                    setRunAll(true);
+                    for (const { q, providers } of toRun) {
+                      if (stopAllRef.current) break;
+                      setRunning(r => ({ ...r, [q.id]: true }));
+                      await Promise.all(providers.map(p => runProvider(q, p)));
+                      setRunning(r => ({ ...r, [q.id]: false }));
+                    }
+                    setRunAll(false);
+                  }} color="#64748B" variant="outline" small title="Relancer toutes les questions même si déjà générées aujourd'hui">↺ Relancer tout</Btn>
+                )}
+                {runAll && <Btn onClick={() => { stopAllRef.current = true; setRunAll(false); }} color="#DC2626" variant="outline" small>⏹ Arrêter</Btn>}
+              </>
             )}
-            {runAll && <Btn onClick={() => { stopAllRef.current = true; setRunAll(false); }} color="#DC2626" variant="outline" small>⏹ Arrêter</Btn>}
           </div>
         </div>
       </div>
@@ -3122,6 +3136,7 @@ ${question}`;
                         brandTerms={brandTermsForHighlight}
                         competitorMap={competitorMap}
                         lastCalDate={lastCalDateByQP[`${q.id}|${p.id}`] || null}
+                        isReadOnly={isReadOnly}
                       />
                     );
                   })}
@@ -4147,6 +4162,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
   setSites, smData, setSmData,
   sfData, setSfData, gscData, setGscData, gaData, setGaData, bingData, setBingData,
   dbHistory, dbLoading, refreshHistory, confirmModal, setConfirmModal,
+  isReadOnly = false,
 }) {
   const [mainTab, setMainTab]       = useState("analyse"); // "setup" | "analyse"
   const [subTab, setSubTab]         = useState("keywords"); // keywords | questions | urls
@@ -4278,21 +4294,30 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
     <div>
       {/* ── Header + onglets principaux Setup / Analyse ── */}
       <div style={{ marginBottom: 24 }}>
-        <div style={{ fontSize: 20, fontWeight: 800, color: C.text, marginBottom: 16 }}>🔍 Fan-outs</div>
-        <div style={{ display: "inline-flex", gap: 2, background: "#F1F5F9", borderRadius: 20, padding: 3 }}>
-          {[
-            { key: "setup",  label: "⚙️ Setup" },
-            { key: "main",   label: "📊 Analyse Fan-outs" },
-          ].map(t => (
-            <button key={t.key} onClick={() => setMainTab(t.key === "main" ? ("analyse") : "setup")} style={{
-              padding: "6px 16px", borderRadius: 16, fontSize: 12, fontWeight: 700,
-              border: "none", cursor: "pointer", transition: "all 0.15s",
-              background: (t.key === "setup" ? mainTab === "setup" : mainTab !== "setup") ? "#fff" : "transparent",
-              color: (t.key === "setup" ? mainTab === "setup" : mainTab !== "setup") ? "#1A3C2E" : "#94A3B8",
-              boxShadow: (t.key === "setup" ? mainTab === "setup" : mainTab !== "setup") ? "0 1px 4px rgba(0,0,0,0.1)" : "none",
-            }}>{t.label}</button>
-          ))}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+          <div style={{ fontSize: 20, fontWeight: 800, color: C.text }}>🔍 Fan-outs</div>
+          {isReadOnly && (
+            <span style={{ fontSize: 11, fontWeight: 700, color: "#D97706", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, padding: "4px 12px" }}>
+              👁 Mode lecture — Interrogations désactivées
+            </span>
+          )}
         </div>
+        {!isReadOnly && (
+          <div style={{ display: "inline-flex", gap: 2, background: "#F1F5F9", borderRadius: 20, padding: 3 }}>
+            {[
+              { key: "setup",  label: "⚙️ Setup" },
+              { key: "main",   label: "📊 Analyse Fan-outs" },
+            ].map(t => (
+              <button key={t.key} onClick={() => setMainTab(t.key === "main" ? ("analyse") : "setup")} style={{
+                padding: "6px 16px", borderRadius: 16, fontSize: 12, fontWeight: 700,
+                border: "none", cursor: "pointer", transition: "all 0.15s",
+                background: (t.key === "setup" ? mainTab === "setup" : mainTab !== "setup") ? "#fff" : "transparent",
+                color: (t.key === "setup" ? mainTab === "setup" : mainTab !== "setup") ? "#1A3C2E" : "#94A3B8",
+                boxShadow: (t.key === "setup" ? mainTab === "setup" : mainTab !== "setup") ? "0 1px 4px rgba(0,0,0,0.1)" : "none",
+              }}>{t.label}</button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* ── Setup ── */}
@@ -4429,6 +4454,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
             setProjects?.(prev => prev.map(proj => proj.id === projectId ? { ...proj, ...keyPatch } : proj));
             onSaveProviderKeys?.(keyPatch);
           }}
+          isReadOnly={isReadOnly}
         />
       </div>
       {subTab === "competitors" && (

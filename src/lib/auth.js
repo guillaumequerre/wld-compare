@@ -129,13 +129,50 @@ export async function sbGetProjectMembers(projectId) {
   return res.json();
 }
 
-export async function sbAddProjectMember(projectId, email, invitedBy) {
+export async function sbAddProjectMember(projectId, email, invitedBy, role = "member") {
+  const token = getToken();
+  const headers = { "Content-Type": "application/json", "Prefer": "return=representation,resolution=ignore-duplicates" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
   const res = await fetch(`/api/supabase/rest/v1/project_members`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "Prefer": "return=representation,resolution=ignore-duplicates" },
-    body: JSON.stringify({ project_id: projectId, user_email: email.toLowerCase().trim(), role: "member", invited_by: invitedBy }),
+    headers,
+    body: JSON.stringify({ project_id: projectId, user_email: email.toLowerCase().trim(), role, invited_by: invitedBy }),
   });
   return res.ok;
+}
+
+// Invite un utilisateur sur un projet.
+// - Si le compte existe : l'ajoute directement à project_members
+// - Si le compte n'existe pas : envoie un email d'invitation Supabase + ajoute à project_members
+// Retourne { ok, existed, invited, error }
+export async function sbInviteMember(projectId, email, invitedBy, role = "member") {
+  try {
+    // 1. Vérifier existence + envoyer invite si besoin
+    const res = await fetch("/api/auth?action=invite_member", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: email.toLowerCase().trim(), redirectTo: window.location.origin + "/" }),
+    });
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data.error || "Erreur lors de l'invitation" };
+
+    // 2. Ajouter à project_members dans tous les cas
+    const added = await sbAddProjectMember(projectId, email, invitedBy, role);
+    if (!added) return { ok: false, error: "Compte invité mais erreur d'ajout au projet" };
+
+    return { ok: true, existed: data.existed, invited: data.invited };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+} ('owner' | 'member' | 'reader' | null)
+export async function sbGetMyRole(projectId, userEmail, ownerEmail) {
+  if (!userEmail || !projectId) return null;
+  const email = userEmail.toLowerCase();
+  if (isSuperAdmin({ email })) return "owner";
+  if (ownerEmail && ownerEmail.toLowerCase() === email) return "owner";
+  const members = await sbGetProjectMembers(projectId);
+  const me = members.find(m => m.user_email?.toLowerCase() === email);
+  return me?.role || null;
 }
 
 export async function sbRemoveProjectMember(projectId, email) {
@@ -170,7 +207,7 @@ export async function sbLoadAccessibleProjects(userEmail) {
 
     const [ownedRes, memberRes] = await Promise.all([
       fetch(`/api/supabase/rest/v1/projects?owner_email=eq.${encodeURIComponent(email)}&select=*&order=updated_at.desc`, { headers: authH }),
-      fetch(`/api/supabase/rest/v1/project_members?user_email=eq.${encodeURIComponent(email)}&select=project_id`, { headers: authH }),
+      fetch(`/api/supabase/rest/v1/project_members?user_email=eq.${encodeURIComponent(email)}&select=project_id,role`, { headers: authH }),
     ]);
     const owned = ownedRes.ok ? await ownedRes.json() : [];
     const memberships = memberRes.ok ? await memberRes.json() : [];
@@ -184,9 +221,14 @@ export async function sbLoadAccessibleProjects(userEmail) {
     }
 
     const seen = new Set();
-    return [...owned, ...memberProjects]
-      .filter(p => { if (seen.has(p.id)) return false; seen.add(p.id); return true; })
-      .map(parseProject);
+    // Projets owned = rôle 'owner', projets member = rôle depuis la table
+    const ownedParsed = owned.map(p => ({ ...parseProject(p), myRole: "owner" }));
+    const memberParsed = memberProjects.map(p => {
+      const membership = memberships.find(m => m.project_id === p.id);
+      return { ...parseProject(p), myRole: membership?.role || "member" };
+    });
+    return [...ownedParsed, ...memberParsed]
+      .filter(p => { if (seen.has(p.id)) return false; seen.add(p.id); return true; });
   } catch(e) {
     console.error("sbLoadAccessibleProjects error:", e);
     return [];

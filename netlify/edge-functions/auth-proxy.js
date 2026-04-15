@@ -170,6 +170,56 @@ export default async function handler(req) {
       return json({ user: data });
     }
 
+    // ── INVITE MEMBER ───────────────────────────────────────────────
+    // Vérifie si le compte existe. Si oui, retourne existed=true (l'appelant
+    // ajoutera juste à project_members). Si non, envoie un email d'invitation
+    // Supabase pour que l'invité crée son compte + mot de passe.
+    if (action === "invite_member") {
+      if (!SUPABASE_SERVICE_KEY) {
+        return json({ error: "Configuration serveur manquante (SUPABASE_SERVICE_KEY)" }, 500);
+      }
+      const { email, redirectTo } = body;
+      if (!email) return json({ error: "Email requis" }, 400);
+
+      const adminHeaders = {
+        "Content-Type": "application/json",
+        "apikey": SUPABASE_SERVICE_KEY,
+        "Authorization": `Bearer ${SUPABASE_SERVICE_KEY}`,
+      };
+
+      // 1. Vérifier si l'utilisateur existe déjà
+      const checkRes = await fetch(
+        `${SUPABASE_URL}/auth/v1/admin/users?email=${encodeURIComponent(email.toLowerCase().trim())}&page=1&per_page=1`,
+        { headers: adminHeaders }
+      );
+      if (checkRes.ok) {
+        const checkData = await checkRes.json();
+        const users = checkData.users || [];
+        if (users.length > 0) {
+          // Compte existe → pas besoin d'invitation, l'appelant ajoutera juste à project_members
+          return json({ existed: true, invited: false });
+        }
+      }
+
+      // 2. Compte inexistant → envoyer l'invitation Supabase
+      const redirect = redirectTo || `${url.origin}/`;
+      const inviteRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/invite`, {
+        method: "POST",
+        headers: adminHeaders,
+        body: JSON.stringify({
+          email: email.toLowerCase().trim(),
+          redirect_to: redirect,
+        }),
+      });
+      const inviteData = await inviteRes.json();
+      if (!inviteRes.ok) {
+        const msg = inviteData.message || inviteData.msg || inviteData.error_description || "Erreur lors de l'invitation";
+        return json({ error: msg }, 400);
+      }
+
+      return json({ existed: false, invited: true, user: inviteData });
+    }
+
     return json({ error: "Action inconnue" }, 400);
   } catch (e) {
     return json({ error: e.message }, 500);

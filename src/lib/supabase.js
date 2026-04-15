@@ -1,25 +1,80 @@
 const PROXY = "/api/supabase";
 
-function authHeaders(extra = {}) {
+// ── Décode le payload JWT sans librairie externe ──────────────────
+function jwtExp(token) {
+  try {
+    const payload = JSON.parse(atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+    return payload.exp || 0;
+  } catch { return 0; }
+}
+
+// ── Lit la session stockée ────────────────────────────────────────
+function getStoredSession() {
   try {
     const s = sessionStorage.getItem("correl_session") || localStorage.getItem("correl_session");
-    const token = s ? JSON.parse(s).access_token : null;
-    if (token) return { "Authorization": `Bearer ${token}`, ...extra };
+    return s ? JSON.parse(s) : null;
+  } catch { return null; }
+}
+
+function storeSession(session) {
+  try {
+    const str = JSON.stringify(session);
+    sessionStorage.setItem("correl_session", str);
+    localStorage.setItem("correl_session", str);
   } catch {}
+}
+
+// ── Vérifie l'expiry et rafraîchit si besoin (< 120s avant expiry) ─
+let _refreshPromise = null; // évite les refresh simultanés
+export async function ensureValidSession() {
+  const session = getStoredSession();
+  if (!session?.access_token) throw new Error("Non authentifié — reconnectez-vous");
+
+  const exp = jwtExp(session.access_token);
+  const now = Math.floor(Date.now() / 1000);
+
+  // Token encore valide (plus de 2 minutes restantes)
+  if (exp > now + 120) return session.access_token;
+
+  // Token expiré ou bientôt expiré → refresh
+  if (!session.refresh_token) throw new Error("Session expirée — reconnectez-vous");
+
+  // Éviter les appels refresh simultanés
+  if (!_refreshPromise) {
+    _refreshPromise = fetch("/api/auth?action=refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token: session.refresh_token }),
+    })
+      .then(async (res) => {
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Session expirée — reconnectez-vous");
+        const newSession = {
+          ...session,
+          access_token: data.access_token,
+          refresh_token: data.refresh_token,
+          user: data.user || session.user,
+        };
+        storeSession(newSession);
+        return newSession.access_token;
+      })
+      .finally(() => { _refreshPromise = null; });
+  }
+  return _refreshPromise;
+}
+
+// ── Headers auth — synchrone, lit le token courant ───────────────
+function authHeaders(extra = {}) {
+  const session = getStoredSession();
+  const token = session?.access_token || null;
+  if (token) return { "Authorization": `Bearer ${token}`, ...extra };
   return extra;
 }
 
 
 export async function sbUpload(path, csvText) {
-  // Upload via proxy Netlify — auth gérée côté serveur
-  const token = (() => {
-    try {
-      const s = sessionStorage.getItem("correl_session") || localStorage.getItem("correl_session");
-      return s ? JSON.parse(s).access_token : null;
-    } catch { return null; }
-  })();
-
-  if (!token) throw new Error("Non authentifié — reconnectez-vous");
+  // Vérifier/rafraîchir le token avant l'upload
+  const token = await ensureValidSession();
 
   const res = await fetch(`${PROXY}/storage/v1/object/csv-imports/${path}`, {
     method: "POST",
@@ -108,9 +163,9 @@ export async function sbGetLatest(projectId) {
 }
 
 export async function sbDownload(storage_path) {
-  const res = await fetch(`${PROXY}/storage/v1/object/csv-imports/${storage_path}`, {
-    headers: authHeaders(),
-  });
+  const token = await ensureValidSession().catch(() => null);
+  const headers = token ? { "Authorization": `Bearer ${token}` } : authHeaders();
+  const res = await fetch(`${PROXY}/storage/v1/object/csv-imports/${storage_path}`, { headers });
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     console.error("[sbDownload] failed:", res.status, body);
@@ -431,75 +486,85 @@ export async function sbDeleteQuestion(id) {
 // ── GEO — RESULTS ────────────────────────────────────────────────
 
 export async function sbSaveGeoResult(result) {
-  // Derive provider_id from model label for upsert deduplication
-  // Only include provider_id if column exists (optional)
-  // Explicitly pick only columns that exist in geo_results table
   const row = {
-    question_id:          result.question_id,
-    project_id:           result.project_id,
-    site_id:              result.site_id,
-    model:                result.model,
-    answer:               result.answer,
-    answer_type:          result.answer_type   || null,
-    intent_type:          result.intent_type   || null,
-    sources:              result.sources       || [],
-    source_types:         result.source_types  || [],
-    brand_mentioned:      result.brand_mentioned    ?? false,
-    brand_position:       result.brand_position     ?? null,
-    brand_in_sources:     result.brand_in_sources   ?? false,
+    question_id:           result.question_id,
+    project_id:            result.project_id,
+    site_id:               result.site_id,
+    model:                 result.model,
+    answer:                result.answer,
+    answer_type:           result.answer_type   || null,
+    intent_type:           result.intent_type   || null,
+    sources:               result.sources       || [],
+    source_types:          result.source_types  || [],
+    brand_mentioned:       result.brand_mentioned    ?? false,
+    brand_position:        result.brand_position     ?? null,
+    brand_in_sources:      result.brand_in_sources   ?? false,
     competitors_mentioned: result.competitors_mentioned || [],
-    input_tokens:         result.input_tokens  ?? null,
-    output_tokens:        result.output_tokens ?? null,
-    created_at:           result.created_at    || new Date().toISOString(),
+    input_tokens:          result.input_tokens  ?? null,
+    output_tokens:         result.output_tokens ?? null,
+    created_at:            result.created_at    || new Date().toISOString(),
   };
 
-  // Tentative INSERT
-  const res = await fetch(`${PROXY}/rest/v1/geo_results`, {
-    method: "POST",
-    headers: {
-      ...authHeaders(),
-      "Content-Type": "application/json",
-      "Prefer": "return=representation",
-    },
-    body: JSON.stringify(row),
+  const patchBody = JSON.stringify({
+    answer: row.answer, answer_type: row.answer_type, intent_type: row.intent_type,
+    sources: row.sources, source_types: row.source_types,
+    brand_mentioned: row.brand_mentioned, brand_position: row.brand_position,
+    brand_in_sources: row.brand_in_sources, competitors_mentioned: row.competitors_mentioned,
+    input_tokens: row.input_tokens, output_tokens: row.output_tokens, created_at: row.created_at,
   });
 
-  if (res.ok) return res.json();
-
-  const errBody = await res.text().catch(() => "");
-
-  // 409 = contrainte unique (question_id, model) → PATCH la ligne existante
-  if (res.status === 409) {
-    const patch = await fetch(
-      `${PROXY}/rest/v1/geo_results?question_id=eq.${encodeURIComponent(row.question_id)}&model=eq.${encodeURIComponent(row.model)}`,
-      {
-        method: "PATCH",
-        headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "return=representation" },
-        body: JSON.stringify({
-          answer:               row.answer,
-          answer_type:          row.answer_type,
-          intent_type:          row.intent_type,
-          sources:              row.sources,
-          source_types:         row.source_types,
-          brand_mentioned:      row.brand_mentioned,
-          brand_position:       row.brand_position,
-          brand_in_sources:     row.brand_in_sources,
-          competitors_mentioned: row.competitors_mentioned,
-          input_tokens:         row.input_tokens,
-          output_tokens:        row.output_tokens,
-          created_at:           row.created_at,
-        }),
-      }
-    );
-    if (patch.ok) return patch.json();
-    const patchErr = await patch.text().catch(() => "");
-    console.error("[sbSaveGeoResult] patch failed:", patch.status, patchErr);
-    throw new Error(`Save geo result (patch) failed: ${patch.status}`);
+  // 1. Vérifier si une ligne existe déjà (évite le 409 en console navigateur)
+  const checkRes = await fetch(
+    `${PROXY}/rest/v1/geo_results?question_id=eq.${encodeURIComponent(row.question_id)}&model=eq.${encodeURIComponent(row.model)}&select=id&limit=1`,
+    { headers: authHeaders() }
+  );
+  if (checkRes.ok) {
+    const existing = await checkRes.json();
+    const existingId = Array.isArray(existing) ? existing[0]?.id : existing?.id;
+    if (existingId) {
+      // Ligne existante → PATCH par id
+      const patch = await fetch(
+        `${PROXY}/rest/v1/geo_results?id=eq.${encodeURIComponent(existingId)}`,
+        { method: "PATCH", headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "return=representation" }, body: patchBody }
+      );
+      if (patch.ok) return patch.json();
+      return null;
+    }
   }
 
+  // 2. Pas de ligne existante → INSERT
+  const res = await fetch(`${PROXY}/rest/v1/geo_results`, {
+    method: "POST",
+    headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "return=representation" },
+    body: JSON.stringify(row),
+  });
+  if (res.ok) return res.json();
+
+  // 3. Fallback ultime si 409 résiduel (race condition)
+  if (res.status === 409) {
+    const retry = await fetch(
+      `${PROXY}/rest/v1/geo_results?question_id=eq.${encodeURIComponent(row.question_id)}&model=eq.${encodeURIComponent(row.model)}&select=id&limit=1`,
+      { headers: authHeaders() }
+    );
+    if (retry.ok) {
+      const rows2 = await retry.json();
+      const id2 = Array.isArray(rows2) ? rows2[0]?.id : rows2?.id;
+      if (id2) {
+        const patch2 = await fetch(
+          `${PROXY}/rest/v1/geo_results?id=eq.${encodeURIComponent(id2)}`,
+          { method: "PATCH", headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "return=representation" }, body: patchBody }
+        );
+        if (patch2.ok) return patch2.json();
+      }
+    }
+    return null;
+  }
+
+  const errBody = await res.text().catch(() => "");
   console.error("[sbSaveGeoResult] failed:", res.status, errBody);
   throw new Error(`Save geo result failed: ${res.status} — ${errBody.slice(0, 200)}`);
 }
+
 
 export async function sbGetGeoResultsAll(project_id) {
   const res = await fetch(`${PROXY}/rest/v1/geo_results?project_id=eq.${encodeURIComponent(project_id)}&select=*&order=created_at.desc`, { headers: authHeaders() });

@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { C } from "../lib/constants";
-import { authLogin, authSignup, isSuperAdmin, sbGetProjectMembers, sbAddProjectMember, sbRemoveProjectMember } from "../lib/auth";
+import { authLogin, authSignup, isSuperAdmin, sbGetProjectMembers, sbAddProjectMember, sbRemoveProjectMember, sbInviteMember } from "../lib/auth";
 
 function Section({ title, children }) {
   return (
@@ -69,34 +69,55 @@ function LoginCard({ onLogin }) {
 }
 
 // ── Project members manager ───────────────────────────────────────
-function ProjectMembers({ project, ownerEmail }) {
+function ProjectMembers({ project, ownerEmail, myRole = "owner" }) {
   const [members, setMembers] = useState([]);
   const [newEmail, setNewEmail] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
+  const [newRole, setNewRole]   = useState("member"); // "member" | "reader"
+  const [loading, setLoading]   = useState(false);
+  const [saving,  setSaving]    = useState(false);
+  const [error,   setError]     = useState("");
+  const canManage = myRole === "owner" || myRole === "member";
 
   useEffect(() => {
     if (!project?.id) return;
     setLoading(true);
     sbGetProjectMembers(project.id).then(m => { setMembers(m); setLoading(false); }).catch(() => setLoading(false));
-  }, [project?.id]);
+  }, [project?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const [inviteMsg, setInviteMsg] = useState(""); // message de succès distinct de l'erreur
 
   const add = async () => {
     const email = newEmail.trim().toLowerCase();
     if (!email || !email.includes("@")) return;
-    setSaving(true); setError("");
-    const ok = await sbAddProjectMember(project.id, email, ownerEmail);
-    if (ok) {
-      setMembers(prev => [...prev, { user_email: email, role: "member" }]);
-      setNewEmail("");
-    } else { setError("Erreur lors de l'ajout"); }
+    setSaving(true); setError(""); setInviteMsg("");
+    const result = await sbInviteMember(project.id, email, ownerEmail, newRole);
+    if (result.ok) {
+      setMembers(prev => {
+        const exists = prev.findIndex(m => m.user_email === email);
+        const entry = { user_email: email, role: newRole };
+        if (exists >= 0) { const n = [...prev]; n[exists] = entry; return n; }
+        return [...prev, entry];
+      });
+      setNewEmail(""); setNewRole("member");
+      if (result.invited) {
+        setInviteMsg(`✉️ Invitation envoyée à ${email} — l'utilisateur recevra un email pour créer son compte.`);
+      } else {
+        setInviteMsg(`✓ ${email} a été ajouté au projet.`);
+      }
+    } else {
+      setError(result.error || "Erreur lors de l'invitation");
+    }
     setSaving(false);
   };
 
   const remove = async (email) => {
     await sbRemoveProjectMember(project.id, email);
     setMembers(prev => prev.filter(m => m.user_email !== email));
+  };
+
+  const roleBadge = (role) => {
+    if (role === "reader") return { label: "👁 Lecture", color: "#D97706", bg: "#FFFBEB" };
+    return { label: "✏️ Membre", color: "#7C3AED", bg: "#F5F3FF" };
   };
 
   if (!project) return <div style={{ fontSize: 12, color: C.textLight }}>Sélectionnez un projet</div>;
@@ -110,36 +131,56 @@ function ProjectMembers({ project, ownerEmail }) {
         <span style={{ fontSize: 10, background: "#ECFDF5", color: "#059669", borderRadius: 4, padding: "1px 6px" }}>propriétaire</span>
       </div>
 
-      {/* Members */}
-      <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>Membres ({members.length})</div>
+      {/* Members list */}
+      <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>Accès ({members.length})</div>
       {loading ? <div style={{ fontSize: 12, color: C.textLight }}>Chargement…</div> : (
         <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 16 }}>
-          {members.length === 0 && <div style={{ fontSize: 12, color: C.textLight, fontStyle: "italic" }}>Aucun membre invité</div>}
-          {members.map(m => (
-            <div key={m.user_email} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", background: C.bg, borderRadius: 8, border: `1px solid ${C.border}` }}>
-              <span style={{ fontSize: 12, color: C.text }}>{m.user_email}</span>
-              <button onClick={() => remove(m.user_email)} style={{ fontSize: 11, color: "#DC2626", background: "none", border: "none", cursor: "pointer" }}>✕ Retirer</button>
-            </div>
-          ))}
+          {members.length === 0 && <div style={{ fontSize: 12, color: C.textLight, fontStyle: "italic" }}>Aucun accès invité</div>}
+          {members.map(m => {
+            const badge = roleBadge(m.role);
+            return (
+              <div key={m.user_email} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: C.bg, borderRadius: 8, border: `1px solid ${C.border}` }}>
+                <span style={{ fontSize: 12, color: C.text, flex: 1 }}>{m.user_email}</span>
+                <span style={{ fontSize: 10, fontWeight: 700, color: badge.color, background: badge.bg, borderRadius: 5, padding: "2px 8px" }}>{badge.label}</span>
+                {canManage && (
+                  <button onClick={() => remove(m.user_email)} style={{ fontSize: 11, color: "#DC2626", background: "none", border: "none", cursor: "pointer", padding: "0 4px" }}>✕</button>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 
-      {/* Add member */}
-      <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>Inviter un utilisateur</div>
-      {error && <div style={{ fontSize: 12, color: "#DC2626", marginBottom: 8 }}>{error}</div>}
-      <div style={{ display: "flex", gap: 8 }}>
-        <input type="email" value={newEmail} onChange={e => setNewEmail(e.target.value)}
-          onKeyDown={e => e.key === "Enter" && add()}
-          placeholder="email@exemple.com"
-          style={{ flex: 1, padding: "8px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} />
-        <button onClick={add} disabled={saving || !newEmail.includes("@")}
-          style={{ padding: "8px 16px", background: saving ? C.bg : "#7C3AED", color: saving ? C.textLight : "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-          {saving ? "…" : "Inviter"}
-        </button>
-      </div>
-      <div style={{ fontSize: 11, color: C.textLight, marginTop: 6 }}>
-        L'utilisateur invité doit avoir un compte pour accéder au projet.
-      </div>
+      {/* Invite — visible only to owners/members */}
+      {canManage && (
+        <>
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>Inviter un utilisateur</div>
+          {error && <div style={{ fontSize: 12, color: "#DC2626", marginBottom: 8 }}>{error}</div>}
+          {inviteMsg && <div style={{ fontSize: 12, color: "#059669", background: "#ECFDF5", border: "1px solid #BBF7D0", borderRadius: 7, padding: "8px 12px", marginBottom: 8 }}>{inviteMsg}</div>}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <input type="email" value={newEmail} onChange={e => setNewEmail(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && add()}
+              placeholder="email@exemple.com"
+              style={{ flex: "1 1 200px", padding: "8px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }} />
+            <select value={newRole} onChange={e => setNewRole(e.target.value)}
+              style={{ padding: "8px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, cursor: "pointer" }}>
+              <option value="member">✏️ Membre — accès complet</option>
+              <option value="reader">👁 Lecture seule — Fan-outs & Audit uniquement</option>
+            </select>
+            <button onClick={add} disabled={saving || !newEmail.includes("@")}
+              style={{ padding: "8px 20px", background: saving ? C.bg : "#7C3AED", color: saving ? C.textLight : "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", opacity: !newEmail.includes("@") ? 0.5 : 1 }}>
+              {saving ? "…" : "Inviter"}
+            </button>
+          </div>
+          <div style={{ fontSize: 11, color: C.textLight, marginTop: 6 }}>
+            <strong>Membre</strong> : accès complet (Setup, Fan-outs, Audit). <strong>Lecture seule</strong> : Fan-outs et Audit GEO uniquement, aucun appel LLM.
+            Si l'adresse n'a pas de compte, un email d'invitation sera envoyé automatiquement.
+          </div>
+        </>
+      )}
+      {!canManage && (
+        <div style={{ fontSize: 12, color: C.textLight, fontStyle: "italic" }}>Vous avez un accès lecture seule sur ce projet.</div>
+      )}
     </div>
   );
 }
@@ -196,7 +237,7 @@ function AccountForm({ user, onLogout, isAdmin }) {
   );
 }
 
-export default function ManageTab({ user, projects, currentProjectId, setCurrentProjectId, onLogin, onLogout }) {
+export default function ManageTab({ user, projects, currentProjectId, setCurrentProjectId, onLogin, onLogout, myRole = "owner" }) {
   const [selectedProjectId, setSelectedProjectId] = useState(currentProjectId);
   const selectedProject = projects.find(p => p.id === selectedProjectId) || projects[0];
   const isAdmin = user && isSuperAdmin(user);
@@ -234,7 +275,7 @@ export default function ManageTab({ user, projects, currentProjectId, setCurrent
           </div>
         </div>
 
-        <ProjectMembers project={selectedProject} ownerEmail={user.email} />
+        <ProjectMembers project={selectedProject} ownerEmail={user.email} myRole={myRole} />
       </Section>
 
       {/* Superadmin info */}
