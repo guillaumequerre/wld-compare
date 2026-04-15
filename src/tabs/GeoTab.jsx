@@ -739,22 +739,21 @@ function getProviderId(model) {
 
 async function callProvider(provider, apiKey, prompt) {
   if (provider.id === "openai") {
+    // chat/completions — sans web_search_preview pour réduire les coûts
     const res = await fetch("/api/openai", {
       method: "POST",
-      headers: { "Content-Type": "application/json", "X-Openai-Key": apiKey, "X-Openai-Endpoint": "responses" },
+      headers: { "Content-Type": "application/json", "X-Openai-Key": apiKey, "X-Openai-Endpoint": "chat" },
       body: JSON.stringify({
         model: provider.model,
-        input: prompt,
-        tools: [{ type: "web_search_preview", search_context_size: "high" }],
-        max_output_tokens: 8000,
-        // No JSON schema — free text response so web search annotations contain real URLs
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 1200,
       }),
     });
     const raw = await res.text();
     if (raw.trimStart().startsWith("<")) throw new Error("Proxy /api/openai introuvable");
     const data = JSON.parse(raw);
     if (!res.ok) throw new Error(data.error?.message || `OpenAI ${res.status}`);
-    return parseOpenAIResponse(data, "responses");
+    return parseOpenAIResponse(data, "chat");
   }
 
   if (provider.id === "gemini") {
@@ -2439,9 +2438,11 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
   // Refs so callbacks always read current values without stale closure issues
   const activeProvidersRef = useRef(activeProviders);
   const providerKeysRef    = useRef(providerKeys);
+  const resultsRef         = useRef([]); // toujours à jour pour getProvidersToRun
   // Keep refs in sync with props on every render (not just via useEffect)
   activeProvidersRef.current = activeProviders;
   providerKeysRef.current    = providerKeys;
+  resultsRef.current         = results;
   const [selected, setSelected]     = useState(new Set());
   const [bulkCat, setBulkCat]       = useState("");
   const [keywords, setKeywords]     = useState([]);
@@ -2686,11 +2687,11 @@ ${question}`;
     const currentKeys = providerKeysRef.current;
     const currentActive = activeProvidersRef.current;
     const configuredProviders = PROVIDERS.filter(p => currentActive.includes(p.id) && currentKeys[p.id]?.dec);
-    if (force) return configuredProviders; // always run all when forced (individual ▶ button)
+    if (force) return configuredProviders;
     const today = new Date().toISOString().slice(0, 10);
-    const qResults = resultsByQ[q.id] || [];
+    // Lire depuis resultsRef.current pour avoir toujours les données fraîches
+    const qResults = resultsRef.current.filter(r => r.question_id === q.id);
     return configuredProviders.filter(p => {
-      // Skip if already generated today for this provider
       const alreadyToday = qResults.some(r =>
         getProviderId(r.model) === p.id &&
         r.created_at && r.created_at.slice(0, 10) === today
