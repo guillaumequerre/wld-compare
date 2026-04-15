@@ -2560,8 +2560,11 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
 
     for (const line of lines) {
       const trimmed = line.trimStart();
-      // Uniquement les listes numérotées : "1. NomMarque" ou "1) NomMarque"
-      const m = trimmed.match(/^\d+[.)]\s+\**([A-Z\xC0-\xD6\xD8-\xF6][A-Za-z\xC0-\xFF0-9\-& ]{1,40})\**/);
+      // 1. Liste numérotée : "1. NomMarque" ou "1) **NomMarque**" (OpenAI)
+      // 2. Gras en début de ligne : "**NomMarque**" (Claude)
+      const mNum  = trimmed.match(/^\d+[.)]\s+\**([A-Z\xC0-\xD6\xD8-\xF6][A-Za-z\xC0-\xFF0-9\-& ]{1,40})\**/);
+      const mBold = !mNum && trimmed.match(/^\*\*([A-Z\xC0-\xD6\xD8-\xF6][A-Za-z\xC0-\xFF0-9\-& ]{1,40})\*\*(?!\s*:)/);
+      const m = mNum || mBold;
       if (!m) continue;
       const name = m[1].trim().replace(/[.:,;\u2013\u2014]+$/, '');
       if (!name || name.length < 2) continue;
