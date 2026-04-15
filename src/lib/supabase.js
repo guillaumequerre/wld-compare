@@ -858,4 +858,52 @@ export async function sbTriggerScheduler() {
     throw new Error(`Trigger failed: ${res.status} — ${body.slice(0, 120)}`);
   }
   return res.json();
+} 
+// ── GEO COMPETITORS ───────────────────────────────────────────────
+// Table: geo_competitors (id, project_id, site_id, name, domain, category, color, created_at)
+// Catégories: "direct" | "geo" | "partner" | "other" | custom string
+
+export async function sbGetCompetitors(project_id, site_id) {
+  const res = await fetch(
+    `${PROXY}/rest/v1/geo_competitors?project_id=eq.${encodeURIComponent(project_id)}&site_id=eq.${encodeURIComponent(site_id)}&order=name.asc`,
+    { headers: authHeaders() }
+  );
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function sbSaveCompetitor({ project_id, site_id, name, domain, category, color }) {
+  const res = await fetch(
+    `${PROXY}/rest/v1/geo_competitors?on_conflict=project_id,site_id,name`,
+    {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
+      body: JSON.stringify({ project_id, site_id, name: name.trim(), domain: (domain || "").trim().toLowerCase(), category: category || "other", color: color || "#DC2626" }),
+    }
+  );
+  if (!res.ok) throw new Error(`Save competitor failed: ${res.status}`);
+  const data = await res.json();
+  return Array.isArray(data) ? data[0] : data;
+}
+
+export async function sbUpdateCompetitor(id, patch) {
+  const res = await fetch(
+    `${PROXY}/rest/v1/geo_competitors?id=eq.${encodeURIComponent(id)}`,
+    {
+      method: "PATCH",
+      headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "return=representation" },
+      body: JSON.stringify(patch),
+    }
+  );
+  if (!res.ok) throw new Error(`Update competitor failed: ${res.status}`);
+  const data = await res.json();
+  return Array.isArray(data) ? data[0] : data;
+}
+
+export async function sbDeleteCompetitor(id) {
+  const res = await fetch(
+    `${PROXY}/rest/v1/geo_competitors?id=eq.${encodeURIComponent(id)}`,
+    { method: "DELETE", headers: authHeaders() }
+  );
+  return res.ok;
 }

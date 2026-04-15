@@ -8,6 +8,14 @@ import { C, SITE_PALETTE } from "../lib/constants";
 
 const ANTHROPIC_PROXY = "/api/anthropic";
 
+// Rend les **texte** en <strong> dans toute l'app
+function renderBold(text) {
+  if (!text || !text.includes("**")) return text;
+  return text.split(/\*\*(.+?)\*\*/g).map((part, i) =>
+    i % 2 === 1 ? <strong key={i} style={{ fontSize: "1.05em" }}>{part}</strong> : part
+  );
+}
+
 function pct(a, b) { return b ? Math.round(a / b * 100) : 0; }
 function getDomain(url) { try { return new URL(url).hostname.replace("www.", ""); } catch { return url; } }
 function dayKey(d) { return d.toISOString().slice(0, 10); }
@@ -190,6 +198,129 @@ function Section({ icon, title, sub, children, accent }) {
   );
 }
 
+// ── Scatter plot concurrents : citations (X) × position moy. (Y) ──
+function CompetitorScatter({ compStats, total, brandName, brandWithBrand, brandAvgPos }) {
+  const W = 560, H = 300, PL = 44, PR = 16, PT = 16, PB = 36;
+  const plotW = W - PL - PR, plotH = H - PT - PB;
+
+  // Préparer les points concurrents
+  const entries = Object.entries(compStats).map(([name, s]) => ({
+    name,
+    citations: s.mentions,
+    pct: Math.round(s.mentions / Math.max(total, 1) * 100),
+    avgPos: s.positions.length ? +(s.positions.reduce((a, b) => a + b, 0) / s.positions.length).toFixed(1) : null,
+  }));
+
+  // Ajouter la marque si données dispo
+  const brandEntry = brandName && brandWithBrand > 0 ? {
+    name: brandName, citations: brandWithBrand,
+    pct: Math.round(brandWithBrand / Math.max(total, 1) * 100),
+    avgPos: brandAvgPos ? +brandAvgPos : null,
+    isBrand: true,
+  } : null;
+  const allPoints = brandEntry ? [...entries, brandEntry] : entries;
+  const withPos = allPoints.filter(p => p.avgPos !== null);
+
+  if (!withPos.length) {
+    return <div style={{ fontSize: 11, color: "#94A3B8", fontStyle: "italic" }}>Données de position insuffisantes pour le graphique</div>;
+  }
+
+  const maxCit = Math.max(...withPos.map(p => p.citations), 1);
+  const maxPos = Math.max(...withPos.map(p => p.avgPos), 5);
+  const minPos = Math.min(...withPos.map(p => p.avgPos), 1);
+  const posRange = Math.max(maxPos - minPos + 1, 3);
+
+  const toX = (cit) => PL + (cit / maxCit) * plotW;
+  // Y inversé : position 1 en haut
+  const toY = (pos) => PT + ((pos - minPos) / posRange) * plotH;
+
+  const COLORS = ["#DC2626","#D97706","#7C3AED","#2563EB","#0891B2","#059669","#9333EA","#EA580C"];
+
+  // Quadrant labels
+  const midCit = maxCit / 2;
+  const midPos = (maxPos + minPos) / 2;
+
+  return (
+    <div>
+      <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: "block", background: "#FAFAFA", borderRadius: 10, border: "1px solid #E8E8ED" }}>
+        {/* Axes */}
+        <line x1={PL} x2={W - PR} y1={H - PB} y2={H - PB} stroke="#E2E8F0" strokeWidth={1} />
+        <line x1={PL} x2={PL} y1={PT} y2={H - PB} stroke="#E2E8F0" strokeWidth={1} />
+
+        {/* Quadrant background */}
+        <rect x={PL} y={PT} width={plotW / 2} height={plotH / 2} fill="#FEF2F2" opacity={0.5} />
+        <rect x={PL + plotW / 2} y={PT} width={plotW / 2} height={plotH / 2} fill="#FFFBEB" opacity={0.5} />
+        <rect x={PL} y={PT + plotH / 2} width={plotW / 2} height={plotH / 2} fill="#EFF6FF" opacity={0.5} />
+        <rect x={PL + plotW / 2} y={PT + plotH / 2} width={plotW / 2} height={plotH / 2} fill="#ECFDF5" opacity={0.5} />
+
+        {/* Quadrant dividers */}
+        <line x1={PL + plotW / 2} x2={PL + plotW / 2} y1={PT} y2={H - PB} stroke="#CBD5E1" strokeWidth={1} strokeDasharray="4,3" />
+        <line x1={PL} x2={W - PR} y1={PT + plotH / 2} y2={PT + plotH / 2} stroke="#CBD5E1" strokeWidth={1} strokeDasharray="4,3" />
+
+        {/* Quadrant labels */}
+        <text x={PL + 6} y={PT + 12} fontSize={8} fill="#DC2626" opacity={0.7}>Peu cités · mal positionnés</text>
+        <text x={PL + plotW / 2 + 6} y={PT + 12} fontSize={8} fill="#D97706" opacity={0.7}>Très cités · mal positionnés</text>
+        <text x={PL + 6} y={PT + plotH / 2 + 12} fontSize={8} fill="#2563EB" opacity={0.7}>Peu cités · bien positionnés</text>
+        <text x={PL + plotW / 2 + 6} y={PT + plotH / 2 + 12} fontSize={8} fill="#059669" opacity={0.7}>Très cités · bien positionnés</text>
+
+        {/* Ticks X (citations) */}
+        {[0, Math.round(maxCit / 2), maxCit].map(v => {
+          const x = toX(v);
+          return <g key={v}>
+            <line x1={x} x2={x} y1={H - PB} y2={H - PB + 4} stroke="#CBD5E1" strokeWidth={1} />
+            <text x={x} y={H - PB + 14} fontSize={8} fill="#94A3B8" textAnchor="middle">{v}</text>
+          </g>;
+        })}
+
+        {/* Ticks Y (position — inversé) */}
+        {[Math.ceil(minPos), Math.round(midPos), Math.floor(maxPos)].map(v => {
+          const y = toY(v);
+          return <g key={v}>
+            <line x1={PL - 4} x2={PL} y1={y} y2={y} stroke="#CBD5E1" strokeWidth={1} />
+            <text x={PL - 6} y={y + 3} fontSize={8} fill="#94A3B8" textAnchor="end">#{v}</text>
+          </g>;
+        })}
+
+        {/* Axis labels */}
+        <text x={PL + plotW / 2} y={H - 2} fontSize={9} fill="#64748B" textAnchor="middle">Citations dans les réponses LLM →</text>
+        <text x={10} y={PT + plotH / 2} fontSize={9} fill="#64748B" textAnchor="middle" transform={`rotate(-90, 10, ${PT + plotH / 2})`}>Position moy. ↓</text>
+
+        {/* Points */}
+        {withPos.map((p, i) => {
+          const x = toX(p.citations);
+          const y = toY(p.avgPos);
+          const color = p.isBrand ? "#059669" : COLORS[i % COLORS.length];
+          const r = 6 + Math.sqrt(p.citations) * 1.2;
+          return (
+            <g key={p.name}>
+              <circle cx={x} cy={y} r={r} fill={color} opacity={0.85} stroke="#fff" strokeWidth={1.5} />
+              <text x={x} y={y - r - 3} fontSize={9} fill={color} textAnchor="middle" fontWeight={p.isBrand ? "800" : "600"}>
+                {p.name.length > 12 ? p.name.slice(0, 11) + "…" : p.name}
+              </text>
+              <text x={x} y={y + 3} fontSize={8} fill="#fff" textAnchor="middle" fontWeight="700">{p.pct}%</text>
+            </g>
+          );
+        })}
+      </svg>
+
+      {/* Légende */}
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 8 }}>
+        {withPos.map((p, i) => {
+          const color = p.isBrand ? "#059669" : COLORS[i % COLORS.length];
+          return (
+            <div key={p.name} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11 }}>
+              <div style={{ width: 10, height: 10, borderRadius: "50%", background: color, flexShrink: 0 }} />
+              <span style={{ fontWeight: p.isBrand ? 700 : 400 }}>{p.name}</span>
+              <span style={{ color: "#94A3B8" }}>({p.citations} cit. · pos. {p.avgPos ?? "—"})</span>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ fontSize: 10, color: "#94A3B8", marginTop: 4 }}>Taille des bulles proportionnelle au nombre de citations · % = part des résultats</div>
+    </div>
+  );
+}
+
 // ── Bandeau de score GEO ───────────────────────────────────────────
 function GeoScoreBanner({ audit, brand, site }) {
   const score = audit.presenceRate;
@@ -284,18 +415,34 @@ function computeAudit(questions, results, urlIndex, brand, site) {
     compStats[c.name].mentions++;
     if (c.position) compStats[c.name].positions.push(c.position);
   }));
-  const urlsToOptimize = brandUrls.filter(u => u.count_as_source < 3).slice(0, 10);
-  const urlsToRework   = brandUrls.filter(u => u.count_as_source === 0 && u.count_in_answer > 0).slice(0, 10);
+  // ── URL détaillées marque avec questions et mots-clés liés ────
+  const qMap = {};
+  questions.forEach(q => { qMap[q.id] = q; });
+  const urlDetails = brandUrls.map(u => {
+    // questions dans lesquelles cette URL apparaît en source ou réponse
+    const linkedResults = results.filter(r =>
+      (r.sources || []).some(s => s === u.url) || (r.answer || "").includes(u.url)
+    );
+    const linkedQIds = [...new Set(linkedResults.map(r => r.question_id))];
+    const linkedQs = linkedQIds.map(id => qMap[id]).filter(Boolean);
+    const linkedKeywords = [...new Set(linkedQs.map(q => q.keyword_id).filter(Boolean))];
+    return { ...u, linkedQs, linkedKeywords };
+  });
+  const urlsToOptimize = brandUrls.filter(u => u.count_as_source < 3).slice(0, 15);
+  const urlsToRework   = brandUrls.filter(u => u.count_as_source === 0 && u.count_in_answer > 0).slice(0, 15);
   const urlsToInspire  = referenceUrls.filter(u => u.count_as_source >= 3).slice(0, 10);
   const presenceRate = pct(withBrand, total);
   const leads = [];
-  if (presenceRate < 30) leads.push({ priority: "🔴 Critique", label: "Présence < 30%", action: "Créer des contenus spécifiquement optimisés pour les questions de recommandation" });
-  if (avgPos && avgPos > 3) leads.push({ priority: "🟠 Important", label: `Position moyenne ${avgPos}`, action: "Améliorer le contenu pour remonter dans les fan-outs — viser le top 3" });
-  if (withSources < withBrand) leads.push({ priority: "🟡 Moyen", label: "Peu cité en source", action: "Augmenter l'autorité des pages — obtenir des backlinks depuis les sources fréquemment citées" });
+  if (presenceRate < 30) leads.push({ priority: "🔴 Critique", label: "Présence < 30%", action: "**Créer des contenus de recommandation** spécifiquement ciblés sur les questions sans présence. Structurez avec des listes comparatives explicites." });
+  if (presenceRate >= 30 && presenceRate < 50) leads.push({ priority: "🟠 À améliorer", label: `Présence ${presenceRate}%`, action: "**Enrichir les pages existantes** pour répondre directement aux questions fan-out. Ajoutez des sections dédiées aux comparatifs." });
+  if (avgPos && parseFloat(avgPos) > 3) leads.push({ priority: "🟠 Position", label: `Position moyenne ${avgPos}`, action: "**Optimiser le contenu pour remonter en top 3** des fan-outs. Répondez à la question dès le premier paragraphe et structurez avec des listes." });
+  if (withSources < withBrand) leads.push({ priority: "🟡 Sources", label: "Peu cité en source", action: "**Renforcer l'autorité des pages** via des backlinks depuis les domaines fréquemment cités. Soumettez vos URLs prioritaires à IndexNow." });
   if (Object.keys(compStats).length > 0) {
     const topComp = Object.entries(compStats).sort((a,b) => b[1].mentions - a[1].mentions)[0];
-    leads.push({ priority: "🟠 Concurrence", label: `${topComp[0]} dominant`, action: `Analyser le contenu de ${topComp[0]} et créer des alternatives plus complètes` });
+    leads.push({ priority: "🟠 Concurrence", label: `${topComp[0]} dominant`, action: `**Analyser le contenu de ${topComp[0]}** et créer des pages alternatives plus complètes avec données propriétaires et avis d'experts.` });
   }
+  leads.push({ priority: "📝 Contenu", label: "Volume et structure", action: "**Viser 1 500–2 500 mots** sur les pages à forte intention. Structurez avec H2/H3 clairs, FAQ en bas de page, et schema JSON-LD Organization + FAQ." });
+  leads.push({ priority: "🔗 Maillage", label: "Hubs thématiques", action: "**Créer des hubs de contenu** regroupant toutes les pages liées à chaque axe fan-out. Le maillage interne fort signale l'importance aux LLMs." });
   const providerStats = {};
   results.forEach(r => {
     const pid = getProviderId(r.model);
@@ -303,26 +450,74 @@ function computeAudit(questions, results, urlIndex, brand, site) {
     providerStats[pid].total++;
     if (r.brand_mentioned) providerStats[pid].withBrand++;
   });
-  const qMap = {};
-  questions.forEach(q => { qMap[q.id] = q.question; });
-  const missingBrandQs = [...new Set(results.filter(r => !r.brand_mentioned).map(r => qMap[r.question_id]).filter(Boolean))].slice(0, 12);
-  const presentBrandQs = [...new Set(results.filter(r => r.brand_mentioned).map(r => qMap[r.question_id]).filter(Boolean))].slice(0, 8);
-  return { total, withBrand, withSources, avgPos, presenceRate, trendDays, sortedUrls, brandUrls, competitorUrls, referenceUrls, topDomains, intentCount, typeCount, compStats, urlsToOptimize, urlsToRework, urlsToInspire, leads, questions: questions.length, providerStats, missingBrandQs, presentBrandQs };
+  // Questions favorites (25 max) avec présence/absence
+  const favQuestions = questions.filter(q => q.is_favorite);
+  const favPresent = favQuestions.filter(q => results.some(r => r.question_id === q.id && (r.brand_mentioned === true || r.brand_mentioned === 1)));
+  const favMissing = favQuestions.filter(q => !results.some(r => r.question_id === q.id && (r.brand_mentioned === true || r.brand_mentioned === 1)));
+  // Fallback : si pas de favoris, toutes questions
+  const srcPresent = favPresent.length > 0 ? favPresent : questions.filter(q => results.some(r => r.question_id === q.id && (r.brand_mentioned === true || r.brand_mentioned === 1)));
+  const srcMissing = favMissing.length > 0 ? favMissing : questions.filter(q => !results.some(r => r.question_id === q.id && (r.brand_mentioned === true || r.brand_mentioned === 1)));
+  const presentBrandQs = srcPresent.slice(0, 25).map(q => q.question);
+  const missingBrandQs = srcMissing.slice(0, 25).map(q => q.question);
+  const hasFavFilter = favQuestions.length > 0;
+  return { total, withBrand, withSources, avgPos, presenceRate, trendDays, sortedUrls, brandUrls, urlDetails, competitorUrls, referenceUrls, topDomains, intentCount, typeCount, compStats, urlsToOptimize, urlsToRework, urlsToInspire, leads, questions: questions.length, providerStats, missingBrandQs, presentBrandQs, hasFavFilter, favCount: favQuestions.length };
 }
 
 function TrendChart({ trendDays }) {
-  const W = 600, H = 80, PAD = 24, plotW = W - PAD * 2, plotH = H - 16;
-  const tested = trendDays.filter(d => d.tested > 0);
-  if (!tested.length) return <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>Aucun test effectué ces 30 derniers jours</div>;
-  const pts = trendDays.map((d, i) => ({ x: PAD + (i / (trendDays.length - 1)) * plotW, y: d.rate !== null ? (H - 16) - (d.rate / 100) * plotH + 8 : null, ...d }));
-  const pathPts = pts.filter(p => p.y !== null);
+  const W = 600, H = 110, PAD = 36, plotW = W - PAD - 16, plotH = H - 24;
+  const active = trendDays.filter(d => d.tested > 0);
+  if (!active.length) return <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>Aucun test effectué ces 30 derniers jours</div>;
+  // Ordonnée = citations brutes (present), max = max_du_jour * 1.5 (min 4 pour lisibilité)
+  const maxPresent = Math.max(...trendDays.map(d => d.present || 0));
+  const yMax = Math.max(Math.ceil(maxPresent * 1.5), 4);
+  const toY = (v) => H - 12 - (v / yMax) * plotH;
+  const pts = trendDays.map((d, i) => ({
+    x: PAD + (i / (trendDays.length - 1)) * plotW,
+    y: d.present !== null ? toY(d.present) : null,
+    ...d,
+  }));
+  const pathPts = pts.filter(p => p.y !== null && p.tested > 0);
   const pathD = pathPts.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ");
+  // Graduations : 0, mi, max
+  const ticks = [0, Math.round(yMax / 2), yMax];
   return (
     <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: "block" }}>
-      <line x1={PAD} x2={W-PAD} y1={H-8} y2={H-8} stroke={C.border} strokeWidth={1} />
-      {[0, 50, 100].map(v => { const y = (H-16) - (v/100) * plotH + 8; return <g key={v}><line x1={PAD} x2={W-PAD} y1={y} y2={y} stroke={C.border} strokeWidth={0.5} strokeDasharray="3,3" /><text x={PAD-4} y={y+3} fontSize={8} fill={C.textLight} textAnchor="end">{v}%</text></g>; })}
+      {/* Grille */}
+      {ticks.map(v => {
+        const y = toY(v);
+        return <g key={v}>
+          <line x1={PAD} x2={W - 16} y1={y} y2={y} stroke={C.border} strokeWidth={0.5} strokeDasharray="3,3" />
+          <text x={PAD - 5} y={y + 3} fontSize={8} fill={C.textLight} textAnchor="end">{v}</text>
+        </g>;
+      })}
+      {/* Axe X */}
+      <line x1={PAD} x2={W - 16} y1={H - 12} y2={H - 12} stroke={C.border} strokeWidth={1} />
+      {/* Étiquettes dates début/milieu/fin */}
+      {[0, 14, 29].map(i => (
+        <text key={i} x={PAD + (i / 29) * plotW} y={H - 2} fontSize={7} fill={C.textLight} textAnchor="middle">
+          {trendDays[i]?.date?.slice(5)}
+        </text>
+      ))}
+      {/* Ligne de tendance */}
       {pathPts.length > 1 && <path d={pathD} fill="none" stroke="#059669" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />}
-      {pts.map((p, i) => p.y !== null && <circle key={i} cx={p.x} cy={p.y} r={3} fill={p.rate >= 50 ? "#059669" : "#DC2626"} />)}
+      {/* Zone sous la courbe */}
+      {pathPts.length > 1 && (
+        <path
+          d={`${pathD} L ${pathPts[pathPts.length-1].x} ${toY(0)} L ${pathPts[0].x} ${toY(0)} Z`}
+          fill="#05966918"
+        />
+      )}
+      {/* Points */}
+      {pts.map((p, i) => p.y !== null && p.tested > 0 && (
+        <g key={i}>
+          <circle cx={p.x} cy={p.y} r={3.5} fill={p.present > 0 ? "#059669" : C.border} stroke={C.white} strokeWidth={1} />
+          {p.present > 0 && (
+            <text x={p.x} y={p.y - 6} fontSize={7} fill="#059669" textAnchor="middle" fontWeight="700">{p.present}</text>
+          )}
+        </g>
+      ))}
+      {/* Label ordonnée */}
+      <text x={8} y={H / 2} fontSize={8} fill={C.textLight} textAnchor="middle" transform={`rotate(-90, 8, ${H/2})`}>Citations</text>
     </svg>
   );
 }
@@ -353,21 +548,24 @@ Sections (titres ## markdown) :
 Sois concret et utilise les données.`;
 
     try {
-      const res = await fetch(ANTHROPIC_PROXY, { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 4000, stream: true, messages: [{ role: "user", content: prompt }] }) });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const reader = res.body.getReader(); const dec = new TextDecoder();
-      let buf = "", text = "";
-      while (true) {
-        const { done, value } = await reader.read(); if (done) break;
-        buf += dec.decode(value, { stream: true }); const lines = buf.split("\n"); buf = lines.pop();
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue; const raw = line.slice(6).trim(); if (raw === "[DONE]") continue;
-          try { const ev = JSON.parse(raw); const delta = ev?.delta?.text || ev?.choices?.[0]?.delta?.content || ""; if (delta) { text += delta; setAnalysis(text); } } catch {}
-        }
+      // Le proxy /api/anthropic rassemble le stream SSE côté serveur
+      // et renvoie un JSON standard { content: [{ type:"text", text:"..." }] }
+      const res = await fetch(ANTHROPIC_PROXY, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 4000, messages: [{ role: "user", content: prompt }] }),
+      });
+      if (!res.ok) {
+        const errBody = await res.text().catch(() => "");
+        throw new Error(`HTTP ${res.status} — ${errBody.slice(0, 120)}`);
       }
-      onTextReady?.(text); setStatus("done");
-    } catch(e) { console.error(e); setStatus("error"); }
+      const data = await res.json();
+      const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("\n").trim();
+      if (!text) throw new Error("Réponse vide du proxy");
+      setAnalysis(text);
+      onTextReady?.(text);
+      setStatus("done");
+    } catch(e) { console.error("[AIAnalysis]", e); setStatus("error"); }
   }, [audit, brand, site, questions]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (status === "idle") return (
@@ -382,9 +580,9 @@ Sois concret et utilise les données.`;
       <div style={{ fontSize: 12, lineHeight: 1.8, color: C.text }}>
         {analysis.split("\n").map((line, i) => {
           if (line.startsWith("## ")) return <div key={i} style={{ fontSize: 14, fontWeight: 800, color: C.text, marginTop: 20, marginBottom: 6, borderBottom: `2px solid ${C.border}`, paddingBottom: 4 }}>{line.slice(3)}</div>;
-          if (line.startsWith("- ")) return <div key={i} style={{ paddingLeft: 16, marginBottom: 3 }}>• {line.slice(2)}</div>;
+          if (line.startsWith("- ")) return <div key={i} style={{ paddingLeft: 16, marginBottom: 3 }}>• {renderBold(line.slice(2))}</div>;
           if (!line.trim()) return <div key={i} style={{ height: 8 }} />;
-          return <div key={i} style={{ marginBottom: 4 }}>{line}</div>;
+          return <div key={i} style={{ marginBottom: 4 }}>{renderBold(line)}</div>;
         })}
       </div>
       {status === "done" && <button onClick={generate} style={{ marginTop: 12, padding: "6px 14px", border: `1px solid ${C.border}`, borderRadius: 8, background: C.white, fontSize: 11, cursor: "pointer", color: C.textMid }}>🔄 Regénérer</button>}
@@ -470,7 +668,7 @@ Commence directement par ## 🔍. Chiffres précis. Actionnable.`;
             const lines = section.trim().split("\n"); const title = lines[0].replace(/^## /, ""); const body = lines.slice(1).join("\n").trim(); const col = getColor(title);
             return <div key={i} style={{ background: col.bg, border: `1px solid ${col.border}`, borderRadius: 10, padding: "12px 16px" }}>
               <div style={{ fontSize: 12, fontWeight: 800, color: col.title, marginBottom: 8 }}>{title}</div>
-              <div style={{ fontSize: 12, color: C.text, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{body}</div>
+              <div style={{ fontSize: 12, color: C.text, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{renderBold(body)}</div>
             </div>;
           })}
         </div>
@@ -963,7 +1161,10 @@ export default function GeoAuditTab({
               {/* Questions ✓ / ✗ */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
                 <div>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: "#059669", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>✓ Questions avec présence</div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#059669", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 4 }}>✓ Questions avec présence</div>
+                  <div style={{ fontSize: 10, color: C.textLight, marginBottom: 8, fontStyle: "italic" }}>
+                    {audit.hasFavFilter ? `Extrait des ${audit.favCount} questions favorites` : "Extrait des 25 premières questions"} · max 25 affichées
+                  </div>
                   {audit.presentBrandQs.length ? audit.presentBrandQs.map((q, i) => (
                     <div key={i} style={{ fontSize: 12, padding: "6px 0", borderBottom: `1px solid ${C.borderLight}`, display: "flex", gap: 8 }}>
                       <span style={{ color: "#059669", fontWeight: 700, flexShrink: 0 }}>✓</span><span>{q}</span>
@@ -971,7 +1172,10 @@ export default function GeoAuditTab({
                   )) : <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>Aucune présence</div>}
                 </div>
                 <div>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: "#DC2626", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>✗ Questions sans présence</div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#DC2626", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 4 }}>✗ Questions sans présence</div>
+                  <div style={{ fontSize: 10, color: C.textLight, marginBottom: 8, fontStyle: "italic" }}>
+                    {audit.hasFavFilter ? `Extrait des ${audit.favCount} questions favorites` : "Extrait des 25 premières questions"} · max 25 affichées
+                  </div>
                   {audit.missingBrandQs.length ? audit.missingBrandQs.map((q, i) => (
                     <div key={i} style={{ fontSize: 12, padding: "6px 0", borderBottom: `1px solid ${C.borderLight}`, display: "flex", gap: 8 }}>
                       <span style={{ color: "#DC2626", fontWeight: 700, flexShrink: 0 }}>✗</span><span>{q}</span>
@@ -1033,7 +1237,7 @@ export default function GeoAuditTab({
                 BLOC 4 — ANALYSE DES SOURCES & URLS
                 Top domaines + URLs marque catégorisées
             ══════════════════════════════════════════════════════ */}
-            <Section icon="🔗" title="Sources & URLs" sub="Domaines les plus cités et état des URLs de la marque" accent={C.purple}>
+            <Section icon="🔗" title="Sources & URLs" sub="URLs de la marque citées dans les réponses LLM" accent={C.purple}>
 
               {/* Top domaines */}
               <div style={{ marginBottom: 20 }}>
@@ -1053,23 +1257,49 @@ export default function GeoAuditTab({
                 </div>
               </div>
 
-              {/* URLs marque catégorisées */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
-                <div>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: "#D97706", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>⚡ À optimiser</div>
-                  <div style={{ fontSize: 10, color: C.textLight, marginBottom: 6 }}>Présentes mais peu citées en source</div>
-                  {audit.urlsToOptimize.length ? audit.urlsToOptimize.map((u, i) => <UrlRow key={u.id} url={u.url} rank={i+1} meta={`${u.count_as_source} src · ${u.count_in_answer} rép`} badge="À booster" badgeColor="#D97706" badgeBg="#FFFBEB" />) : <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>Aucune</div>}
-                </div>
-                <div>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: "#DC2626", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>🔄 À reprendre</div>
-                  <div style={{ fontSize: 10, color: C.textLight, marginBottom: 6 }}>Dans les réponses mais jamais en source</div>
-                  {audit.urlsToRework.length ? audit.urlsToRework.map((u, i) => <UrlRow key={u.id} url={u.url} rank={i+1} meta={`${u.count_as_source} src · ${u.count_in_answer} rép`} badge="À refaire" badgeColor="#DC2626" badgeBg="#FEF2F2" />) : <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>Aucune</div>}
-                </div>
-                <div>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: "#2563EB", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>💡 Référence</div>
-                  <div style={{ fontSize: 10, color: C.textLight, marginBottom: 6 }}>Top sources externes à surveiller</div>
-                  {audit.urlsToInspire.length ? audit.urlsToInspire.map((u, i) => <UrlRow key={u.id} url={u.url} rank={i+1} meta={`${getDomain(u.url)} · ${u.count_as_source} cit.`} badge="Inspiration" badgeColor="#2563EB" badgeBg="#EFF6FF" />) : <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>Aucune</div>}
-                </div>
+              {/* Tableau URLs marque */}
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>URLs de la marque citées</div>
+                {audit.brandUrls.length === 0 ? (
+                  <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>Aucune URL de la marque détectée dans les sources</div>
+                ) : (
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                    <thead>
+                      <tr style={{ background: C.bg }}>
+                        {["URL", "Citations src", "Mentions rép.", "Questions liées", "Statut"].map(h => (
+                          <th key={h} style={{ padding: "8px 12px", textAlign: "left", fontWeight: 600, fontSize: 10, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.5, borderBottom: `1px solid ${C.border}` }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {audit.brandUrls.slice(0, 20).map((u, i) => {
+                        const src = u.count_as_source || 0;
+                        const rep = u.count_in_answer || 0;
+                        const detail = (audit.urlDetails || []).find(d => d.url === u.url);
+                        const qCount = detail?.linkedQs?.length || 0;
+                        const status = src >= 3 ? { label: "✓ Performante", color: "#059669", bg: "#ECFDF5" }
+                                     : rep > 0 && src === 0 ? { label: "⚠ À sourcer", color: "#DC2626", bg: "#FEF2F2" }
+                                     : src > 0 ? { label: "↑ À booster", color: "#D97706", bg: "#FFFBEB" }
+                                     : { label: "— Peu citée", color: C.textLight, bg: C.bg };
+                        return (
+                          <tr key={i} style={{ borderBottom: `1px solid ${C.borderLight}` }}>
+                            <td style={{ padding: "8px 12px", maxWidth: 260, wordBreak: "break-all" }}>
+                              <a href={u.url} target="_blank" rel="noreferrer" style={{ color: "#2563EB", fontSize: 11, textDecoration: "none" }}>{u.url.replace(/^https?:\/\//, "")}</a>
+                            </td>
+                            <td style={{ padding: "8px 12px", textAlign: "center", fontWeight: 700, color: src > 0 ? "#059669" : C.textLight }}>{src}</td>
+                            <td style={{ padding: "8px 12px", textAlign: "center", fontWeight: 700, color: rep > 0 ? "#2563EB" : C.textLight }}>{rep}</td>
+                            <td style={{ padding: "8px 12px", textAlign: "center", color: qCount > 0 ? C.text : C.textLight }}>
+                              {qCount > 0 ? `${qCount} question${qCount > 1 ? "s" : ""}` : "—"}
+                            </td>
+                            <td style={{ padding: "8px 12px" }}>
+                              <span style={{ fontSize: 10, fontWeight: 700, color: status.color, background: status.bg, borderRadius: 6, padding: "2px 8px" }}>{status.label}</span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
               </div>
             </Section>
 
@@ -1146,46 +1376,14 @@ export default function GeoAuditTab({
               };
 
               return (
-                <Section icon="📊" title="Croisements data × présence GEO" sub="Impact des métriques techniques, SEO et Bing AI sur la visibilité générative" accent={C.teal}>
+                <Section icon="📊" title="Croisements data × présence GEO" sub="Bing AI, SEO et corrélations Screaming Frog" accent={C.teal}>
 
-                  {/* 1. Technique × GEO */}
-                  <CrossCard icon="🕷️" title="Technique (SF) × Présence GEO"
-                    sub="Comment les métriques techniques influencent la citation dans les réponses LLM">
-                    <div style={{ display: "grid", gridTemplateColumns: hasSF && hasCorr ? "1fr 1fr" : "1fr", gap: 20 }}>
-                      <div>
-                        <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>État actuel</div>
-                        {hasSF ? (<>
-                          {metrics.map(({ site: s, sf }) => sf && <Signal key={s.id} label={`${s.label} — Mots moy.`} value={sf.avgWords} note="par page" color={s.color} />)}
-                          {metrics.map(({ site: s, sf }) => sf && <Signal key={s.id} label={`${s.label} — Inlinks uniq.`} value={sf.avgInlinksUniq} note="moy. par page" color={s.color} />)}
-                          {metrics.map(({ site: s, sf }) => sf && <Signal key={s.id} label={`${s.label} — Schemas`} value={`${sf.schemaRate}%`} note="des pages" color={s.color} />)}
-                          {metrics.map(({ site: s, sf }) => sf && <Signal key={s.id} label={`${s.label} — Profondeur`} value={sf.avgDepth} note="niveaux moy." color={s.color} />)}
-                        </>) : <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>Importez un CSV Screaming Frog dans ⚙️ Setup</div>}
-                      </div>
-                      <div>
-                        <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>
-                          {geoCorrs.length ? "Corrélations SF × Citations Bing" : "Pistes d'optimisation GEO technique"}
-                        </div>
-                        {geoCorrs.length
-                          ? geoCorrs.map((c, i) => <CorrRow key={i} {...c} />)
-                          : <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>Interrogez plus de questions pour obtenir des corrélations</div>
-                        }
-                      </div>
-                    </div>
-                    <div style={{ marginTop: 16 }}>
-                      <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>Pistes d'optimisation GEO technique</div>
-                      <Lead2 priority="📝 Volume de contenu" color="#2563EB" bg="#EFF6FF" text="Les LLMs favorisent les pages avec un volume substantiel. Visez 1 000–2 500 mots pour les pages à forte intention transactionnelle. Structurez avec des H2/H3 clairs pour faciliter l'extraction sémantique." />
-                      <Lead2 priority="🏷️ Schema JSON-LD" color="#059669" bg="#ECFDF5" text="Les schemas Organization, FAQ et HowTo augmentent la probabilité de citation. Priorisez les pages sans schema." />
-                      <Lead2 priority="🔗 Maillage interne" color="#7C3AED" bg="#F5F3FF" text="Un fort maillage interne vers les pages cibles signale leur importance aux LLMs. Créez des hubs thématiques." />
-                      <Lead2 priority="📐 Profondeur URL" color="#D97706" bg="#FFFBEB" text="Les pages superficielles (profondeur > 3) sont moins souvent citées. Remontez les pages importantes dans l'arborescence." />
-                    </div>
-                  </CrossCard>
-
-                  {/* 2. Bing AI × Fan-outs */}
-                  <CrossCard icon="🤖" title="Bing AI Performance × Fan-outs"
-                    sub="Croisement entre les pages reconnues par Bing AI et la présence dans les LLMs">
+                  {/* B5 — Bing AI × Fan-outs — URLs marque uniquement */}
+                  <CrossCard icon="🤖" title="Bing AI × Fan-outs" sub="URLs de la marque — top citations Bing vs top citations LLM">
                     {(() => {
                       const siteId = site?.id;
                       const bingRows = (bingData[siteId] || []);
+                      // Construire map url → citations Bing
                       const bingByUrl = {};
                       bingRows.forEach(r => {
                         const url = (r["url"] || r["adresse"] || r["address"] || "").trim().toLowerCase();
@@ -1194,80 +1392,104 @@ export default function GeoAuditTab({
                         if (!bingByUrl[url]) bingByUrl[url] = { url, citations: 0 };
                         bingByUrl[url].citations += cits;
                       });
-                      const bingUrlsSorted = Object.values(bingByUrl).sort((a,b) => b.citations - a.citations);
-                      const fanoutUrlSet = new Set(urlIndex.filter(u=>u.project_id===projectId).map(u => (u.url || "").toLowerCase()));
-                      const bingAlsoInFanout = bingUrlsSorted.filter(b => fanoutUrlSet.has(b.url));
-                      const bingOnlyBing    = bingUrlsSorted.filter(b => !fanoutUrlSet.has(b.url));
-                      const fanoutNotInBing = urlIndex.filter(u => u.project_id===projectId && !bingByUrl[(u.url||"").toLowerCase()]);
-                      const alignScore = bingUrlsSorted.length > 0
-                        ? Math.round((bingAlsoInFanout.length / Math.min(bingUrlsSorted.length, fanoutUrlSet.size + 1)) * 100) : null;
+                      // Filtrer UNIQUEMENT les URLs de la marque
+                      const brandTerms = [brand?.brand_name, ...(brand?.brand_aliases || []), brand?.brand_domain]
+                        .filter(Boolean).map(t => t.toLowerCase().replace(/\s+/g, ""));
+                      const isBrandUrl = (url) => brandTerms.some(t => t && url.toLowerCase().includes(t));
+
+                      const bingBrandUrls = Object.values(bingByUrl)
+                        .filter(b => isBrandUrl(b.url))
+                        .sort((a, b) => b.citations - a.citations)
+                        .slice(0, 10);
+
+                      const fanoutBrandUrls = urlIndex
+                        .filter(u => u.project_id === projectId && isBrandUrl(u.url || ""))
+                        .sort((a, b) => (b.count_as_source + b.count_in_answer) - (a.count_as_source + a.count_in_answer))
+                        .slice(0, 10);
+
+                      const alignScore = bingBrandUrls.length > 0 && fanoutBrandUrls.length > 0 ? (() => {
+                        const bingSet = new Set(bingBrandUrls.map(b => b.url));
+                        const both = fanoutBrandUrls.filter(f => bingSet.has((f.url || "").toLowerCase())).length;
+                        return Math.round((both / Math.max(bingBrandUrls.length, fanoutBrandUrls.length)) * 100);
+                      })() : null;
                       const scoreColor = alignScore === null ? C.textLight : alignScore >= 60 ? "#059669" : alignScore >= 30 ? "#D97706" : "#DC2626";
-                      const scoreLabel = alignScore === null ? "—" : alignScore >= 60 ? "Bonne cohérence" : alignScore >= 30 ? "Cohérence partielle" : "Faible cohérence";
+
                       return (
                         <div>
-                          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginBottom: 20 }}>
+                          {/* KPIs */}
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 20 }}>
                             {[
-                              { label: "Citations Bing AI", value: bingTotal.toLocaleString(), sub: `${bingPages} pages indexées`, color: "#7C3AED" },
-                              { label: "Présence Fan-outs", value: `${geoPct}%`, sub: `${audit.withBrand}/${total2}`, color: geoPct >= 50 ? "#059669" : "#DC2626" },
-                              { label: "Cité en source LLM", value: withSource, sub: "URLs marque", color: "#2563EB" },
-                              { label: "Alignement Bing × LLM", value: alignScore !== null ? `${alignScore}%` : "—", sub: scoreLabel, color: scoreColor },
+                              { label: "URLs marque sur Bing", value: bingBrandUrls.length, color: "#7C3AED" },
+                              { label: "URLs marque sur LLMs", value: fanoutBrandUrls.length, color: "#2563EB" },
+                              { label: "Alignement", value: alignScore !== null ? `${alignScore}%` : "—", color: scoreColor },
                             ].map(k => (
                               <div key={k.label} style={{ background: C.bg, borderRadius: 10, padding: "12px 14px", border: `1px solid ${C.border}` }}>
                                 <div style={{ fontSize: 10, color: C.textLight, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 4 }}>{k.label}</div>
                                 <div style={{ fontSize: 20, fontWeight: 800, color: k.color }}>{k.value}</div>
-                                <div style={{ fontSize: 10, color: C.textLight, marginTop: 2 }}>{k.sub}</div>
                               </div>
                             ))}
                           </div>
-                          {hasBing ? (
-                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, marginBottom: 20 }}>
-                              <div>
-                                <div style={{ fontSize: 11, fontWeight: 700, color: "#059669", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>✓ Bing ET LLM ({bingAlsoInFanout.length})</div>
-                                {bingAlsoInFanout.length === 0 ? <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>Aucun recoupement</div>
-                                  : bingAlsoInFanout.slice(0, 5).map((u, i) => (
-                                    <div key={i} style={{ padding: "5px 0", borderBottom: `1px solid ${C.borderLight}` }}>
-                                      <div style={{ fontSize: 11, color: "#059669", fontWeight: 600, wordBreak: "break-all" }}>{u.url.replace(/^https?:\/\/[^/]+/, "")}</div>
-                                      <div style={{ fontSize: 10, color: C.textLight }}>{u.citations} cit. Bing</div>
-                                    </div>
-                                  ))}
-                              </div>
-                              <div>
-                                <div style={{ fontSize: 11, fontWeight: 700, color: "#D97706", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>⚡ Bing seulement ({bingOnlyBing.length})</div>
-                                <div style={{ fontSize: 10, color: C.textLight, marginBottom: 6 }}>Reconnues Bing, absentes LLMs → priorité</div>
-                                {bingOnlyBing.slice(0, 5).map((u, i) => (
-                                  <div key={i} style={{ padding: "5px 0", borderBottom: `1px solid ${C.borderLight}` }}>
-                                    <div style={{ fontSize: 11, color: "#D97706", fontWeight: 600, wordBreak: "break-all" }}>{u.url.replace(/^https?:\/\/[^/]+/, "")}</div>
-                                    <div style={{ fontSize: 10, color: C.textLight }}>{u.citations} cit. Bing</div>
-                                  </div>
-                                ))}
-                              </div>
-                              <div>
-                                <div style={{ fontSize: 11, fontWeight: 700, color: "#2563EB", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>🔗 LLM seulement ({fanoutNotInBing.length})</div>
-                                <div style={{ fontSize: 10, color: C.textLight, marginBottom: 6 }}>Citées LLMs mais non indexées Bing</div>
-                                {fanoutNotInBing.slice(0, 5).map((u, i) => (
-                                  <div key={i} style={{ padding: "5px 0", borderBottom: `1px solid ${C.borderLight}` }}>
-                                    <div style={{ fontSize: 11, color: "#2563EB", fontWeight: 600, wordBreak: "break-all" }}>{(u.url||"").replace(/^https?:\/\/[^/]+/, "")}</div>
-                                    <div style={{ fontSize: 10, color: C.textLight }}>{(u.count_as_source||0)+(u.count_in_answer||0)} cit. LLM</div>
-                                  </div>
-                                ))}
-                              </div>
+
+                          {!hasBing ? (
+                            <div style={{ background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 10, padding: "12px 16px", fontSize: 12, color: "#92400E" }}>
+                              Importez un export Bing Webmaster Tools dans ⚙️ Setup pour débloquer cette analyse.
                             </div>
                           ) : (
-                            <div style={{ background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 10, padding: "12px 16px", marginBottom: 20, fontSize: 12, color: "#92400E" }}>
-                              Importez un export Bing Webmaster Tools dans ⚙️ Setup pour débloquer l'analyse croisée.
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+                              {/* Colonne Bing */}
+                              <div>
+                                <div style={{ fontSize: 11, fontWeight: 700, color: "#7C3AED", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>
+                                  🤖 Top URLs marque — Bing
+                                </div>
+                                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                                  <thead><tr style={{ background: C.bg }}>
+                                    <th style={{ padding: "5px 8px", textAlign: "left", fontWeight: 600, color: C.textLight, fontSize: 10, borderBottom: `1px solid ${C.border}` }}>URL</th>
+                                    <th style={{ padding: "5px 8px", textAlign: "right", fontWeight: 600, color: C.textLight, fontSize: 10, borderBottom: `1px solid ${C.border}` }}>Cit. Bing</th>
+                                  </tr></thead>
+                                  <tbody>
+                                    {bingBrandUrls.length === 0
+                                      ? <tr><td colSpan={2} style={{ padding: "8px", color: C.textLight, fontStyle: "italic" }}>Aucune URL marque dans Bing</td></tr>
+                                      : bingBrandUrls.map((u, i) => (
+                                        <tr key={i} style={{ borderBottom: `1px solid ${C.borderLight}` }}>
+                                          <td style={{ padding: "5px 8px", wordBreak: "break-all", color: "#7C3AED" }}>{u.url.replace(/^https?:\/\/[^/]+/, "") || "/"}</td>
+                                          <td style={{ padding: "5px 8px", textAlign: "right", fontWeight: 700 }}>{u.citations}</td>
+                                        </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                              {/* Colonne Fan-outs */}
+                              <div>
+                                <div style={{ fontSize: 11, fontWeight: 700, color: "#2563EB", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>
+                                  🔗 Top URLs marque — Fan-outs LLM
+                                </div>
+                                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                                  <thead><tr style={{ background: C.bg }}>
+                                    <th style={{ padding: "5px 8px", textAlign: "left", fontWeight: 600, color: C.textLight, fontSize: 10, borderBottom: `1px solid ${C.border}` }}>URL</th>
+                                    <th style={{ padding: "5px 8px", textAlign: "right", fontWeight: 600, color: C.textLight, fontSize: 10, borderBottom: `1px solid ${C.border}` }}>Src</th>
+                                    <th style={{ padding: "5px 8px", textAlign: "right", fontWeight: 600, color: C.textLight, fontSize: 10, borderBottom: `1px solid ${C.border}` }}>Rép</th>
+                                  </tr></thead>
+                                  <tbody>
+                                    {fanoutBrandUrls.length === 0
+                                      ? <tr><td colSpan={3} style={{ padding: "8px", color: C.textLight, fontStyle: "italic" }}>Aucune URL marque dans les fan-outs</td></tr>
+                                      : fanoutBrandUrls.map((u, i) => (
+                                        <tr key={i} style={{ borderBottom: `1px solid ${C.borderLight}` }}>
+                                          <td style={{ padding: "5px 8px", wordBreak: "break-all", color: "#2563EB" }}>{(u.url || "").replace(/^https?:\/\/[^/]+/, "") || "/"}</td>
+                                          <td style={{ padding: "5px 8px", textAlign: "right", fontWeight: 700, color: "#059669" }}>{u.count_as_source}</td>
+                                          <td style={{ padding: "5px 8px", textAlign: "right", fontWeight: 700 }}>{u.count_in_answer}</td>
+                                        </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
                             </div>
                           )}
-                          <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>Pistes actionnables</div>
-                          {bingOnlyBing.length > 0 && <Lead2 priority={`⚡ ${bingOnlyBing.length} page${bingOnlyBing.length>1?"s":""} Bing non citées LLMs`} color="#D97706" bg="#FFFBEB" text="Renforcez leur contenu : ajoutez des listes de recommandation, répondez explicitement à des questions, insérez des données structurées FAQ." />}
-                          {fanoutNotInBing.length > 0 && <Lead2 priority={`🔗 ${fanoutNotInBing.length} page${fanoutNotInBing.length>1?"s":""} LLM non indexées Bing`} color="#2563EB" bg="#EFF6FF" text="Soumettez ces URLs via Bing Webmaster Tools → IndexNow pour accélérer leur indexation." />}
-                          <Lead2 priority="🌐 Autorité marque Bing" color="#7C3AED" bg="#F5F3FF" text="Ajoutez SpeakableSpecification, Organization et FAQ sur vos pages cibles. Vérifiez votre profil Bing Places." />
-                          {geoPct < 50 && bingTotal > 0 && <Lead2 priority="📊 Gap Bing → LLM" color="#DC2626" bg="#FEF2F2" text={`Bing vous cite (${bingTotal} fois) mais les LLMs peu (${geoPct}%). Créez des pages comparatives ciblant les questions fan-out.`} />}
                         </div>
                       );
                     })()}
                   </CrossCard>
 
-                  {/* 3. SEO × GEO */}
+                  {/* GSC × GEO */}
                   <CrossCard icon="🔍" title="Données SEO (GSC) × Présence GEO"
                     sub="Relation entre les performances SEO organiques et la visibilité générative">
                     <div style={{ display: "grid", gridTemplateColumns: hasGSC ? "1fr 1fr" : "1fr", gap: 20 }}>
@@ -1281,26 +1503,79 @@ export default function GeoAuditTab({
                         </>) : <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>Importez un export GSC dans ⚙️ Setup</div>}
                       </div>
                       <div>
-                        <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>
-                          {seoCorrs.length ? "Corrélations SF × Clics GSC" : "Interprétation SEO/GEO"}
-                        </div>
-                        {seoCorrs.length ? seoCorrs.map((c, i) => <CorrRow key={i} {...c} />) : hasGSC ? (
+                        <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>Interprétation</div>
+                        {hasGSC ? (
                           <div style={{ fontSize: 12, color: C.textMid, lineHeight: 1.7 }}>
-                            {gscAvgPos && parseFloat(gscAvgPos) <= 10 && geoPct < 30 ? "Paradoxe SEO/GEO : bonne position organique mais faible présence GEO. Restructurez le contenu pour répondre aux questions de recommandation." :
-                             gscAvgPos && parseFloat(gscAvgPos) <= 10 && geoPct >= 50 ? "Corrélation positive SEO/GEO : la forte autorité SEO se traduit en présence GEO." :
-                             "Améliorer le SEO on-page renforcera également la visibilité GEO via l'autorité accrue."}
+                            {gscAvgPos && parseFloat(gscAvgPos) <= 10 && geoPct < 30
+                              ? "Paradoxe SEO/GEO : bonne position organique mais faible présence GEO. Restructurez le contenu pour répondre directement aux questions de recommandation."
+                              : gscAvgPos && parseFloat(gscAvgPos) <= 10 && geoPct >= 50
+                              ? "Corrélation positive SEO/GEO : la forte autorité SEO se traduit en présence GEO."
+                              : "Améliorer le SEO on-page renforcera la visibilité GEO via l'autorité accrue."}
                           </div>
                         ) : <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>—</div>}
                       </div>
                     </div>
-                    <div style={{ marginTop: 16 }}>
-                      <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>Pistes d'optimisation GEO via SEO</div>
-                      <Lead2 priority="🏆 Pages top 10 GSC → GEO" color="#2563EB" bg="#EFF6FF" text="Les pages bien positionnées sur Google ont une autorité reconnue. Optimisez-les pour le GEO : ajoutez des sections comparatives et des recommandations directes." />
-                      <Lead2 priority="🎯 Intention transactionnelle" color="#059669" bg="#ECFDF5" text="Les LLMs citent préférentiellement les pages à forte intention transactionnelle. Enrichissez vos pages top GSC avec des listes de recommandations structurées." />
-                      <Lead2 priority="✍️ EEAT et autorité d'auteur" color="#7C3AED" bg="#F5F3FF" text="Ajoutez des bios d'auteurs, des sources citables, des données originales et des avis d'experts sur vos pages clés." />
-                      <Lead2 priority="🔄 Contenu frais" color="#D97706" bg="#FFFBEB" text="Les LLMs préfèrent les contenus récents. Mettez à jour régulièrement vos comparatifs avec des dates de révision visibles." />
-                    </div>
                   </CrossCard>
+
+                  {/* B7 — Corrélations Screaming Frog — tableau unique */}
+                  {hasCorr && (
+                    <CrossCard icon="🕷️" title="Corrélations Screaming Frog" sub="SF × Bing AI · SF × GSC · SF × Fan-outs">
+                      {(() => {
+                        // SF × Fan-outs : corrélations avec brand_mentioned (src=bing proxy)
+                        const fanoutCorrs = corrMatrix.flatMap(row =>
+                          row.corrs.filter(c => c.kpi.src === "bing" && c.value !== null)
+                            .map(c => ({ dim: row.dim.label, kpi: c.kpi.label, src: "bing", value: c.value }))
+                        );
+                        const gscCorrsAll = corrMatrix.flatMap(row =>
+                          row.corrs.filter(c => c.kpi.src === "gsc" && c.value !== null)
+                            .map(c => ({ dim: row.dim.label, kpi: c.kpi.label, src: "gsc", value: c.value }))
+                        );
+                        const allCorrs = [...fanoutCorrs, ...gscCorrsAll]
+                          .sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
+                          .slice(0, 15);
+
+                        if (!allCorrs.length) return (
+                          <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>
+                            Importez un CSV Screaming Frog et interrogez plus de questions pour calculer les corrélations.
+                          </div>
+                        );
+
+                        return (
+                          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                            <thead>
+                              <tr style={{ background: C.bg }}>
+                                {["Dimension SF", "KPI", "Type", "Corrélation"].map(h => (
+                                  <th key={h} style={{ padding: "7px 12px", textAlign: "left", fontWeight: 600, fontSize: 10, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.5, borderBottom: `1px solid ${C.border}` }}>{h}</th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {allCorrs.map((c, i) => {
+                                const pos = c.value > 0;
+                                const strong = Math.abs(c.value) >= 0.4;
+                                const srcLabel = c.src === "gsc" ? "SF × GSC" : "SF × Fan-out";
+                                const srcColor = c.src === "gsc" ? "#2563EB" : "#7C3AED";
+                                return (
+                                  <tr key={i} style={{ borderBottom: `1px solid ${C.borderLight}` }}>
+                                    <td style={{ padding: "7px 12px", color: C.text }}>{c.dim}</td>
+                                    <td style={{ padding: "7px 12px", color: C.textMid }}>{c.kpi}</td>
+                                    <td style={{ padding: "7px 12px" }}>
+                                      <span style={{ fontSize: 10, fontWeight: 700, color: srcColor, background: srcColor + "15", borderRadius: 4, padding: "1px 6px" }}>{srcLabel}</span>
+                                    </td>
+                                    <td style={{ padding: "7px 12px" }}>
+                                      <span style={{ fontSize: 12, fontWeight: strong ? 700 : 500, color: pos ? "#059669" : "#DC2626", background: pos ? "#ECFDF5" : "#FEF2F2", borderRadius: 5, padding: "2px 10px" }}>
+                                        {pos ? "▲" : "▼"} r={c.value.toFixed(2)}
+                                      </span>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        );
+                      })()}
+                    </CrossCard>
+                  )}
                 </Section>
               );
             })()}
@@ -1309,29 +1584,48 @@ export default function GeoAuditTab({
                 BLOC 6 — PLAN D'ACTION
                 Pistes prioritaires + analyse Fan-out IA
             ══════════════════════════════════════════════════════ */}
-            <Section icon="🎯" title="Plan d'action" sub="Recommandations prioritaires et analyse IA" accent={C.green}>
+            {/* ══════════════════════════════════════════════════════
+                BLOC 6 — PLAN D'ACTION
+            ══════════════════════════════════════════════════════ */}
+            <Section icon="🎯" title="Plan d'action" sub="Recommandations data, analyses IA et graphique concurrentiel" accent={C.green}>
 
-              {/* Pistes issues des données */}
-              <div style={{ marginBottom: 20 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>Pistes d'optimisation prioritaires</div>
-                {audit.leads.map((l, i) => (
-                  <div key={i} style={{ padding: "10px 14px", borderLeft: "3px solid #7C3AED", background: "#F5F3FF", borderRadius: "0 8px 8px 0", marginBottom: 8 }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 2 }}>{l.priority} — {l.label}</div>
-                    <div style={{ fontSize: 12, color: C.textMid }}>{l.action}</div>
+              {/* B8 — Pistes prioritaires globales avec renderBold */}
+              <div style={{ marginBottom: 24 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>Pistes prioritaires</div>
+                {audit.leads.map((l, i) => {
+                  const borderColor = l.priority.includes("🔴") ? "#DC2626" : l.priority.includes("🟠") ? "#D97706" : l.priority.includes("🟡") ? "#CA8A04" : C.green;
+                  const bgColor     = l.priority.includes("🔴") ? "#FEF2F2"  : l.priority.includes("🟠") ? "#FFFBEB"  : l.priority.includes("🟡") ? "#FEFCE8"  : "#ECFDF5";
+                  return (
+                    <div key={i} style={{ padding: "10px 14px", borderLeft: `3px solid ${borderColor}`, background: bgColor, borderRadius: "0 8px 8px 0", marginBottom: 8 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 3 }}>{l.priority} — {l.label}</div>
+                      <div style={{ fontSize: 12, color: C.textMid, lineHeight: 1.6 }}>{renderBold(l.action)}</div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* B1 — Scatter plot concurrents : citations × position */}
+              {Object.keys(audit.compStats).length > 0 && (
+                <div style={{ marginBottom: 24 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>
+                    Cartographie concurrentielle — Citations × Position
                   </div>
-                ))}
-              </div>
+                  <CompetitorScatter compStats={audit.compStats} total={audit.total} brandName={brand?.brand_name} brandWithBrand={audit.withBrand} brandAvgPos={audit.avgPos} />
+                </div>
+              )}
 
-              {/* Analyse Fan-out IA */}
-              <div style={{ marginBottom: 20 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>Analyse Fan-out IA</div>
-                <FanoutAnalysis questions={siteQuestions} results={siteResults} brand={brand} claudeKey={claudeKey} />
-              </div>
-
-              {/* Analyse IA détaillée */}
-              <div>
-                <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>✦ Analyse IA détaillée — interprétation contextuelle par Claude</div>
-                <AIAnalysis audit={audit} brand={brand} site={site} questions={siteQuestions} onTextReady={setAiText} />
+              {/* B9 — CTAs harmonisés : Analyse Fan-out + Analyse Détaillée côte à côte */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+                <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 12, padding: "16px 20px" }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 4 }}>✨ Analyse Fan-out</div>
+                  <div style={{ fontSize: 11, color: C.textLight, marginBottom: 12 }}>Recommandations basées sur vos données de présence et sources</div>
+                  <FanoutAnalysis questions={siteQuestions} results={siteResults} brand={brand} claudeKey={claudeKey} />
+                </div>
+                <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 12, padding: "16px 20px" }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 4 }}>✦ Analyse IA détaillée</div>
+                  <div style={{ fontSize: 11, color: C.textLight, marginBottom: 12 }}>Interprétation contextuelle complète générée par Claude</div>
+                  <AIAnalysis audit={audit} brand={brand} site={site} questions={siteQuestions} onTextReady={setAiText} />
+                </div>
               </div>
             </Section>
 

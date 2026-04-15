@@ -13,6 +13,7 @@ import {
   sbGetUrlIndex, sbUpdateUrlMeta, sbIncrementUrlCounts,
   sbAddCalendarEntry, sbGetCalendarEntriesBatch,
   sbDownload, sbSaveProject, sbDeleteProject,
+  sbGetCompetitors, sbSaveCompetitor, sbUpdateCompetitor, sbDeleteCompetitor,
 } from "../lib/supabase";
 import { ProviderConfigPanel, BrandConfigPanel } from "../components/GeoConfig";
 import UploadCard from "../components/UploadCard";
@@ -95,6 +96,56 @@ function renderMarkdown(text) {
     }
     if (!line.trim()) return <div key={li} style={{ height: 6 }} />;
     return <div key={li} style={{ marginBottom: 2 }}>{parts}</div>;
+  });
+}
+
+// ── renderMarkdownHighlighted — surligne marque (vert) et concurrents (rouge) ──
+// competitorMap : { lowerName → { color, category } }
+function renderMarkdownHighlighted(text, brandTerms = [], competitorMap = {}) {
+  if (!text) return null;
+  const hasHighlights = brandTerms.length > 0 || Object.keys(competitorMap).length > 0;
+  if (!hasHighlights) return renderMarkdown(text);
+
+  // Tokenize une ligne en spans avec surlignages
+  function highlightLine(line) {
+    if (!line) return [line];
+    // Construire regex de tous les termes (marque + concurrents), plus long d'abord
+    const allTerms = [
+      ...brandTerms.map(t => ({ term: t, type: "brand" })),
+      ...Object.keys(competitorMap).map(t => ({ term: t, type: "competitor" })),
+    ].filter(t => t.term).sort((a, b) => b.term.length - a.term.length);
+
+    if (!allTerms.length) return [line];
+
+    const pattern = allTerms.map(t => t.term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+    const re = new RegExp(`(${pattern})`, "gi");
+    const parts = line.split(re);
+
+    return parts.map((part, i) => {
+      const lower = part.toLowerCase();
+      if (brandTerms.some(t => t.toLowerCase() === lower)) {
+        return <mark key={i} style={{ background: "#DCFCE7", color: "#166534", borderRadius: 3, padding: "0 2px", fontWeight: 600 }}>{part}</mark>;
+      }
+      if (competitorMap[lower]) {
+        const cat = competitorMap[lower];
+        const bg = cat.category === "direct" ? "#FEE2E2" : cat.category === "geo" ? "#FEF3C7" : "#F3F4F6";
+        const color = cat.category === "direct" ? "#991B1B" : cat.category === "geo" ? "#92400E" : "#374151";
+        return <mark key={i} style={{ background: bg, color, borderRadius: 3, padding: "0 2px", fontWeight: 500, opacity: 0.9 }}>{part}</mark>;
+      }
+      return part;
+    });
+  }
+
+  const lines = text.split("\n");
+  return lines.map((line, li) => {
+    const highlighted = highlightLine(line);
+    const trimmed = line.trimStart();
+    const isHeading = trimmed.startsWith("## ") || trimmed.startsWith("### ");
+    const isList = /^[-*•]\s/.test(trimmed) || /^\d+\.\s/.test(trimmed);
+    if (isHeading) return <div key={li} style={{ fontWeight: 700, fontSize: 13, marginTop: 8, marginBottom: 2 }}>{highlighted}</div>;
+    if (isList) return <div key={li} style={{ paddingLeft: 12, marginBottom: 2, display: "flex", gap: 6 }}><span style={{ flexShrink: 0 }}>•</span><span>{highlighted}</span></div>;
+    if (!line.trim()) return <div key={li} style={{ height: 6 }} />;
+    return <div key={li} style={{ marginBottom: 2 }}>{highlighted}</div>;
   });
 }
 
@@ -973,7 +1024,7 @@ function StatusBadge({ status }) {
 
 // ── Stats header ──────────────────────────────────────────────────
 
-function StatsHeader({ questions, results, brandName }) {
+function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [] }) {
   const total       = results.length;
   const withBrand   = results.filter(r => r.brand_mentioned === true || r.brand_mentioned === 1).length;
   const withSources = results.filter(r => r.brand_in_sources).length;
@@ -981,7 +1032,7 @@ function StatsHeader({ questions, results, brandName }) {
   const avgPos      = positions.length ? (positions.reduce((a, b) => a + b, 0) / positions.length).toFixed(1) : "—";
   const presence    = total ? Math.round(withBrand / total * 100) : 0;
 
-  // Top competitors — 1 mention max per question/result (not cumulated)
+  // Top competitors — enrichis avec catégories qualifiées
   const compCount = {};
   results.forEach(r => {
     const seen = new Set();
@@ -992,7 +1043,18 @@ function StatsHeader({ questions, results, brandName }) {
       }
     });
   });
-  const topComps = Object.entries(compCount).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  // Fusionner avec concurrents qualifiés (ajouter ceux sans détection auto)
+  const allCompNames = new Set([
+    ...Object.keys(compCount),
+    ...qualifiedCompetitors.map(c => c.name),
+  ]);
+  const enrichedComps = [...allCompNames].map(name => {
+    const qual = qualifiedCompetitors.find(c => c.name.toLowerCase() === name.toLowerCase());
+    const catDef = qual
+      ? (COMP_CATEGORIES.find(c => c.key === qual.category) || COMP_CATEGORIES[3])
+      : null;
+    return { name, count: compCount[name] || 0, qual, catDef };
+  }).sort((a, b) => b.count - a.count).slice(0, 8);
 
   // Top domains
   const domainCount = {};
@@ -1024,20 +1086,28 @@ function StatsHeader({ questions, results, brandName }) {
         <div style={{ fontSize: 11, color: C.textLight }}>questions citées</div>
       </div>
 
-      {/* Top concurrents — always shown */}
-      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px" }}>
+      {/* Top concurrents enrichis avec catégories */}
+      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px", gridColumn: "span 2" }}>
         <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>Top concurrents cités</div>
-        {topComps.length > 0 ? topComps.map(([name, cnt]) => (
-          <div key={name} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 3 }}>
-            <span style={{ color: C.text, fontWeight: 500 }}>{name}</span>
-            <span style={{ color: C.textLight }}>{cnt}×</span>
+        {enrichedComps.length > 0 ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            {enrichedComps.map(({ name, count, qual, catDef }) => (
+              <div key={name} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                {catDef && <div style={{ width: 8, height: 8, borderRadius: "50%", background: catDef.color, flexShrink: 0 }} />}
+                {!catDef && <div style={{ width: 8, height: 8, borderRadius: "50%", background: C.border, flexShrink: 0 }} />}
+                <span style={{ fontSize: 11, fontWeight: 600, color: catDef?.color || C.text, flex: 1 }}>{name}</span>
+                {catDef && <span style={{ fontSize: 9, color: catDef.color, background: catDef.bg, borderRadius: 4, padding: "1px 5px", fontWeight: 700 }}>{catDef.label}</span>}
+                {!catDef && <span style={{ fontSize: 9, color: C.textLight, fontStyle: "italic" }}>non qualifié</span>}
+                <span style={{ fontSize: 10, color: C.textLight, minWidth: 24, textAlign: "right" }}>{count > 0 ? `${count}×` : ""}</span>
+              </div>
+            ))}
           </div>
-        )) : (
-          <span style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>Aucune citation concurrent identifiée</span>
+        ) : (
+          <span style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>Aucun concurrent identifié</span>
         )}
       </div>
 
-      {/* Top domaines — always shown */}
+      {/* Top domaines */}
       <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px" }}>
         <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>Sites les plus cités</div>
         {topDomains.length > 0 ? topDomains.map(([domain, cnt]) => (
@@ -1049,6 +1119,175 @@ function StatsHeader({ questions, results, brandName }) {
           <span style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>Aucun domaine source identifié</span>
         )}
       </div>
+    </div>
+  );
+}
+
+// ── Competitor Manager ────────────────────────────────────────────
+
+const COMP_CATEGORIES = [
+  { key: "direct",  label: "Concurrent direct",  color: "#DC2626", bg: "#FEF2F2" },
+  { key: "geo",     label: "Concurrent GEO",      color: "#D97706", bg: "#FFFBEB" },
+  { key: "partner", label: "Partenaire",           color: "#059669", bg: "#ECFDF5" },
+  { key: "other",   label: "Autre",                color: "#64748B", bg: "#F1F5F9" },
+];
+
+function CompetitorManager({ projectId, siteId, allResults, competitors, setCompetitors }) {
+  const [newName,    setNewName]    = useState("");
+  const [newDomain,  setNewDomain]  = useState("");
+  const [newCat,     setNewCat]     = useState("direct");
+  const [customCats, setCustomCats] = useState([]); // catégories custom ajoutées
+  const [newCustom,  setNewCustom]  = useState("");
+  const [saving,     setSaving]     = useState(false);
+  const [editId,     setEditId]     = useState(null);
+
+  // Détecter automatiquement les noms depuis competitors_mentioned
+  const detectedNames = useMemo(() => {
+    const counts = {};
+    allResults.forEach(r => {
+      (r.competitors_mentioned || []).forEach(c => {
+        if (c.name) counts[c.name] = (counts[c.name] || 0) + 1;
+      });
+    });
+    return Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  }, [allResults]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const qualifiedNames = new Set(competitors.map(c => c.name.toLowerCase()));
+  const unqualified = detectedNames.filter(([name]) => !qualifiedNames.has(name.toLowerCase()));
+
+  const allCats = [...COMP_CATEGORIES, ...customCats.map(k => ({ key: k, label: k, color: "#7C3AED", bg: "#F5F3FF" }))];
+
+  const getCatDef = (cat) => allCats.find(c => c.key === cat) || COMP_CATEGORIES[3];
+
+  const save = async (name, domain, category) => {
+    if (!name.trim() || !projectId || !siteId) return;
+    setSaving(true);
+    try {
+      const catDef = getCatDef(category);
+      const saved = await sbSaveCompetitor({ project_id: projectId, site_id: siteId, name: name.trim(), domain, category, color: catDef.color });
+      setCompetitors(prev => {
+        const idx = prev.findIndex(c => c.name.toLowerCase() === name.trim().toLowerCase());
+        if (idx >= 0) { const n = [...prev]; n[idx] = saved; return n; }
+        return [...prev, saved].sort((a, b) => a.name.localeCompare(b.name));
+      });
+      setNewName(""); setNewDomain(""); setNewCat("direct");
+    } catch(e) { console.error(e); }
+    setSaving(false);
+  };
+
+  const updateCat = async (comp, category) => {
+    const catDef = getCatDef(category);
+    try {
+      await sbUpdateCompetitor(comp.id, { category, color: catDef.color });
+      setCompetitors(prev => prev.map(c => c.id === comp.id ? { ...c, category, color: catDef.color } : c));
+    } catch(e) { console.error(e); }
+  };
+
+  const remove = async (id) => {
+    try {
+      await sbDeleteCompetitor(id);
+      setCompetitors(prev => prev.filter(c => c.id !== id));
+    } catch(e) { console.error(e); }
+  };
+
+  return (
+    <div>
+      {/* Détectés automatiquement — non qualifiés */}
+      {unqualified.length > 0 && (
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>
+            🔍 Détectés dans les réponses — à qualifier ({unqualified.length})
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {unqualified.slice(0, 20).map(([name, cnt]) => (
+              <div key={name} style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 10px", background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }}>
+                <span style={{ fontWeight: 600 }}>{name}</span>
+                <span style={{ color: C.textLight, fontSize: 10 }}>{cnt}×</span>
+                <button onClick={() => { setNewName(name); setNewDomain(""); }}
+                  style={{ padding: "1px 8px", background: "#2563EB", color: "#fff", border: "none", borderRadius: 5, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>
+                  + Qualifier
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Formulaire d'ajout */}
+      <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 16px", marginBottom: 16 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>
+          {newName ? `Qualifier : ${newName}` : "Ajouter un concurrent"}
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+          <div style={{ flex: "1 1 160px" }}>
+            <div style={{ fontSize: 10, color: C.textLight, marginBottom: 3 }}>Nom</div>
+            <input value={newName} onChange={e => setNewName(e.target.value)} placeholder="ex: HubSpot"
+              style={{ width: "100%", padding: "6px 10px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 12 }} />
+          </div>
+          <div style={{ flex: "1 1 140px" }}>
+            <div style={{ fontSize: 10, color: C.textLight, marginBottom: 3 }}>Domaine (optionnel)</div>
+            <input value={newDomain} onChange={e => setNewDomain(e.target.value)} placeholder="ex: hubspot.com"
+              style={{ width: "100%", padding: "6px 10px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 12 }} />
+          </div>
+          <div style={{ flex: "1 1 160px" }}>
+            <div style={{ fontSize: 10, color: C.textLight, marginBottom: 3 }}>Catégorie</div>
+            <select value={newCat} onChange={e => setNewCat(e.target.value)}
+              style={{ width: "100%", padding: "6px 10px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 12 }}>
+              {allCats.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+            </select>
+          </div>
+          <button onClick={() => save(newName, newDomain, newCat)} disabled={saving || !newName.trim()}
+            style={{ padding: "7px 16px", background: newName.trim() ? "#2563EB" : C.bg, color: newName.trim() ? "#fff" : C.textLight, border: "none", borderRadius: 7, fontSize: 12, fontWeight: 700, cursor: newName.trim() ? "pointer" : "default" }}>
+            {saving ? "…" : "Enregistrer"}
+          </button>
+        </div>
+        {/* Ajouter catégorie custom */}
+        <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "center" }}>
+          <input value={newCustom} onChange={e => setNewCustom(e.target.value)} placeholder="Nouvelle catégorie…"
+            style={{ padding: "4px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11, width: 180 }} />
+          <button onClick={() => { if (newCustom.trim()) { setCustomCats(p => [...p, newCustom.trim()]); setNewCustom(""); } }}
+            disabled={!newCustom.trim()}
+            style={{ padding: "4px 10px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11, cursor: "pointer", background: C.white }}>
+            + Catégorie
+          </button>
+        </div>
+      </div>
+
+      {/* Liste des concurrents qualifiés */}
+      {competitors.length > 0 && (
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>
+            Concurrents qualifiés ({competitors.length})
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {competitors.map(comp => {
+              const catDef = getCatDef(comp.category);
+              const mentions = detectedNames.find(([n]) => n.toLowerCase() === comp.name.toLowerCase())?.[1] || 0;
+              return (
+                <div key={comp.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: catDef.bg, border: `1px solid ${catDef.color}33`, borderRadius: 9 }}>
+                  <div style={{ width: 10, height: 10, borderRadius: "50%", background: catDef.color, flexShrink: 0 }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: C.text }}>{comp.name}</div>
+                    {comp.domain && <div style={{ fontSize: 10, color: C.textLight }}>{comp.domain}</div>}
+                  </div>
+                  {mentions > 0 && <span style={{ fontSize: 10, color: C.textLight, flexShrink: 0 }}>{mentions} cit.</span>}
+                  <select value={comp.category} onChange={e => updateCat(comp, e.target.value)}
+                    style={{ fontSize: 10, padding: "3px 6px", border: `1px solid ${catDef.color}66`, borderRadius: 5, background: catDef.bg, color: catDef.color, fontWeight: 700, cursor: "pointer" }}>
+                    {allCats.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+                  </select>
+                  <button onClick={() => remove(comp.id)}
+                    style={{ background: "none", border: "none", cursor: "pointer", color: C.textLight, fontSize: 12, padding: "0 2px" }}>✕</button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      {competitors.length === 0 && unqualified.length === 0 && (
+        <div style={{ fontSize: 12, color: C.textLight, fontStyle: "italic" }}>
+          Aucun concurrent détecté. Lancez des questions pour identifier les marques citées dans les réponses.
+        </div>
+      )}
     </div>
   );
 }
@@ -1784,7 +2023,7 @@ function HintPanelQuestion({ questionId, question, sources, brandName, brandAlia
 
 // ── ProviderRow — calendar + info + accordion + run button ────────
 
-function ProviderRow({ provider, results, allProviderResults, brandName, brandAliases, brandDomain = "", hasKey, isRunning, onRun, questionId, newCalEntry = null, question = "", claudeKey = "", projectId = null, siteId = null, savedHint = "" }) {
+function ProviderRow({ provider, results, allProviderResults, brandName, brandAliases, brandDomain = "", hasKey, isRunning, onRun, questionId, newCalEntry = null, question = "", claudeKey = "", projectId = null, siteId = null, savedHint = "", brandTerms = [], competitorMap = {} }) {
   const [open, setOpen] = useState(false);
   const p = provider;
 
@@ -1857,7 +2096,7 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
       {open && result && (
         <div style={{ borderTop: `1px solid ${C.border}`, padding: '10px 12px', background: C.bg }}>
           <div style={{ fontSize: 12, color: C.text, lineHeight: 1.7 }}>
-            {renderMarkdown(result.answer || '')}
+            {renderMarkdownHighlighted(result.answer || '', brandTerms, competitorMap)}
           </div>
           {sources.length > 0 && (
             <div style={{ marginTop: 10 }}>
@@ -2101,9 +2340,13 @@ RÈGLES :
 
 // ── Questions sub-tab (v2) ────────────────────────────────────────
 
-function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allResults, onResultSaved, activeProviders = ["openai"], providerKeys = {}, runMode = "parallel", keywordsOrder = [], refreshTrigger = 0 }) {
+function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allResults, onResultSaved, activeProviders = ["openai"], providerKeys = {}, runMode = "parallel", keywordsOrder = [], refreshTrigger = 0, competitors: competitorsProp = [], setCompetitors: setCompetitorsProp = null }) {
   const [questions, setQuestions]   = useState([]);
   const [results, setResults]       = useState(allResults || []);
+  // Utiliser le state remonté depuis GeoTab si disponible, sinon local
+  const [competitorsLocal, setCompetitorsLocal] = useState([]);
+  const competitors    = competitorsProp.length > 0 ? competitorsProp : competitorsLocal;
+  const setCompetitors = setCompetitorsProp || setCompetitorsLocal;
   // Sort: favorites first, then by keyword order, then by creation date
   const sortedQuestions = useMemo(() => {
     const kwIndexMap = {};
@@ -2435,6 +2678,20 @@ ${question}`;
 
   const { brand_name = "", brand_aliases = [] } = brand || {};
 
+  // Construire competitorMap pour le surlignement dans les réponses
+  // { lowerName → { color, category, bg } }
+  const competitorMap = useMemo(() => {
+    const map = {};
+    competitors.forEach(c => {
+      const catDef = COMP_CATEGORIES.find(cat => cat.key === c.category) || COMP_CATEGORIES[3];
+      map[c.name.toLowerCase()] = { color: catDef.color, category: c.category, bg: catDef.bg };
+      if (c.domain) map[c.domain.toLowerCase().replace(/^www\./, "")] = { color: catDef.color, category: c.category, bg: catDef.bg };
+    });
+    return map;
+  }, [competitors]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const brandTermsForHighlight = [brand_name, ...brand_aliases].filter(Boolean);
+
   // Results for filtered questions, filtered by provider selection
   const filteredResults = useMemo(() => {
     const qIds = new Set(filtered.map(q => q.id));
@@ -2475,7 +2732,7 @@ ${question}`;
       />
 
       {/* ── Stats header (filtered) ── */}
-      <StatsHeader questions={filtered} results={filteredResults} brandName={brand_name} />
+      <StatsHeader questions={filtered} results={filteredResults} brandName={brand_name} qualifiedCompetitors={competitors} />
 
       {/* ── Manual question input ── */}
       <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 16px", marginBottom: 14, display: "flex", gap: 10, alignItems: "center" }}>
@@ -2672,6 +2929,8 @@ ${question}`;
                         siteId={site?.id}
                         savedHint={hintsMap[q.id]?.text || ""}
                         savedHintDate={hintsMap[q.id]?.date || null}
+                        brandTerms={brandTermsForHighlight}
+                        competitorMap={competitorMap}
                       />
                     );
                   })}
@@ -2745,7 +3004,7 @@ ${question}`;
 // ── URL Index sub-tab ─────────────────────────────────────────────
 
 
-function UrlsTab({ projectId, categories, brand, allResults }) {
+function UrlsTab({ projectId, categories, brand, allResults, qualifiedCompetitors = [] }) {
   const [urls, setUrls]         = useState([]);
   const [loading, setLoading]   = useState(true);
   const [error, setError]       = useState(false);
@@ -2772,24 +3031,45 @@ function UrlsTab({ projectId, categories, brand, allResults }) {
       .catch(() => { setUrls([]); setLoading(false); setError(true); });
   }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Classify a URL
-  const classifyUrl = (u) => {
+  // Classify a URL — utilise les concurrents qualifiés en priorité
+  const classifyUrl = useCallback((u) => {
     const d = (u.domain || "").toLowerCase();
     const allBrand = [brandName, ...brandAliases].filter(Boolean).map(t => t.toLowerCase());
-    const knownComps = competitors.filter(Boolean).map(t => t.toLowerCase());
-
     if (allBrand.some(t => d.includes(t))) return "brand";
 
-    // Identified competitors from results
+    // Concurrents qualifiés (depuis geo_competitors) — priorité sur l'ancienne liste
+    for (const qc of qualifiedCompetitors) {
+      const name = (qc.name || "").toLowerCase();
+      const dom  = (qc.domain || "").toLowerCase().replace(/^www\./, "");
+      if ((dom && d.includes(dom)) || d.includes(name.replace(/\s+/g, ""))) {
+        return `competitor_q_${qc.category}`; // ex: competitor_q_direct
+      }
+    }
+
+    // Fallback : ancienne logique (brand.competitors + noms détectés)
+    const knownComps = competitors.filter(Boolean).map(t => t.toLowerCase());
     const compNames = new Set();
     allResults.forEach(r => (r.competitors_mentioned || []).forEach(c => { if (c.name) compNames.add(c.name.toLowerCase()); }));
     const identifiedComps = [...compNames];
-
     if (knownComps.some(t => d.includes(t))) return "competitor_known";
     if (identifiedComps.some(t => d.includes(t) || t.includes(d.split(".")[0]))) return "competitor_identified";
     return "other";
-  };
-  // Map detailed class to display class
+  }, [brandName, brandAliases, competitors, qualifiedCompetitors, allResults]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Obtenir la def de style pour une classe
+  const getClassStyle = useCallback((cls) => {
+    if (cls === "brand") return { color: "#059669", bg: "#ECFDF5", border: "#059669", label: `✓ ${brandName || "Marque"}` };
+    if (cls.startsWith("competitor_q_")) {
+      const cat = cls.replace("competitor_q_", "");
+      const catDef = COMP_CATEGORIES.find(c => c.key === cat) || COMP_CATEGORIES[3];
+      const qc = qualifiedCompetitors.find(c => c.category === cat);
+      return { color: catDef.color, bg: catDef.bg, border: catDef.color, label: `⚔️ ${catDef.label}` };
+    }
+    if (cls.startsWith("competitor")) return { color: "#DC2626", bg: "#FEF2F2", border: "#DC2626", label: "⚔️ Concurrent" };
+    return { color: "#64748B", bg: "#F8FAFC", border: "#E2E8F0", label: "🔗 Autre source" };
+  }, [brandName, qualifiedCompetitors]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Map detailed class to display class (pour filtres)
   const mapCls = (c) => c.startsWith("competitor") ? "competitor" : c;
 
   const classColors = {
@@ -2996,8 +3276,9 @@ function UrlsTab({ projectId, categories, brand, allResults }) {
       {view === "urls" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
           {filtered.map(u => {
-            const cls  = mapCls(classifyUrl(u));
-            const meta = classColors[cls];
+            const rawCls = classifyUrl(u);
+            const cls    = mapCls(rawCls);
+            const meta   = getClassStyle(rawCls);
             const isOpen = openCrawl === u.id;
             const hasSections = u.crawl_sections?.length > 0;
             const cat = categories.find(c => c.id === u.theme_category_id);
@@ -3105,8 +3386,8 @@ function UrlsTab({ projectId, categories, brand, allResults }) {
       {view === "domains" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {domains.map((d, i) => {
-            const cls  = mapCls(classifyUrl({ domain: d.domain }));
-            const meta = classColors[cls];
+            const rawCls = classifyUrl({ domain: d.domain });
+            const meta   = getClassStyle(rawCls);
             const total = d.count_as_source + d.count_in_answer;
             const maxTotal = domains[0] ? domains[0].count_as_source + domains[0].count_in_answer : 1;
             return (
@@ -3753,6 +4034,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
   const [keywords, setKeywords]     = useState([]); // lifted from KeywordsTab for cross-tab ordering
   const [categories, setCategories] = useState([]);
   const [axes, setAxes]             = useState(Array.isArray(geoAxes) ? geoAxes : DEFAULT_AXES);
+  const [competitors, setCompetitors] = useState([]); // concurrents qualifiés, partagés entre onglets
 
   const site = (Array.isArray(sites) ? sites : []).find(s => s.id === selectedSite) || (Array.isArray(sites) ? sites : [])[0];
 
@@ -3773,6 +4055,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
     sbGetBrand(projectId, site.id).then(b => { setBrand(b); });
     sbGetGeoResults(projectId, site.id).then(r => { setAllResults(r); }); // keep previous data while loading
     sbGetKeywords(projectId, site.id).then(kws => { setKeywords(kws || []); });
+    sbGetCompetitors(projectId, site.id).then(c => { setCompetitors(c || []); });
   }, [projectId, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Decode key when enc changes
@@ -3847,10 +4130,11 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
       {/* ── Sub-nav ── */}
       <div style={{ display: "flex", gap: 6, marginBottom: 20 }}>
         {[
-          { key: "keywords",  label: "🔑 Mots-clés",         color: "#D97706" },
-          { key: "questions", label: "💬 Questions",          color: "#7C3AED" },
-          { key: "automation", label: "⏰ Automatisation",    color: "#7C3AED" },
-          { key: "urls",      label: "🔗 Sources & Mentions", color: "#2563EB" },
+          { key: "keywords",    label: "🔑 Mots-clés",         color: "#D97706" },
+          { key: "questions",   label: "💬 Questions",          color: "#7C3AED" },
+          { key: "competitors", label: "⚔️ Concurrents",        color: "#DC2626" },
+          { key: "automation",  label: "⏰ Automatisation",     color: "#7C3AED" },
+          { key: "urls",        label: "🔗 Sources & Mentions", color: "#2563EB" },
         ].map(t => (
           <button key={t.key} onClick={() => setSubTab(t.key)} style={{
             flex: 1, padding: "12px 16px", borderRadius: 10, fontSize: 14, fontWeight: 800,
@@ -3896,8 +4180,25 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
           runMode={runMode}
           keywordsOrder={keywords.map(k => k.id)}
           refreshTrigger={questionsKey}
+          competitors={competitors}
+          setCompetitors={setCompetitors}
         />
       </div>
+      {subTab === "competitors" && (
+        <div style={{ background: "#fff", border: `1px solid #E8E8ED`, borderRadius: 14, padding: "20px 24px" }}>
+          <div style={{ fontSize: 16, fontWeight: 800, color: "#1C1C1C", marginBottom: 4 }}>⚔️ Concurrents</div>
+          <div style={{ fontSize: 12, color: "#909090", marginBottom: 20 }}>
+            Qualifiez les marques détectées dans les réponses LLM. Les concurrents qualifiés sont mis en valeur dans les réponses et intégrés dans les analyses.
+          </div>
+          <CompetitorManager
+            projectId={projectId}
+            siteId={site?.id}
+            allResults={allResults.filter(r => r.site_id === site?.id)}
+            competitors={competitors}
+            setCompetitors={setCompetitors}
+          />
+        </div>
+      )}
       {subTab === "automation" && (
         <AutomationTab
           projectId={projectId}
@@ -3912,6 +4213,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
           categories={categories}
           brand={brand}
           allResults={allResults.filter(r => r.site_id === site?.id)}
+          qualifiedCompetitors={competitors}
         />
       )}
 
