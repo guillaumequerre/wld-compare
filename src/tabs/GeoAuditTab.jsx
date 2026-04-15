@@ -1,9 +1,10 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { sbGetBrand, sbGetQuestions, sbGetGeoResults, sbGetUrlIndex,
-  sbSaveProject, sbDeleteProject, sbDownload } from "../lib/supabase";
+  sbSaveProject, sbDeleteProject, sbDownload,
+  sbGetCalendarEntriesBatch, sbGetKeywords } from "../lib/supabase";
 import UploadCard from "../components/UploadCard";
 import PageTypeClassifier from "../components/PageTypeClassifier";
-import { newProject } from "../lib/helpers";
+import { newProject, parseCSV } from "../lib/helpers";
 import { C, SITE_PALETTE } from "../lib/constants";
 
 const ANTHROPIC_PROXY = "/api/anthropic";
@@ -179,6 +180,18 @@ function AuditSetupPanel({
         <PageTypeClassifier projectId={projectId} sites={safeSites} pageTypes={pageTypes} setPageTypes={setPageTypes} />
       </SetupSection>
 
+    </div>
+  );
+}
+
+
+// ── Stat card ─────────────────────────────────────────────────────
+function StatCard({ label, value, sub, color = C.text, bg = C.white }) {
+  return (
+    <div style={{ background: bg, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px" }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: 24, fontWeight: 800, color }}>{value}</div>
+      {sub && <div style={{ fontSize: 11, color: C.textLight, marginTop: 2 }}>{sub}</div>}
     </div>
   );
 }
@@ -367,28 +380,106 @@ function GeoScoreBanner({ audit, brand, site }) {
 }
 
 
-function computeAudit(questions, results, urlIndex, brand, site) {
+// ── Normalise une URL pour comparaison et groupement ─────────────
+function normalizeUrl(raw) {
+  if (!raw) return "";
+  let u = raw.trim();
+  // Supprimer le query string et fragment
+  u = u.replace(/[?#].*$/, "");
+  // Supprimer le slash final
+  u = u.replace(/\/$/, "");
+  // Supprimer https:// http://
+  u = u.replace(/^https?:\/\//i, "");
+  // Supprimer www.
+  u = u.replace(/^www\./i, "");
+  return u.toLowerCase();
+}
+
+function computeAudit(questions, results, urlIndex, brand, site, calendarEntries = [], keywords = []) {
   const brandName = brand?.brand_name || "";
+  const brandAliases = brand?.brand_aliases || [];
   const competitors = brand?.competitors || [];
   const total = results.length;
   const withBrand = results.filter(r => r.brand_mentioned).length;
   const withSources = results.filter(r => r.brand_in_sources).length;
   const positions = results.filter(r => r.brand_position).map(r => r.brand_position);
   const avgPos = positions.length ? (positions.reduce((a, b) => a + b, 0) / positions.length).toFixed(1) : null;
-  const today = new Date(); today.setHours(0,0,0,0);
+
+  // ── TrendChart — basé sur geo_calendar_dates ─────────────────
+  // Compter par test_date : total d'interrogations et présences de la marque
+  const calByDate = {};
+  calendarEntries.forEach(e => {
+    const d = e.test_date || (e.created_at || "").slice(0, 10);
+    if (!d) return;
+    if (!calByDate[d]) calByDate[d] = { tested: 0, present: 0 };
+    calByDate[d].tested++;
+    if (e.brand_present === true || e.brand_present === 1) calByDate[d].present++;
+  });
+  const today = new Date(); today.setHours(0, 0, 0, 0);
   const trendDays = [];
   for (let i = 29; i >= 0; i--) {
     const d = new Date(today); d.setDate(d.getDate() - i);
     const key = dayKey(d);
-    const dayResults = results.filter(r => r.created_at && r.created_at.slice(0,10) === key);
-    trendDays.push({ date: key, tested: dayResults.length, present: dayResults.filter(r => r.brand_mentioned).length, rate: dayResults.length ? pct(dayResults.filter(r => r.brand_mentioned).length, dayResults.length) : null });
+    const day = calByDate[key] || { tested: 0, present: 0 };
+    trendDays.push({
+      date: key,
+      tested: day.tested,
+      present: day.present,
+      rate: day.tested > 0 ? pct(day.present, day.tested) : null,
+    });
   }
-  const sortedUrls = [...urlIndex].sort((a, b) => (b.count_as_source + b.count_in_answer) - (a.count_as_source + a.count_in_answer));
-  const brandUrls = sortedUrls.filter(u => [brandName, ...(brand?.brand_aliases || [])].some(t => t && u.domain?.toLowerCase().includes(t.toLowerCase())));
-  const competitorUrls = sortedUrls.filter(u => competitors.some(c => c && u.domain?.toLowerCase().includes(c.toLowerCase())));
-  const referenceUrls = sortedUrls.filter(u => !brandUrls.includes(u) && !competitorUrls.includes(u)).slice(0, 10);
+
+  // ── URLs marque — normalisation et cumul ─────────────────────
+  const brandTerms = [brandName, ...brandAliases].filter(Boolean).map(t => t.toLowerCase());
+  const isBrandTerm = (str) => brandTerms.some(t => t && str.toLowerCase().includes(t));
+
+  // Grouper urlIndex par URL normalisée
+  const normGroups = {};
+  urlIndex.forEach(u => {
+    const norm = normalizeUrl(u.url);
+    if (!norm) return;
+    if (!normGroups[norm]) normGroups[norm] = { norm, url: u.url, count_as_source: 0, count_in_answer: 0, domain: null, linkedQs: [], linkedKeywords: [] };
+    normGroups[norm].count_as_source += u.count_as_source || 0;
+    normGroups[norm].count_in_answer += u.count_in_answer || 0;
+    if (!normGroups[norm].domain) normGroups[norm].domain = u.domain;
+  });
+  const mergedUrls = Object.values(normGroups).sort((a, b) => (b.count_as_source + b.count_in_answer) - (a.count_as_source + a.count_in_answer));
+
+  const sortedUrls = mergedUrls;
+  const brandUrls = mergedUrls.filter(u =>
+    isBrandTerm(u.norm) || isBrandTerm(u.domain || "")
+  );
+  const competitorUrls = mergedUrls.filter(u =>
+    !isBrandTerm(u.norm) && competitors.some(c => c && u.norm.includes(c.toLowerCase()))
+  );
+  const referenceUrls = mergedUrls
+    .filter(u => !brandUrls.includes(u) && !competitorUrls.includes(u))
+    .slice(0, 10);
+
+  // urlDetails — relier les URLs marque aux questions
+  const qMap = {};
+  questions.forEach(q => { qMap[q.id] = q; });
+  const urlDetails = brandUrls.map(u => {
+    const linkedResults = results.filter(r =>
+      (r.sources || []).some(s => normalizeUrl(s) === u.norm) ||
+      (r.answer || "").includes(u.norm)
+    );
+    const linkedQIds = [...new Set(linkedResults.map(r => r.question_id))];
+    const linkedQs = linkedQIds.map(id => qMap[id]).filter(Boolean);
+    const linkedKeywords = [...new Set(linkedQs.map(q => q.keyword_id).filter(Boolean))];
+    return { ...u, linkedQs, linkedKeywords };
+  });
+
   const topDomains = {};
-  sortedUrls.forEach(u => { if (!topDomains[u.domain]) topDomains[u.domain] = 0; topDomains[u.domain] += u.count_as_source + u.count_in_answer; });
+  sortedUrls.forEach(u => {
+    if (!topDomains[u.norm]) topDomains[u.norm] = 0;
+    topDomains[u.norm] += u.count_as_source + u.count_in_answer;
+  });
+
+  const urlsToOptimize = brandUrls.filter(u => u.count_as_source < 3).slice(0, 15);
+  const urlsToRework   = brandUrls.filter(u => u.count_as_source === 0 && u.count_in_answer > 0).slice(0, 15);
+  const urlsToInspire  = referenceUrls.filter(u => u.count_as_source >= 3).slice(0, 10);
+
   const intentCount = {};
   results.forEach(r => { if (r.intent_type) intentCount[r.intent_type] = (intentCount[r.intent_type] || 0) + 1; });
   const typeCount = {};
@@ -399,34 +490,53 @@ function computeAudit(questions, results, urlIndex, brand, site) {
     compStats[c.name].mentions++;
     if (c.position) compStats[c.name].positions.push(c.position);
   }));
-  // ── URL détaillées marque avec questions et mots-clés liés ────
-  const qMap = {};
-  questions.forEach(q => { qMap[q.id] = q; });
-  const urlDetails = brandUrls.map(u => {
-    // questions dans lesquelles cette URL apparaît en source ou réponse
-    const linkedResults = results.filter(r =>
-      (r.sources || []).some(s => s === u.url) || (r.answer || "").includes(u.url)
-    );
-    const linkedQIds = [...new Set(linkedResults.map(r => r.question_id))];
-    const linkedQs = linkedQIds.map(id => qMap[id]).filter(Boolean);
-    const linkedKeywords = [...new Set(linkedQs.map(q => q.keyword_id).filter(Boolean))];
-    return { ...u, linkedQs, linkedKeywords };
-  });
-  const urlsToOptimize = brandUrls.filter(u => u.count_as_source < 3).slice(0, 15);
-  const urlsToRework   = brandUrls.filter(u => u.count_as_source === 0 && u.count_in_answer > 0).slice(0, 15);
-  const urlsToInspire  = referenceUrls.filter(u => u.count_as_source >= 3).slice(0, 10);
+
   const presenceRate = pct(withBrand, total);
+
+  // ── Questions 25 max — favoris d'abord, puis par volume de keyword ─
+  const kwVolMap = {};
+  keywords.forEach(k => { if (k.search_volume > 0) kwVolMap[k.id] = k.search_volume; });
+
+  // Trier toutes les questions : favoris d'abord, puis par volume desc, puis par création
+  const sortedQuestions = [...questions].sort((a, b) => {
+    if (a.is_favorite && !b.is_favorite) return -1;
+    if (!a.is_favorite && b.is_favorite) return 1;
+    const va = kwVolMap[a.keyword_id] || 0;
+    const vb = kwVolMap[b.keyword_id] || 0;
+    if (vb !== va) return vb - va;
+    return new Date(a.created_at) - new Date(b.created_at);
+  });
+
+  const hasResult = (q) => results.some(r => r.question_id === q.id);
+  const hasBrand  = (q) => results.some(r => r.question_id === q.id && (r.brand_mentioned === true || r.brand_mentioned === 1));
+
+  // Prendre max 25 questions avec résultats, puis compléter avec sans résultats
+  const withResults = sortedQuestions.filter(hasResult);
+  const withoutRes  = sortedQuestions.filter(q => !hasResult(q));
+  const top25 = [...withResults, ...withoutRes].slice(0, 25);
+
+  const presentBrandQs = top25
+    .filter(hasBrand)
+    .map(q => ({ question: q.question, isFav: !!q.is_favorite, volume: kwVolMap[q.keyword_id] || 0 }));
+  const missingBrandQs = top25
+    .filter(q => !hasBrand(q))
+    .map(q => ({ question: q.question, isFav: !!q.is_favorite, volume: kwVolMap[q.keyword_id] || 0 }));
+
+  const hasFavFilter = questions.some(q => q.is_favorite);
+  const favCount = questions.filter(q => q.is_favorite).length;
+
   const leads = [];
   if (presenceRate < 30) leads.push({ priority: "🔴 Critique", label: "Présence < 30%", action: "**Créer des contenus de recommandation** spécifiquement ciblés sur les questions sans présence. Structurez avec des listes comparatives explicites." });
   if (presenceRate >= 30 && presenceRate < 50) leads.push({ priority: "🟠 À améliorer", label: `Présence ${presenceRate}%`, action: "**Enrichir les pages existantes** pour répondre directement aux questions fan-out. Ajoutez des sections dédiées aux comparatifs." });
   if (avgPos && parseFloat(avgPos) > 3) leads.push({ priority: "🟠 Position", label: `Position moyenne ${avgPos}`, action: "**Optimiser le contenu pour remonter en top 3** des fan-outs. Répondez à la question dès le premier paragraphe et structurez avec des listes." });
   if (withSources < withBrand) leads.push({ priority: "🟡 Sources", label: "Peu cité en source", action: "**Renforcer l'autorité des pages** via des backlinks depuis les domaines fréquemment cités. Soumettez vos URLs prioritaires à IndexNow." });
   if (Object.keys(compStats).length > 0) {
-    const topComp = Object.entries(compStats).sort((a,b) => b[1].mentions - a[1].mentions)[0];
+    const topComp = Object.entries(compStats).sort((a, b) => b[1].mentions - a[1].mentions)[0];
     leads.push({ priority: "🟠 Concurrence", label: `${topComp[0]} dominant`, action: `**Analyser le contenu de ${topComp[0]}** et créer des pages alternatives plus complètes avec données propriétaires et avis d'experts.` });
   }
   leads.push({ priority: "📝 Contenu", label: "Volume et structure", action: "**Viser 1 500–2 500 mots** sur les pages à forte intention. Structurez avec H2/H3 clairs, FAQ en bas de page, et schema JSON-LD Organization + FAQ." });
   leads.push({ priority: "🔗 Maillage", label: "Hubs thématiques", action: "**Créer des hubs de contenu** regroupant toutes les pages liées à chaque axe fan-out. Le maillage interne fort signale l'importance aux LLMs." });
+
   const providerStats = {};
   results.forEach(r => {
     const pid = getProviderId(r.model);
@@ -434,18 +544,10 @@ function computeAudit(questions, results, urlIndex, brand, site) {
     providerStats[pid].total++;
     if (r.brand_mentioned) providerStats[pid].withBrand++;
   });
-  // Questions favorites (25 max) avec présence/absence
-  const favQuestions = questions.filter(q => q.is_favorite);
-  const favPresent = favQuestions.filter(q => results.some(r => r.question_id === q.id && (r.brand_mentioned === true || r.brand_mentioned === 1)));
-  const favMissing = favQuestions.filter(q => !results.some(r => r.question_id === q.id && (r.brand_mentioned === true || r.brand_mentioned === 1)));
-  // Fallback : si pas de favoris, toutes questions
-  const srcPresent = favPresent.length > 0 ? favPresent : questions.filter(q => results.some(r => r.question_id === q.id && (r.brand_mentioned === true || r.brand_mentioned === 1)));
-  const srcMissing = favMissing.length > 0 ? favMissing : questions.filter(q => !results.some(r => r.question_id === q.id && (r.brand_mentioned === true || r.brand_mentioned === 1)));
-  const presentBrandQs = srcPresent.slice(0, 25).map(q => q.question);
-  const missingBrandQs = srcMissing.slice(0, 25).map(q => q.question);
-  const hasFavFilter = favQuestions.length > 0;
-  return { total, withBrand, withSources, avgPos, presenceRate, trendDays, sortedUrls, brandUrls, urlDetails, competitorUrls, referenceUrls, topDomains, intentCount, typeCount, compStats, urlsToOptimize, urlsToRework, urlsToInspire, leads, questions: questions.length, providerStats, missingBrandQs, presentBrandQs, hasFavFilter, favCount: favQuestions.length };
+
+  return { total, withBrand, withSources, avgPos, presenceRate, trendDays, sortedUrls, brandUrls, urlDetails, competitorUrls, referenceUrls, topDomains, intentCount, typeCount, compStats, urlsToOptimize, urlsToRework, urlsToInspire, leads, questions: questions.length, providerStats, missingBrandQs, presentBrandQs, hasFavFilter, favCount };
 }
+
 
 function TrendChart({ trendDays }) {
   const W = 600, H = 110, PAD = 36, plotW = W - PAD - 16, plotH = H - 24;
@@ -881,9 +983,9 @@ ${section("01", "Indicateurs clés")}
   });
 
   const presentList = audit.presentBrandQs.map(q =>
-    `<li><span style="color:${S.ok};font-weight:700">✓</span>${q}</li>`).join("");
+    `<li><span style="color:${S.ok};font-weight:700">✓</span>${q.isFav ? "⭐ " : ""}${q.question}${q.volume > 0 ? ` <span style="color:#2563EB;font-size:10px">(🔍${q.volume >= 1000 ? (q.volume/1000).toFixed(1)+"k" : q.volume})</span>` : ""}</li>`).join("");
   const missingList = audit.missingBrandQs.map(q =>
-    `<li><span style="color:${S.danger};font-weight:700">✗</span>${q}</li>`).join("");
+    `<li><span style="color:${S.danger};font-weight:700">✗</span>${q.isFav ? "⭐ " : ""}${q.question}${q.volume > 0 ? ` <span style="color:#2563EB;font-size:10px">(🔍${q.volume >= 1000 ? (q.volume/1000).toFixed(1)+"k" : q.volume})</span>` : ""}</li>`).join("");
 
   const bloc2 = `
 ${section("02", "Visibilité marque")}
@@ -940,9 +1042,9 @@ ${compRows.length ? tbl(["Concurrent", "Mentions", "% résultats", "Pos. moy."],
     ];
   });
 
-  const urlsOpt     = audit.urlsToOptimize.slice(0, 8).map(u  => urlRow(u.url, `${u.count_as_source} src · ${u.count_in_answer} rép`, "À booster",  S.warn,   S.warnBg)).join("");
-  const urlsRework  = audit.urlsToRework.slice(0, 8).map(u    => urlRow(u.url, `${u.count_as_source} src · ${u.count_in_answer} rép`, "À refaire",  S.danger, S.dangerBg)).join("");
-  const urlsInspire = audit.urlsToInspire.slice(0, 8).map(u   => urlRow(u.url, `${getDomain(u.url)} · ${u.count_as_source} cit.`,     "Inspiration", S.blue,   S.blueBg)).join("");
+  const urlsOpt     = audit.urlsToOptimize.slice(0, 8).map(u  => urlRow(u.norm || u.url, `${u.count_as_source} src · ${u.count_in_answer} rép`, "À booster",  S.warn,   S.warnBg)).join("");
+  const urlsRework  = audit.urlsToRework.slice(0, 8).map(u    => urlRow(u.norm || u.url, `${u.count_as_source} src · ${u.count_in_answer} rép`, "À refaire",  S.danger, S.dangerBg)).join("");
+  const urlsInspire = audit.urlsToInspire.slice(0, 8).map(u   => urlRow(u.norm || u.url, `${getDomain(u.url)} · ${u.count_as_source} cit.`,     "Inspiration", S.blue,   S.blueBg)).join("");
 
   const bloc4 = `
 ${section("04", "Sources & URLs")}
@@ -1031,6 +1133,8 @@ export default function GeoAuditTab({
   const [questions, setQuestions]       = useState([]);
   const [results, setResults]           = useState([]);
   const [urlIndex, setUrlIndex]         = useState([]);
+  const [calendarEntries, setCalendarEntries] = useState([]); // geo_calendar_dates — 30 derniers jours
+  const [keywords, setKeywords]         = useState([]); // pour tri par volume
   const [loading, setLoading]           = useState(true);
 
   const site = (Array.isArray(sites) ? sites : []).find(s => s.id === selectedSite) || (Array.isArray(sites) ? sites : [])[0];
@@ -1039,14 +1143,14 @@ export default function GeoAuditTab({
   useEffect(() => {
     if (!projectId || !site?.id) return;
     setLoading(true);
-    Promise.all([sbGetBrand(projectId, site.id), sbGetQuestions(projectId, site.id), sbGetGeoResults(projectId, site.id), sbGetUrlIndex(projectId)])
-      .then(([b, q, r, u]) => { setBrand(b); setQuestions(q); setResults(r); setUrlIndex(u); setLoading(false); });
+    Promise.all([sbGetBrand(projectId, site.id), sbGetQuestions(projectId, site.id), sbGetGeoResults(projectId, site.id), sbGetUrlIndex(projectId), sbGetCalendarEntriesBatch(projectId, site.id), sbGetKeywords(projectId, site.id)])
+      .then(([b, q, r, u, cal, kws]) => { setBrand(b); setQuestions(q); setResults(r); setUrlIndex(u); setCalendarEntries(cal || []); setKeywords(kws || []); setLoading(false); });
   }, [projectId, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const siteResults   = useMemo(() => results.filter(r => r.site_id === site?.id), [results, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const siteQuestions = useMemo(() => questions.filter(q => q.site_id === site?.id), [questions, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const siteUrls      = useMemo(() => urlIndex.filter(u => u.project_id === projectId), [urlIndex, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
-  const audit         = useMemo(() => computeAudit(siteQuestions, siteResults, siteUrls, brand, site), [siteQuestions, siteResults, siteUrls, brand, site]); // eslint-disable-line react-hooks/exhaustive-deps
+  const audit = useMemo(() => computeAudit(siteQuestions, siteResults, siteUrls, brand, site, calendarEntries, keywords), [siteQuestions, siteResults, siteUrls, brand, site, calendarEntries, keywords]); // eslint-disable-line react-hooks/exhaustive-deps
   const noData        = !siteResults.length;
 
   return (
@@ -1147,22 +1251,28 @@ export default function GeoAuditTab({
                 <div>
                   <div style={{ fontSize: 11, fontWeight: 700, color: "#059669", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 4 }}>✓ Questions avec présence</div>
                   <div style={{ fontSize: 10, color: C.textLight, marginBottom: 8, fontStyle: "italic" }}>
-                    {audit.hasFavFilter ? `Extrait des ${audit.favCount} questions favorites` : "Extrait des 25 premières questions"} · max 25 affichées
+                    Favoris en premier · max 25 · triées par volume
                   </div>
                   {audit.presentBrandQs.length ? audit.presentBrandQs.map((q, i) => (
-                    <div key={i} style={{ fontSize: 12, padding: "6px 0", borderBottom: `1px solid ${C.borderLight}`, display: "flex", gap: 8 }}>
-                      <span style={{ color: "#059669", fontWeight: 700, flexShrink: 0 }}>✓</span><span>{q}</span>
+                    <div key={i} style={{ fontSize: 12, padding: "6px 0", borderBottom: `1px solid ${C.borderLight}`, display: "flex", gap: 8, alignItems: "flex-start" }}>
+                      <span style={{ color: "#059669", fontWeight: 700, flexShrink: 0 }}>✓</span>
+                      {q.isFav && <span style={{ flexShrink: 0, fontSize: 11 }} title="Question favorite">⭐</span>}
+                      <span style={{ flex: 1 }}>{q.question}</span>
+                      {q.volume > 0 && <span style={{ fontSize: 10, color: "#2563EB", background: "#EFF6FF", borderRadius: 4, padding: "1px 5px", flexShrink: 0, fontWeight: 600 }}>🔍 {q.volume >= 1000 ? (q.volume/1000).toFixed(1)+"k" : q.volume}</span>}
                     </div>
                   )) : <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>Aucune présence</div>}
                 </div>
                 <div>
                   <div style={{ fontSize: 11, fontWeight: 700, color: "#DC2626", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 4 }}>✗ Questions sans présence</div>
                   <div style={{ fontSize: 10, color: C.textLight, marginBottom: 8, fontStyle: "italic" }}>
-                    {audit.hasFavFilter ? `Extrait des ${audit.favCount} questions favorites` : "Extrait des 25 premières questions"} · max 25 affichées
+                    Favoris en premier · max 25 · triées par volume
                   </div>
                   {audit.missingBrandQs.length ? audit.missingBrandQs.map((q, i) => (
-                    <div key={i} style={{ fontSize: 12, padding: "6px 0", borderBottom: `1px solid ${C.borderLight}`, display: "flex", gap: 8 }}>
-                      <span style={{ color: "#DC2626", fontWeight: 700, flexShrink: 0 }}>✗</span><span>{q}</span>
+                    <div key={i} style={{ fontSize: 12, padding: "6px 0", borderBottom: `1px solid ${C.borderLight}`, display: "flex", gap: 8, alignItems: "flex-start" }}>
+                      <span style={{ color: "#DC2626", fontWeight: 700, flexShrink: 0 }}>✗</span>
+                      {q.isFav && <span style={{ flexShrink: 0, fontSize: 11 }} title="Question favorite">⭐</span>}
+                      <span style={{ flex: 1 }}>{q.question}</span>
+                      {q.volume > 0 && <span style={{ fontSize: 10, color: "#2563EB", background: "#EFF6FF", borderRadius: 4, padding: "1px 5px", flexShrink: 0, fontWeight: 600 }}>🔍 {q.volume >= 1000 ? (q.volume/1000).toFixed(1)+"k" : q.volume}</span>}
                     </div>
                   )) : <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>Toutes les questions ont une présence !</div>}
                 </div>
@@ -1259,16 +1369,18 @@ export default function GeoAuditTab({
                       {audit.brandUrls.slice(0, 20).map((u, i) => {
                         const src = u.count_as_source || 0;
                         const rep = u.count_in_answer || 0;
-                        const detail = (audit.urlDetails || []).find(d => d.url === u.url);
+                        const detail = (audit.urlDetails || []).find(d => d.norm === u.norm);
                         const qCount = detail?.linkedQs?.length || 0;
                         const status = src >= 3 ? { label: "✓ Performante", color: "#059669", bg: "#ECFDF5" }
                                      : rep > 0 && src === 0 ? { label: "⚠ À sourcer", color: "#DC2626", bg: "#FEF2F2" }
                                      : src > 0 ? { label: "↑ À booster", color: "#D97706", bg: "#FFFBEB" }
                                      : { label: "— Peu citée", color: C.textLight, bg: C.bg };
+                        // Afficher la version normalisée (sans https, www, slash final)
+                        const displayUrl = u.norm || u.url.replace(/^https?:\/\//, "");
                         return (
                           <tr key={i} style={{ borderBottom: `1px solid ${C.borderLight}` }}>
                             <td style={{ padding: "8px 12px", maxWidth: 260, wordBreak: "break-all" }}>
-                              <a href={u.url} target="_blank" rel="noreferrer" style={{ color: "#2563EB", fontSize: 11, textDecoration: "none" }}>{u.url.replace(/^https?:\/\//, "")}</a>
+                              <a href={u.url} target="_blank" rel="noreferrer" style={{ color: "#2563EB", fontSize: 11, textDecoration: "none" }}>{displayUrl}</a>
                             </td>
                             <td style={{ padding: "8px 12px", textAlign: "center", fontWeight: 700, color: src > 0 ? "#059669" : C.textLight }}>{src}</td>
                             <td style={{ padding: "8px 12px", textAlign: "center", fontWeight: 700, color: rep > 0 ? "#2563EB" : C.textLight }}>{rep}</td>
