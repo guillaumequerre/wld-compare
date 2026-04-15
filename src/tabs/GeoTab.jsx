@@ -1163,60 +1163,74 @@ function CompetitorManager({ projectId, siteId, allResults, competitors, setComp
   const [newCustom,  setNewCustom]  = useState("");
   const [saving,     setSaving]     = useState(false);
 
-  // Compter les mentions de chaque concurrent qualifié dans les réponses (texte + competitors_mentioned)
-  // Approche mixte : competitors_mentioned pour les futures interrogations,
-  // + recherche textuelle rétroactive pour les résultats existants
+  // Compter mentions (dans le texte) ET présence en source pour chaque concurrent
   const detectedNames = useMemo(() => {
-    const counts = {}; // lower → count
-    const displayNames = {}; // lower → display name
+    const mentions = {}; // lower → count (cité dans le texte de réponse)
+    const asSrc    = {}; // lower → count (cité en tant que source URL)
+    const display  = {}; // lower → display name
 
-    // 1. Depuis competitors_mentioned (résultats récents avec la nouvelle logique)
+    // Construire la liste de tous les noms à surveiller
+    const allNames = new Map(); // lower → display
+    competitors.forEach(c => allNames.set(c.name.toLowerCase(), c.name));
+
+    // 1. Depuis competitors_mentioned (champ JSON)
     allResults.forEach(r => {
-      const seen = new Set();
+      const seenMention = new Set();
       (r.competitors_mentioned || []).forEach(c => {
         if (!c.name) return;
         const lower = c.name.toLowerCase();
-        if (!seen.has(lower)) {
-          seen.add(lower);
-          counts[lower] = (counts[lower] || 0) + 1;
-          if (!displayNames[lower]) displayNames[lower] = c.name;
+        if (!seenMention.has(lower)) {
+          seenMention.add(lower);
+          mentions[lower] = (mentions[lower] || 0) + 1;
+          if (!display[lower]) display[lower] = c.name;
+          allNames.set(lower, display[lower]);
+        }
+        if (c.in_sources) {
+          asSrc[lower] = (asSrc[lower] || 0) + 1;
         }
       });
     });
 
-    // 2. Recherche textuelle rétroactive pour les concurrents qualifiés
-    // — compter les réponses qui mentionnent le nom (au moins une fois)
-    const qualNames = competitors.map(c => ({
-      lower: c.name.toLowerCase(),
-      display: c.name,
-      // regex mot-clé insensible à la casse, limites de mots optionnelles
-      re: new RegExp(c.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'),
-    }));
+    // 2. Recherche textuelle rétroactive (réponses existantes)
+    allNames.forEach((dispName, lower) => {
+      const re = new RegExp(dispName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      const domainRe = (() => {
+        const comp = competitors.find(c => c.name.toLowerCase() === lower);
+        if (!comp?.domain) return null;
+        try { return new RegExp(comp.domain.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'); } catch { return null; }
+      })();
 
-    allResults.forEach(r => {
-      const text = (r.answer || '').toLowerCase();
-      qualNames.forEach(({ lower, display, re }) => {
-        // Ne compter qu'une fois par résultat pour éviter le double-comptage
-        if (re.test(r.answer || '')) {
-          // Vérifier qu'on n'a pas déjà compté ce résultat via competitors_mentioned
-          const alreadyCounted = (r.competitors_mentioned || []).some(
-            c => c.name?.toLowerCase() === lower
-          );
-          if (!alreadyCounted) {
-            counts[lower] = (counts[lower] || 0) + 1;
-            if (!displayNames[lower]) displayNames[lower] = display;
+      allResults.forEach(r => {
+        const alreadyMentioned = (r.competitors_mentioned || []).some(c => c.name?.toLowerCase() === lower);
+        if (!alreadyMentioned && re.test(r.answer || '')) {
+          mentions[lower] = (mentions[lower] || 0) + 1;
+          if (!display[lower]) display[lower] = dispName;
+        }
+        // Vérifier présence en source par domaine
+        if (domainRe) {
+          const alreadySource = (r.competitors_mentioned || []).some(c => c.name?.toLowerCase() === lower && c.in_sources);
+          if (!alreadySource) {
+            const inSources = (r.sources || []).some(s => domainRe.test(s));
+            if (inSources) asSrc[lower] = (asSrc[lower] || 0) + 1;
           }
         }
       });
     });
 
-    return Object.entries(counts)
-      .map(([lower, cnt]) => [displayNames[lower] || lower, cnt])
-      .sort((a, b) => b[1] - a[1]);
+    // Fusionner et trier par mentions desc
+    const allLowers = new Set([...Object.keys(mentions), ...Object.keys(asSrc)]);
+    return [...allLowers]
+      .map(lower => ({
+        name: display[lower] || allNames.get(lower) || lower,
+        lower,
+        mentions: mentions[lower] || 0,
+        asSources: asSrc[lower] || 0,
+      }))
+      .sort((a, b) => (b.mentions + b.asSources) - (a.mentions + a.asSources));
   }, [allResults, competitors]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const qualifiedNames = new Set(competitors.map(c => c.name.toLowerCase()));
-  const unqualified = detectedNames.filter(([name]) => !qualifiedNames.has(name.toLowerCase()));
+  const unqualified = detectedNames.filter(({ name }) => !qualifiedNames.has(name.toLowerCase()));
 
   const allCats = [...COMP_CATEGORIES, ...customCats.map(k => ({ key: k, label: k, color: "#7C3AED", bg: "#F5F3FF" }))];
 
@@ -1262,10 +1276,11 @@ function CompetitorManager({ projectId, siteId, allResults, competitors, setComp
             🔍 Détectés dans les réponses — à qualifier ({unqualified.length})
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-            {unqualified.slice(0, 20).map(([name, cnt]) => (
+          {unqualified.slice(0, 20).map(({ name, mentions, asSources }) => (
               <div key={name} style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 10px", background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }}>
                 <span style={{ fontWeight: 600 }}>{name}</span>
-                <span style={{ color: C.textLight, fontSize: 10 }}>{cnt}×</span>
+                <span style={{ color: C.textLight, fontSize: 10 }}>{mentions}×</span>
+                {asSources > 0 && <span style={{ fontSize: 10, color: "#2563EB", background: "#EFF6FF", borderRadius: 4, padding: "1px 5px" }}>📎 {asSources}</span>}
                 <button onClick={() => { setNewName(name); setNewDomain(""); }}
                   style={{ padding: "1px 8px", background: "#2563EB", color: "#fff", border: "none", borderRadius: 5, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>
                   + Qualifier
@@ -1325,7 +1340,9 @@ function CompetitorManager({ projectId, siteId, allResults, competitors, setComp
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             {competitors.map(comp => {
               const catDef = getCatDef(comp.category);
-              const mentions = detectedNames.find(([n]) => n.toLowerCase() === comp.name.toLowerCase())?.[1] || 0;
+              const stats = detectedNames.find(d => d.name.toLowerCase() === comp.name.toLowerCase() || d.lower === comp.name.toLowerCase());
+              const mentions  = stats?.mentions  || 0;
+              const asSources = stats?.asSources || 0;
               return (
                 <div key={comp.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: catDef.bg, border: `1px solid ${catDef.color}33`, borderRadius: 9 }}>
                   <div style={{ width: 10, height: 10, borderRadius: "50%", background: catDef.color, flexShrink: 0 }} />
@@ -1333,7 +1350,22 @@ function CompetitorManager({ projectId, siteId, allResults, competitors, setComp
                     <div style={{ fontSize: 12, fontWeight: 700, color: C.text }}>{comp.name}</div>
                     {comp.domain && <div style={{ fontSize: 10, color: C.textLight }}>{comp.domain}</div>}
                   </div>
-                  {mentions > 0 && <span style={{ fontSize: 10, color: C.textLight, flexShrink: 0 }}>{mentions} cit.</span>}
+                  {/* Compteurs mentions + sources */}
+                  <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                    {mentions > 0 && (
+                      <span title="Cité dans les réponses" style={{ fontSize: 10, color: catDef.color, background: catDef.bg, border: `1px solid ${catDef.color}44`, borderRadius: 5, padding: "1px 6px", fontWeight: 600 }}>
+                        💬 {mentions}
+                      </span>
+                    )}
+                    {asSources > 0 && (
+                      <span title="Cité en tant que source URL" style={{ fontSize: 10, color: "#2563EB", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 5, padding: "1px 6px", fontWeight: 600 }}>
+                        📎 {asSources}
+                      </span>
+                    )}
+                    {mentions === 0 && asSources === 0 && (
+                      <span style={{ fontSize: 10, color: C.textLight }}>—</span>
+                    )}
+                  </div>
                   <select value={comp.category} onChange={e => updateCat(comp, e.target.value)}
                     style={{ fontSize: 10, padding: "3px 6px", border: `1px solid ${catDef.color}66`, borderRadius: 5, background: catDef.bg, color: catDef.color, fontWeight: 700, cursor: "pointer" }}>
                     {allCats.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
