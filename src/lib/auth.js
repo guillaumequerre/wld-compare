@@ -164,7 +164,9 @@ export async function sbInviteMember(projectId, email, invitedBy, role = "member
   } catch (e) {
     return { ok: false, error: e.message };
   }
-} ('owner' | 'member' | 'reader' | null)
+}
+
+// Retourne le rôle de l'utilisateur courant sur un projet ('owner' | 'member' | 'reader' | null)
 export async function sbGetMyRole(projectId, userEmail, ownerEmail) {
   if (!userEmail || !projectId) return null;
   const email = userEmail.toLowerCase();
