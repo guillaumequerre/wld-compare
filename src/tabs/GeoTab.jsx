@@ -1035,6 +1035,8 @@ function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [] 
   // Top competitors — enrichis avec catégories qualifiées
   const compCount = {}; // lower → count
   const compNameMap = {}; // lower → display name (première occurrence)
+
+  // 1. Depuis competitors_mentioned
   results.forEach(r => {
     const seen = new Set();
     (r.competitors_mentioned || []).forEach(c => {
@@ -1044,6 +1046,21 @@ function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [] 
         seen.add(lower);
         compCount[lower] = (compCount[lower] || 0) + 1;
         if (!compNameMap[lower]) compNameMap[lower] = c.name;
+      }
+    });
+  });
+
+  // 2. Recherche textuelle rétroactive pour les concurrents qualifiés
+  qualifiedCompetitors.forEach(qc => {
+    const lower = qc.name.toLowerCase();
+    const re = new RegExp(qc.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+    results.forEach(r => {
+      if (re.test(r.answer || '')) {
+        const alreadyCounted = (r.competitors_mentioned || []).some(c => c.name?.toLowerCase() === lower);
+        if (!alreadyCounted) {
+          compCount[lower] = (compCount[lower] || 0) + 1;
+          if (!compNameMap[lower]) compNameMap[lower] = qc.name;
+        }
       }
     });
   });
@@ -1146,16 +1163,57 @@ function CompetitorManager({ projectId, siteId, allResults, competitors, setComp
   const [newCustom,  setNewCustom]  = useState("");
   const [saving,     setSaving]     = useState(false);
 
-  // Détecter automatiquement les noms depuis competitors_mentioned
+  // Compter les mentions de chaque concurrent qualifié dans les réponses (texte + competitors_mentioned)
+  // Approche mixte : competitors_mentioned pour les futures interrogations,
+  // + recherche textuelle rétroactive pour les résultats existants
   const detectedNames = useMemo(() => {
-    const counts = {};
+    const counts = {}; // lower → count
+    const displayNames = {}; // lower → display name
+
+    // 1. Depuis competitors_mentioned (résultats récents avec la nouvelle logique)
     allResults.forEach(r => {
+      const seen = new Set();
       (r.competitors_mentioned || []).forEach(c => {
-        if (c.name) counts[c.name] = (counts[c.name] || 0) + 1;
+        if (!c.name) return;
+        const lower = c.name.toLowerCase();
+        if (!seen.has(lower)) {
+          seen.add(lower);
+          counts[lower] = (counts[lower] || 0) + 1;
+          if (!displayNames[lower]) displayNames[lower] = c.name;
+        }
       });
     });
-    return Object.entries(counts).sort((a, b) => b[1] - a[1]);
-  }, [allResults]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // 2. Recherche textuelle rétroactive pour les concurrents qualifiés
+    // — compter les réponses qui mentionnent le nom (au moins une fois)
+    const qualNames = competitors.map(c => ({
+      lower: c.name.toLowerCase(),
+      display: c.name,
+      // regex mot-clé insensible à la casse, limites de mots optionnelles
+      re: new RegExp(c.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'),
+    }));
+
+    allResults.forEach(r => {
+      const text = (r.answer || '').toLowerCase();
+      qualNames.forEach(({ lower, display, re }) => {
+        // Ne compter qu'une fois par résultat pour éviter le double-comptage
+        if (re.test(r.answer || '')) {
+          // Vérifier qu'on n'a pas déjà compté ce résultat via competitors_mentioned
+          const alreadyCounted = (r.competitors_mentioned || []).some(
+            c => c.name?.toLowerCase() === lower
+          );
+          if (!alreadyCounted) {
+            counts[lower] = (counts[lower] || 0) + 1;
+            if (!displayNames[lower]) displayNames[lower] = display;
+          }
+        }
+      });
+    });
+
+    return Object.entries(counts)
+      .map(([lower, cnt]) => [displayNames[lower] || lower, cnt])
+      .sort((a, b) => b[1] - a[1]);
+  }, [allResults, competitors]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const qualifiedNames = new Set(competitors.map(c => c.name.toLowerCase()));
   const unqualified = detectedNames.filter(([name]) => !qualifiedNames.has(name.toLowerCase()));
