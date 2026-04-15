@@ -6,7 +6,7 @@ import {
   sbSaveQuestions, sbGetQuestions, sbUpdateQuestion, sbDeleteQuestion,
   sbSaveGeoResult, sbGetGeoResults, sbSaveHint, sbGetHints, sbSetKeywordTags,
   sbGetSchedule, sbSaveSchedule, sbUpdateSchedule, sbTriggerScheduler,
-  sbSaveProjectSettings,
+  sbSaveProjectSettings, sbSaveProviderKeys,
   sbGetCategories, sbSaveCategory, sbDeleteCategory,
   sbSetQuestionCategory,
   sbBulkSetKeywordCategory, sbBulkSetQuestionCategory,
@@ -44,6 +44,7 @@ function decodeKey(enc) {
     return ""; // AES blob or corrupted — user must re-enter
   }
 }
+function encodeKey(k) { try { return k ? btoa(unescape(encodeURIComponent(k))) : ""; } catch { return ""; } }
 
 function extractDomain(url) {
   try { return new URL(url).hostname.replace("www.", ""); } catch { return url; }
@@ -1449,23 +1450,60 @@ function KeywordsTab({ site, projectId, apiKey, model, axes, context, categories
     setLoading(false);
   };
 
-  // Import CSV: col1=keyword, col2=category name
+  // Import CSV: col1=keyword, col2=category name (optionnel), col3=volume (optionnel)
+  // Accepte aussi un CSV avec headers : keyword, category, volume
   const importCSV = (e) => {
     const file = e.target.files[0];
     if (!file) return;
     const reader = new FileReader();
     reader.onload = async (ev) => {
-      const rows = parseCSV(ev.target.result).filter(r => r[0]);
+      const text = ev.target.result;
+      const allRows = parseCSV(text).filter(r => r[0]);
+      if (!allRows.length) return;
+
+      // Détecter si la première ligne est un header
+      const firstLow = allRows[0][0]?.toLowerCase().trim();
+      const hasHeader = firstLow === "keyword" || firstLow === "mot-clé" || firstLow === "keywords";
+      const dataRows = hasHeader ? allRows.slice(1) : allRows;
+
+      // Détecter les indices de colonnes si header présent
+      let kwIdx = 0, catIdx = 1, volIdx = 2;
+      if (hasHeader) {
+        const headers = allRows[0].map(h => h.toLowerCase().trim());
+        kwIdx  = headers.findIndex(h => h === "keyword" || h === "mot-clé" || h.startsWith("keyword")) ?? 0;
+        catIdx = headers.findIndex(h => h === "category" || h === "catégorie");
+        volIdx = headers.findIndex(h => h === "volume" || h.includes("volume") || h === "search volume");
+        if (kwIdx === -1) kwIdx = 0;
+      }
+
       const toAdd = [];
-      for (const [keyword, catName] of rows) {
+      const volOverrides = []; // { keyword, vol } à mettre à jour après save
+      for (const row of dataRows) {
+        const keyword = row[kwIdx]?.trim();
+        if (!keyword) continue;
+        const catName = catIdx >= 0 && row[catIdx] ? row[catIdx].trim() : null;
         const cat = catName ? categories.find(c => c.name.toLowerCase() === catName.toLowerCase()) : null;
-        toAdd.push({ project_id: projectId, site_id: site.id, keyword, status: "pending", ...(cat ? { category_id: cat.id } : {}) });
+        const vol = volIdx >= 0 && row[volIdx] ? parseInt(row[volIdx].replace(/[^0-9]/g, ""), 10) : NaN;
+        const entry = { project_id: projectId, site_id: site.id, keyword, status: "pending", ...(cat ? { category_id: cat.id } : {}) };
+        if (!isNaN(vol) && vol > 0) entry.search_volume = vol;
+        toAdd.push(entry);
+        if (!isNaN(vol) && vol > 0) volOverrides.push({ keyword: keyword.toLowerCase(), vol });
       }
       if (!toAdd.length) return;
       const saved = await sbSaveKeywords(toAdd);
+      // Mettre à jour les volumes pour les keywords déjà en base qui n'ont pas reçu le volume via save
+      if (volOverrides.length) {
+        for (const kw of saved) {
+          const override = volOverrides.find(v => v.keyword === kw.keyword?.toLowerCase());
+          if (override && !kw.search_volume) {
+            await sbUpdateKeywordVolume(kw.id, override.vol, "csv_import").catch(() => {});
+            kw.search_volume = override.vol;
+          }
+        }
+      }
       setKeywords(prev => [...prev, ...saved]);
     };
-    reader.readAsText(file);
+    reader.readAsText(file, "UTF-8");
     e.target.value = "";
   };
 
@@ -2339,7 +2377,7 @@ RÈGLES :
 
 // ── Questions sub-tab (v2) ────────────────────────────────────────
 
-function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allResults, onResultSaved, activeProviders = ["openai"], providerKeys = {}, runMode = "parallel", keywordsOrder = [], refreshTrigger = 0, competitors: competitorsProp = [], setCompetitors: setCompetitorsProp = null }) {
+function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allResults, onResultSaved, activeProviders = ["openai"], providerKeys = {}, runMode = "parallel", keywordsOrder = [], refreshTrigger = 0, competitors: competitorsProp = [], setCompetitors: setCompetitorsProp = null, onSaveKey = null }) {
   const [questions, setQuestions]   = useState([]);
   const [results, setResults]       = useState(allResults || []);
   // Utiliser le state remonté depuis GeoTab si disponible, sinon local
@@ -2395,6 +2433,8 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
   const setFilterProviders  = (v) => { setFilterProvidersRaw(v);  persistFilters({ filterProviders: v }); };
   const [running, setRunning]       = useState({});
   const [runAll, setRunAll]         = useState(false);
+  const [keyInputOpen, setKeyInputOpen] = useState(null); // provider id dont le popover est ouvert
+  const [keyInputVal,  setKeyInputVal]  = useState("");   // valeur saisie dans le popover
   const stopAllRef = useRef(false);
   // Refs so callbacks always read current values without stale closure issues
   const activeProvidersRef = useRef(activeProviders);
@@ -2780,13 +2820,65 @@ ${question}`;
           {PROVIDERS.map(p => {
             const active = filterProviders.includes(p.id);
             const hasKey = !!providerKeys[p.id]?.dec;
+            const isOpen = keyInputOpen === p.id;
             return (
-              <button key={p.id} onClick={() => setFilterProviders(prev => active ? prev.filter(id => id !== p.id) : [...prev, p.id])}
-                title={!hasKey ? `Clé ${p.label} manquante — ajoutez-la dans ⚙️ Gestion des Providers (en haut de page)` : undefined}
-                style={{ padding: "2px 10px", border: `2px solid ${p.color}`, borderRadius: 10, fontSize: 10, fontWeight: 600, cursor: hasKey ? "pointer" : "not-allowed",
-                  background: active ? p.color : "transparent", color: active ? "#fff" : hasKey ? p.color : C.textLight, opacity: hasKey ? 1 : 0.4 }}>
-                {p.icon} {p.label}{!hasKey ? " 🔑" : ""}
-              </button>
+              <div key={p.id} style={{ position: "relative" }}>
+                <button
+                  onClick={() => {
+                    if (!hasKey) {
+                      // Ouvrir le popover de saisie de clé
+                      setKeyInputOpen(isOpen ? null : p.id);
+                      setKeyInputVal("");
+                    } else {
+                      setFilterProviders(prev => active ? prev.filter(id => id !== p.id) : [...prev, p.id]);
+                    }
+                  }}
+                  title={!hasKey ? `Cliquez pour configurer la clé ${p.label}` : `Filtrer par ${p.label}`}
+                  style={{ padding: "2px 10px", border: `2px solid ${p.color}`, borderRadius: 10, fontSize: 10, fontWeight: 600, cursor: "pointer",
+                    background: active && hasKey ? p.color : "transparent",
+                    color: active && hasKey ? "#fff" : hasKey ? p.color : C.textLight,
+                    opacity: 1 }}>
+                  {p.icon} {p.label}{!hasKey ? " 🔑" : ""}
+                </button>
+                {/* Popover saisie clé */}
+                {isOpen && (
+                  <div style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 100, background: C.white, border: `1.5px solid ${p.color}`, borderRadius: 10, padding: "10px 12px", minWidth: 260, boxShadow: "0 4px 20px rgba(0,0,0,0.12)" }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: p.color, marginBottom: 6 }}>🔑 Clé {p.label}</div>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <input
+                        autoFocus
+                        type="password"
+                        value={keyInputVal}
+                        onChange={e => setKeyInputVal(e.target.value)}
+                        onKeyDown={async e => {
+                          if (e.key === "Enter" && keyInputVal.trim()) {
+                            const enc = encodeKey(keyInputVal.trim());
+                            await sbSaveProviderKeys(projectId, { [p.keyField]: enc });
+                            onSaveKey?.({ [p.keyField]: enc });
+                            setKeyInputOpen(null); setKeyInputVal("");
+                          }
+                          if (e.key === "Escape") { setKeyInputOpen(null); setKeyInputVal(""); }
+                        }}
+                        placeholder={p.keyPlaceholder}
+                        style={{ flex: 1, padding: "5px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11, fontFamily: "monospace" }}
+                      />
+                      <button
+                        onClick={async () => {
+                          if (!keyInputVal.trim()) return;
+                          const enc = encodeKey(keyInputVal.trim());
+                          await sbSaveProviderKeys(projectId, { [p.keyField]: enc });
+                          onSaveKey?.({ [p.keyField]: enc });
+                          setKeyInputOpen(null); setKeyInputVal("");
+                        }}
+                        disabled={!keyInputVal.trim()}
+                        style={{ padding: "5px 10px", background: p.color, color: "#fff", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: keyInputVal.trim() ? "pointer" : "default", opacity: keyInputVal.trim() ? 1 : 0.5 }}>
+                        ✓
+                      </button>
+                    </div>
+                    <div style={{ fontSize: 9, color: C.textLight, marginTop: 4 }}>Entrée ou ✓ pour enregistrer · Échap pour annuler</div>
+                  </div>
+                )}
+              </div>
             );
           })}
 
@@ -2820,12 +2912,36 @@ ${question}`;
           />
 
           <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-            <button onClick={() => sbGetQuestions(projectId, site.id).then(setQuestions)}
-              title="Recharger les questions" style={{ padding: "4px 8px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.white, color: C.textLight, fontSize: 11, cursor: "pointer" }}>🔄</button>
+            <button
+              onClick={async () => {
+                // Recharger : reload questions + résultats sans relancer les providers
+                await Promise.all([
+                  sbGetQuestions(projectId, site.id).then(setQuestions),
+                  sbGetGeoResults(projectId, site.id).then(setResults),
+                ]);
+              }}
+              title="Recharger questions et résultats (sans relancer les providers)"
+              style={{ padding: "4px 8px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.white, color: C.textLight, fontSize: 11, cursor: "pointer" }}>🔄</button>
             <Btn onClick={runAllQuestions} disabled={runAll || toRunCount === 0} color="#7C3AED"
-              title={!runAll && toRunCount === 0 ? "Toutes les questions ont déjà été interrogées aujourd'hui — relancez manuellement une question pour forcer la ré-interrogation" : undefined}>
+              title={!runAll && toRunCount === 0 ? "Toutes les questions ont déjà été interrogées aujourd'hui — utilisez ↺ pour forcer le relancement" : `Interroge uniquement les questions sans réponse aujourd'hui (${toRunCount})`}>
               {runAll ? "⏳ En cours…" : toRunCount > 0 ? `▶ Lancer tout (${toRunCount})` : "✓ Tout généré"}
             </Btn>
+            {!runAll && toRunCount === 0 && (
+              <Btn onClick={async () => {
+                // Relancer tout — force=true, ignore le filtre today
+                const toRun = filtered.map(q => ({ q, providers: getProvidersToRun(q, true) })).filter(({ providers }) => providers.length > 0);
+                if (!toRun.length) return;
+                stopAllRef.current = false;
+                setRunAll(true);
+                for (const { q, providers } of toRun) {
+                  if (stopAllRef.current) break;
+                  setRunning(r => ({ ...r, [q.id]: true }));
+                  await Promise.all(providers.map(p => runProvider(q, p)));
+                  setRunning(r => ({ ...r, [q.id]: false }));
+                }
+                setRunAll(false);
+              }} color="#64748B" variant="outline" small title="Relancer toutes les questions même si déjà générées aujourd'hui">↺ Relancer tout</Btn>
+            )}
             {runAll && <Btn onClick={() => { stopAllRef.current = true; setRunAll(false); }} color="#DC2626" variant="outline" small>⏹ Arrêter</Btn>}
           </div>
         </div>
@@ -3716,6 +3832,7 @@ function FanoutSetupPanel({
   dbHistory, dbLoading, refreshHistory, confirmModal, setConfirmModal,
   project, projectId, onSaveProviderKeys,
   axes, onSaveAxes, onAxesChange,
+  onSemrushVolumes,
 }) {
   const [showHistory, setShowHistory] = useState(false);
 
@@ -3867,15 +3984,33 @@ function FanoutSetupPanel({
               <div style={{ fontSize: 11, fontWeight: 700, color: site.color, marginBottom: 8 }}>{site.label}</div>
               <UploadCard label="Semrush" icon="📈" hint="Organic pages export" color={site.color}
                 loaded={(smData||{})[site.id]?.length > 0} rows={(smData||{})[site.id]}
-                onData={(_, rawText) => { const rows = parseSemrush(parseSemrushCSV(rawText)); setSmData(p => ({...p, [site.id]: rows})); }}
+                onData={(_, rawText) => {
+                  const parsed = parseSemrushCSV(rawText);
+                  const rows = parseSemrush(parsed);
+                  setSmData(p => ({...p, [site.id]: rows}));
+                  // Enrichir les volumes de mots-clés si le CSV contient des keywords
+                  if (parsed.length > 0 && (parsed[0].keyword !== undefined || parsed[0].Keyword !== undefined)) {
+                    onSemrushVolumes?.(site.id, parsed);
+                  }
+                }}
                 onClear={() => setSmData(p => ({...p, [site.id]: []}))}
                 rawMode siteId={site.id} source="sm" projectId={projectId}
                 onAfterUpload={refreshHistory}
-                onLoadFromHistory={async row => { try { const t = await sbDownload(row.storage_path); const rows = parseSemrush(parseSemrushCSV(t)); setSmData(p => ({...p, [site.id]: rows})); } catch(e) {} }}
+                onLoadFromHistory={async row => {
+                  try {
+                    const t = await sbDownload(row.storage_path);
+                    const parsed = parseSemrushCSV(t);
+                    const rows = parseSemrush(parsed);
+                    setSmData(p => ({...p, [site.id]: rows}));
+                    if (parsed.length > 0 && (parsed[0].keyword !== undefined || parsed[0].Keyword !== undefined)) {
+                      onSemrushVolumes?.(site.id, parsed);
+                    }
+                  } catch(e) {}
+                }}
               />
               {(smData||{})[site.id]?.length > 0 && <div style={{ marginTop: 4, fontSize: 10, color: site.color, fontWeight: 600 }}>✓ {(smData||{})[site.id].length} pages</div>}
               {lastImports[`${site.id}_sm`]?.storage_path && !(smData||{})[site.id]?.length && (
-                <button onClick={async () => { try { const t = await sbDownload(lastImports[`${site.id}_sm`].storage_path); const rows = parseSemrush(parseSemrushCSV(t)); setSmData(p => ({...p, [site.id]: rows})); } catch(e) {} }}
+                <button onClick={async () => { try { const t = await sbDownload(lastImports[`${site.id}_sm`].storage_path); const parsed = parseSemrushCSV(t); const rows = parseSemrush(parsed); setSmData(p => ({...p, [site.id]: rows})); if (parsed.length > 0 && (parsed[0].keyword !== undefined || parsed[0].Keyword !== undefined)) { onSemrushVolumes?.(site.id, parsed); } } catch(e) {} }}
                   style={{ marginTop: 4, width: "100%", padding: "3px 0", border: `1px solid ${site.color}`, borderRadius: 6, background: site.bg, color: site.color, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>↩ Dernier</button>
               )}
             </div>
@@ -4118,6 +4253,31 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
           axes={axes}
           onSaveAxes={onSaveAxes}
           onAxesChange={(a) => setAxes(a)}
+          onSemrushVolumes={async (siteId, parsedRows) => {
+            // Construire une map keyword → volume depuis le CSV Semrush
+            const volMap = {};
+            parsedRows.forEach(row => {
+              const kw  = (row.keyword || row.Keyword || row["mot-clé"] || "").toLowerCase().trim();
+              const vol = parseInt(row.volume || row.Volume || row["Search Volume"] || row["search volume"] || 0, 10);
+              if (kw && !isNaN(vol)) volMap[kw] = vol;
+            });
+            if (!Object.keys(volMap).length) return;
+            // Charger les mots-clés du projet pour ce site
+            try {
+              const kws = await sbGetKeywords(projectId, siteId);
+              let updated = 0;
+              for (const kw of kws) {
+                const vol = volMap[kw.keyword.toLowerCase().trim()];
+                if (vol !== undefined && vol !== kw.search_volume) {
+                  await sbUpdateKeywordVolume(kw.id, vol, "semrush_csv");
+                  updated++;
+                }
+              }
+              if (updated > 0) {
+                setQuestionsKey(k => k + 1); // force reload dans QuestionsTab
+              }
+            } catch(e) { console.warn("onSemrushVolumes error:", e); }
+          }}
         />
       )}
 
@@ -4179,6 +4339,20 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
           refreshTrigger={questionsKey}
           competitors={competitors}
           setCompetitors={setCompetitors}
+          onSaveKey={(keyPatch) => {
+            setProviderKeys(prev => {
+              const next = { ...prev };
+              PROVIDERS.forEach(p => {
+                if (keyPatch[p.keyField]) {
+                  const dec = decodeKey(keyPatch[p.keyField]);
+                  next[p.id] = { enc: keyPatch[p.keyField], dec, input: "", status: dec ? "ok" : "error" };
+                }
+              });
+              return next;
+            });
+            setProjects?.(prev => prev.map(proj => proj.id === projectId ? { ...proj, ...keyPatch } : proj));
+            onSaveProviderKeys?.(keyPatch);
+          }}
         />
       </div>
       {subTab === "competitors" && (
