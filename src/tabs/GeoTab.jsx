@@ -2439,10 +2439,54 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
   const activeProvidersRef = useRef(activeProviders);
   const providerKeysRef    = useRef(providerKeys);
   const resultsRef         = useRef([]); // toujours à jour pour getProvidersToRun
+  const competitorsRef     = useRef(competitors); // pour autoRegisterCompetitors
   // Keep refs in sync with props on every render (not just via useEffect)
   activeProvidersRef.current = activeProviders;
   providerKeysRef.current    = providerKeys;
   resultsRef.current         = results;
+  competitorsRef.current     = competitors;
+
+  // Auto-enregistrement des marques citées dans les réponses
+  const autoRegisterCompetitors = useCallback(async (answer, brandTerms) => {
+    if (!answer || !projectId || !site?.id) return;
+    // Extraire les noms de marques potentiels depuis la réponse :
+    // items de liste (-, *, 1.) dont le nom n'est pas la marque
+    const lowerBrand = brandTerms.map(t => t.toLowerCase());
+    const lines = answer.split('\n');
+    const extracted = new Set();
+    for (const line of lines) {
+      const trimmed = line.trimStart();
+      // Lignes de liste : "- NomMarque : ..." ou "1. NomMarque —" ou "**NomMarque**"
+      const listMatch = trimmed.match(/^(?:[-*•]|\d+[.)]) +\**([A-ZÀ-ÿ][A-Za-zÀ-ÿ0-9\-& .]{1,40})\**/);
+      const boldMatch = trimmed.match(/^\*\*([A-ZÀ-ÿ][A-Za-zÀ-ÿ0-9\-& .]{1,40})\*\*/);
+      const name = (listMatch?.[1] || boldMatch?.[1] || '').trim().replace(/[.:,;]+$/, '');
+      if (!name || name.length < 3) continue;
+      const lower = name.toLowerCase();
+      // Exclure la marque et les mots courants
+      if (lowerBrand.some(b => lower.includes(b) || b.includes(lower))) continue;
+      if (/^(les|des|une|pour|dans|avec|sans|voici|votre|notre|leur|cette|bien|vous|nous)\b/i.test(lower)) continue;
+      extracted.add(name);
+    }
+    if (!extracted.size) return;
+    const currentComps = competitorsRef.current;
+    const qualifiedNames = new Set(currentComps.map(c => c.name.toLowerCase()));
+    for (const name of extracted) {
+      if (qualifiedNames.has(name.toLowerCase())) continue; // déjà enregistré
+      try {
+        const saved = await sbSaveCompetitor({
+          project_id: projectId, site_id: site.id,
+          name, domain: '', category: 'other', color: '#64748B',
+        });
+        if (saved) {
+          setCompetitors(prev => {
+            if (prev.some(c => c.name.toLowerCase() === name.toLowerCase())) return prev;
+            return [...prev, saved].sort((a, b) => a.name.localeCompare(b.name));
+          });
+          qualifiedNames.add(name.toLowerCase());
+        }
+      } catch {} // silencieux si doublon
+    }
+  }, [projectId, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const [selected, setSelected]     = useState(new Set());
   const [bulkCat, setBulkCat]       = useState("");
   const [keywords, setKeywords]     = useState([]);
@@ -2593,6 +2637,10 @@ ${question}`;
       // Persist to DB (best effort)
       sbAddCalendarEntry(q.id, provider.id, brandMentioned).catch(() => {});
 
+      // Auto-enregistrement des concurrents détectés dans la réponse
+      const brandTermsForAuto = [brand_name, ...(brand?.brand_aliases || [])].filter(Boolean);
+      autoRegisterCompetitors(parsed.answer, brandTermsForAuto).catch(() => {});
+
       // Update cached answers on question
       const cachePatch = { has_result: true, last_answer: parsed.answer, last_model: record.model, last_date: now };
       if (brandMentioned) Object.assign(cachePatch, { best_answer: parsed.answer, best_model: record.model, best_date: now });
@@ -2742,16 +2790,21 @@ ${question}`;
     });
   }, [filtered, results, filterProviders]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Count questions to generate for "Lancer tout" indicator
+  // Count questions to generate for "Lancer tout" indicator — utilise resultsRef pour être frais
   const toRunCount = useMemo(() => {
     const today = new Date().toISOString().slice(0, 10);
     const configuredProviders = PROVIDERS.filter(p =>
       activeProviders.includes(p.id) && providerKeys[p.id]?.dec
     );
     if (!configuredProviders.length) return 0;
+    // Construire une map fraîche depuis resultsRef.current
+    const freshByQ = {};
+    resultsRef.current.forEach(r => {
+      if (!freshByQ[r.question_id]) freshByQ[r.question_id] = [];
+      freshByQ[r.question_id].push(r);
+    });
     return filtered.filter(q => {
-      const qResults = resultsByQ[q.id] || [];
-      // Count questions that have at least one provider not yet done today
+      const qResults = freshByQ[q.id] || [];
       return configuredProviders.some(p =>
         !qResults.some(r =>
           getProviderId(r.model) === p.id &&
@@ -2759,7 +2812,7 @@ ${question}`;
         )
       );
     }).length;
-  }, [filtered, resultsByQ, activeProviders, providerKeys]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [filtered, results, activeProviders, providerKeys]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div>
@@ -2957,7 +3010,11 @@ ${question}`;
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {filtered.map(q => {
             const qResults = resultsByQ[q.id] || [];
-            const hasBrand = qResults.some(r => r.brand_mentioned === true || r.brand_mentioned === 1);
+            // Couleur basée sur le résultat le plus récent (pas sur l'historique entier)
+            const latestQResult = qResults.length
+              ? [...qResults].sort((a, b) => new Date(b.created_at||0) - new Date(a.created_at||0))[0]
+              : null;
+            const hasBrand = !!(latestQResult && (latestQResult.brand_mentioned === true || latestQResult.brand_mentioned === 1));
             const isRunning = running[q.id];
             const isSel = selected.has(q.id);
             const cat = categories.find(c => c.id === q.category_id);
