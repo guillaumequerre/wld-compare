@@ -843,7 +843,7 @@ export async function sbDeleteSchedule(id) {
 }
 
 export async function sbTriggerScheduler() {
-  // Manual trigger — calls the scheduler endpoint with secret header
+  // Manual trigger — force=true bypasse le filtre next_run du scheduler
   const secret = process.env.REACT_APP_SCHEDULER_SECRET;
   const res = await fetch("/api/geo-scheduler", {
     method: "POST",
@@ -851,6 +851,7 @@ export async function sbTriggerScheduler() {
       "Content-Type": "application/json",
       ...(secret ? { "X-Scheduler-Secret": secret } : {}),
     },
+    body: JSON.stringify({ force: true }),
   });
   if (!res.ok) {
     const body = await res.text().catch(() => "");

@@ -237,13 +237,24 @@ export default async function(request) {
     return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 });
   }
 
+  // Le trigger manuel peut passer force=true pour ignorer next_run
+  let forceRun = false;
+  if (request.method === "POST") {
+    try {
+      const body = await request.json().catch(() => ({}));
+      forceRun = body?.force === true;
+    } catch {}
+  }
+
   try {
     const now = new Date().toISOString();
 
-    // 1. Load all active schedules due for execution
-    const schedules = await sbGet(
-      `geo_schedules?active=eq.true&next_run=lte.${encodeURIComponent(now)}&order=next_run.asc&limit=50`
-    );
+    // 1. Load active schedules — si force=true on ignore le filtre next_run
+    const filter = forceRun
+      ? `geo_schedules?active=eq.true&order=next_run.asc&limit=50`
+      : `geo_schedules?active=eq.true&next_run=lte.${encodeURIComponent(now)}&order=next_run.asc&limit=50`;
+
+    const schedules = await sbGet(filter);
 
     console.log(`[geo-scheduler] Found ${schedules.length} schedules to process`);
     if (!schedules.length) {
