@@ -1139,7 +1139,6 @@ function CompetitorManager({ projectId, siteId, allResults, competitors, setComp
   const [customCats, setCustomCats] = useState([]); // catégories custom ajoutées
   const [newCustom,  setNewCustom]  = useState("");
   const [saving,     setSaving]     = useState(false);
-  const [editId,     setEditId]     = useState(null);
 
   // Détecter automatiquement les noms depuis competitors_mentioned
   const detectedNames = useMemo(() => {
@@ -2346,7 +2345,7 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
   // Utiliser le state remonté depuis GeoTab si disponible, sinon local
   const [competitorsLocal, setCompetitorsLocal] = useState([]);
   const competitors    = competitorsProp.length > 0 ? competitorsProp : competitorsLocal;
-  const setCompetitors = setCompetitorsProp || setCompetitorsLocal;
+  const setCompetitors = setCompetitorsProp || setCompetitorsLocal; // eslint-disable-line no-unused-vars
   // Sort: favorites first, then by keyword order, then by creation date
   const sortedQuestions = useMemo(() => {
     const kwIndexMap = {};
@@ -3019,8 +3018,8 @@ function UrlsTab({ projectId, categories, brand, allResults, qualifiedCompetitor
   const [openCrawl, setOpenCrawl]   = useState(null);
 
   const brandName    = brand?.brand_name || "";
-  const brandAliases = brand?.brand_aliases || [];
-  const competitors  = brand?.competitors  || [];
+  const brandAliases = useMemo(() => brand?.brand_aliases || [], [brand?.brand_aliases]); // eslint-disable-line react-hooks/exhaustive-deps
+  const competitors  = useMemo(() => brand?.competitors  || [], [brand?.competitors]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!projectId) return;
@@ -3062,7 +3061,6 @@ function UrlsTab({ projectId, categories, brand, allResults, qualifiedCompetitor
     if (cls.startsWith("competitor_q_")) {
       const cat = cls.replace("competitor_q_", "");
       const catDef = COMP_CATEGORIES.find(c => c.key === cat) || COMP_CATEGORIES[3];
-      const qc = qualifiedCompetitors.find(c => c.category === cat);
       return { color: catDef.color, bg: catDef.bg, border: catDef.color, label: `⚔️ ${catDef.label}` };
     }
     if (cls.startsWith("competitor")) return { color: "#DC2626", bg: "#FEF2F2", border: "#DC2626", label: "⚔️ Concurrent" };
@@ -3277,7 +3275,6 @@ function UrlsTab({ projectId, categories, brand, allResults, qualifiedCompetitor
         <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
           {filtered.map(u => {
             const rawCls = classifyUrl(u);
-            const cls    = mapCls(rawCls);
             const meta   = getClassStyle(rawCls);
             const isOpen = openCrawl === u.id;
             const hasSections = u.crawl_sections?.length > 0;

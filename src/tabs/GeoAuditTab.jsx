@@ -3,7 +3,7 @@ import { sbGetBrand, sbGetQuestions, sbGetGeoResults, sbGetUrlIndex,
   sbSaveProject, sbDeleteProject, sbDownload } from "../lib/supabase";
 import UploadCard from "../components/UploadCard";
 import PageTypeClassifier from "../components/PageTypeClassifier";
-import { newProject } from "../lib/helpers";
+import { newProject, parseCSV } from "../lib/helpers";
 import { C, SITE_PALETTE } from "../lib/constants";
 
 const ANTHROPIC_PROXY = "/api/anthropic";
@@ -183,6 +183,18 @@ function AuditSetupPanel({
   );
 }
 
+
+// ── Stat card ─────────────────────────────────────────────────────
+function StatCard({ label, value, sub, color = C.text, bg = C.white }) {
+  return (
+    <div style={{ background: bg, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px" }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: 24, fontWeight: 800, color }}>{value}</div>
+      {sub && <div style={{ fontSize: 11, color: C.textLight, marginTop: 2 }}>{sub}</div>}
+    </div>
+  );
+}
+
 function Section({ icon, title, sub, children, accent }) {
   return (
     <div style={{ background: C.white, border: `1px solid ${accent ? accent + "44" : C.border}`, borderRadius: 14, overflow: "hidden", marginBottom: 16 }}>
@@ -237,7 +249,6 @@ function CompetitorScatter({ compStats, total, brandName, brandWithBrand, brandA
   const COLORS = ["#DC2626","#D97706","#7C3AED","#2563EB","#0891B2","#059669","#9333EA","#EA580C"];
 
   // Quadrant labels
-  const midCit = maxCit / 2;
   const midPos = (maxPos + minPos) / 2;
 
   return (
@@ -367,21 +378,6 @@ function GeoScoreBanner({ audit, brand, site }) {
   );
 }
 
-function UrlRow({ url, meta, badge, badgeColor, badgeBg, rank }) {
-  return (
-    <div style={{ display: "flex", alignItems: "flex-start", gap: 12, padding: "10px 0", borderBottom: `1px solid ${C.borderLight}` }}>
-      {rank && <span style={{ fontSize: 13, fontWeight: 800, color: C.textLight, minWidth: 24, flexShrink: 0 }}>#{rank}</span>}
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
-          <a href={url} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: "#2563EB", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textDecoration: "none", display: "block", flex: 1 }}>{url}</a>
-          <a href={url} target="_blank" rel="noreferrer" style={{ flexShrink: 0, fontSize: 10, color: C.textLight, border: `1px solid ${C.border}`, borderRadius: 4, padding: "1px 5px", textDecoration: "none" }}>↗</a>
-        </div>
-        {meta && <div style={{ fontSize: 11, color: C.textLight }}>{meta}</div>}
-      </div>
-      {badge && <span style={{ fontSize: 10, fontWeight: 700, color: badgeColor || "#059669", background: badgeBg || "#ECFDF5", border: `1px solid ${(badgeColor || "#059669")}33`, borderRadius: 6, padding: "2px 8px", flexShrink: 0 }}>{badge}</span>}
-    </div>
-  );
-}
 
 function computeAudit(questions, results, urlIndex, brand, site) {
   const brandName = brand?.brand_name || "";
@@ -1308,27 +1304,13 @@ export default function GeoAuditTab({
                 SF technique / Bing AI / GSC SEO
             ══════════════════════════════════════════════════════ */}
             {(() => {
-              const hasSF      = metrics.some(m => m.sf);
               const hasGSC     = metrics.some(m => m.gsc);
               const hasBing    = metrics.some(m => m.bing);
               const hasCorr    = corrMatrix.length > 0 && corrMatrix.some(r => r.corrs.some(c => c.value !== null));
               const geoPct     = audit.presenceRate;
               const avgPos2    = audit.avgPos;
-              const withSource = audit.withSources;
               const total2     = audit.total;
 
-              const geoCorrs = hasCorr ? corrMatrix.flatMap(row =>
-                row.corrs.filter(c => c.kpi.src === "bing" && c.value !== null)
-                  .map(c => ({ dim: row.dim.label, kpi: c.kpi.label, value: c.value }))
-              ).sort((a, b) => Math.abs(b.value) - Math.abs(a.value)).slice(0, 5) : [];
-
-              const seoCorrs = hasCorr ? corrMatrix.flatMap(row =>
-                row.corrs.filter(c => c.kpi.src === "gsc" && c.value !== null)
-                  .map(c => ({ dim: row.dim.label, kpi: c.kpi.label, value: c.value }))
-              ).sort((a, b) => Math.abs(b.value) - Math.abs(a.value)).slice(0, 5) : [];
-
-              const bingTotal  = metrics.reduce((s, m) => s + (m.bing?.geoMentions || 0), 0);
-              const bingPages  = metrics.reduce((s, m) => s + (m.bing?.pageCount || 0), 0);
               const gscClicks  = metrics.reduce((s, m) => s + (m.gsc?.clicks || 0), 0);
               const gscPos     = metrics.filter(m => m.gsc?.position).map(m => m.gsc.position);
               const gscAvgPos  = gscPos.length ? (gscPos.reduce((a,b)=>a+b,0)/gscPos.length).toFixed(1) : null;
@@ -1356,24 +1338,6 @@ export default function GeoAuditTab({
                 </div>
               );
 
-              const Lead2 = ({ priority, text, color = "#7C3AED", bg = "#F5F3FF" }) => (
-                <div style={{ padding: "9px 12px", borderLeft: `3px solid ${color}`, background: bg, borderRadius: "0 8px 8px 0", marginBottom: 8 }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color, marginBottom: 2 }}>{priority}</div>
-                  <div style={{ fontSize: 11, color: C.textMid, lineHeight: 1.5 }}>{text}</div>
-                </div>
-              );
-
-              const CorrRow = ({ dim, kpi, value }) => {
-                const pos = value > 0; const strong = Math.abs(value) >= 0.4;
-                return (
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "5px 0", borderBottom: `1px solid ${C.borderLight}` }}>
-                    <span style={{ fontSize: 11, color: C.textMid }}>{dim} × {kpi}</span>
-                    <span style={{ fontSize: 12, fontWeight: strong ? 700 : 500, color: pos ? "#059669" : "#DC2626", background: pos ? "#ECFDF5" : "#FEF2F2", borderRadius: 5, padding: "1px 8px" }}>
-                      {pos ? "▲" : "▼"} r={value.toFixed(2)}
-                    </span>
-                  </div>
-                );
-              };
 
               return (
                 <Section icon="📊" title="Croisements data × présence GEO" sub="Bing AI, SEO et corrélations Screaming Frog" accent={C.teal}>
