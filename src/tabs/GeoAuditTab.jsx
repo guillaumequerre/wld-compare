@@ -3,7 +3,7 @@ import { sbGetBrand, sbGetQuestions, sbGetGeoResults, sbGetUrlIndex,
   sbSaveProject, sbDeleteProject, sbDownload } from "../lib/supabase";
 import UploadCard from "../components/UploadCard";
 import PageTypeClassifier from "../components/PageTypeClassifier";
-import { newProject, parseCSV } from "../lib/helpers";
+import { newProject } from "../lib/helpers";
 import { C, SITE_PALETTE } from "../lib/constants";
 
 const ANTHROPIC_PROXY = "/api/anthropic";
@@ -177,15 +177,15 @@ function AuditSetupPanel({
 
 
 // ── Stat card ─────────────────────────────────────────────────────
-function StatCard({ label, value, sub, color = C.text, bg = C.white }) {
-  return (
-    <div style={{ background: bg, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px" }}>
-      <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 4 }}>{label}</div>
-      <div style={{ fontSize: 24, fontWeight: 800, color }}>{value}</div>
-      {sub && <div style={{ fontSize: 11, color: C.textLight, marginTop: 2 }}>{sub}</div>}
-    </div>
-  );
-}
+// function StatCard({ label, value, sub, color = C.text, bg = C.white }) {
+//   return (
+//     <div style={{ background: bg, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px" }}>
+//       <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 4 }}>{label}</div>
+//       <div style={{ fontSize: 24, fontWeight: 800, color }}>{value}</div>
+//       {sub && <div style={{ fontSize: 11, color: C.textLight, marginTop: 2 }}>{sub}</div>}
+//     </div>
+//   );
+// }
 
 function Section({ icon, title, sub, children, accent }) {
   return (
