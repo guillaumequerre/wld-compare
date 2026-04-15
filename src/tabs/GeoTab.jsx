@@ -1790,10 +1790,7 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
 
   // Most recent result for this provider
   const result = [...(results || [])].sort((a,b) => new Date(b.created_at||0) - new Date(a.created_at||0))[0] || null;
-  const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
-  const isRecent = result?.created_at && (Date.now() - new Date(result.created_at).getTime()) < SEVEN_DAYS_MS;
-  const hasBrand = isRecent && isBrandPresent(result);
-  
+  const hasBrand = isBrandPresent(result);
   const sources = result?.sources || [];
   const comps   = result?.competitors_mentioned || [];
 
@@ -2587,11 +2584,7 @@ ${question}`;
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {filtered.map(q => {
             const qResults = resultsByQ[q.id] || [];
-            const latestResult = [...qResults].sort((a,b) => new Date(b.created_at||0) - new Date(a.created_at||0))[0];
-            const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
-            const hasBrand = !!latestResult?.created_at
-              && (Date.now() - new Date(latestResult.created_at).getTime()) < SEVEN_DAYS_MS
-              && (latestResult.brand_mentioned === true || latestResult.brand_mentioned === 1);
+            const hasBrand = qResults.some(r => r.brand_mentioned === true || r.brand_mentioned === 1);
             const isRunning = running[q.id];
             const isSel = selected.has(q.id);
             const cat = categories.find(c => c.id === q.category_id);
@@ -3441,6 +3434,7 @@ function SetupSection({ icon, title, children }) {
 function FanoutSetupPanel({
   projects, currentProjectId, setCurrentProjectId, setProjects, ownerEmail,
   sites, setSites, smData, setSmData,
+  sfData, setSfData, gscData, setGscData, gaData, setGaData, bingData, setBingData,
   dbHistory, dbLoading, refreshHistory, confirmModal, setConfirmModal,
   project, projectId, onSaveProviderKeys,
   axes, onSaveAxes, onAxesChange,
@@ -3543,6 +3537,50 @@ function FanoutSetupPanel({
         </div>
       </SetupSection>
 
+      {/* ── Imports SF / GSC / GA4 / Bing ── */}
+      <SetupSection icon="📥" title="Imports CSV — SF, GSC, GA4, Bing">
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          {safeSites.map(site => (
+            <div key={site.id} style={{ flex: "1 1 200px", background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 10, padding: "10px 14px" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: site.color, marginBottom: 8 }}>{site.label}</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {[
+                  { key: "sf",   label: "Screaming Frog", icon: "🐸", data: sfData,   setter: setSfData },
+                  { key: "gsc",  label: "Search Console",  icon: "🔍", data: gscData,  setter: setGscData },
+                  { key: "ga",   label: "Analytics 4",     icon: "📊", data: gaData,   setter: setGaData },
+                  { key: "bing", label: "Bing Webmaster",  icon: "🤖", data: bingData, setter: setBingData },
+                ].map(({ key, label, icon, data, setter }) => {
+                  const hasData = (data||{})[site.id]?.length > 0;
+                  const lastRow = lastImports[`${site.id}_${key}`];
+                  return (
+                    <div key={key}>
+                      <UploadCard
+                        label={`${icon} ${label}`} icon={icon} color={site.color}
+                        loaded={hasData} rows={(data||{})[site.id]}
+                        onData={rows => setter?.(p => ({...p, [site.id]: rows}))}
+                        onClear={() => setter?.(p => ({...p, [site.id]: []}))}
+                        siteId={site.id} source={key} projectId={projectId}
+                        onAfterUpload={refreshHistory}
+                        onLoadFromHistory={async row => {
+                          try { const t = await sbDownload(row.storage_path); setter?.(p => ({...p, [site.id]: parseCSV(t)})); } catch(e) {}
+                        }}
+                      />
+                      {lastRow?.storage_path && !hasData && (
+                        <button onClick={async () => {
+                          try { const t = await sbDownload(lastRow.storage_path); setter?.(p => ({...p, [site.id]: parseCSV(t)})); } catch(e) {}
+                        }} style={{ marginTop: 3, width: "100%", padding: "2px 0", border: `1px solid ${site.color}`, borderRadius: 6, background: site.bg, color: site.color, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>
+                          ↩ {lastRow.filename}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      </SetupSection>
+
       {/* ── Import Semrush ── */}
       <SetupSection icon="📈" title="Import Semrush — volumes de recherche">
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -3617,7 +3655,9 @@ function FanoutSetupPanel({
 export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes, onSaveProviderKeys, user,
   // Props setup (nouvelles — passées depuis App.jsx)
   projects, currentProjectId, setCurrentProjectId, setProjects, ownerEmail,
-  setSites, smData, setSmData, dbHistory, dbLoading, refreshHistory, confirmModal, setConfirmModal,
+  setSites, smData, setSmData,
+  sfData, setSfData, gscData, setGscData, gaData, setGaData, bingData, setBingData,
+  dbHistory, dbLoading, refreshHistory, confirmModal, setConfirmModal,
 }) {
   const [mainTab, setMainTab]       = useState("analyse"); // "setup" | "analyse"
   const [subTab, setSubTab]         = useState("keywords"); // keywords | questions | urls
@@ -3776,6 +3816,14 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
           setSites={setSites}
           smData={smData}
           setSmData={setSmData}
+          sfData={sfData}
+          setSfData={setSfData}
+          gscData={gscData}
+          setGscData={setGscData}
+          gaData={gaData}
+          setGaData={setGaData}
+          bingData={bingData}
+          setBingData={setBingData}
           dbHistory={dbHistory}
           dbLoading={dbLoading}
           refreshHistory={refreshHistory}

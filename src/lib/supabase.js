@@ -40,31 +40,32 @@ export async function sbUpload(path, csvText) {
 
 
 export async function sbInsertImport({ project_id, site_id, source, filename, storage_path, row_count }) {
-  // UPSERT: 1 row max per (project_id, site_id, source) — replaces previous
-  const res = await fetch(`${PROXY}/rest/v1/imports`, {
+  // UPSERT: on_conflict en URL obligatoire pour que PostgREST génère un vrai
+  // INSERT … ON CONFLICT (project_id,site_id,source) DO UPDATE
+  // Sans ça, "resolution=merge-duplicates" est ignoré et un INSERT nu lève 409.
+  const payload = { project_id, site_id, source, filename, storage_path, row_count, uploaded_at: new Date().toISOString() };
+  const res = await fetch(`${PROXY}/rest/v1/imports?on_conflict=project_id,site_id,source`, {
     method: "POST",
     headers: {
       ...authHeaders(),
       "Content-Type": "application/json",
       "Prefer": "resolution=merge-duplicates,return=representation",
-      "on-conflict": "project_id,site_id,source",
     },
-    body: JSON.stringify({ project_id, site_id, source, filename, storage_path, row_count, uploaded_at: new Date().toISOString() }),
+    body: JSON.stringify(payload),
   });
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    // 409 = contrainte unique non configurée en DB → fallback ignore-duplicates
+    // Fallback si la contrainte unique n'existe pas en DB : PATCH sur la ligne existante
     if (res.status === 409) {
-      const res2 = await fetch(`${PROXY}/rest/v1/imports`, {
-        method: "POST",
-        headers: {
-          ...authHeaders(),
-          "Content-Type": "application/json",
-          "Prefer": "resolution=ignore-duplicates,return=representation",
-        },
-        body: JSON.stringify({ project_id, site_id, source, filename, storage_path, row_count, uploaded_at: new Date().toISOString() }),
-      });
-      if (!res2.ok) return null; // silencieux si toujours KO
+      const res2 = await fetch(
+        `${PROXY}/rest/v1/imports?project_id=eq.${encodeURIComponent(project_id)}&site_id=eq.${encodeURIComponent(site_id)}&source=eq.${encodeURIComponent(source)}`,
+        {
+          method: "PATCH",
+          headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "return=representation" },
+          body: JSON.stringify({ filename, storage_path, row_count, uploaded_at: payload.uploaded_at }),
+        }
+      );
+      if (!res2.ok) return null;
       const data = await res2.json();
       return Array.isArray(data) ? data[0] || null : data;
     }
@@ -809,7 +810,10 @@ export async function sbSaveSchedule({ project_id, site_id, owner_email, frequen
     next_run: nextRun.toISOString(),
   };
 
-  const res = await fetch(`${PROXY}/rest/v1/geo_schedules`, {
+  // Upsert : on_conflict dans l'URL est requis pour que PostgREST génère
+  // un vrai INSERT … ON CONFLICT(project_id, site_id) DO UPDATE
+  // plutôt qu'un INSERT pur qui lève une 409 si la ligne existe déjà.
+  const res = await fetch(`${PROXY}/rest/v1/geo_schedules?on_conflict=project_id,site_id`, {
     method: "POST",
     headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
     body: JSON.stringify(payload),
@@ -853,4 +857,4 @@ export async function sbTriggerScheduler() {
     throw new Error(`Trigger failed: ${res.status} — ${body.slice(0, 120)}`);
   }
   return res.json();
-} 
+}

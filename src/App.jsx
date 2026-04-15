@@ -790,6 +790,14 @@ export default function App() {
               project={currentProject}
               geoAxes={currentProject?.geo_axes || null}
               user={user}
+              sfData={sfData}
+              gscData={gscData}
+              gaData={gaData}
+              bingData={bingData}
+              setSfData={setSfData}
+              setGscData={setGscData}
+              setGaData={setGaData}
+              setBingData={setBingData}
               onSaveAxes={async (axes) => {
                 await sbSaveGeoAxes(currentProjectId, axes);
                 setProjects(prev => prev.map(p => p.id === currentProjectId ? { ...p, geo_axes: axes } : p));
