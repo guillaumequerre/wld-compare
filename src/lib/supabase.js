@@ -453,23 +453,52 @@ export async function sbSaveGeoResult(result) {
     created_at:           result.created_at    || new Date().toISOString(),
   };
 
+  // Tentative INSERT
   const res = await fetch(`${PROXY}/rest/v1/geo_results`, {
     method: "POST",
     headers: {
       ...authHeaders(),
       "Content-Type": "application/json",
-      // UPSERT: replace existing result for same question+model
-      "Prefer": "return=representation,resolution=merge-duplicates",
-      "on-conflict": "question_id,model",
+      "Prefer": "return=representation",
     },
     body: JSON.stringify(row),
   });
-  if (!res.ok) {
-    const errBody = await res.text().catch(() => "");
-    console.error("[sbSaveGeoResult] failed:", res.status, errBody);
-    throw new Error(`Save geo result failed: ${res.status} — ${errBody.slice(0, 200)}`);
+
+  if (res.ok) return res.json();
+
+  const errBody = await res.text().catch(() => "");
+
+  // 409 = contrainte unique (question_id, model) → PATCH la ligne existante
+  if (res.status === 409) {
+    const patch = await fetch(
+      `${PROXY}/rest/v1/geo_results?question_id=eq.${encodeURIComponent(row.question_id)}&model=eq.${encodeURIComponent(row.model)}`,
+      {
+        method: "PATCH",
+        headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "return=representation" },
+        body: JSON.stringify({
+          answer:               row.answer,
+          answer_type:          row.answer_type,
+          intent_type:          row.intent_type,
+          sources:              row.sources,
+          source_types:         row.source_types,
+          brand_mentioned:      row.brand_mentioned,
+          brand_position:       row.brand_position,
+          brand_in_sources:     row.brand_in_sources,
+          competitors_mentioned: row.competitors_mentioned,
+          input_tokens:         row.input_tokens,
+          output_tokens:        row.output_tokens,
+          created_at:           row.created_at,
+        }),
+      }
+    );
+    if (patch.ok) return patch.json();
+    const patchErr = await patch.text().catch(() => "");
+    console.error("[sbSaveGeoResult] patch failed:", patch.status, patchErr);
+    throw new Error(`Save geo result (patch) failed: ${patch.status}`);
   }
-  return res.json();
+
+  console.error("[sbSaveGeoResult] failed:", res.status, errBody);
+  throw new Error(`Save geo result failed: ${res.status} — ${errBody.slice(0, 200)}`);
 }
 
 export async function sbGetGeoResultsAll(project_id) {
@@ -873,15 +902,46 @@ export async function sbGetCompetitors(project_id, site_id) {
 }
 
 export async function sbSaveCompetitor({ project_id, site_id, name, domain, category, color }) {
+  const payload = {
+    project_id, site_id,
+    name: name.trim(),
+    domain: (domain || "").trim().toLowerCase(),
+    category: category || "other",
+    color: color || "#DC2626",
+  };
+  // Tentative upsert avec on_conflict dans l'URL
   const res = await fetch(
     `${PROXY}/rest/v1/geo_competitors?on_conflict=project_id,site_id,name`,
     {
       method: "POST",
       headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
-      body: JSON.stringify({ project_id, site_id, name: name.trim(), domain: (domain || "").trim().toLowerCase(), category: category || "other", color: color || "#DC2626" }),
+      body: JSON.stringify(payload),
     }
   );
-  if (!res.ok) throw new Error(`Save competitor failed: ${res.status}`);
+  if (!res.ok) {
+    // Fallback : PATCH sur la ligne existante si 409 ou 403 sur l'upsert
+    if (res.status === 409 || res.status === 403) {
+      const res2 = await fetch(
+        `${PROXY}/rest/v1/geo_competitors?project_id=eq.${encodeURIComponent(project_id)}&site_id=eq.${encodeURIComponent(site_id)}&name=eq.${encodeURIComponent(name.trim())}`,
+        {
+          method: "PATCH",
+          headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "return=representation" },
+          body: JSON.stringify({ domain: payload.domain, category: payload.category, color: payload.color }),
+        }
+      );
+      if (res2.ok) {
+        const data2 = await res2.json();
+        if (Array.isArray(data2) && data2.length) return data2[0];
+      }
+      // Fallback ultime : GET pour renvoyer l'existant
+      const res3 = await fetch(
+        `${PROXY}/rest/v1/geo_competitors?project_id=eq.${encodeURIComponent(project_id)}&site_id=eq.${encodeURIComponent(site_id)}&name=eq.${encodeURIComponent(name.trim())}&limit=1`,
+        { headers: authHeaders() }
+      );
+      if (res3.ok) { const d3 = await res3.json(); return Array.isArray(d3) ? d3[0] : d3; }
+    }
+    throw new Error(`Save competitor failed: ${res.status}`);
+  }
   const data = await res.json();
   return Array.isArray(data) ? data[0] : data;
 }
