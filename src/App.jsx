@@ -1364,13 +1364,13 @@ export default function GeoAuditTab({
   setSites, sfData, setSfData, gscData, setGscData, gaData, setGaData,
   setBingData, dbHistory, dbLoading, refreshHistory,
   confirmModal, setConfirmModal, pageTypes, setPageTypes,
-  isReadOnly = false, autoStartTour = false, onTourStarted = null,
+  autoStartTour = false, onTourStarted = null,
 }) {
   const [mainTab, setMainTab]           = useState("audit");
-  const [selectedSite, setSelectedSite] = useState(sites[0]?.id || "");
+  const [selectedSite, setSelectedSite] = useState(sites?.[0]?.id || "");
   // Sync selectedSite quand le projet change
   useEffect(() => {
-    setSelectedSite(sites[0]?.id || "");
+    setSelectedSite(sites?.[0]?.id || "");
   }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
   const [aiText, setAiText]             = useState("");
   const [exporting, setExporting]       = useState(false);
