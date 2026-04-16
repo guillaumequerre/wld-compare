@@ -652,8 +652,8 @@ function computeAudit(questions, results, urlIndex, brand, site, calendarEntries
   }
 
   // ── URLs marque — normalisation et cumul ─────────────────────
-  const brandTerms = [brandName, ...brandAliases].filter(Boolean).map(t => t.toLowerCase());
-  const isBrandTerm = (str) => brandTerms.some(t => t && str.toLowerCase().includes(t));
+  const brandTerms = [brandName, ...brandAliases].filter(v => typeof v === "string" && v.trim()).map(t => t.toLowerCase());
+  const isBrandTerm = (str) => brandTerms.some(t => t && String(str || "").toLowerCase().includes(t));
 
   // Grouper urlIndex par URL normalisée
   const normGroups = {};
@@ -671,8 +671,14 @@ function computeAudit(questions, results, urlIndex, brand, site, calendarEntries
   const brandUrls = mergedUrls.filter(u =>
     isBrandTerm(u.norm) || isBrandTerm(u.domain || "")
   );
+  const competitorNames = competitors
+  .map(c => typeof c === "string" ? c : c?.name)
+  .filter(Boolean)
+  .map(name => name.toLowerCase());
+
   const competitorUrls = mergedUrls.filter(u =>
-    !isBrandTerm(u.norm) && competitors.some(c => c && u.norm.includes(c.toLowerCase()))
+    !isBrandTerm(u.norm) &&
+    competitorNames.some(name => u.norm.includes(name))
   );
   const referenceUrls = mergedUrls
     .filter(u => !brandUrls.includes(u) && !competitorUrls.includes(u))
@@ -1398,7 +1404,7 @@ export default function GeoAuditTab({
   const siteResults   = useMemo(() => results.filter(r => r.site_id === site?.id), [results, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const siteQuestions = useMemo(() => questions.filter(q => q.site_id === site?.id), [questions, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const siteUrls      = useMemo(() => urlIndex.filter(u => u.project_id === projectId), [urlIndex, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
-  const audit = useMemo(() => computeAudit(siteQuestions, siteResults, siteUrls, brand, site, calendarEntries, keywords, competitors), [siteQuestions, siteResults, siteUrls, brand, site, calendarEntries, keywords, competitors]); // eslint-disable-line react-hooks/exhaustive-deps
+  const audit         = useMemo(() => computeAudit(siteQuestions, siteResults, siteUrls, brand, site, calendarEntries, keywords, competitors), [siteQuestions, siteResults, siteUrls, brand, site, calendarEntries, keywords, competitors]); // eslint-disable-line react-hooks/exhaustive-deps
   const noData        = !siteResults.length;
 
   // Démarrer le tour automatiquement si demandé (depuis HomeTab) — après loading et noData
