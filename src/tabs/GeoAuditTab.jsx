@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
+import TourGuide from "../components/TourGuide";
 import { sbGetBrand, sbGetQuestions, sbGetGeoResults, sbGetUrlIndex,
   sbSaveProject, sbDeleteProject, sbDownload,
   sbGetCalendarEntriesBatch, sbGetKeywords, sbGetCategories, sbGetCompetitors } from "../lib/supabase";
@@ -1374,6 +1375,7 @@ export default function GeoAuditTab({
   }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
   const [aiText, setAiText]             = useState("");
   const [exporting, setExporting]       = useState(false);
+  const [showTour, setShowTour]         = useState(false);
   const [brand, setBrand]               = useState(null);
   const [questions, setQuestions]       = useState([]);
   const [results, setResults]           = useState([]);
@@ -1400,11 +1402,55 @@ export default function GeoAuditTab({
   const audit = useMemo(() => computeAudit(siteQuestions, siteResults, siteUrls, brand, site, calendarEntries, keywords, competitors), [siteQuestions, siteResults, siteUrls, brand, site, calendarEntries, keywords, competitors]); // eslint-disable-line react-hooks/exhaustive-deps
   const noData        = !siteResults.length;
 
+  const AUDIT_TOUR_STEPS = [
+    {
+      target: "audit-score",
+      icon: "📊",
+      title: "Score de présence GEO",
+      desc: "Le score GEO mesure le % de réponses LLM où votre marque est citée. En dessous, les KPIs clés : total de tests, présence en sources, position moyenne.",
+      tip: "Visez un score > 60% pour une bonne visibilité GEO.",
+      position: "bottom",
+    },
+    {
+      target: "audit-visibility",
+      icon: "📡",
+      title: "Visibilité marque",
+      desc: "Ce bloc détaille la présence par provider (OpenAI, Claude, Gemini…) et la tendance sur 30 jours. Les questions avec et sans présence sont listées.",
+      tip: "Les questions sans présence sont vos priorités de contenu.",
+      position: "bottom",
+    },
+    {
+      target: "audit-competitors",
+      icon: "⚔️",
+      title: "Paysage concurrentiel",
+      desc: "Tableau des concurrents avec leur catégorie (Direct / GEO / Partenaire), nombre de mentions et position moyenne.",
+      tip: "Qualifiez les concurrents dans Fan-outs → ⚔️ pour enrichir cette section.",
+      position: "top",
+    },
+    {
+      target: "audit-export",
+      icon: "⬇",
+      title: "Export PDF",
+      desc: "Génère un rapport PDF complet : score, KPIs, concurrents, URLs à optimiser, recommandations et analyse IA.",
+      tip: "Cliquez '✦ Générer l'analyse IA' avant d'exporter pour un rapport plus riche.",
+      position: "top",
+    },
+  ];
+
   return (
     <div>
+      {showTour && (
+        <TourGuide steps={AUDIT_TOUR_STEPS} onClose={() => setShowTour(false)} />
+      )}
       {/* ── Header + onglets principaux ── */}
       <div style={{ marginBottom: 24 }}>
-        <div style={{ fontSize: 20, fontWeight: 800, color: C.text, marginBottom: 16 }}>📋 Audit GEO</div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+          <div style={{ fontSize: 20, fontWeight: 800, color: C.text }}>📋 Audit GEO</div>
+          <button onClick={() => setShowTour(true)}
+            style={{ fontSize: 11, fontWeight: 700, color: "#1A3C2E", background: "#EAF0EC", border: "1px solid #B2CCBC", borderRadius: 8, padding: "5px 12px", cursor: "pointer" }}>
+            🎓 Guide
+          </button>
+        </div>
         <div style={{ display: "inline-flex", gap: 2, background: "#F1F5F9", borderRadius: 20, padding: 3 }}>
           {[{ key: "setup", label: "⚙️ Setup" }, { key: "audit", label: "📋 Génération Audit GEO" }].map(t => (
             <button key={t.key} onClick={() => setMainTab(t.key)} style={{
@@ -1440,11 +1486,11 @@ export default function GeoAuditTab({
                 <button key={s.id} onClick={() => setSelectedSite(s.id)} style={{ padding: "5px 12px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer", border: `2px solid ${s.color}`, background: selectedSite === s.id ? s.color : "transparent", color: selectedSite === s.id ? "#fff" : s.color }}>{s.label}</button>
               ))}
             </div>
-            <button onClick={() => { setExporting(true); exportPDF(audit, brand, site, aiText); setTimeout(() => setExporting(false), 1000); }}
+            <span data-tour="audit-export"><button onClick={() => { setExporting(true); exportPDF(audit, brand, site, aiText); setTimeout(() => setExporting(false), 1000); }}
               disabled={noData || exporting}
               style={{ padding: "8px 18px", background: noData ? C.bg : "#2563EB", color: noData ? C.textLight : "#fff", border: "none", borderRadius: 9, fontSize: 12, fontWeight: 700, cursor: noData ? "not-allowed" : "pointer" }}>
               {exporting ? "⏳ Export…" : "⬇ Export PDF"}
-            </button>
+            </button></span>
           </div>
 
           {loading ? (
@@ -1461,13 +1507,13 @@ export default function GeoAuditTab({
                 BLOC 1 — SYNTHÈSE EXÉCUTIVE
                 Score GEO + KPIs clés en un coup d'œil
             ══════════════════════════════════════════════════════ */}
-            <GeoScoreBanner audit={audit} brand={brand} site={site} />
+            <div data-tour="audit-score"><GeoScoreBanner audit={audit} brand={brand} site={site} /></div>
 
             {/* ══════════════════════════════════════════════════════
                 BLOC 2 — VISIBILITÉ MARQUE
                 Présence par provider + tendance 30j + questions
             ══════════════════════════════════════════════════════ */}
-            <Section icon="📡" title="Visibilité marque" sub="Présence dans les réponses LLM par provider et dans le temps" accent={C.blue}>
+            <div data-tour="audit-visibility" style={{ display: "contents" }}><Section icon="📡" title="Visibilité marque" sub="Présence dans les réponses LLM par provider et dans le temps" accent={C.blue}>
 
               {/* Présence par provider */}
               <div style={{ marginBottom: 20 }}>
@@ -1526,7 +1572,7 @@ export default function GeoAuditTab({
               </div>
             </Section>
 
-            {/* ══════════════════════════════════════════════════════
+            </div>{/* ══════════════════════════════════════════════════════
                 BLOC 2B — ANALYSE PAR CATÉGORIE
             ══════════════════════════════════════════════════════ */}
             <CategoryAnalysisCard
@@ -1542,7 +1588,7 @@ export default function GeoAuditTab({
                 BLOC 3 — ANALYSE CONCURRENTIELLE
                 Concurrents + intentions + types de réponses
             ══════════════════════════════════════════════════════ */}
-            <Section icon="⚔️" title="Paysage concurrentiel" sub="Concurrents détectés dans les réponses LLM" accent={C.amber}>
+            <div data-tour="audit-competitors" style={{ display: "contents" }}><Section icon="⚔️" title="Paysage concurrentiel" sub="Concurrents détectés dans les réponses LLM" accent={C.amber}>
 
               {/* Table concurrents */}
               {Object.keys(audit.compStats).length > 0 ? (
@@ -1615,7 +1661,7 @@ export default function GeoAuditTab({
               </div>
             </Section>
 
-            {/* ══════════════════════════════════════════════════════
+            </div>{/* ══════════════════════════════════════════════════════
                 BLOC 4 — ANALYSE DES SOURCES & URLS
                 Top domaines + URLs marque catégorisées
             ══════════════════════════════════════════════════════ */}

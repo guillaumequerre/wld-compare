@@ -193,8 +193,17 @@ export async function sbSetProjectOwner(projectId, ownerEmail) {
 }
 
 export async function sbLoadAccessibleProjects(userEmail) {
-  const token = getToken();
-  if (!token || !userEmail) return [];
+  if (!userEmail) return [];
+
+  // Rafraîchir le token si besoin (gère le cas où la page est rechargée après expiry)
+  let token;
+  try {
+    const { ensureValidSession } = await import("../lib/supabase");
+    token = await ensureValidSession();
+  } catch {
+    token = getToken(); // fallback si import échoue
+  }
+  if (!token) return [];
 
   try {
     const email = userEmail.toLowerCase();

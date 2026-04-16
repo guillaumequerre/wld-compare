@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import TourGuide from "../components/TourGuide";
 import PresenceCalendar from "../components/PresenceCalendar";
 import {
   sbGetBrand,
@@ -2985,7 +2986,7 @@ ${question}`;
       />
 
       {/* ── Stats header (filtered) ── */}
-      <StatsHeader questions={filtered} results={filteredResults} brandName={brand_name} qualifiedCompetitors={competitors} />
+      <div data-tour="stats-header"><StatsHeader questions={filtered} results={filteredResults} brandName={brand_name} qualifiedCompetitors={competitors} /></div>
 
       {/* ── Manual question input ── */}
       <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 16px", marginBottom: 14, display: "flex", gap: 10, alignItems: "center" }}>
@@ -3135,7 +3136,7 @@ ${question}`;
               title="Recharger questions et résultats"
               style={{ padding: "4px 8px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.white, color: C.textLight, fontSize: 11, cursor: "pointer" }}>🔄</button>
             {!isReadOnly && (
-              <>
+              <span data-tour="run-all" style={{ display: "contents" }}>
                 <Btn onClick={runAllQuestions} disabled={runAll || toRunCount === 0} color="#7C3AED"
                   title={!runAll && toRunCount === 0 ? "Toutes les questions ont déjà été interrogées aujourd'hui — utilisez ↺ pour forcer le relancement" : `Interroge uniquement les questions sans réponse aujourd'hui (${toRunCount})`}>
                   {runAll ? "⏳ En cours…" : toRunCount > 0 ? `▶ Lancer tout (${toRunCount})` : "✓ Tout généré"}
@@ -3156,7 +3157,7 @@ ${question}`;
                   }} color="#64748B" variant="outline" small title="Relancer toutes les questions même si déjà générées aujourd'hui">↺ Relancer tout</Btn>
                 )}
                 {runAll && <Btn onClick={() => { stopAllRef.current = true; setRunAll(false); }} color="#DC2626" variant="outline" small>⏹ Arrêter</Btn>}
-              </>
+              </span>
             )}
           </div>
         </div>
@@ -4296,7 +4297,8 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
 }) {
   const [mainTab, setMainTab]       = useState("analyse"); // "setup" | "analyse"
   const [subTab, setSubTab]         = useState("keywords"); // keywords | questions | urls
-  const [questionsKey, setQuestionsKey] = useState(0); // incremented to force QuestionsTab reload
+  const [questionsKey, setQuestionsKey] = useState(0);
+  const [showTour, setShowTour]     = useState(false);
   const [selectedSite, setSelectedSite] = useState(sites[0]?.id || "");
   // Sync selectedSite quand le projet change
   useEffect(() => {
@@ -4419,19 +4421,84 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
     setApiKeyDec(k);
   }, [apiKeyEnc]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const GEO_TOUR_STEPS = [
+    {
+      target: "subnav",
+      icon: "🧭",
+      title: "Navigation Fan-outs",
+      desc: "5 onglets structurent l'analyse : Mots-clés, Questions, Concurrents, Automatisation et Sources. Commencez par les Mots-clés.",
+      tip: "Chaque onglet correspond à une étape du workflow GEO.",
+      position: "bottom",
+    },
+    {
+      target: "keywords-section",
+      icon: "🔑",
+      title: "1. Mots-clés",
+      desc: "Saisissez vos requêtes cibles (une par ligne) ou importez un CSV Semrush. Utilisez 📋 Copier liste pour récupérer les volumes sur Semrush, puis importez le CSV.",
+      tip: "Commencez par 5–10 mots-clés stratégiques pour un premier test.",
+      position: "bottom",
+    },
+    {
+      target: "subnav",
+      icon: "🔑",
+      title: "2. Clés API providers",
+      desc: "Cliquez sur un badge provider (OpenAI, Claude, Gemini…) sans clé configurée pour ouvrir la saisie. Au moins un provider est requis pour interroger les LLMs.",
+      tip: "Claude est aussi utilisé pour les analyses IA et les hints.",
+      position: "bottom",
+    },
+    {
+      target: "stats-header",
+      icon: "📊",
+      title: "3. Tableau de bord de présence",
+      desc: "Ce bloc affiche en temps réel : % de présence marque, position moyenne, nombre de providers actifs et top concurrents. Il se met à jour après chaque interrogation.",
+      tip: "Filtrez par provider ou par date pour analyser les tendances.",
+      position: "bottom",
+    },
+    {
+      target: "run-all",
+      icon: "▶",
+      title: "4. Lancer les interrogations",
+      desc: "▶ Lancer tout interroge uniquement les questions sans réponse aujourd'hui. ↺ Relancer tout force le rechargement de toutes les questions.",
+      tip: "Chaque interrogation est sauvegardée en base — l'historique est consultable dans l'Audit GEO.",
+      position: "top",
+    },
+    {
+      target: null,
+      icon: "📋",
+      title: "5. Consultez l'Audit GEO",
+      desc: "Une fois les premières interrogations lancées, rendez-vous dans l'onglet 📋 Audit GEO pour voir le score de présence, le paysage concurrentiel et les recommandations actionnables.",
+      tip: "L'analyse IA détaillée nécessite une clé Claude configurée.",
+      position: "center",
+    },
+  ];
 
   return (
     <div>
+      {/* Guide Tour */}
+      {showTour && (
+        <TourGuide
+          steps={GEO_TOUR_STEPS}
+          onClose={() => setShowTour(false)}
+        />
+      )}
       {/* ── Header + onglets principaux Setup / Analyse ── */}
       <div style={{ marginBottom: 24 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
           <div style={{ fontSize: 20, fontWeight: 800, color: C.text }}>🔍 Fan-outs</div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            {!isReadOnly && (
+              <button onClick={() => { setMainTab("analyse"); setShowTour(true); }}
+                style={{ fontSize: 11, fontWeight: 700, color: "#1A3C2E", background: "#EAF0EC", border: "1px solid #B2CCBC", borderRadius: 8, padding: "5px 12px", cursor: "pointer" }}>
+                🎓 Guide
+              </button>
+            )}
           {isReadOnly && (
             <span style={{ fontSize: 11, fontWeight: 700, color: "#D97706", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, padding: "4px 12px" }}>
               👁 Mode lecture — Interrogations désactivées
             </span>
           )}
-        </div>
+          </div>{/* end flex buttons */}
+        </div>{/* end flex header row */}
         {!isReadOnly && (
           <div style={{ display: "inline-flex", gap: 2, background: "#F1F5F9", borderRadius: 20, padding: 3 }}>
             {[
@@ -4516,7 +4583,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
       {mainTab === "analyse" && (<div>
 
       {/* ── Sub-nav ── */}
-      <div style={{ display: "flex", gap: 6, marginBottom: 20 }}>
+      <div data-tour="subnav" style={{ display: "flex", gap: 6, marginBottom: 20 }}>
         {[
           { key: "keywords",    label: "🔑 Mots-clés",         color: "#D97706" },
           { key: "questions",   label: "💬 Questions",          color: "#7C3AED" },
@@ -4538,7 +4605,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
 
       {/* ── Sub-tabs ── */}
       {subTab === "keywords" && (
-        <KeywordsTab
+        <div data-tour="keywords-section"><KeywordsTab
           site={site}
           projectId={projectId}
           apiKey={apiKeyDec}
@@ -4552,7 +4619,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
           providerKeys={providerKeys}
           onQuestionsGenerated={() => { setQuestionsKey(k => k + 1); }}
         />
-      )}
+      </div>)}
       <div style={{ display: subTab === "questions" ? "block" : "none" }}>
         <QuestionsTab
           site={site}
