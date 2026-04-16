@@ -1838,6 +1838,15 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
           </span>
           <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
             <input ref={fileVolRef} type="file" accept=".csv" style={{ display: "none" }} onChange={enrichFromCsv} />
+            <button
+              onClick={() => {
+                const list = keywords.map(k => k.keyword).join(", ");
+                navigator.clipboard.writeText(list).catch(() => {});
+              }}
+              title="Copier tous les mots-clés séparés par des virgules (pour Semrush)"
+              style={{ fontSize: 11, fontWeight: 600, padding: "4px 10px", border: "1px solid #E2E8F0", borderRadius: 7, background: "#fff", color: "#64748B", cursor: "pointer" }}>
+              📋 Copier liste
+            </button>
             <button onClick={() => fileVolRef.current?.click()}
               style={{ fontSize: 11, fontWeight: 600, padding: "4px 10px", border: "1px solid #BFDBFE", borderRadius: 7, background: "#fff", color: "#2563EB", cursor: "pointer" }}>
               📄 CSV Semrush
@@ -2558,21 +2567,32 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
     const lines = answer.split('\n');
     const extracted = new Set();
 
-    // Labels structurels à ignorer (pas des noms de marques)
-    const SKIP = /^(description|site web|site|url|lien|contact|adresse|prix|note|téléphone|email|courriel|fondation|créé|secteur|type|catégorie|siège|country|pays)$/i;
-
     for (const line of lines) {
       const trimmed = line.trimStart();
-      // Uniquement les listes numérotées : "1. NomMarque" ou "1) NomMarque"
-      // On s'arrête au premier séparateur : " :", " —", " –", " (", " :"
-      const m = trimmed.match(/^\d+[.)]\s+\**([A-ZÀ-Ö][A-Za-zÀ-ÿ0-9][A-Za-zÀ-ÿ0-9\-&]*)\**/);
-      if (!m) continue;
-      const name = m[1].trim();
+      let name = null;
+
+      // Format 1 — liste numérotée : "1. **Ingenico**" ou "1. Ingenico"
+      // On s'arrête au premier séparateur (- — : ( [) ou fin de ligne
+      const mNum = trimmed.match(/^\d+[.)]\s+\**([^*\n]+?)\**(?:\s*$|\s*[-\u2013\u2014:([])/);
+      if (mNum) name = mNum[1].trim();
+
+      // Format 2 — gras seul sur sa ligne : "**Bain & Company**"
+      // Rien (ou whitespace) après le ** fermant → c'est un nom de marque
+      // "**Site web**: url" ou "**Description**: text" ont un : après → ignorés
+      if (!name) {
+        const mBold = trimmed.match(/^\*\*([^*\n]+?)\*\*\s*$/);
+        if (mBold) name = mBold[1].trim();
+      }
+
       if (!name || name.length < 2) continue;
+
+      // Exclure les labels structurels
       const lower = name.toLowerCase();
-      // Exclure labels structurels et la marque elle-même
-      if (SKIP.test(lower)) continue;
+      if (/^(description|site web|site|url|lien|contact|adresse|prix|note|t\u00e9l\u00e9phone|email|secteur|type|cat\u00e9gorie|si\u00e8ge|pays|country|conseil|conseils|consulting|solutions|services|prestataire|prestataires|acteurs|acteur|entreprise|entreprises|fournisseur|fournisseurs|partenaire|partenaires|sp\u00e9cialiste|sp\u00e9cialistes|cabinet|cabinets|agence|agences|plateforme|plateformes|outil|outils|logiciel|logiciels|option|options|exemple|exemples)$/i.test(lower)) continue;
+
+      // Exclure la marque analysée
       if (lowerBrand.some(b => b && (lower === b || lower.includes(b) || b.includes(lower)))) continue;
+
       extracted.add(name);
     }
 
