@@ -100,9 +100,6 @@ export default function TourGuide({ steps, onClose, initialStep = 0 }) {
     height: rect.height + PAD * 2,
   } : null;
 
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
-
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 9000, pointerEvents: "none" }}>
 
