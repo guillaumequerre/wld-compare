@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
-import TourGuide from "../components/TourGuide";
+import TourGuide from "./tabs/TourGuide";
 import { sbGetBrand, sbGetQuestions, sbGetGeoResults, sbGetUrlIndex,
   sbSaveProject, sbDeleteProject, sbDownload,
   sbGetCalendarEntriesBatch, sbGetKeywords, sbGetCategories, sbGetCompetitors } from "../lib/supabase";
