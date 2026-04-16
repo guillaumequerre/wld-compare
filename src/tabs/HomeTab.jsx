@@ -250,76 +250,46 @@ function ProjectsList({ user, projects, currentProjectId, dbLoading, onSelectPro
 }
 
 // ── Guide de démarrage inline ─────────────────────────────────────
-function GuideSection({ onGoFanout, onGoAudit }) {
-  const [open, setOpen] = useState(null); // null | "fanout" | "audit"
-
-  const FANOUT_STEPS = [
-    { icon: "🔑", title: "Configurez les providers", desc: "Dans ⚙️ Setup → Clés API, collez vos clés OpenAI, Claude, Gemini ou Perplexity. Au moins une clé suffit pour démarrer.", tip: "Clé Claude obligatoire pour les analyses IA et hints." },
-    { icon: "🏷️", title: "Renseignez la marque", desc: "Dans ⚙️ Setup → Configuration des marques, ajoutez le nom, le domaine et les alias de votre marque.", tip: "Plus vous ajoutez d'alias, plus la détection est précise." },
-    { icon: "📝", title: "Ajoutez des mots-clés", desc: "Dans l'onglet 🔑 Mots-clés, saisissez vos requêtes cibles. Utilisez 📋 Copier liste + Semrush pour obtenir les volumes.", tip: "Commencez par 5–10 mots-clés stratégiques." },
-    { icon: "💬", title: "Générez les questions", desc: "Cliquez « 💬 Générer toutes les questions » — l'IA crée 5 angles par mot-clé (recommandation, comparaison, avis…).", tip: "Personnalisez les axes dans ⚙️ Setup si besoin." },
-    { icon: "▶", title: "Lancez les fan-outs", desc: "Dans 💬 Questions, cliquez « ▶ Lancer tout » pour interroger tous les providers. Chaque réponse détecte automatiquement votre marque et vos concurrents.", tip: "Relancez chaque jour pour suivre l'évolution dans le temps." },
-  ];
-
-  const AUDIT_STEPS = [
-    { icon: "📁", title: "Créez un projet + site", desc: "Le projet est déjà créé. Dans ⚙️ Setup, ajoutez vos sites (domaines) et importez vos CSV Screaming Frog, GSC, Bing.", tip: "Screaming Frog est indispensable pour l'audit URLs." },
-    { icon: "📡", title: "Lancez les fan-outs d'abord", desc: "L'audit GEO s'appuie sur les résultats des interrogations LLM. Commencez par 🔍 Fan-outs pour alimenter les données.", tip: "Même 20–30 réponses suffisent pour un premier audit." },
-    { icon: "📋", title: "Consultez l'audit", desc: "Dans 📋 Audit GEO, l'audit affiche : score de présence, paysage concurrentiel, URLs à optimiser, croisements SEO.", tip: "Cliquez « ✦ Générer l'analyse IA » pour le rapport complet." },
-    { icon: "⬇", title: "Exportez le rapport PDF", desc: "Cliquez « ⬇ Export PDF » pour générer un rapport complet prêt à envoyer en livrable client.", tip: "L'export inclut toutes les sections et les recommandations." },
-  ];
-
-  const panels = [
-    { id: "fanout", icon: "🔍", label: "Fan-outs", color: "#059669", bg: "#ECFDF5", border: "#BBF7D0", steps: FANOUT_STEPS, action: "Aller dans Fan-outs →", onClick: onGoFanout },
-    { id: "audit",  icon: "📋", label: "Audit GEO", color: "#2563EB", bg: "#EFF6FF", border: "#BFDBFE", steps: AUDIT_STEPS,  action: "Aller dans Audit GEO →", onClick: onGoAudit },
+function GuideSection({ onGoFanoutTour, onGoAuditTour }) {
+  const cards = [
+    {
+      icon: "🔍", label: "Fan-outs", color: "#059669", bg: "#ECFDF5", border: "#BBF7D0",
+      desc: "Configurez vos providers, ajoutez vos mots-clés et interrogez les LLMs pour mesurer votre présence.",
+      steps: 5,
+      action: "Démarrer le guide →",
+      onClick: onGoFanoutTour,
+    },
+    {
+      icon: "📋", label: "Audit GEO", color: "#2563EB", bg: "#EFF6FF", border: "#BFDBFE",
+      desc: "Consultez votre score de présence, le paysage concurrentiel et exportez un rapport PDF.",
+      steps: 4,
+      action: "Démarrer le guide →",
+      onClick: onGoAuditTour,
+    },
   ];
 
   return (
     <div style={{ marginTop: 24 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
         <div style={{ height: 1, flex: 1, background: C.border }} />
-        <span style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.8 }}>Guide de démarrage</span>
+        <span style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.8 }}>🎓 Guide de démarrage interactif</span>
         <div style={{ height: 1, flex: 1, background: C.border }} />
       </div>
-
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-        {panels.map(p => (
-          <div key={p.id} style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden" }}>
-            {/* Panel header */}
-            <button onClick={() => setOpen(open === p.id ? null : p.id)}
-              style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 18px", background: open === p.id ? p.bg : C.white, border: "none", cursor: "pointer", borderBottom: open === p.id ? `1px solid ${p.border}` : "none" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <div style={{ width: 36, height: 36, borderRadius: 9, background: p.color + "18", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>{p.icon}</div>
-                <div style={{ textAlign: "left" }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{p.label}</div>
-                  <div style={{ fontSize: 11, color: C.textLight }}>{p.steps.length} étapes</div>
-                </div>
+        {cards.map(p => (
+          <div key={p.label} style={{ background: C.white, border: `1px solid ${p.border}`, borderRadius: 14, padding: "18px 20px", display: "flex", flexDirection: "column", gap: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <div style={{ width: 40, height: 40, borderRadius: 10, background: p.bg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, flexShrink: 0 }}>{p.icon}</div>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{p.label}</div>
+                <div style={{ fontSize: 11, color: C.textLight }}>{p.steps} étapes guidées avec spotlight</div>
               </div>
-              <span style={{ fontSize: 13, color: C.textLight, transform: open === p.id ? "rotate(180deg)" : "none", transition: "transform 0.2s" }}>▼</span>
+            </div>
+            <div style={{ fontSize: 12, color: C.textMid, lineHeight: 1.5 }}>{p.desc}</div>
+            <button onClick={p.onClick}
+              style={{ marginTop: "auto", padding: "9px", background: p.color, color: "#fff", border: "none", borderRadius: 9, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+              {p.action}
             </button>
-
-            {/* Steps */}
-            {open === p.id && (
-              <div style={{ padding: "16px 18px" }}>
-                <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 16 }}>
-                  {p.steps.map((s, i) => (
-                    <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
-                      <div style={{ width: 22, height: 22, borderRadius: "50%", background: p.bg, border: `1px solid ${p.border}`, color: p.color, fontSize: 10, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 1 }}>
-                        {i + 1}
-                      </div>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 2 }}>{s.icon} {s.title}</div>
-                        <div style={{ fontSize: 11, color: C.textMid, lineHeight: 1.5, marginBottom: 3 }}>{s.desc}</div>
-                        <div style={{ fontSize: 10, color: p.color, background: p.bg, borderRadius: 5, padding: "2px 7px", display: "inline-block" }}>💡 {s.tip}</div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                <button onClick={p.onClick}
-                  style={{ width: "100%", padding: "10px", background: p.color, color: "#fff", border: "none", borderRadius: 9, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-                  {p.action}
-                </button>
-              </div>
-            )}
           </div>
         ))}
       </div>
@@ -328,7 +298,7 @@ function GuideSection({ onGoFanout, onGoAudit }) {
 }
 
 // ── HomeTab ───────────────────────────────────────────────────────
-export default function HomeTab({ user, projects, currentProjectId, dbLoading, onLogin, onLogout, onSelectProject, onCreateProject, onGoSetup, onGoFanout, onGoAudit }) {
+export default function HomeTab({ user, projects, currentProjectId, dbLoading, onLogin, onLogout, onSelectProject, onCreateProject, onGoSetup, onGoFanout, onGoAudit, onGoFanoutTour, onGoAuditTour }) {
   const [visible, setVisible]         = useState(true);
   const [displayUser, setDisplayUser] = useState(user);
 
@@ -406,7 +376,7 @@ export default function HomeTab({ user, projects, currentProjectId, dbLoading, o
             </div>
 
             {/* Guide inline */}
-            <GuideSection onGoFanout={onGoFanout} onGoAudit={onGoAudit} />
+            <GuideSection onGoFanoutTour={onGoFanoutTour} onGoAuditTour={onGoAuditTour} />
           </>
         )}
       </div>

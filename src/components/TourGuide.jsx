@@ -1,98 +1,93 @@
 // src/components/TourGuide.jsx
-// Guide interactif avec spotlight (blur + trou) autour de la zone active.
-// Usage :
-//   <TourGuide steps={STEPS} onClose={() => setTour(false)} />
-//   Chaque step : { target: "data-tour attr value", title, desc, position: "top"|"bottom"|"left"|"right"|"center" }
-//   Sur les éléments cibles : data-tour="xxx"
-
 import { useState, useEffect, useCallback, useRef } from "react";
 
 const GREEN = "#1A3C2E";
-const PAD   = 12; // padding autour du spotlight
+const PAD   = 12;
 
 export default function TourGuide({ steps, onClose, initialStep = 0 }) {
-  const [step, setStep]     = useState(initialStep);
-  const [rect, setRect]     = useState(null);  // DOMRect de l'élément cible
-  const [pos,  setPos]      = useState({ top: 0, left: 0 }); // position du tooltip
-  const boxRef              = useRef(null);
+  const [step, setStep]   = useState(initialStep);
+  const [rect, setRect]   = useState(null);
+  const [pos,  setPos]    = useState({ top: 80, left: 80 });
+  const boxRef            = useRef(null);
+  const rafRef            = useRef(null);
+  const mountedRef        = useRef(true);
 
   const current = steps[step];
   const total   = steps.length;
   const isLast  = step === total - 1;
 
-  // Trouver et scroller vers l'élément cible
-  const updateTarget = useCallback(() => {
+  // Calcule le DOMRect de l'élément cible
+  const calcRect = useCallback(() => {
+    if (!mountedRef.current) return;
     const target = current?.target
       ? document.querySelector(`[data-tour="${current.target}"]`)
       : null;
-
-    if (!target) {
-      setRect(null);
-      return;
-    }
-
-    // Scroller doucement vers l'élément
-    target.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
-
-    // Attendre la fin du scroll avant de calculer le rect
-    setTimeout(() => {
-      const r = target.getBoundingClientRect();
-      setRect({ top: r.top, left: r.left, width: r.width, height: r.height });
-    }, 350);
+    if (!target) { setRect(null); return; }
+    const r = target.getBoundingClientRect();
+    setRect({ top: r.top, left: r.left, width: r.width, height: r.height });
   }, [current]);
 
+  // Boucle RAF pour suivre en temps réel (scroll, resize, animations)
   useEffect(() => {
-    updateTarget();
-  }, [updateTarget, step]);
+    mountedRef.current = true;
+    const loop = () => {
+      calcRect();
+      rafRef.current = requestAnimationFrame(loop);
+    };
+    rafRef.current = requestAnimationFrame(loop);
+    return () => {
+      mountedRef.current = false;
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    };
+  }, [calcRect]);
 
-  // Recalcul au resize
+  // Au changement d'étape : scroll instantané vers la cible
   useEffect(() => {
-    const handler = () => updateTarget();
-    window.addEventListener("resize", handler);
-    return () => window.removeEventListener("resize", handler);
-  }, [updateTarget]);
+    const target = current?.target
+      ? document.querySelector(`[data-tour="${current.target}"]`)
+      : null;
+    if (target) {
+      target.scrollIntoView({ behavior: "instant", block: "center", inline: "nearest" });
+    }
+  }, [step, current]);
 
-  // Position du tooltip selon la place disponible
+  // Positionner le tooltip
   useEffect(() => {
-    if (!rect || !boxRef.current) return;
-    const boxH = boxRef.current.offsetHeight || 200;
+    if (!boxRef.current) return;
+    const boxH = boxRef.current.offsetHeight || 220;
     const boxW = boxRef.current.offsetWidth  || 320;
     const vw   = window.innerWidth;
     const vh   = window.innerHeight;
-
-    const spotTop    = rect.top    - PAD;
-    const spotLeft   = rect.left   - PAD;
-    const spotBottom = rect.top    + rect.height + PAD;
-    const spotRight  = rect.left   + rect.width  + PAD;
-
-    let top, left;
-
-    // Préférence : position indiquée dans l'étape, sinon auto
     const pref = current?.position || "auto";
 
-    if (pref === "center" || !rect.width) {
-      top  = vh / 2 - boxH / 2;
-      left = vw / 2 - boxW / 2;
-    } else if (pref === "bottom" || (pref === "auto" && spotBottom + boxH + 12 < vh)) {
-      top  = spotBottom + 12;
-      left = Math.min(Math.max(spotLeft, 16), vw - boxW - 16);
-    } else if (pref === "top" || spotTop - boxH - 12 > 0) {
-      top  = spotTop - boxH - 12;
-      left = Math.min(Math.max(spotLeft, 16), vw - boxW - 16);
-    } else if (pref === "right" || spotRight + boxW + 12 < vw) {
-      top  = Math.min(Math.max(rect.top - boxH / 2 + rect.height / 2, 16), vh - boxH - 16);
-      left = spotRight + 12;
-    } else {
-      top  = Math.min(Math.max(rect.top - boxH / 2 + rect.height / 2, 16), vh - boxH - 16);
-      left = spotLeft - boxW - 12;
+    if (pref === "center" || !rect || !rect.width) {
+      setPos({ top: Math.max(vh / 2 - boxH / 2, 12), left: Math.max(vw / 2 - boxW / 2, 12) });
+      return;
     }
 
+    const sTop    = rect.top  - PAD;
+    const sLeft   = rect.left - PAD;
+    const sBottom = rect.top  + rect.height + PAD;
+    const sRight  = rect.left + rect.width  + PAD;
+    const clamp   = (l) => Math.min(Math.max(l, 12), vw - boxW - 12);
+
+    let top, left;
+    if (pref === "bottom" || (pref === "auto" && sBottom + boxH + 12 < vh)) {
+      top = sBottom + 12; left = clamp(sLeft);
+    } else if (pref === "top" || sTop - boxH - 12 > 0) {
+      top = sTop - boxH - 12; left = clamp(sLeft);
+    } else if (pref === "right" || sRight + boxW + 12 < vw) {
+      top = Math.min(Math.max(rect.top - boxH / 2 + rect.height / 2, 12), vh - boxH - 12);
+      left = sRight + 12;
+    } else {
+      top = Math.min(Math.max(rect.top - boxH / 2 + rect.height / 2, 12), vh - boxH - 12);
+      left = sLeft - boxW - 12;
+    }
     setPos({ top: Math.max(top, 8), left: Math.max(left, 8) });
-  }, [rect, current, step]);
+  }, [rect, current]);
 
   if (!current) return null;
 
-  // Spotlight : 4 bandes obscures autour du trou
   const s = rect ? {
     top:    rect.top    - PAD,
     left:   rect.left   - PAD,
@@ -103,40 +98,18 @@ export default function TourGuide({ steps, onClose, initialStep = 0 }) {
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 9000, pointerEvents: "none" }}>
 
-      {/* 4 bandes obscures — créent l'effet spotlight */}
       {s ? <>
-        {/* Haut */}
-        <div style={{ position: "fixed", top: 0, left: 0, right: 0, height: s.top, background: "rgba(0,0,0,0.55)", pointerEvents: "auto" }} onClick={onClose} />
-        {/* Bas */}
-        <div style={{ position: "fixed", top: s.top + s.height, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.55)", pointerEvents: "auto" }} onClick={onClose} />
-        {/* Gauche */}
-        <div style={{ position: "fixed", top: s.top, left: 0, width: s.left, height: s.height, background: "rgba(0,0,0,0.55)", pointerEvents: "auto" }} onClick={onClose} />
-        {/* Droite */}
-        <div style={{ position: "fixed", top: s.top, left: s.left + s.width, right: 0, height: s.height, background: "rgba(0,0,0,0.55)", pointerEvents: "auto" }} onClick={onClose} />
-        {/* Bordure lumineuse autour du spotlight */}
-        <div style={{ position: "fixed", top: s.top - 2, left: s.left - 2, width: s.width + 4, height: s.height + 4, borderRadius: 10, border: `2px solid ${GREEN}88`, boxShadow: `0 0 0 3px ${GREEN}33`, pointerEvents: "none" }} />
+        <div style={{ position: "fixed", top: 0, left: 0, right: 0, height: Math.max(s.top, 0), background: "rgba(0,0,0,0.52)", pointerEvents: "auto" }} onClick={onClose} />
+        <div style={{ position: "fixed", top: s.top + s.height, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.52)", pointerEvents: "auto" }} onClick={onClose} />
+        <div style={{ position: "fixed", top: s.top, left: 0, width: Math.max(s.left, 0), height: s.height, background: "rgba(0,0,0,0.52)", pointerEvents: "auto" }} onClick={onClose} />
+        <div style={{ position: "fixed", top: s.top, left: s.left + s.width, right: 0, height: s.height, background: "rgba(0,0,0,0.52)", pointerEvents: "auto" }} onClick={onClose} />
+        <div style={{ position: "fixed", top: s.top - 2, left: s.left - 2, width: s.width + 4, height: s.height + 4, borderRadius: 10, border: `2px solid ${GREEN}99`, boxShadow: `0 0 0 3px ${GREEN}33`, pointerEvents: "none" }} />
       </> : (
-        /* Overlay plein si pas de cible */
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", pointerEvents: "auto" }} onClick={onClose} />
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.25)", pointerEvents: "auto" }} onClick={onClose} />
       )}
 
       {/* Tooltip */}
-      <div
-        ref={boxRef}
-        style={{
-          position: "fixed",
-          top: pos.top,
-          left: pos.left,
-          width: 320,
-          background: "#fff",
-          borderRadius: 14,
-          boxShadow: "0 8px 32px rgba(0,0,0,0.22), 0 0 0 1.5px #1A3C2E33",
-          overflow: "hidden",
-          pointerEvents: "auto",
-          zIndex: 9001,
-        }}
-      >
-        {/* Header */}
+      <div ref={boxRef} style={{ position: "fixed", top: pos.top, left: pos.left, width: 320, background: "#fff", borderRadius: 14, boxShadow: "0 8px 32px rgba(0,0,0,0.22)", overflow: "hidden", pointerEvents: "auto", zIndex: 9001 }}>
         <div style={{ background: GREEN, padding: "12px 16px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <div style={{ width: 22, height: 22, background: "#F0EBE0", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -149,15 +122,11 @@ export default function TourGuide({ steps, onClose, initialStep = 0 }) {
           </div>
           <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: "#fff", fontSize: 16, opacity: 0.7, padding: 0 }}>✕</button>
         </div>
-
-        {/* Barre de progression */}
         <div style={{ height: 3, background: "#E2E8F0" }}>
           <div style={{ height: "100%", width: `${((step + 1) / total) * 100}%`, background: GREEN, transition: "width 0.3s" }} />
         </div>
-
-        {/* Contenu */}
         <div style={{ padding: "16px 18px" }}>
-          <div style={{ display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 10 }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "flex-start", marginBottom: current.tip ? 10 : 0 }}>
             {current.icon && (
               <div style={{ width: 38, height: 38, borderRadius: 10, background: GREEN + "15", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, flexShrink: 0 }}>
                 {current.icon}
@@ -170,15 +139,11 @@ export default function TourGuide({ steps, onClose, initialStep = 0 }) {
           </div>
           {current.tip && (
             <div style={{ background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 7, padding: "7px 11px", fontSize: 11, color: "#92400E", display: "flex", gap: 6 }}>
-              <span style={{ flexShrink: 0 }}>💡</span>
-              <span>{current.tip}</span>
+              <span style={{ flexShrink: 0 }}>💡</span><span>{current.tip}</span>
             </div>
           )}
         </div>
-
-        {/* Navigation */}
         <div style={{ padding: "10px 18px 14px", borderTop: "1px solid #F1F5F9", display: "flex", alignItems: "center", gap: 8 }}>
-          {/* Points */}
           <div style={{ display: "flex", gap: 4 }}>
             {steps.map((_, i) => (
               <button key={i} onClick={() => setStep(i)}

@@ -1364,7 +1364,7 @@ export default function GeoAuditTab({
   setSites, sfData, setSfData, gscData, setGscData, gaData, setGaData,
   setBingData, dbHistory, dbLoading, refreshHistory,
   confirmModal, setConfirmModal, pageTypes, setPageTypes,
-  isReadOnly = false,
+  isReadOnly = false, autoStartTour = false, onTourStarted = null,
 }) {
   const [mainTab, setMainTab]           = useState("audit");
   const [selectedSite, setSelectedSite] = useState(sites[0]?.id || "");
@@ -1375,6 +1375,11 @@ export default function GeoAuditTab({
   const [aiText, setAiText]             = useState("");
   const [exporting, setExporting]       = useState(false);
   const [showTour, setShowTour]         = useState(false);
+
+  // Démarrer le tour automatiquement si demandé (depuis HomeTab)
+  useEffect(() => {
+    if (autoStartTour && !loading && !noData) { setShowTour(true); onTourStarted?.(); }
+  }, [autoStartTour, loading, noData]); // eslint-disable-line react-hooks/exhaustive-deps
   const [brand, setBrand]               = useState(null);
   const [questions, setQuestions]       = useState([]);
   const [results, setResults]           = useState([]);
@@ -1445,8 +1450,8 @@ export default function GeoAuditTab({
       <div style={{ marginBottom: 24 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
           <div style={{ fontSize: 20, fontWeight: 800, color: C.text }}>📋 Audit GEO</div>
-          <button onClick={() => setShowTour(true)}
-            style={{ fontSize: 11, fontWeight: 700, color: "#1A3C2E", background: "#EAF0EC", border: "1px solid #B2CCBC", borderRadius: 8, padding: "5px 12px", cursor: "pointer" }}>
+          <button onClick={() => setShowTour(true)} disabled={noData || loading}
+            style={{ fontSize: 11, fontWeight: 700, color: "#1A3C2E", background: "#EAF0EC", border: "1px solid #B2CCBC", borderRadius: 8, padding: "5px 12px", cursor: noData || loading ? "not-allowed" : "pointer", opacity: noData || loading ? 0.4 : 1 }}>
             🎓 Guide
           </button>
         </div>

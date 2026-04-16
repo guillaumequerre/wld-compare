@@ -4294,11 +4294,18 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
   sfData, setSfData, gscData, setGscData, gaData, setGaData, bingData, setBingData,
   dbHistory, dbLoading, refreshHistory, confirmModal, setConfirmModal,
   isReadOnly = false,
+  autoStartTour = false,
+  onTourStarted = null,
 }) {
   const [mainTab, setMainTab]       = useState("analyse"); // "setup" | "analyse"
   const [subTab, setSubTab]         = useState("keywords"); // keywords | questions | urls
   const [questionsKey, setQuestionsKey] = useState(0);
   const [showTour, setShowTour]     = useState(false);
+
+  // Démarrer le tour automatiquement si demandé (depuis HomeTab)
+  useEffect(() => {
+    if (autoStartTour) { setMainTab("analyse"); setShowTour(true); onTourStarted?.(); }
+  }, [autoStartTour]); // eslint-disable-line react-hooks/exhaustive-deps
   const [selectedSite, setSelectedSite] = useState(sites[0]?.id || "");
   // Sync selectedSite quand le projet change
   useEffect(() => {
