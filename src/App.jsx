@@ -1375,11 +1375,6 @@ export default function GeoAuditTab({
   const [aiText, setAiText]             = useState("");
   const [exporting, setExporting]       = useState(false);
   const [showTour, setShowTour]         = useState(false);
-
-  // Démarrer le tour automatiquement si demandé (depuis HomeTab)
-  useEffect(() => {
-    if (autoStartTour && !loading && !noData) { setShowTour(true); onTourStarted?.(); }
-  }, [autoStartTour, loading, noData]); // eslint-disable-line react-hooks/exhaustive-deps
   const [brand, setBrand]               = useState(null);
   const [questions, setQuestions]       = useState([]);
   const [results, setResults]           = useState([]);
@@ -1405,6 +1400,10 @@ export default function GeoAuditTab({
   const siteUrls      = useMemo(() => urlIndex.filter(u => u.project_id === projectId), [urlIndex, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
   const audit = useMemo(() => computeAudit(siteQuestions, siteResults, siteUrls, brand, site, calendarEntries, keywords, competitors), [siteQuestions, siteResults, siteUrls, brand, site, calendarEntries, keywords, competitors]); // eslint-disable-line react-hooks/exhaustive-deps
   const noData        = !siteResults.length;
+    // Démarrer le tour automatiquement si demandé (depuis HomeTab)
+  useEffect(() => {
+    if (autoStartTour && !loading && !noData) { setShowTour(true); onTourStarted?.(); }
+  }, [autoStartTour, loading, noData]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const AUDIT_TOUR_STEPS = [
     {
