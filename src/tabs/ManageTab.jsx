@@ -101,8 +101,10 @@ function ProjectMembers({ project, ownerEmail, myRole = "owner" }) {
       setNewEmail(""); setNewRole("member");
       if (result.invited) {
         setInviteMsg(`✉️ Invitation envoyée à ${email} — l'utilisateur recevra un email pour créer son compte.`);
-      } else {
-        setInviteMsg(`✓ ${email} a été ajouté au projet.`);
+      } else if (result.existed && result.emailSent) {
+        setInviteMsg(`✉️ Email envoyé à ${email} — l'utilisateur peut se connecter via le lien reçu.`);
+      } else if (result.existed) {
+        setInviteMsg(`✓ ${email} a été ajouté au projet — il peut se connecter avec son compte existant.`);
       }
     } else {
       setError(result.error || "Erreur lors de l'invitation");

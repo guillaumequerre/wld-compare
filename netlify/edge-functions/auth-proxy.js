@@ -171,9 +171,9 @@ export default async function handler(req) {
     }
 
     // ── INVITE MEMBER ───────────────────────────────────────────────
-    // Vérifie si le compte existe. Si oui, retourne existed=true (l'appelant
-    // ajoutera juste à project_members). Si non, envoie un email d'invitation
-    // Supabase pour que l'invité crée son compte + mot de passe.
+    // Vérifie si le compte existe.
+    // - Nouveau compte  → email d'invitation Supabase (création de compte + mot de passe)
+    // - Compte existant → email magic link pour se connecter (notification d'accès au projet)
     if (action === "invite_member") {
       if (!SUPABASE_SERVICE_KEY) {
         return json({ error: "Configuration serveur manquante (SUPABASE_SERVICE_KEY)" }, 500);
@@ -187,27 +187,39 @@ export default async function handler(req) {
         "Authorization": `Bearer ${SUPABASE_SERVICE_KEY}`,
       };
 
+      const redirect = redirectTo || `${url.origin}/`;
+      const cleanEmail = email.toLowerCase().trim();
+
       // 1. Vérifier si l'utilisateur existe déjà
       const checkRes = await fetch(
-        `${SUPABASE_URL}/auth/v1/admin/users?email=${encodeURIComponent(email.toLowerCase().trim())}&page=1&per_page=1`,
+        `${SUPABASE_URL}/auth/v1/admin/users?email=${encodeURIComponent(cleanEmail)}&page=1&per_page=1`,
         { headers: adminHeaders }
       );
       if (checkRes.ok) {
         const checkData = await checkRes.json();
         const users = checkData.users || [];
         if (users.length > 0) {
-          // Compte existe → pas besoin d'invitation, l'appelant ajoutera juste à project_members
-          return json({ existed: true, invited: false });
+          // Compte existant → envoyer un magic link pour se connecter
+          const mlRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/generate_link`, {
+            method: "POST",
+            headers: adminHeaders,
+            body: JSON.stringify({
+              type: "magiclink",
+              email: cleanEmail,
+              redirect_to: redirect,
+            }),
+          });
+          const mlOk = mlRes.ok;
+          return json({ existed: true, invited: mlOk, emailSent: mlOk });
         }
       }
 
-      // 2. Compte inexistant → envoyer l'invitation Supabase
-      const redirect = redirectTo || `${url.origin}/`;
+      // 2. Compte inexistant → envoyer l'invitation Supabase (email de création de compte)
       const inviteRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/invite`, {
         method: "POST",
         headers: adminHeaders,
         body: JSON.stringify({
-          email: email.toLowerCase().trim(),
+          email: cleanEmail,
           redirect_to: redirect,
         }),
       });
