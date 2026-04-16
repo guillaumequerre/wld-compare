@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
-import { C } from "./lib/constants";
-import { authLogin, authSignup, isSuperAdmin, sbGetProjectMembers, sbRemoveProjectMember, sbInviteMember } from "./lib/auth";
+import { C } from "../lib/constants";
+import { authLogin, authSignup, isSuperAdmin, sbGetProjectMembers, sbRemoveProjectMember, sbInviteMember } from "../lib/auth";
 
 function Section({ title, children }) {
   return (
