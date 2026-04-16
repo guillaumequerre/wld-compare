@@ -4,7 +4,6 @@ import { authLogin, authSignup, authForgotPassword, isSuperAdmin } from "../lib/
 
 const GREEN        = "#1A3C2E";
 const GREEN_LIGHT  = "#EAF0EC";
-const GREEN_BORDER = "#B2CCBC";
 
 // ── Helpers ───────────────────────────────────────────────────────
 function fmtDate(iso) {
