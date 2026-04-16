@@ -621,7 +621,6 @@ function normalizeUrl(raw) {
 function computeAudit(questions, results, urlIndex, brand, site, calendarEntries = [], keywords = [], competitors = []) {
   const brandName = brand?.brand_name || "";
   const brandAliases = brand?.brand_aliases || [];
-  const competitors = brand?.competitors || [];
   const total = results.length;
   const withBrand = results.filter(r => r.brand_mentioned).length;
   const withSources = results.filter(r => r.brand_in_sources).length;
