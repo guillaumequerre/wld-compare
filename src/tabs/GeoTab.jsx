@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import TourGuide from "./TourGuide";
+import TourGuide from "../components/TourGuide";
 import PresenceCalendar from "../components/PresenceCalendar";
 import {
   sbGetBrand,
