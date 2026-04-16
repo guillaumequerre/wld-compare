@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import TourGuide from "./TourGuide";
-import PresenceCalendar from "../components/PresenceCalendar";
+import PresenceCalendar from "./components/PresenceCalendar";
 import {
   sbGetBrand,
   sbSaveKeywords, sbGetKeywords, sbUpdateKeywordStatus, sbDeleteKeyword, sbUpdateKeywordVolume,
@@ -15,12 +15,12 @@ import {
   sbAddCalendarEntry, sbGetCalendarEntriesBatch,
   sbDownload, sbSaveProject, sbDeleteProject,
   sbGetCompetitors, sbSaveCompetitor, sbUpdateCompetitor, sbDeleteCompetitor,
-} from "../lib/supabase";
-import { ProviderConfigPanel, BrandConfigPanel } from "../components/GeoConfig";
-import UploadCard from "../components/UploadCard";
-import { newProject, parseCSV, parseSemrushCSV } from "../lib/helpers";
-import { parseSemrush } from "../lib/parsers";
-import { C, SITE_PALETTE } from "../lib/constants";
+} from "./lib/supabase";
+import { ProviderConfigPanel, BrandConfigPanel } from "./components/GeoConfig";
+import UploadCard from "./components/UploadCard";
+import { newProject, parseCSV, parseSemrushCSV } from "./lib/helpers";
+import { parseSemrush } from "./lib/parsers";
+import { C, SITE_PALETTE } from "./lib/constants";
 // Note: sbSaveGeoAxes is called via onSaveAxes prop from App.jsx
 
 
