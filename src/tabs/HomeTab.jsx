@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
-import { C } from "../lib/constants";
-import { authLogin, authSignup, authForgotPassword, isSuperAdmin } from "../lib/auth";
+import { C } from "./lib/constants";
+import { authLogin, authSignup, authForgotPassword, isSuperAdmin } from "./lib/auth";
 
 const GREEN        = "#1A3C2E";
 const GREEN_LIGHT  = "#EAF0EC";

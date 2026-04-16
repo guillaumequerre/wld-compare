@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
-import { C } from "../lib/constants";
-import { authLogin, authSignup, isSuperAdmin, sbGetProjectMembers, sbRemoveProjectMember, sbInviteMember } from "../lib/auth";
+import { C } from "./lib/constants";
+import { authLogin, authSignup, isSuperAdmin, sbGetProjectMembers, sbRemoveProjectMember, sbInviteMember } from "./lib/auth";
 
 function Section({ title, children }) {
   return (
@@ -196,7 +196,7 @@ function AccountForm({ user, onLogout, isAdmin }) {
   const saveName = async () => {
     setSaving(true);
     try {
-      const { getToken } = await import("../lib/auth");
+      const { getToken } = await import("./lib/auth");
       const token = getToken();
       await fetch("/api/auth?action=update_name", {
         method: "POST",
