@@ -1633,7 +1633,8 @@ function KeywordsTab({ site, projectId, apiKey, model, axes, context, categories
     if (!file) return;
     const reader = new FileReader();
     reader.onload = async (ev) => {
-      const text = ev.target.result;
+      // Supprimer le BOM UTF-8 éventuel (\uFEFF) ajouté par Excel / Semrush
+      let text = ev.target.result.replace(/^\uFEFF/, "");
       const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
       if (lines.length < 2) return;
       // Auto-détecter le séparateur : virgule ou point-virgule
@@ -1649,18 +1650,19 @@ function KeywordsTab({ site, projectId, apiKey, model, axes, context, categories
         result.push(cur.trim());
         return result;
       };
-      const header = splitLine(lines[0]).map(h => h.toLowerCase().replace(/"/g, "").trim());
+      const header = splitLine(lines[0]).map(h => h.toLowerCase().trim());
       const kwIdx  = header.findIndex(h => h === "keyword" || h === "mot-clé" || h.startsWith("keyword"));
       const volIdx = header.findIndex(h => h === "volume" || h.includes("volume"));
       if (kwIdx === -1 || volIdx === -1) {
-        alert(`Colonnes non trouvées (séparateur détecté : '${sep}'). Le CSV doit avoir des colonnes 'Keyword' et 'Volume'.`);
+        alert(`Colonnes non trouvées (séparateur détecté : '${sep}').\nEn-tête lue : ${header.join(" | ")}\nLe CSV doit avoir des colonnes 'Keyword' et 'Volume'.`);
         return;
       }
       const volMap = {};
       for (const line of lines.slice(1)) {
-        const cols = splitLine(line).map(c => c.replace(/"/g, "").trim());
-        const kw  = cols[kwIdx]?.toLowerCase();
-        const raw = cols[volIdx]?.replace(/\s/g, "").replace(",", "");
+        const cols = splitLine(line);
+        const kw  = cols[kwIdx]?.trim().toLowerCase();
+        // Nettoyer le volume : supprimer guillemets, espaces, et TOUS les séparateurs de milliers
+        const raw = (cols[volIdx] || "").replace(/"/g, "").replace(/[\s,]/g, "");
         const vol = parseInt(raw, 10);
         if (kw && !isNaN(vol)) volMap[kw] = vol;
       }
