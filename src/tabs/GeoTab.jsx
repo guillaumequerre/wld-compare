@@ -2558,17 +2558,20 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
     const lines = answer.split('\n');
     const extracted = new Set();
 
+    // Labels structurels à ignorer (pas des noms de marques)
+    const SKIP = /^(description|site web|site|url|lien|contact|adresse|prix|note|téléphone|email|courriel|fondation|créé|secteur|type|catégorie|siège|country|pays)$/i;
+
     for (const line of lines) {
       const trimmed = line.trimStart();
-      // 1. Liste numérotée : "1. NomMarque" ou "1) **NomMarque**" (OpenAI)
-      // 2. Gras en début de ligne : "**NomMarque**" (Claude)
-      const mNum  = trimmed.match(/^\d+[.)]\s+\**([A-Z\xC0-\xD6\xD8-\xF6][A-Za-z\xC0-\xFF0-9\-& ]{1,40})\**/);
-      const mBold = !mNum && trimmed.match(/^\*\*([A-Z\xC0-\xD6\xD8-\xF6][A-Za-z\xC0-\xFF0-9\-& ]{1,40})\*\*(?!\s*:)/);
-      const m = mNum || mBold;
+      // Uniquement les listes numérotées : "1. NomMarque" ou "1) NomMarque"
+      // On s'arrête au premier séparateur : " :", " —", " –", " (", " :"
+      const m = trimmed.match(/^\d+[.)]\s+\**([A-ZÀ-Ö][A-Za-zÀ-ÿ0-9][A-Za-zÀ-ÿ0-9\-&]*)\**/);
       if (!m) continue;
-      const name = m[1].trim().replace(/[.:,;\u2013\u2014]+$/, '');
+      const name = m[1].trim();
       if (!name || name.length < 2) continue;
       const lower = name.toLowerCase();
+      // Exclure labels structurels et la marque elle-même
+      if (SKIP.test(lower)) continue;
       if (lowerBrand.some(b => b && (lower === b || lower.includes(b) || b.includes(lower)))) continue;
       extracted.add(name);
     }
