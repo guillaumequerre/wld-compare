@@ -1367,10 +1367,10 @@ export default function GeoAuditTab({
   isReadOnly = false, autoStartTour = false, onTourStarted = null,
 }) {
   const [mainTab, setMainTab]           = useState("audit");
-  const [selectedSite, setSelectedSite] = useState(sites[0]?.id || "");
+  const [selectedSite, setSelectedSite] = useState(sites?.[0]?.id || "");
   // Sync selectedSite quand le projet change
   useEffect(() => {
-    setSelectedSite(sites[0]?.id || "");
+    setSelectedSite(sites?.[0]?.id || "");
   }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
   const [aiText, setAiText]             = useState("");
   const [exporting, setExporting]       = useState(false);
