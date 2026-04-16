@@ -198,7 +198,7 @@ export async function sbLoadAccessibleProjects(userEmail) {
   // Rafraîchir le token si besoin (gère le cas où la page est rechargée après expiry)
   let token;
   try {
-    const { ensureValidSession } = await import("./lib/supabase");
+    const { ensureValidSession } = await import("./supabase");
     token = await ensureValidSession();
   } catch {
     token = getToken(); // fallback si import échoue
