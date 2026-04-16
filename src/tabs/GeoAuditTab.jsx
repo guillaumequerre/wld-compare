@@ -1,13 +1,21 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { sbGetBrand, sbGetQuestions, sbGetGeoResults, sbGetUrlIndex,
   sbSaveProject, sbDeleteProject, sbDownload,
-  sbGetCalendarEntriesBatch, sbGetKeywords, sbGetCategories } from "../lib/supabase";
+  sbGetCalendarEntriesBatch, sbGetKeywords, sbGetCategories, sbGetCompetitors } from "../lib/supabase";
 import UploadCard from "../components/UploadCard";
 import PageTypeClassifier from "../components/PageTypeClassifier";
 import { newProject } from "../lib/helpers";
 import { C, SITE_PALETTE } from "../lib/constants";
 
 const ANTHROPIC_PROXY = "/api/anthropic";
+
+// Catégories concurrents — miroir de GeoTab
+const COMP_CAT_DEFS = {
+  direct:  { label: "Direct",    color: "#DC2626", bg: "#FEF2F2" },
+  geo:     { label: "GEO",       color: "#D97706", bg: "#FFFBEB" },
+  partner: { label: "Partenaire", color: "#059669", bg: "#ECFDF5" },
+  other:   { label: "Autre",     color: "#64748B", bg: "#F1F5F9" },
+};
 
 // Rend les **texte** en <strong> dans toute l'app
 function renderBold(text) {
@@ -429,12 +437,16 @@ function CompetitorScatter({ compStats, total, brandName, brandWithBrand, brandA
   const W = 560, H = 300, PL = 44, PR = 16, PT = 16, PB = 36;
   const plotW = W - PL - PR, plotH = H - PT - PB;
 
-  // Préparer les points concurrents
-  const entries = Object.entries(compStats).map(([name, s]) => ({
+  const COLORS = ["#DC2626","#D97706","#7C3AED","#2563EB","#0891B2","#059669","#9333EA","#EA580C"];
+
+  // Préparer les points concurrents — utilise la couleur de catégorie si dispo
+  const entries = Object.entries(compStats).map(([name, s], idx) => ({
     name,
     citations: s.mentions,
     pct: Math.round(s.mentions / Math.max(total, 1) * 100),
     avgPos: s.positions.length ? +(s.positions.reduce((a, b) => a + b, 0) / s.positions.length).toFixed(1) : null,
+    color: s.color || COLORS[idx % COLORS.length],
+    category: s.category || "other",
   }));
 
   // Ajouter la marque si données dispo
@@ -459,8 +471,6 @@ function CompetitorScatter({ compStats, total, brandName, brandWithBrand, brandA
   const toX = (cit) => PL + (cit / maxCit) * plotW;
   // Y inversé : position 1 en haut
   const toY = (pos) => PT + ((pos - minPos) / posRange) * plotH;
-
-  const COLORS = ["#DC2626","#D97706","#7C3AED","#2563EB","#0891B2","#059669","#9333EA","#EA580C"];
 
   // Quadrant labels
   const midPos = (maxPos + minPos) / 2;
@@ -514,7 +524,7 @@ function CompetitorScatter({ compStats, total, brandName, brandWithBrand, brandA
         {withPos.map((p, i) => {
           const x = toX(p.citations);
           const y = toY(p.avgPos);
-          const color = p.isBrand ? "#059669" : COLORS[i % COLORS.length];
+          const color = p.isBrand ? "#059669" : (p.color || COLORS[i % COLORS.length]);
           const r = 6 + Math.sqrt(p.citations) * 1.2;
           return (
             <g key={p.name}>
@@ -531,7 +541,7 @@ function CompetitorScatter({ compStats, total, brandName, brandWithBrand, brandA
       {/* Légende */}
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 8 }}>
         {withPos.map((p, i) => {
-          const color = p.isBrand ? "#059669" : COLORS[i % COLORS.length];
+          const color = p.isBrand ? "#059669" : (p.color || COLORS[i % COLORS.length]);
           return (
             <div key={p.name} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11 }}>
               <div style={{ width: 10, height: 10, borderRadius: "50%", background: color, flexShrink: 0 }} />
@@ -560,7 +570,6 @@ function GeoScoreBanner({ audit, brand, site }) {
       <div style={{ textAlign: "center", minWidth: 90 }}>
         <div style={{ fontSize: 48, fontWeight: 900, color: level.color, lineHeight: 1 }}>{score}%</div>
         <div style={{ fontSize: 12, fontWeight: 700, color: level.color, marginTop: 4 }}>Score GEO</div>
-        <div style={{ fontSize: 10, color: C.textLight, marginTop: 2 }}>{level.label}</div>
       </div>
       {/* Barre de progression */}
       <div style={{ flex: 1, minWidth: 180 }}>
@@ -608,7 +617,7 @@ function normalizeUrl(raw) {
   return u.toLowerCase();
 }
 
-function computeAudit(questions, results, urlIndex, brand, site, calendarEntries = [], keywords = []) {
+function computeAudit(questions, results, urlIndex, brand, site, calendarEntries = [], keywords = [], competitors = []) {
   const brandName = brand?.brand_name || "";
   const brandAliases = brand?.brand_aliases || [];
   const competitors = brand?.competitors || [];
@@ -698,11 +707,29 @@ function computeAudit(questions, results, urlIndex, brand, site, calendarEntries
   const typeCount = {};
   results.forEach(r => { if (r.answer_type) typeCount[r.answer_type] = (typeCount[r.answer_type] || 0) + 1; });
   const compStats = {};
+  // 1. Depuis competitors_mentioned (résultats récents)
   results.forEach(r => (r.competitors_mentioned || []).forEach(c => {
-    if (!compStats[c.name]) compStats[c.name] = { mentions: 0, positions: [] };
+    if (!compStats[c.name]) compStats[c.name] = { mentions: 0, positions: [], category: null, color: null };
     compStats[c.name].mentions++;
     if (c.position) compStats[c.name].positions.push(c.position);
   }));
+
+  // 2. Enrichir avec les concurrents qualifiés (catégorie + recherche rétroactive)
+  competitors.forEach(comp => {
+    const key = comp.name;
+    if (!compStats[key]) compStats[key] = { mentions: 0, positions: [], category: null, color: null };
+    // Attacher la catégorie et la couleur depuis geo_competitors
+    compStats[key].category = comp.category || "other";
+    compStats[key].color    = comp.color || "#64748B";
+    // Recherche rétroactive dans les réponses non encore comptées
+    const re = new RegExp(comp.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+    results.forEach(r => {
+      const alreadyCounted = (r.competitors_mentioned || []).some(c => c.name?.toLowerCase() === key.toLowerCase());
+      if (!alreadyCounted && re.test(r.answer || "")) {
+        compStats[key].mentions++;
+      }
+    });
+  });
 
   const presenceRate = pct(withBrand, total);
 
@@ -1354,6 +1381,7 @@ export default function GeoAuditTab({
   const [calendarEntries, setCalendarEntries] = useState([]); // geo_calendar_dates — 30 derniers jours
   const [keywords, setKeywords]         = useState([]); // pour tri par volume
   const [categories, setCategories]     = useState([]); // catégories de mots-clés
+  const [competitors, setCompetitors]   = useState([]); // concurrents qualifiés
   const [loading, setLoading]           = useState(true);
 
   const site = (Array.isArray(sites) ? sites : []).find(s => s.id === selectedSite) || (Array.isArray(sites) ? sites : [])[0];
@@ -1362,14 +1390,14 @@ export default function GeoAuditTab({
   useEffect(() => {
     if (!projectId || !site?.id) return;
     setLoading(true);
-    Promise.all([sbGetBrand(projectId, site.id), sbGetQuestions(projectId, site.id), sbGetGeoResults(projectId, site.id), sbGetUrlIndex(projectId), sbGetCalendarEntriesBatch(projectId, site.id), sbGetKeywords(projectId, site.id), sbGetCategories(projectId)])
-      .then(([b, q, r, u, cal, kws, cats]) => { setBrand(b); setQuestions(q); setResults(r); setUrlIndex(u); setCalendarEntries(cal || []); setKeywords(kws || []); setCategories(cats || []); setLoading(false); });
+    Promise.all([sbGetBrand(projectId, site.id), sbGetQuestions(projectId, site.id), sbGetGeoResults(projectId, site.id), sbGetUrlIndex(projectId), sbGetCalendarEntriesBatch(projectId, site.id), sbGetKeywords(projectId, site.id), sbGetCategories(projectId), sbGetCompetitors(projectId, site.id)])
+      .then(([b, q, r, u, cal, kws, cats, comps]) => { setBrand(b); setQuestions(q); setResults(r); setUrlIndex(u); setCalendarEntries(cal || []); setKeywords(kws || []); setCategories(cats || []); setCompetitors(comps || []); setLoading(false); });
   }, [projectId, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const siteResults   = useMemo(() => results.filter(r => r.site_id === site?.id), [results, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const siteQuestions = useMemo(() => questions.filter(q => q.site_id === site?.id), [questions, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const siteUrls      = useMemo(() => urlIndex.filter(u => u.project_id === projectId), [urlIndex, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
-  const audit = useMemo(() => computeAudit(siteQuestions, siteResults, siteUrls, brand, site, calendarEntries, keywords), [siteQuestions, siteResults, siteUrls, brand, site, calendarEntries, keywords]); // eslint-disable-line react-hooks/exhaustive-deps
+  const audit = useMemo(() => computeAudit(siteQuestions, siteResults, siteUrls, brand, site, calendarEntries, keywords, competitors), [siteQuestions, siteResults, siteUrls, brand, site, calendarEntries, keywords, competitors]); // eslint-disable-line react-hooks/exhaustive-deps
   const noData        = !siteResults.length;
 
   return (
@@ -1520,15 +1548,44 @@ export default function GeoAuditTab({
               {Object.keys(audit.compStats).length > 0 ? (
                 <div style={{ marginBottom: 20 }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                    <thead><tr style={{ background: C.bg }}>{["Concurrent","Mentions","% des résultats","Position moy."].map(h => <th key={h} style={{ padding: "8px 12px", textAlign: "left", fontWeight: 600, fontSize: 11, color: C.textLight, textTransform: "uppercase", borderBottom: `1px solid ${C.border}` }}>{h}</th>)}</tr></thead>
-                    <tbody>{Object.entries(audit.compStats).sort((a,b)=>b[1].mentions-a[1].mentions).map(([name, stats]) => (
-                      <tr key={name} style={{ borderBottom: `1px solid ${C.borderLight}` }}>
-                        <td style={{ padding: "8px 12px", fontWeight: 600 }}>{name}</td>
-                        <td style={{ padding: "8px 12px" }}>{stats.mentions}</td>
-                        <td style={{ padding: "8px 12px", color: "#D97706" }}>{pct(stats.mentions, audit.total)}%</td>
-                        <td style={{ padding: "8px 12px" }}>{stats.positions.length ? (stats.positions.reduce((a,b)=>a+b,0)/stats.positions.length).toFixed(1) : "—"}</td>
-                      </tr>
-                    ))}</tbody>
+                    <thead><tr style={{ background: C.bg }}>{["Concurrent","Catégorie","Mentions","% des résultats","Position moy."].map(h => <th key={h} style={{ padding: "8px 12px", textAlign: "left", fontWeight: 600, fontSize: 11, color: C.textLight, textTransform: "uppercase", borderBottom: `1px solid ${C.border}` }}>{h}</th>)}</tr></thead>
+                    <tbody>{Object.entries(audit.compStats)
+                      .filter(([, s]) => s.category !== "other" || s.mentions > 0)
+                      .sort((a, b) => {
+                        // Non-"other" en premier, puis par mentions
+                        const aOther = !a[1].category || a[1].category === "other";
+                        const bOther = !b[1].category || b[1].category === "other";
+                        if (aOther !== bOther) return aOther ? 1 : -1;
+                        return b[1].mentions - a[1].mentions;
+                      })
+                      .map(([name, stats]) => {
+                        const catKey = stats.category || "other";
+                        const cat = COMP_CAT_DEFS[catKey] || COMP_CAT_DEFS.other;
+                        const avgPos = stats.positions.length
+                          ? (stats.positions.reduce((a, b) => a + b, 0) / stats.positions.length).toFixed(1)
+                          : null;
+                        return (
+                          <tr key={name} style={{ borderBottom: `1px solid ${C.borderLight}` }}>
+                            <td style={{ padding: "8px 12px", fontWeight: 600 }}>
+                              {stats.color && <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: stats.color, marginRight: 7, verticalAlign: "middle" }} />}
+                              {name}
+                            </td>
+                            <td style={{ padding: "8px 12px" }}>
+                              {catKey !== "other" ? (
+                                <span style={{ fontSize: 10, fontWeight: 700, color: cat.color, background: cat.bg, borderRadius: 5, padding: "2px 7px" }}>{cat.label}</span>
+                              ) : (
+                                <span style={{ fontSize: 10, color: C.textLight }}>—</span>
+                              )}
+                            </td>
+                            <td style={{ padding: "8px 12px" }}>{stats.mentions}</td>
+                            <td style={{ padding: "8px 12px", color: "#D97706" }}>{pct(stats.mentions, audit.total)}%</td>
+                            <td style={{ padding: "8px 12px", fontWeight: avgPos ? 600 : 400, color: avgPos ? C.text : C.textLight }}>
+                              {avgPos ? `#${avgPos}` : "—"}
+                            </td>
+                          </tr>
+                        );
+                      })
+                    }</tbody>
                   </table>
                 </div>
               ) : (
