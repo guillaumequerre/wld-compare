@@ -196,7 +196,7 @@ function AccountForm({ user, onLogout, isAdmin }) {
   const saveName = async () => {
     setSaving(true);
     try {
-      const { getToken } = await import("../lib/auth");
+      const { getToken } = await import("./lib/auth");
       const token = getToken();
       await fetch("/api/auth?action=update_name", {
         method: "POST",
