@@ -2,7 +2,7 @@ import { useState, useMemo, useCallback, useEffect } from "react";
 import TourGuide from "./TourGuide";
 import { sbGetBrand, sbGetQuestions, sbGetGeoResults, sbGetUrlIndex,
   sbSaveProject, sbDeleteProject, sbDownload,
-  sbGetCalendarEntriesBatch, sbGetKeywords, sbGetCategories, sbGetCompetitors, sbUpdateCompetitor } from "./lib/supabase";
+  sbGetCalendarEntriesBatch, sbGetKeywords, sbGetCategories, sbGetCompetitors, sbUpdateCompetitor } from "../lib/supabase";
 import UploadCard from "../components/UploadCard";
 import PageTypeClassifier from "../components/PageTypeClassifier";
 import { newProject } from "../lib/helpers";
