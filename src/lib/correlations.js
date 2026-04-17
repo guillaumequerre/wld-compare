@@ -117,3 +117,67 @@ export function smIntraCorr(smRows, urlMaps, dimKey, kpiKey) {
   const den = Math.sqrt(xs.reduce((s,x)=>s+(x-mx)**2,0)*ys.reduce((s,y)=>s+(y-my)**2,0));
   return { value: den === 0 ? null : Math.round(num/den*100)/100, n };
 }
+// ── SF × Fan-out URL correlation ─────────────────────────────────
+// sfPages: output of buildSfPageVectors
+// fanoutMap: { normalizedUrl → { source: n, answer: n } }
+// dimKey: SF dim key (avgWords, schemaRate, etc.)
+// kpiKey: "fanoutSource" | "fanoutAnswer"
+export function sfFanoutCorr(sfPages, fanoutMap, dimKey, kpiKey) {
+  const xs = [], ys = [];
+  for (const p of sfPages) {
+    const sfVal = p[dimKey];
+    if (sfVal === undefined || sfVal === null) continue;
+    const fan = fanoutMap[p.full] || fanoutMap[p.path];
+    if (!fan) continue;
+    const kpiVal = kpiKey === "fanoutSource" ? (fan.source || 0) : (fan.answer || 0);
+    xs.push(sfVal);
+    ys.push(kpiVal);
+  }
+  if (xs.length < 5) return null;
+  return { value: pearson(xs, ys), n: xs.length };
+}
+
+// ── URL-level cross correlation (GSC/GA × Bing/Fan-out) ──────────
+// urlMaps: output of buildUrlMaps
+// fanoutMap: { normalizedUrl → { source: n, answer: n } }
+// dimSrc: "gsc" | "ga"
+// dimKey: "clicks"|"impressions"|"ctr"|"position"|"sessions"|"views"
+// kpiKey: "geoMentions"|"fanoutSource"|"fanoutAnswer"
+export function urlXCorr(urlMaps, fanoutMap, dimSrc, dimKey, kpiKey) {
+  const { gsc, ga, bing } = urlMaps;
+  const dimMaps = dimSrc === "gsc" ? gsc : ga;
+  if (!dimMaps) return null;
+
+  const xs = [], ys = [];
+  // Iterate over both path and full maps, deduplicate by url key
+  const seen = new Set();
+  const processRow = (r, url) => {
+    if (seen.has(url)) return;
+    seen.add(url);
+
+    let dimVal = null;
+    if      (dimKey === "clicks")      dimVal = safeNum(gscVal(r, "clics", "clicks") || 0);
+    else if (dimKey === "impressions") dimVal = safeNum(gscVal(r, "impressions") || 0);
+    else if (dimKey === "ctr")         dimVal = safeNum(String(gscVal(r, "ctr") || "0").replace("%", ""));
+    else if (dimKey === "position")    dimVal = safeNum(gscVal(r, "position") || 0);
+    else if (dimKey === "sessions")    dimVal = safeNum(r["sessions"]  || r["ga4 sessions"] || 0);
+    else if (dimKey === "views")       dimVal = safeNum(r["views"]     || r["ga4 views"]    || 0);
+    if (dimVal === null || isNaN(dimVal)) return;
+
+    let kpiVal = null;
+    if (kpiKey === "geoMentions") {
+      const bingR = bing?.pathMap?.[url] || bing?.fullMap?.[url];
+      if (bingR) kpiVal = safeNum(bingR["citations"] || bingR["mentions"] || 0);
+    } else {
+      const fan = fanoutMap[url];
+      if (fan) kpiVal = kpiKey === "fanoutSource" ? (fan.source || 0) : (fan.answer || 0);
+    }
+    if (kpiVal !== null) { xs.push(dimVal); ys.push(kpiVal); }
+  };
+
+  Object.entries(dimMaps.pathMap || {}).forEach(([url, r]) => processRow(r, url));
+  Object.entries(dimMaps.fullMap || {}).forEach(([url, r]) => processRow(r, url));
+
+  if (xs.length < 5) return null;
+  return { value: pearson(xs, ys), n: xs.length };
+}

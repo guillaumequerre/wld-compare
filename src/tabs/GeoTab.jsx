@@ -1033,6 +1033,14 @@ function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [] 
   const avgPos      = positions.length ? (positions.reduce((a, b) => a + b, 0) / positions.length).toFixed(1) : "—";
   const presence    = total ? Math.round(withBrand / total * 100) : 0;
 
+  // ── Breakdown 3 types — mutuellement exclusifs (type le plus fort) ──
+  // ranked  = a une position dans un top (le plus fort)
+  // source  = URL citée en source SANS position
+  // mention = brand_mentioned SANS position NI source (anecdotique)
+  const withRanked      = results.filter(r => getPresenceType(r) === "ranked").length;
+  const withSourceOnly  = results.filter(r => getPresenceType(r) === "source").length;
+  const withMentionOnly = results.filter(r => getPresenceType(r) === "mention").length;
+
   // Top competitors — enrichis avec catégories qualifiées
   const compCount = {}; // lower → count
   const compNameMap = {}; // lower → display name (première occurrence)
@@ -1089,25 +1097,44 @@ function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [] 
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginBottom: 24 }}>
-      {/* Présence */}
+      {/* Présence globale */}
       <div style={{ background: presence >= 50 ? "#ECFDF5" : presence > 0 ? "#FFFBEB" : "#FEF2F2", border: `1px solid ${presence >= 50 ? "#059669" : presence > 0 ? "#D97706" : "#DC2626"}33`, borderRadius: 12, padding: "14px 18px" }}>
         <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 4 }}>Présence {brandName}</div>
         <div style={{ fontSize: 28, fontWeight: 800, color: presence >= 50 ? "#059669" : presence > 0 ? "#D97706" : "#DC2626" }}>{presence}%</div>
         <div style={{ fontSize: 11, color: C.textLight }}>{withBrand} / {total} questions</div>
       </div>
 
+      {/* Breakdown 3 types de présence */}
+      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px", gridColumn: "span 2" }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>Types de présence</div>
+        {/* Barre de proportion */}
+        <div style={{ display: "flex", height: 8, borderRadius: 4, overflow: "hidden", marginBottom: 10, background: "#F1F5F9" }}>
+          {total > 0 && <>
+            <div style={{ width: `${withRanked / total * 100}%`, background: "#059669", transition: "width 0.3s" }} title={`Classé : ${withRanked}`} />
+            <div style={{ width: `${withSourceOnly / total * 100}%`, background: "#2563EB", transition: "width 0.3s" }} title={`Source : ${withSourceOnly}`} />
+            <div style={{ width: `${withMentionOnly / total * 100}%`, background: "#D97706", transition: "width 0.3s" }} title={`Mention : ${withMentionOnly}`} />
+          </>}
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+          {[
+            { icon: "🏆", label: "Classé", count: withRanked, color: "#059669", bg: "#ECFDF5", border: "#A7F3D0", desc: "Position dans un top" },
+            { icon: "🔗", label: "Source", count: withSourceOnly, color: "#2563EB", bg: "#DBEAFE", border: "#BFDBFE", desc: "URL citée en source" },
+            { icon: "💬", label: "Mention", count: withMentionOnly, color: "#D97706", bg: "#FEF3C7", border: "#FDE68A", desc: "Présence textuelle" },
+          ].map(t => (
+            <div key={t.label} style={{ background: t.bg, border: `1px solid ${t.border}`, borderRadius: 8, padding: "8px 10px" }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: t.color, marginBottom: 2 }}>{t.icon} {t.label}</div>
+              <div style={{ fontSize: 20, fontWeight: 800, color: t.color, lineHeight: 1 }}>{t.count}</div>
+              <div style={{ fontSize: 9, color: C.textLight, marginTop: 2 }}>{t.desc}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
       {/* Position moy. */}
       <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px" }}>
         <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 4 }}>Position moy.</div>
         <div style={{ fontSize: 28, fontWeight: 800, color: C.text }}>{avgPos}</div>
-        <div style={{ fontSize: 11, color: C.textLight }}>dans les fan-outs</div>
-      </div>
-
-      {/* Dans les sources */}
-      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px" }}>
-        <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 4 }}>Dans les sources</div>
-        <div style={{ fontSize: 28, fontWeight: 800, color: "#2563EB" }}>{withSources}</div>
-        <div style={{ fontSize: 11, color: C.textLight }}>questions citées</div>
+        <div style={{ fontSize: 11, color: C.textLight }}>dans les tops LLM</div>
       </div>
 
       {/* Top concurrents enrichis avec catégories */}
@@ -1160,21 +1187,22 @@ function CompetitorManager({ projectId, siteId, allResults, competitors, setComp
   const [newName,    setNewName]    = useState("");
   const [newDomain,  setNewDomain]  = useState("");
   const [newCat,     setNewCat]     = useState("direct");
-  const [customCats, setCustomCats] = useState([]); // catégories custom ajoutées
+  const [customCats, setCustomCats] = useState([]);
   const [newCustom,  setNewCustom]  = useState("");
   const [saving,     setSaving]     = useState(false);
+  const [sortBy,     setSortBy]     = useState("mentions"); // "alpha" | "cat" | "mentions"
+  const [filterCat,  setFilterCat]  = useState("all");
 
-  // Compter mentions (dans le texte) ET présence en source pour chaque concurrent
+  // ── Calcul des mentions par concurrent (avec agrégation des alias) ─────
   const detectedNames = useMemo(() => {
-    const mentions = {}; // lower → count (cité dans le texte de réponse)
-    const asSrc    = {}; // lower → count (cité en tant que source URL)
-    const display  = {}; // lower → display name
+    const mentions = {};
+    const asSrc    = {};
+    const display  = {};
 
-    // Construire la liste de tous les noms à surveiller
-    const allNames = new Map(); // lower → display
+    const allNames = new Map();
     competitors.forEach(c => allNames.set(c.name.toLowerCase(), c.name));
 
-    // 1. Depuis competitors_mentioned (champ JSON)
+    // 1. Depuis competitors_mentioned
     allResults.forEach(r => {
       const seenMention = new Set();
       (r.competitors_mentioned || []).forEach(c => {
@@ -1186,55 +1214,60 @@ function CompetitorManager({ projectId, siteId, allResults, competitors, setComp
           if (!display[lower]) display[lower] = c.name;
           allNames.set(lower, display[lower]);
         }
-        if (c.in_sources) {
-          asSrc[lower] = (asSrc[lower] || 0) + 1;
-        }
+        if (c.in_sources) asSrc[lower] = (asSrc[lower] || 0) + 1;
       });
     });
 
-    // 2. Recherche textuelle rétroactive (réponses existantes)
+    // 2. Recherche textuelle rétroactive
     allNames.forEach((dispName, lower) => {
-      const re = new RegExp(dispName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      const re = new RegExp(dispName.replace(/[.*+?^${}()|[\\]]/g, '\\\\$&'), 'i');
       const domainRe = (() => {
         const comp = competitors.find(c => c.name.toLowerCase() === lower);
         if (!comp?.domain) return null;
-        try { return new RegExp(comp.domain.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'); } catch { return null; }
+        try { return new RegExp(comp.domain.replace(/[.*+?^${}()|[\\]]/g, '\\\\$&'), 'i'); } catch { return null; }
       })();
-
       allResults.forEach(r => {
         const alreadyMentioned = (r.competitors_mentioned || []).some(c => c.name?.toLowerCase() === lower);
         if (!alreadyMentioned && re.test(r.answer || '')) {
           mentions[lower] = (mentions[lower] || 0) + 1;
           if (!display[lower]) display[lower] = dispName;
         }
-        // Vérifier présence en source par domaine
         if (domainRe) {
           const alreadySource = (r.competitors_mentioned || []).some(c => c.name?.toLowerCase() === lower && c.in_sources);
-          if (!alreadySource) {
-            const inSources = (r.sources || []).some(s => domainRe.test(s));
-            if (inSources) asSrc[lower] = (asSrc[lower] || 0) + 1;
-          }
+          if (!alreadySource && (r.sources || []).some(s => domainRe.test(s)))
+            asSrc[lower] = (asSrc[lower] || 0) + 1;
         }
       });
     });
 
-    // Fusionner et trier par mentions desc
     const allLowers = new Set([...Object.keys(mentions), ...Object.keys(asSrc)]);
-    return [...allLowers]
-      .map(lower => ({
-        name: display[lower] || allNames.get(lower) || lower,
-        lower,
-        mentions: mentions[lower] || 0,
-        asSources: asSrc[lower] || 0,
-      }))
-      .sort((a, b) => (b.mentions + b.asSources) - (a.mentions + a.asSources));
+    return [...allLowers].map(lower => ({
+      name: display[lower] || allNames.get(lower) || lower,
+      lower,
+      mentions: mentions[lower] || 0,
+      asSources: asSrc[lower] || 0,
+    })).sort((a, b) => (b.mentions + b.asSources) - (a.mentions + a.asSources));
   }, [allResults, competitors]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const qualifiedNames = new Set(competitors.map(c => c.name.toLowerCase()));
-  const unqualified = detectedNames.filter(({ name }) => !qualifiedNames.has(name.toLowerCase()));
+  // ── Mention totales avec alias agrégés ────────────────────────────
+  const getMentionsWithAliases = (comp) => {
+    const own = detectedNames.find(d => d.lower === comp.name.toLowerCase());
+    const ownM = own?.mentions || 0;
+    const ownS = own?.asSources || 0;
+    // Chercher tous les alias qui pointent vers ce concurrent
+    const aliases = competitors.filter(c => c.alias_of === comp.name);
+    const aliasM = aliases.reduce((acc, a) => {
+      const s = detectedNames.find(d => d.lower === a.name.toLowerCase());
+      return acc + (s?.mentions || 0);
+    }, 0);
+    const aliasS = aliases.reduce((acc, a) => {
+      const s = detectedNames.find(d => d.lower === a.name.toLowerCase());
+      return acc + (s?.asSources || 0);
+    }, 0);
+    return { mentions: ownM + aliasM, asSources: ownS + aliasS, aliasCount: aliases.length };
+  };
 
   const allCats = [...COMP_CATEGORIES, ...customCats.map(k => ({ key: k, label: k, color: "#7C3AED", bg: "#F5F3FF" }))];
-
   const getCatDef = (cat) => allCats.find(c => c.key === cat) || COMP_CATEGORIES[3];
 
   const save = async (name, domain, category) => {
@@ -1261,6 +1294,20 @@ function CompetitorManager({ projectId, siteId, allResults, competitors, setComp
     } catch(e) { console.error(e); }
   };
 
+  const updateEnabled = async (comp, enabled) => {
+    try {
+      await sbUpdateCompetitor(comp.id, { enabled });
+      setCompetitors(prev => prev.map(c => c.id === comp.id ? { ...c, enabled } : c));
+    } catch(e) { console.error(e); }
+  };
+
+  const updateAlias = async (comp, alias_of) => {
+    try {
+      await sbUpdateCompetitor(comp.id, { alias_of: alias_of || null });
+      setCompetitors(prev => prev.map(c => c.id === comp.id ? { ...c, alias_of: alias_of || null } : c));
+    } catch(e) { console.error(e); }
+  };
+
   const remove = async (id) => {
     try {
       await sbDeleteCompetitor(id);
@@ -1268,35 +1315,31 @@ function CompetitorManager({ projectId, siteId, allResults, competitors, setComp
     } catch(e) { console.error(e); }
   };
 
+  // ── Tri + filtre ──────────────────────────────────────────────────
+  const displayedComps = useMemo(() => {
+    let list = [...competitors];
+    // Filtre catégorie
+    if (filterCat !== "all") list = list.filter(c => c.category === filterCat);
+    // Tri
+    list.sort((a, b) => {
+      if (sortBy === "alpha") return a.name.localeCompare(b.name);
+      if (sortBy === "cat")   return (a.category||"").localeCompare(b.category||"");
+      // "mentions" — tri par mentions total (avec alias)
+      const ma = getMentionsWithAliases(a);
+      const mb = getMentionsWithAliases(b);
+      return (mb.mentions + mb.asSources) - (ma.mentions + ma.asSources);
+    });
+    return list;
+  }, [competitors, sortBy, filterCat, detectedNames]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Concurrents pouvant être référent (non alias eux-mêmes)
+  const referents = competitors.filter(c => !c.alias_of);
+
   return (
     <div>
-      {/* Détectés automatiquement — non qualifiés */}
-      {unqualified.length > 0 && (
-        <div style={{ marginBottom: 20 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>
-            🔍 Détectés dans les réponses — à qualifier ({unqualified.length})
-          </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-          {unqualified.slice(0, 20).map(({ name, mentions, asSources }) => (
-              <div key={name} style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 10px", background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }}>
-                <span style={{ fontWeight: 600 }}>{name}</span>
-                <span style={{ color: C.textLight, fontSize: 10 }}>{mentions}×</span>
-                {asSources > 0 && <span style={{ fontSize: 10, color: "#2563EB", background: "#EFF6FF", borderRadius: 4, padding: "1px 5px" }}>📎 {asSources}</span>}
-                <button onClick={() => { setNewName(name); setNewDomain(""); }}
-                  style={{ padding: "1px 8px", background: "#2563EB", color: "#fff", border: "none", borderRadius: 5, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>
-                  + Qualifier
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Formulaire d'ajout */}
+      {/* ── Formulaire ajout concurrent ── */}
       <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 16px", marginBottom: 16 }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>
-          {newName ? `Qualifier : ${newName}` : "Ajouter un concurrent"}
-        </div>
+        <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>Ajouter un concurrent</div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
           <div style={{ flex: "1 1 160px" }}>
             <div style={{ fontSize: 10, color: C.textLight, marginBottom: 3 }}>Nom</div>
@@ -1320,7 +1363,6 @@ function CompetitorManager({ projectId, siteId, allResults, competitors, setComp
             {saving ? "…" : "Enregistrer"}
           </button>
         </div>
-        {/* Ajouter catégorie custom */}
         <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "center" }}>
           <input value={newCustom} onChange={e => setNewCustom(e.target.value)} placeholder="Nouvelle catégorie…"
             style={{ padding: "4px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11, width: 180 }} />
@@ -1332,62 +1374,135 @@ function CompetitorManager({ projectId, siteId, allResults, competitors, setComp
         </div>
       </div>
 
-      {/* Liste des concurrents qualifiés */}
+      {/* ── Liste des concurrents qualifiés ── */}
       {competitors.length > 0 && (
         <div>
-          <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>
-            Concurrents qualifiés ({competitors.length})
+          {/* Controls tri + filtre */}
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7 }}>
+              {displayedComps.length} concurrent{displayedComps.length > 1 ? "s" : ""}
+            </span>
+            <div style={{ flex: 1 }} />
+            {/* Filtre catégorie */}
+            <select value={filterCat} onChange={e => setFilterCat(e.target.value)}
+              style={{ fontSize: 11, padding: "4px 8px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.white, cursor: "pointer" }}>
+              <option value="all">Toutes catégories</option>
+              {allCats.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+            </select>
+            {/* Tri */}
+            <div style={{ display: "flex", gap: 4 }}>
+              {[
+                { key: "mentions", label: "💬 Mentions" },
+                { key: "alpha",   label: "A→Z" },
+                { key: "cat",     label: "Catégorie" },
+              ].map(s => (
+                <button key={s.key} onClick={() => setSortBy(s.key)}
+                  style={{ fontSize: 10, padding: "4px 10px", borderRadius: 6, border: `1px solid ${sortBy === s.key ? "#2563EB" : C.border}`, background: sortBy === s.key ? "#EFF6FF" : C.white, color: sortBy === s.key ? "#2563EB" : C.textMid, cursor: "pointer", fontWeight: sortBy === s.key ? 700 : 400 }}>
+                  {s.label}
+                </button>
+              ))}
+            </div>
           </div>
+
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {competitors.map(comp => {
-              const catDef = getCatDef(comp.category);
-              const stats = detectedNames.find(d => d.name.toLowerCase() === comp.name.toLowerCase() || d.lower === comp.name.toLowerCase());
-              const mentions  = stats?.mentions  || 0;
-              const asSources = stats?.asSources || 0;
+            {displayedComps.map(comp => {
+              const catDef   = getCatDef(comp.category);
+              const { mentions, asSources, aliasCount } = getMentionsWithAliases(comp);
+              const enabled  = comp.enabled !== false;
+              const isAlias  = !!comp.alias_of;
+              const aliasTarget = isAlias ? competitors.find(c => c.name === comp.alias_of) : null;
+              const aliasCatDef = aliasTarget ? getCatDef(aliasTarget.category) : null;
+
               return (
-                <div key={comp.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: catDef.bg, border: `1px solid ${catDef.color}33`, borderRadius: 9 }}>
-                  <div style={{ width: 10, height: 10, borderRadius: "50%", background: catDef.color, flexShrink: 0 }} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: C.text }}>{comp.name}</div>
-                    {comp.domain && <div style={{ fontSize: 10, color: C.textLight }}>{comp.domain}</div>}
+                <div key={comp.id} style={{ border: `1px solid ${catDef.color}33`, borderLeft: `3px solid ${isAlias ? "#94A3B8" : catDef.color}`, borderRadius: 9, overflow: "hidden", background: isAlias ? "#F8FAFC" : catDef.bg, opacity: enabled ? 1 : 0.5 }}>
+                  {/* Ligne principale */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px" }}>
+                    <div style={{ width: 10, height: 10, borderRadius: "50%", background: isAlias ? "#94A3B8" : catDef.color, flexShrink: 0 }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <span style={{ fontSize: 12, fontWeight: 700, color: isAlias ? C.textMid : C.text }}>{comp.name}</span>
+                        {isAlias && (
+                          <span style={{ fontSize: 9, fontWeight: 700, color: "#64748B", background: "#E2E8F0", borderRadius: 4, padding: "1px 5px" }}>
+                            alias de {comp.alias_of}
+                          </span>
+                        )}
+                        {!isAlias && aliasCount > 0 && (
+                          <span title={`${aliasCount} alias fusionné${aliasCount > 1 ? "s" : ""}`} style={{ fontSize: 9, fontWeight: 700, color: "#7C3AED", background: "#F5F3FF", borderRadius: 4, padding: "1px 5px", cursor: "default" }}>
+                            +{aliasCount} alias
+                          </span>
+                        )}
+                      </div>
+                      {comp.domain && <div style={{ fontSize: 10, color: C.textLight }}>{comp.domain}</div>}
+                    </div>
+
+                    {/* Compteurs */}
+                    <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                      {mentions > 0 && (
+                        <span title={`Cité dans les réponses${aliasCount > 0 ? " (alias inclus)" : ""}`}
+                          style={{ fontSize: 10, color: catDef.color, background: C.white, border: `1px solid ${catDef.color}44`, borderRadius: 5, padding: "1px 6px", fontWeight: 600 }}>
+                          💬 {mentions}{aliasCount > 0 ? "*" : ""}
+                        </span>
+                      )}
+                      {asSources > 0 && (
+                        <span title={`Cité en tant que source URL${aliasCount > 0 ? " (alias inclus)" : ""}`}
+                          style={{ fontSize: 10, color: "#2563EB", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 5, padding: "1px 6px", fontWeight: 600 }}>
+                          📎 {asSources}{aliasCount > 0 ? "*" : ""}
+                        </span>
+                      )}
+                      {mentions === 0 && asSources === 0 && <span style={{ fontSize: 10, color: C.textLight }}>—</span>}
+                    </div>
+
+                    {/* Toggle actif */}
+                    <button onClick={() => updateEnabled(comp, !enabled)}
+                      title={enabled ? "Désactiver" : "Activer"}
+                      style={{ width: 34, height: 18, borderRadius: 9, border: "none", cursor: "pointer", background: enabled ? "#059669" : "#CBD5E1", position: "relative", transition: "background 0.2s", flexShrink: 0 }}>
+                      <span style={{ position: "absolute", top: 1, left: enabled ? 17 : 1, width: 16, height: 16, borderRadius: "50%", background: "#fff", transition: "left 0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.2)" }} />
+                    </button>
+
+                    {/* Catégorie */}
+                    <select value={comp.category} onChange={e => updateCat(comp, e.target.value)}
+                      style={{ fontSize: 10, padding: "3px 6px", border: `1px solid ${catDef.color}66`, borderRadius: 5, background: catDef.bg, color: catDef.color, fontWeight: 700, cursor: "pointer" }}>
+                      {allCats.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+                    </select>
+
+                    {/* Suppression */}
+                    <button onClick={() => remove(comp.id)}
+                      style={{ background: "none", border: "none", cursor: "pointer", color: C.textLight, fontSize: 12, padding: "0 2px" }}>✕</button>
                   </div>
-                  {/* Compteurs mentions + sources */}
-                  <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-                    {mentions > 0 && (
-                      <span title="Cité dans les réponses" style={{ fontSize: 10, color: catDef.color, background: catDef.bg, border: `1px solid ${catDef.color}44`, borderRadius: 5, padding: "1px 6px", fontWeight: 600 }}>
-                        💬 {mentions}
+
+                  {/* Ligne alias — sélecteur */}
+                  <div style={{ borderTop: `1px solid ${C.borderLight}`, padding: "5px 12px 6px 30px", background: "rgba(0,0,0,0.015)", display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 10, color: C.textLight, flexShrink: 0 }}>🔗 Alias de :</span>
+                    <select
+                      value={comp.alias_of || ""}
+                      onChange={e => updateAlias(comp, e.target.value)}
+                      style={{ fontSize: 11, padding: "2px 6px", border: `1px solid ${C.border}`, borderRadius: 5, background: C.white, color: comp.alias_of ? "#7C3AED" : C.textLight, maxWidth: 220, cursor: "pointer" }}>
+                      <option value="">— Concurrent principal —</option>
+                      {referents.filter(r => r.id !== comp.id).map(r => (
+                        <option key={r.id} value={r.name}>{r.name}</option>
+                      ))}
+                    </select>
+                    {comp.alias_of && (
+                      <span style={{ fontSize: 10, color: C.textLight, fontStyle: "italic" }}>
+                        Ses mentions sont comptées sur "{comp.alias_of}"
                       </span>
                     )}
-                    {asSources > 0 && (
-                      <span title="Cité en tant que source URL" style={{ fontSize: 10, color: "#2563EB", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 5, padding: "1px 6px", fontWeight: 600 }}>
-                        📎 {asSources}
-                      </span>
-                    )}
-                    {mentions === 0 && asSources === 0 && (
-                      <span style={{ fontSize: 10, color: C.textLight }}>—</span>
-                    )}
                   </div>
-                  <select value={comp.category} onChange={e => updateCat(comp, e.target.value)}
-                    style={{ fontSize: 10, padding: "3px 6px", border: `1px solid ${catDef.color}66`, borderRadius: 5, background: catDef.bg, color: catDef.color, fontWeight: 700, cursor: "pointer" }}>
-                    {allCats.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
-                  </select>
-                  <button onClick={() => remove(comp.id)}
-                    style={{ background: "none", border: "none", cursor: "pointer", color: C.textLight, fontSize: 12, padding: "0 2px" }}>✕</button>
                 </div>
               );
             })}
           </div>
         </div>
       )}
-      {competitors.length === 0 && unqualified.length === 0 && (
+
+      {competitors.length === 0 && (
         <div style={{ fontSize: 12, color: C.textLight, fontStyle: "italic" }}>
-          Aucun concurrent détecté. Lancez des questions pour identifier les marques citées dans les réponses.
+          Aucun concurrent qualifié. Ajoutez des concurrents via le formulaire ci-dessus.
         </div>
       )}
     </div>
   );
 }
-
 // ── Category Manager ─────────────────────────────────────────────
 
 const CAT_COLORS = ["#2563EB","#059669","#7C3AED","#D97706","#DC2626","#0891B2","#EA580C","#64748B"];
@@ -2062,6 +2177,23 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
 function isBrandPresent(r) {
   return !!r && (r.brand_mentioned === true || r.brand_mentioned === 1);
 }
+// Retourne le type de présence le plus fort dans un résultat :
+// "ranked"  → brand_position non nul (citée dans un top/liste) — présence la plus forte
+// "source"  → brand_in_sources true (URL dans les sources, pas dans un top)
+// "mention" → brand_mentioned mais sans position ni source (présence textuelle anecdotique)
+// null      → marque absente
+function getPresenceType(r) {
+  if (!r) return null;
+  if (r.brand_position && (r.brand_mentioned === true || r.brand_mentioned === 1)) return "ranked";
+  if (r.brand_in_sources) return "source";
+  if (r.brand_mentioned === true || r.brand_mentioned === 1) return "mention";
+  return null;
+}
+const PRESENCE_STYLES = {
+  ranked:  { border: "#059669", bg: "#F0FDF4", badge: "🏆 Classé",       badgeColor: "#059669", badgeBg: "#ECFDF5", badgeBorder: "#A7F3D0" },
+  source:  { border: "#2563EB", bg: "#EFF6FF", badge: "🔗 Source",        badgeColor: "#2563EB", badgeBg: "#DBEAFE", badgeBorder: "#BFDBFE" },
+  mention: { border: "#D97706", bg: "#FFFBEB", badge: "💬 Mention",       badgeColor: "#D97706", badgeBg: "#FEF3C7", badgeBorder: "#FDE68A" },
+};
 
 // history: [{ test_date: "YYYY-MM-DD", brand_mentioned: bool }]
 // results: current geo_results for this provider (for today's optimistic update)
@@ -2188,6 +2320,8 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
   // Most recent result for this provider
   const result = [...(results || [])].sort((a,b) => new Date(b.created_at||0) - new Date(a.created_at||0))[0] || null;
   const hasBrand = isBrandPresent(result);
+  const presenceType = getPresenceType(result);
+  const ps = presenceType ? PRESENCE_STYLES[presenceType] : null;
   const sources = result?.sources || [];
   const comps   = result?.competitors_mentioned || [];
 
@@ -2199,7 +2333,7 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
 
 
   return (
-    <div style={{ border: `1px solid ${result ? (hasBrand ? '#059669' : C.border) : p.color+'33'}`, borderLeft: `3px solid ${hasBrand ? '#059669' : p.color}`, borderRadius: 9, overflow: 'hidden', background: hasBrand ? '#F0FDF4' : C.white }}>
+    <div style={{ border: `1px solid ${result ? (ps ? ps.border + "66" : C.border) : p.color+"33"}`, borderLeft: `3px solid ${ps ? ps.border : p.color}`, borderRadius: 9, overflow: "hidden", background: ps ? ps.bg : C.white }}>
 
       {/* ── Row ── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px', minHeight: 36 }}>
@@ -2210,9 +2344,18 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
         {/* Calendar */}
         <PresenceCalendar questionId={questionId} providers={[provider]} newEntry={newCalEntry} />
 
-        {/* Source badge */}
-        {result?.brand_in_sources && (
-          <span style={{ fontSize: 9, fontWeight: 700, color: '#2563EB', background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 8, padding: '1px 6px', flexShrink: 0 }}>🔗 Source</span>
+        {/* Presence type badge */}
+        {ps && (
+          <span style={{ fontSize: 9, fontWeight: 700, color: ps.badgeColor, background: ps.badgeBg, border: `1px solid ${ps.badgeBorder}`, borderRadius: 8, padding: "1px 6px", flexShrink: 0 }}>
+            {ps.badge}{presenceType === "ranked" && result.brand_position ? ` #${result.brand_position}` : ""}
+          </span>
+        )}
+
+        {/* Also show source badge if ranked + source */}
+        {presenceType === "ranked" && result?.brand_in_sources && (
+          <span style={{ fontSize: 9, fontWeight: 700, color: PRESENCE_STYLES.source.badgeColor, background: PRESENCE_STYLES.source.badgeBg, border: `1px solid ${PRESENCE_STYLES.source.badgeBorder}`, borderRadius: 8, padding: "1px 6px", flexShrink: 0 }}>
+            {PRESENCE_STYLES.source.badge}
+          </span>
         )}
 
         {/* Intent / answer type */}
@@ -2986,7 +3129,7 @@ ${question}`;
       />
 
       {/* ── Stats header (filtered) ── */}
-      <div data-tour="stats-header"><StatsHeader questions={filtered} results={filteredResults} brandName={brand_name} qualifiedCompetitors={competitors} /></div>
+      <div data-tour="stats-header"><StatsHeader questions={filtered} results={filteredResults} brandName={brand_name} qualifiedCompetitors={competitors.filter(c => c.enabled !== false)} /></div>
 
       {/* ── Manual question input ── */}
       <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 16px", marginBottom: 14, display: "flex", gap: 10, alignItems: "center" }}>
@@ -4436,6 +4579,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
       desc: "5 onglets structurent l'analyse : Mots-clés, Questions, Concurrents, Automatisation et Sources. Commencez par les Mots-clés.",
       tip: "Chaque onglet correspond à une étape du workflow GEO.",
       position: "bottom",
+      onActivate: () => { setMainTab("analyse"); setSubTab("keywords"); },
     },
     {
       target: "keywords-section",
@@ -4444,6 +4588,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
       desc: "Saisissez vos requêtes cibles (une par ligne) ou importez un CSV Semrush. Utilisez 📋 Copier liste pour récupérer les volumes sur Semrush, puis importez le CSV.",
       tip: "Commencez par 5–10 mots-clés stratégiques pour un premier test.",
       position: "bottom",
+      onActivate: () => { setMainTab("analyse"); setSubTab("keywords"); },
     },
     {
       target: "subnav",
@@ -4452,6 +4597,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
       desc: "Cliquez sur un badge provider (OpenAI, Claude, Gemini…) sans clé configurée pour ouvrir la saisie. Au moins un provider est requis pour interroger les LLMs.",
       tip: "Claude est aussi utilisé pour les analyses IA et les hints.",
       position: "bottom",
+      onActivate: () => { setMainTab("analyse"); setSubTab("questions"); },
     },
     {
       target: "stats-header",
@@ -4460,6 +4606,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
       desc: "Ce bloc affiche en temps réel : % de présence marque, position moyenne, nombre de providers actifs et top concurrents. Il se met à jour après chaque interrogation.",
       tip: "Filtrez par provider ou par date pour analyser les tendances.",
       position: "bottom",
+      onActivate: () => { setMainTab("analyse"); setSubTab("questions"); },
     },
     {
       target: "run-all",
@@ -4468,6 +4615,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
       desc: "▶ Lancer tout interroge uniquement les questions sans réponse aujourd'hui. ↺ Relancer tout force le rechargement de toutes les questions.",
       tip: "Chaque interrogation est sauvegardée en base — l'historique est consultable dans l'Audit GEO.",
       position: "top",
+      onActivate: () => { setMainTab("analyse"); setSubTab("questions"); },
     },
     {
       target: null,

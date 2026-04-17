@@ -63,16 +63,25 @@ function NavBar({ tab, setTab, user, onLogout, isReadOnly = false, visibleNavTab
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-      {visibleNavTabs.map(tabBtn)}
+      {/* Items nav — masqués si non connecté */}
+      {user && visibleNavTabs.map(tabBtn)}
 
       {/* Badge lecture seule */}
-      {isReadOnly && (
+      {user && isReadOnly && (
         <span style={{ fontSize: 10, fontWeight: 700, color: "#D97706", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 6, padding: "3px 8px", whiteSpace: "nowrap" }}>
           👁 Lecture
         </span>
       )}
 
-      <div ref={burgerRef} style={{ position: "relative" }}>
+      {/* Bouton connexion si non connecté */}
+      {!user && (
+        <button onClick={() => setTab("home")} style={{ padding: "7px 16px", border: "none", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 700, background: C.blue, color: "#fff" }}>
+          🔐 Se connecter
+        </button>
+      )}
+
+      {/* Menu burger — uniquement si connecté */}
+      {user && <div ref={burgerRef} style={{ position: "relative" }}>
         <button onClick={() => setBurgerOpen(o => !o)} style={{
           padding: "6px 10px", border: "none", borderRadius: 7, cursor: "pointer", fontSize: 13,
           background: isBurgerTab || burgerOpen ? C.blue : "transparent",
@@ -144,7 +153,7 @@ function NavBar({ tab, setTab, user, onLogout, isReadOnly = false, visibleNavTab
             )}
           </div>
         )}
-      </div>
+      </div>}
     </div>
   );
 }
@@ -728,6 +737,9 @@ export default function App() {
             <MatrixTab
               sites={sites}
               sfData={sfData}
+              gscData={gscData}
+              gaData={gaData}
+              bingData={bingData}
               smData={smData}
               semrushCorrMatrix={semrushCorrMatrix}
               pageMode={pageMode}
@@ -740,6 +752,7 @@ export default function App() {
               pageTypes={pageTypes}
               geoResults={geoResults}
               geoQuestions={[]}
+              geoUrlIndex={geoUrlIndex}
             />
           )}
 

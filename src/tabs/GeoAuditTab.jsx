@@ -2,7 +2,7 @@ import { useState, useMemo, useCallback, useEffect } from "react";
 import TourGuide from "./TourGuide";
 import { sbGetBrand, sbGetQuestions, sbGetGeoResults, sbGetUrlIndex,
   sbSaveProject, sbDeleteProject, sbDownload,
-  sbGetCalendarEntriesBatch, sbGetKeywords, sbGetCategories, sbGetCompetitors } from "../lib/supabase";
+  sbGetCalendarEntriesBatch, sbGetKeywords, sbGetCategories, sbGetCompetitors, sbUpdateCompetitor } from "./lib/supabase";
 import UploadCard from "../components/UploadCard";
 import PageTypeClassifier from "../components/PageTypeClassifier";
 import { newProject } from "../lib/helpers";
@@ -441,7 +441,9 @@ function CompetitorScatter({ compStats, total, brandName, brandWithBrand, brandA
   const COLORS = ["#DC2626","#D97706","#7C3AED","#2563EB","#0891B2","#059669","#9333EA","#EA580C"];
 
   // Préparer les points concurrents — utilise la couleur de catégorie si dispo
-  const entries = Object.entries(compStats).map(([name, s], idx) => ({
+  const entries = Object.entries(compStats)
+    .filter(([, s]) => s.enabled !== false)
+    .map(([name, s], idx) => ({
     name,
     citations: s.mentions,
     pct: Math.round(s.mentions / Math.max(total, 1) * 100),
@@ -493,11 +495,11 @@ function CompetitorScatter({ compStats, total, brandName, brandWithBrand, brandA
         <line x1={PL + plotW / 2} x2={PL + plotW / 2} y1={PT} y2={H - PB} stroke="#CBD5E1" strokeWidth={1} strokeDasharray="4,3" />
         <line x1={PL} x2={W - PR} y1={PT + plotH / 2} y2={PT + plotH / 2} stroke="#CBD5E1" strokeWidth={1} strokeDasharray="4,3" />
 
-        {/* Quadrant labels */}
-        <text x={PL + 6} y={PT + 12} fontSize={8} fill="#DC2626" opacity={0.7}>Peu cités · mal positionnés</text>
-        <text x={PL + plotW / 2 + 6} y={PT + 12} fontSize={8} fill="#D97706" opacity={0.7}>Très cités · mal positionnés</text>
-        <text x={PL + 6} y={PT + plotH / 2 + 12} fontSize={8} fill="#2563EB" opacity={0.7}>Peu cités · bien positionnés</text>
-        <text x={PL + plotW / 2 + 6} y={PT + plotH / 2 + 12} fontSize={8} fill="#059669" opacity={0.7}>Très cités · bien positionnés</text>
+        {/* Quadrant labels — Y inversé : position 1 en HAUT = bien positionné */}
+        <text x={PL + 6} y={PT + 12} fontSize={8} fill="#2563EB" opacity={0.7}>Peu cités · bien positionnés</text>
+        <text x={PL + plotW / 2 + 6} y={PT + 12} fontSize={8} fill="#059669" opacity={0.7}>Très cités · bien positionnés</text>
+        <text x={PL + 6} y={PT + plotH / 2 + 12} fontSize={8} fill="#DC2626" opacity={0.7}>Peu cités · mal positionnés</text>
+        <text x={PL + plotW / 2 + 6} y={PT + plotH / 2 + 12} fontSize={8} fill="#D97706" opacity={0.7}>Très cités · mal positionnés</text>
 
         {/* Ticks X (citations) */}
         {[0, Math.round(maxCit / 2), maxCit].map(v => {
@@ -584,16 +586,25 @@ function GeoScoreBanner({ audit, brand, site }) {
           <div><span style={{ fontSize: 11, color: C.textLight }}>Résultats</span> <strong style={{ fontSize: 13, color: C.text }}>{audit.total}</strong></div>
         </div>
       </div>
-      {/* Cibles */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 140 }}>
+      {/* Breakdown 3 types de présence */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 200 }}>
+        {/* Barre proportion */}
+        <div style={{ display: "flex", height: 6, borderRadius: 3, overflow: "hidden", background: "#E2E8F0", marginBottom: 4 }}>
+          {audit.total > 0 && <>
+            <div style={{ width: `${(audit.withRanked||0) / audit.total * 100}%`, background: "#059669" }} title={`Classé : ${audit.withRanked||0}`} />
+            <div style={{ width: `${(audit.withSourceOnly||0) / audit.total * 100}%`, background: "#2563EB" }} title={`Source : ${audit.withSourceOnly||0}`} />
+            <div style={{ width: `${(audit.withMentionOnly||0) / audit.total * 100}%`, background: "#D97706" }} title={`Mention : ${audit.withMentionOnly||0}`} />
+          </>}
+        </div>
         {[
-          { label: "Présence", val: `${audit.withBrand}/${audit.total}`, color: level.color },
-          { label: "Pos. moy.", val: audit.avgPos ? `#${audit.avgPos}` : "—", color: C.text },
-          { label: "Cité source", val: String(audit.withSources), color: C.blue },
-          { label: "Concurrents", val: String(Object.keys(audit.compStats).length), color: C.amber },
+          { icon: "🏆", label: "Classé",  val: audit.withRanked||0,      color: "#059669", tip: "Position dans un top LLM" },
+          { icon: "🔗", label: "Source",  val: audit.withSourceOnly||0,  color: "#2563EB", tip: "URL citée en source" },
+          { icon: "💬", label: "Mention", val: audit.withMentionOnly||0, color: "#D97706", tip: "Présence textuelle anecdotique" },
+          { icon: "🏷",  label: "Pos. moy.", val: audit.avgPos ? `#${audit.avgPos}` : "—", color: C.text, tip: "Position moyenne dans les tops" },
+          { icon: "⚔️", label: "Concurrents", val: Object.keys(audit.compStats).length, color: C.amber, tip: "Concurrents détectés" },
         ].map(k => (
-          <div key={k.label} style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-            <span style={{ fontSize: 11, color: C.textLight }}>{k.label}</span>
+          <div key={k.label} title={k.tip} style={{ display: "flex", justifyContent: "space-between", gap: 12, cursor: "default" }}>
+            <span style={{ fontSize: 11, color: C.textLight }}>{k.icon} {k.label}</span>
             <span style={{ fontSize: 12, fontWeight: 700, color: k.color }}>{k.val}</span>
           </div>
         ))}
@@ -627,6 +638,18 @@ function computeAudit(questions, results, urlIndex, brand, site, calendarEntries
   const positions = results.filter(r => r.brand_position).map(r => r.brand_position);
   const avgPos = positions.length ? (positions.reduce((a, b) => a + b, 0) / positions.length).toFixed(1) : null;
 
+  // ── Breakdown 3 types de présence (mutuellement exclusifs) ───────
+  const getPresType = (r) => {
+    if (!r) return null;
+    if (r.brand_position && (r.brand_mentioned === true || r.brand_mentioned === 1)) return "ranked";
+    if (r.brand_in_sources) return "source";
+    if (r.brand_mentioned === true || r.brand_mentioned === 1) return "mention";
+    return null;
+  };
+  const withRanked      = results.filter(r => getPresType(r) === "ranked").length;
+  const withSourceOnly  = results.filter(r => getPresType(r) === "source").length;
+  const withMentionOnly = results.filter(r => getPresType(r) === "mention").length;
+
   // ── TrendChart — basé sur geo_calendar_dates ─────────────────
   // Compter par test_date : total d'interrogations et présences de la marque
   const calByDate = {};
@@ -652,8 +675,8 @@ function computeAudit(questions, results, urlIndex, brand, site, calendarEntries
   }
 
   // ── URLs marque — normalisation et cumul ─────────────────────
-  const brandTerms = [brandName, ...brandAliases].filter(v => typeof v === "string" && v.trim()).map(t => t.toLowerCase());
-  const isBrandTerm = (str) => brandTerms.some(t => t && String(str || "").toLowerCase().includes(t));
+  const brandTerms = [brandName, ...brandAliases].filter(Boolean).map(t => t.toLowerCase());
+  const isBrandTerm = (str) => brandTerms.some(t => t && str.toLowerCase().includes(t));
 
   // Grouper urlIndex par URL normalisée
   const normGroups = {};
@@ -671,14 +694,8 @@ function computeAudit(questions, results, urlIndex, brand, site, calendarEntries
   const brandUrls = mergedUrls.filter(u =>
     isBrandTerm(u.norm) || isBrandTerm(u.domain || "")
   );
-  const competitorNames = competitors
-  .map(c => typeof c === "string" ? c : c?.name)
-  .filter(Boolean)
-  .map(name => name.toLowerCase());
-
   const competitorUrls = mergedUrls.filter(u =>
-    !isBrandTerm(u.norm) &&
-    competitorNames.some(name => u.norm.includes(name))
+    !isBrandTerm(u.norm) && competitors.some(c => c && u.norm.includes(c.toLowerCase()))
   );
   const referenceUrls = mergedUrls
     .filter(u => !brandUrls.includes(u) && !competitorUrls.includes(u))
@@ -723,10 +740,11 @@ function computeAudit(questions, results, urlIndex, brand, site, calendarEntries
   // 2. Enrichir avec les concurrents qualifiés (catégorie + recherche rétroactive)
   competitors.forEach(comp => {
     const key = comp.name;
-    if (!compStats[key]) compStats[key] = { mentions: 0, positions: [], category: null, color: null };
-    // Attacher la catégorie et la couleur depuis geo_competitors
+    if (!compStats[key]) compStats[key] = { mentions: 0, positions: [], category: null, color: null, enabled: true };
+    // Attacher la catégorie, la couleur et le statut actif depuis geo_competitors
     compStats[key].category = comp.category || "other";
     compStats[key].color    = comp.color || "#64748B";
+    compStats[key].enabled  = comp.enabled !== false;
     // Recherche rétroactive dans les réponses non encore comptées
     const re = new RegExp(comp.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
     results.forEach(r => {
@@ -791,7 +809,7 @@ function computeAudit(questions, results, urlIndex, brand, site, calendarEntries
     if (r.brand_mentioned) providerStats[pid].withBrand++;
   });
 
-  return { total, withBrand, withSources, avgPos, presenceRate, trendDays, sortedUrls, brandUrls, urlDetails, competitorUrls, referenceUrls, topDomains, intentCount, typeCount, compStats, urlsToOptimize, urlsToRework, urlsToInspire, leads, questions: questions.length, providerStats, missingBrandQs, presentBrandQs, hasFavFilter, favCount };
+  return { total, withBrand, withSources, withRanked, withSourceOnly, withMentionOnly, avgPos, presenceRate, trendDays, sortedUrls, brandUrls, urlDetails, competitorUrls, referenceUrls, topDomains, intentCount, typeCount, compStats, urlsToOptimize, urlsToRework, urlsToInspire, leads, questions: questions.length, providerStats, missingBrandQs, presentBrandQs, hasFavFilter, favCount };
 }
 
 
@@ -1381,6 +1399,8 @@ export default function GeoAuditTab({
   const [aiText, setAiText]             = useState("");
   const [exporting, setExporting]       = useState(false);
   const [showTour, setShowTour]         = useState(false);
+  const [compSort, setCompSort]         = useState({ col: "mentions", dir: "desc" });
+  const [compTableOpen, setCompTableOpen] = useState(true);
   const [brand, setBrand]               = useState(null);
   const [questions, setQuestions]       = useState([]);
   const [results, setResults]           = useState([]);
@@ -1404,7 +1424,7 @@ export default function GeoAuditTab({
   const siteResults   = useMemo(() => results.filter(r => r.site_id === site?.id), [results, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const siteQuestions = useMemo(() => questions.filter(q => q.site_id === site?.id), [questions, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const siteUrls      = useMemo(() => urlIndex.filter(u => u.project_id === projectId), [urlIndex, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
-  const audit         = useMemo(() => computeAudit(siteQuestions, siteResults, siteUrls, brand, site, calendarEntries, keywords, competitors), [siteQuestions, siteResults, siteUrls, brand, site, calendarEntries, keywords, competitors]); // eslint-disable-line react-hooks/exhaustive-deps
+  const audit = useMemo(() => computeAudit(siteQuestions, siteResults, siteUrls, brand, site, calendarEntries, keywords, competitors), [siteQuestions, siteResults, siteUrls, brand, site, calendarEntries, keywords, competitors]); // eslint-disable-line react-hooks/exhaustive-deps
   const noData        = !siteResults.length;
 
   // Démarrer le tour automatiquement si demandé (depuis HomeTab) — après loading et noData
@@ -1420,6 +1440,7 @@ export default function GeoAuditTab({
       desc: "Le score GEO mesure le % de réponses LLM où votre marque est citée. En dessous, les KPIs clés : total de tests, présence en sources, position moyenne.",
       tip: "Visez un score > 60% pour une bonne visibilité GEO.",
       position: "bottom",
+      onActivate: () => setMainTab("audit"),
     },
     {
       target: "audit-visibility",
@@ -1428,6 +1449,7 @@ export default function GeoAuditTab({
       desc: "Ce bloc détaille la présence par provider (OpenAI, Claude, Gemini…) et la tendance sur 30 jours. Les questions avec et sans présence sont listées.",
       tip: "Les questions sans présence sont vos priorités de contenu.",
       position: "bottom",
+      onActivate: () => setMainTab("audit"),
     },
     {
       target: "audit-competitors",
@@ -1436,6 +1458,7 @@ export default function GeoAuditTab({
       desc: "Tableau des concurrents avec leur catégorie (Direct / GEO / Partenaire), nombre de mentions et position moyenne.",
       tip: "Qualifiez les concurrents dans Fan-outs → ⚔️ pour enrichir cette section.",
       position: "top",
+      onActivate: () => setMainTab("audit"),
     },
     {
       target: "audit-export",
@@ -1444,6 +1467,7 @@ export default function GeoAuditTab({
       desc: "Génère un rapport PDF complet : score, KPIs, concurrents, URLs à optimiser, recommandations et analyse IA.",
       tip: "Cliquez '✦ Générer l'analyse IA' avant d'exporter pour un rapport plus riche.",
       position: "top",
+      onActivate: () => setMainTab("audit"),
     },
   ];
 
@@ -1525,6 +1549,34 @@ export default function GeoAuditTab({
             ══════════════════════════════════════════════════════ */}
             <div data-tour="audit-visibility" style={{ display: "contents" }}><Section icon="📡" title="Visibilité marque" sub="Présence dans les réponses LLM par provider et dans le temps" accent={C.blue}>
 
+              {/* Breakdown 3 types de présence */}
+              <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px", marginBottom: 20 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>Répartition par type de présence</div>
+                {/* Barre de proportion */}
+                <div style={{ display: "flex", height: 8, borderRadius: 4, overflow: "hidden", background: "#E2E8F0", marginBottom: 12 }}>
+                  {audit.total > 0 && <>
+                    <div style={{ width: `${(audit.withRanked||0) / audit.total * 100}%`, background: "#059669", transition: "width 0.3s" }} title={`Classé : ${audit.withRanked||0}`} />
+                    <div style={{ width: `${(audit.withSourceOnly||0) / audit.total * 100}%`, background: "#2563EB", transition: "width 0.3s" }} title={`Source : ${audit.withSourceOnly||0}`} />
+                    <div style={{ width: `${(audit.withMentionOnly||0) / audit.total * 100}%`, background: "#D97706", transition: "width 0.3s" }} title={`Mention : ${audit.withMentionOnly||0}`} />
+                  </>}
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
+                  {[
+                    { icon: "🏆", label: "Classé",     count: audit.withRanked||0,      color: "#059669", bg: "#ECFDF5", border: "#A7F3D0", desc: "Position dans un top LLM" },
+                    { icon: "🔗", label: "Source",     count: audit.withSourceOnly||0,  color: "#2563EB", bg: "#DBEAFE", border: "#BFDBFE", desc: "URL citée en source" },
+                    { icon: "💬", label: "Mention",    count: audit.withMentionOnly||0, color: "#D97706", bg: "#FEF3C7", border: "#FDE68A", desc: "Présence textuelle" },
+                    { icon: "✗",  label: "Absent",     count: audit.total - (audit.withBrand||0), color: "#DC2626", bg: "#FEF2F2", border: "#FECACA", desc: "Non mentionné" },
+                  ].map(t => (
+                    <div key={t.label} style={{ background: t.bg, border: `1px solid ${t.border}`, borderRadius: 8, padding: "10px 12px" }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: t.color, marginBottom: 2 }}>{t.icon} {t.label}</div>
+                      <div style={{ fontSize: 22, fontWeight: 800, color: t.color, lineHeight: 1 }}>{t.count}</div>
+                      <div style={{ fontSize: 9, color: C.textLight, marginTop: 2 }}>{t.desc}</div>
+                      <div style={{ fontSize: 9, color: t.color, marginTop: 2, fontWeight: 600 }}>{audit.total > 0 ? Math.round(t.count / audit.total * 100) : 0}%</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
               {/* Présence par provider */}
               <div style={{ marginBottom: 20 }}>
                 <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>Par provider LLM</div>
@@ -1600,49 +1652,106 @@ export default function GeoAuditTab({
             ══════════════════════════════════════════════════════ */}
             <div data-tour="audit-competitors" style={{ display: "contents" }}><Section icon="⚔️" title="Paysage concurrentiel" sub="Concurrents détectés dans les réponses LLM" accent={C.amber}>
 
-              {/* Table concurrents */}
+              {/* Cartographie concurrentielle — au-dessus du tableau */}
+              {Object.keys(audit.compStats).filter(k => audit.compStats[k].enabled !== false).length > 0 && (
+                <div style={{ marginBottom: 20 }}>
+                  <CompetitorScatter compStats={audit.compStats} total={audit.total} brandName={brand?.brand_name} brandWithBrand={audit.withBrand} brandAvgPos={audit.avgPos} />
+                </div>
+              )}
+
+              {/* Table concurrents — collapsible avec header sticky */}
               {Object.keys(audit.compStats).length > 0 ? (
                 <div style={{ marginBottom: 20 }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                    <thead><tr style={{ background: C.bg }}>{["Concurrent","Catégorie","Mentions","% des résultats","Position moy."].map(h => <th key={h} style={{ padding: "8px 12px", textAlign: "left", fontWeight: 600, fontSize: 11, color: C.textLight, textTransform: "uppercase", borderBottom: `1px solid ${C.border}` }}>{h}</th>)}</tr></thead>
-                    <tbody>{Object.entries(audit.compStats)
-                      .filter(([, s]) => s.category !== "other" || s.mentions > 0)
-                      .sort((a, b) => {
-                        // Non-"other" en premier, puis par mentions
-                        const aOther = !a[1].category || a[1].category === "other";
-                        const bOther = !b[1].category || b[1].category === "other";
-                        if (aOther !== bOther) return aOther ? 1 : -1;
-                        return b[1].mentions - a[1].mentions;
-                      })
-                      .map(([name, stats]) => {
-                        const catKey = stats.category || "other";
-                        const cat = COMP_CAT_DEFS[catKey] || COMP_CAT_DEFS.other;
-                        const avgPos = stats.positions.length
-                          ? (stats.positions.reduce((a, b) => a + b, 0) / stats.positions.length).toFixed(1)
-                          : null;
-                        return (
-                          <tr key={name} style={{ borderBottom: `1px solid ${C.borderLight}` }}>
-                            <td style={{ padding: "8px 12px", fontWeight: 600 }}>
-                              {stats.color && <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: stats.color, marginRight: 7, verticalAlign: "middle" }} />}
-                              {name}
-                            </td>
-                            <td style={{ padding: "8px 12px" }}>
-                              {catKey !== "other" ? (
-                                <span style={{ fontSize: 10, fontWeight: 700, color: cat.color, background: cat.bg, borderRadius: 5, padding: "2px 7px" }}>{cat.label}</span>
-                              ) : (
-                                <span style={{ fontSize: 10, color: C.textLight }}>—</span>
-                              )}
-                            </td>
-                            <td style={{ padding: "8px 12px" }}>{stats.mentions}</td>
-                            <td style={{ padding: "8px 12px", color: "#D97706" }}>{pct(stats.mentions, audit.total)}%</td>
-                            <td style={{ padding: "8px 12px", fontWeight: avgPos ? 600 : 400, color: avgPos ? C.text : C.textLight }}>
-                              {avgPos ? `#${avgPos}` : "—"}
-                            </td>
+                  {/* Header collapsible */}
+                  <button
+                    onClick={() => setCompTableOpen(o => !o)}
+                    style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "8px 12px", background: C.bg, border: `1px solid ${C.border}`, borderRadius: compTableOpen ? "8px 8px 0 0" : 8, cursor: "pointer", fontSize: 11, fontWeight: 700, color: C.textMid, userSelect: "none" }}>
+                    <span style={{ transform: compTableOpen ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.2s", display: "inline-block" }}>▼</span>
+                    <span style={{ textTransform: "uppercase", letterSpacing: 0.7 }}>Détail des concurrents ({Object.keys(audit.compStats).length})</span>
+                  </button>
+                  {compTableOpen && (
+                    <div style={{ border: `1px solid ${C.border}`, borderTop: "none", borderRadius: "0 0 8px 8px", overflow: "auto", maxHeight: 420 }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                        <thead style={{ position: "sticky", top: 0, zIndex: 1, background: C.bg }}>
+                          <tr>
+                            {[
+                              { key: "name",    label: "Concurrent" },
+                              { key: "cat",     label: "Catégorie" },
+                              { key: "enabled", label: "Actif" },
+                              { key: "mentions",label: "Mentions" },
+                              { key: "pct",     label: "% résultats" },
+                              { key: "pos",     label: "Position moy." },
+                            ].map(h => (
+                              <th key={h.key} onClick={() => setCompSort(s => ({ col: h.key, dir: s.col === h.key && s.dir === "desc" ? "asc" : "desc" }))}
+                                style={{ padding: "8px 12px", textAlign: "left", fontWeight: 600, fontSize: 11, color: compSort.col === h.key ? C.text : C.textLight, textTransform: "uppercase", borderBottom: `1px solid ${C.border}`, cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }}>
+                                {h.label} {compSort.col === h.key ? (compSort.dir === "desc" ? "↓" : "↑") : ""}
+                              </th>
+                            ))}
                           </tr>
-                        );
-                      })
-                    }</tbody>
-                  </table>
+                        </thead>
+                        <tbody>{Object.entries(audit.compStats)
+                          .filter(([, s]) => s.category !== "other" || s.mentions > 0)
+                          .sort((a, b) => {
+                            const [na, sa] = a; const [nb, sb] = b;
+                            const avgPosA = sa.positions.length ? sa.positions.reduce((x,y)=>x+y,0)/sa.positions.length : 999;
+                            const avgPosB = sb.positions.length ? sb.positions.reduce((x,y)=>x+y,0)/sb.positions.length : 999;
+                            const mul = compSort.dir === "desc" ? -1 : 1;
+                            if (compSort.col === "name")    return mul * na.localeCompare(nb);
+                            if (compSort.col === "cat")     return mul * (sa.category||"other").localeCompare(sb.category||"other");
+                            if (compSort.col === "enabled") return mul * ((sa.enabled===false?0:1) - (sb.enabled===false?0:1));
+                            if (compSort.col === "mentions")return mul * (sa.mentions - sb.mentions);
+                            if (compSort.col === "pct")     return mul * (sa.mentions - sb.mentions);
+                            if (compSort.col === "pos")     return mul * (avgPosA - avgPosB);
+                            return 0;
+                          })
+                          .map(([name, stats]) => {
+                            const catKey = stats.category || "other";
+                            const cat = COMP_CAT_DEFS[catKey] || COMP_CAT_DEFS.other;
+                            const avgPos = stats.positions.length
+                              ? (stats.positions.reduce((a, b) => a + b, 0) / stats.positions.length).toFixed(1)
+                              : null;
+                            const enabled = stats.enabled !== false;
+                            return (
+                              <tr key={name} style={{ borderBottom: `1px solid ${C.borderLight}`, opacity: enabled ? 1 : 0.45 }}>
+                                <td style={{ padding: "8px 12px", fontWeight: 600 }}>
+                                  {stats.color && <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: stats.color, marginRight: 7, verticalAlign: "middle" }} />}
+                                  {name}
+                                </td>
+                                <td style={{ padding: "8px 12px" }}>
+                                  {catKey !== "other" ? (
+                                    <span style={{ fontSize: 10, fontWeight: 700, color: cat.color, background: cat.bg, borderRadius: 5, padding: "2px 7px" }}>{cat.label}</span>
+                                  ) : (
+                                    <span style={{ fontSize: 10, color: C.textLight }}>—</span>
+                                  )}
+                                </td>
+                                <td style={{ padding: "8px 12px" }}>
+                                  <button
+                                    onClick={async () => {
+                                      const newEnabled = !enabled;
+                                      const comp = competitors.find(c => c.name === name);
+                                      if (comp) {
+                                        try { await sbUpdateCompetitor(comp.id, { enabled: newEnabled }); } catch {}
+                                      }
+                                      setCompetitors(prev => prev.map(c => c.name === name ? { ...c, enabled: newEnabled } : c));
+                                    }}
+                                    style={{ width: 36, height: 20, borderRadius: 10, border: "none", cursor: "pointer", background: enabled ? "#059669" : "#CBD5E1", position: "relative", transition: "background 0.2s" }}
+                                    title={enabled ? "Désactiver ce concurrent" : "Activer ce concurrent"}
+                                  >
+                                    <span style={{ position: "absolute", top: 2, left: enabled ? 18 : 2, width: 16, height: 16, borderRadius: "50%", background: "#fff", transition: "left 0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.2)" }} />
+                                  </button>
+                                </td>
+                                <td style={{ padding: "8px 12px" }}>{stats.mentions}</td>
+                                <td style={{ padding: "8px 12px", color: "#D97706" }}>{pct(stats.mentions, audit.total)}%</td>
+                                <td style={{ padding: "8px 12px", fontWeight: avgPos ? 600 : 400, color: avgPos ? C.text : C.textLight }}>
+                                  {avgPos ? `#${avgPos}` : "—"}
+                                </td>
+                              </tr>
+                            );
+                          })
+                        }</tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic", marginBottom: 16 }}>Aucun concurrent détecté dans les réponses LLM</div>

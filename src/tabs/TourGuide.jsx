@@ -1,4 +1,4 @@
-// src/components/TourGuide.jsx
+// src/tabs/TourGuide.jsx
 import { useState, useEffect, useCallback, useRef } from "react";
 
 const GREEN = "#1A3C2E";
@@ -27,7 +27,7 @@ export default function TourGuide({ steps, onClose, initialStep = 0 }) {
     setRect({ top: r.top, left: r.left, width: r.width, height: r.height });
   }, [current]);
 
-  // Boucle RAF pour suivre en temps réel (scroll, resize, animations)
+  // Boucle RAF pour suivre en temps réel
   useEffect(() => {
     mountedRef.current = true;
     const loop = () => {
@@ -41,15 +41,24 @@ export default function TourGuide({ steps, onClose, initialStep = 0 }) {
     };
   }, [calcRect]);
 
-  // Au changement d'étape : scroll instantané vers la cible
+  // Au changement d'étape :
+  // 1. Exécuter onActivate si défini (navigation vers le bon sous-onglet)
+  // 2. Attendre que le DOM soit mis à jour, puis scroller vers la cible
   useEffect(() => {
-    const target = current?.target
-      ? document.querySelector(`[data-tour="${current.target}"]`)
-      : null;
-    if (target) {
-      target.scrollIntoView({ behavior: "instant", block: "center", inline: "nearest" });
+    if (current?.onActivate) {
+      current.onActivate();
     }
-  }, [step, current]);
+    // Petit délai pour laisser React re-rendre après onActivate
+    const t = setTimeout(() => {
+      const target = current?.target
+        ? document.querySelector(`[data-tour="${current.target}"]`)
+        : null;
+      if (target) {
+        target.scrollIntoView({ behavior: "instant", block: "center", inline: "nearest" });
+      }
+    }, 80);
+    return () => clearTimeout(t);
+  }, [step]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Positionner le tooltip
   useEffect(() => {
@@ -97,7 +106,6 @@ export default function TourGuide({ steps, onClose, initialStep = 0 }) {
 
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 9000, pointerEvents: "none" }}>
-
       {s ? <>
         <div style={{ position: "fixed", top: 0, left: 0, right: 0, height: Math.max(s.top, 0), background: "rgba(0,0,0,0.52)", pointerEvents: "auto" }} onClick={onClose} />
         <div style={{ position: "fixed", top: s.top + s.height, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.52)", pointerEvents: "auto" }} onClick={onClose} />
