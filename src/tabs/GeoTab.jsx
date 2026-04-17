@@ -1028,7 +1028,6 @@ function StatusBadge({ status }) {
 function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [] }) {
   const total       = results.length;
   const withBrand   = results.filter(r => r.brand_mentioned === true || r.brand_mentioned === 1).length;
-  const withSources = results.filter(r => r.brand_in_sources).length;
   const positions   = results.filter(r => r.brand_position).map(r => r.brand_position);
   const avgPos      = positions.length ? (positions.reduce((a, b) => a + b, 0) / positions.length).toFixed(1) : "—";
   const presence    = total ? Math.round(withBrand / total * 100) : 0;
@@ -1410,8 +1409,6 @@ function CompetitorManager({ projectId, siteId, allResults, competitors, setComp
               const { mentions, asSources, aliasCount } = getMentionsWithAliases(comp);
               const enabled  = comp.enabled !== false;
               const isAlias  = !!comp.alias_of;
-              const aliasTarget = isAlias ? competitors.find(c => c.name === comp.alias_of) : null;
-              const aliasCatDef = aliasTarget ? getCatDef(aliasTarget.category) : null;
 
               return (
                 <div key={comp.id} style={{ border: `1px solid ${catDef.color}33`, borderLeft: `3px solid ${isAlias ? "#94A3B8" : catDef.color}`, borderRadius: 9, overflow: "hidden", background: isAlias ? "#F8FAFC" : catDef.bg, opacity: enabled ? 1 : 0.5 }}>
@@ -2319,7 +2316,6 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
 
   // Most recent result for this provider
   const result = [...(results || [])].sort((a,b) => new Date(b.created_at||0) - new Date(a.created_at||0))[0] || null;
-  const hasBrand = isBrandPresent(result);
   const presenceType = getPresenceType(result);
   const ps = presenceType ? PRESENCE_STYLES[presenceType] : null;
   const sources = result?.sources || [];
