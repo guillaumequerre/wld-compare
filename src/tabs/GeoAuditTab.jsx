@@ -675,8 +675,16 @@ function computeAudit(questions, results, urlIndex, brand, site, calendarEntries
   }
 
   // ── URLs marque — normalisation et cumul ─────────────────────
-  const brandTerms = [brandName, ...brandAliases].filter(Boolean).map(t => t.toLowerCase());
-  const isBrandTerm = (str) => brandTerms.some(t => t && str.toLowerCase().includes(t));
+  const brandTerms = [brandName, ...brandAliases]
+    .filter(v => typeof v === "string" && v.trim())
+    .map(t => t.toLowerCase());
+  const isBrandTerm = (str) => brandTerms.some(t => t && String(str || "").toLowerCase().includes(t));
+
+  // Pré-calculer les noms de concurrents normalisés (objets ou strings)
+  const competitorNames = competitors
+    .map(c => typeof c === "string" ? c : c?.name)
+    .filter(Boolean)
+    .map(name => name.toLowerCase());
 
   // Grouper urlIndex par URL normalisée
   const normGroups = {};
@@ -695,7 +703,7 @@ function computeAudit(questions, results, urlIndex, brand, site, calendarEntries
     isBrandTerm(u.norm) || isBrandTerm(u.domain || "")
   );
   const competitorUrls = mergedUrls.filter(u =>
-    !isBrandTerm(u.norm) && competitors.some(c => c && u.norm.includes(c.toLowerCase()))
+    !isBrandTerm(u.norm) && competitorNames.some(name => u.norm.includes(name))
   );
   const referenceUrls = mergedUrls
     .filter(u => !brandUrls.includes(u) && !competitorUrls.includes(u))
