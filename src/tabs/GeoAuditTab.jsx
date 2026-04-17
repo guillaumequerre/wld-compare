@@ -650,15 +650,33 @@ function computeAudit(questions, results, urlIndex, brand, site, calendarEntries
   const withSourceOnly  = results.filter(r => getPresType(r) === "source").length;
   const withMentionOnly = results.filter(r => getPresType(r) === "mention").length;
 
-  // ── TrendChart — basé sur geo_calendar_dates ─────────────────
-  // Compter par test_date : total d'interrogations et présences de la marque
+  // ── TrendChart — basé sur les résultats + geo_calendar_dates ─────
+  // Combinaison des deux sources pour toujours avoir une tendance à jour :
+  // 1. calendarEntries : entrées DB détaillées (par test)
+  // 2. results : résultats en mémoire (toujours à jour après un run)
   const calByDate = {};
+
+  // Source 1 : geo_calendar_dates (données historiques précises)
   calendarEntries.forEach(e => {
     const d = e.test_date || (e.created_at || "").slice(0, 10);
     if (!d) return;
     if (!calByDate[d]) calByDate[d] = { tested: 0, present: 0 };
     calByDate[d].tested++;
     if (e.brand_present === true || e.brand_present === 1) calByDate[d].present++;
+  });
+
+  // Source 2 : résultats en mémoire (complète les jours manquants / toujours frais)
+  // On utilise created_at pour grouper par jour
+  results.forEach(r => {
+    const d = (r.created_at || "").slice(0, 10);
+    if (!d) return;
+    // Utiliser les résultats en mémoire uniquement si le jour n'est pas couvert par calendarEntries
+    // (évite le double-comptage)
+    if (!calByDate[d]) {
+      calByDate[d] = { tested: 0, present: 0 };
+      calByDate[d].tested++;
+      if (r.brand_mentioned === true || r.brand_mentioned === 1) calByDate[d].present++;
+    }
   });
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const trendDays = [];
@@ -1422,12 +1440,14 @@ export default function GeoAuditTab({
   const site = (Array.isArray(sites) ? sites : []).find(s => s.id === selectedSite) || (Array.isArray(sites) ? sites : [])[0];
   const claudeKey = decodeKey(project?.claude_geo_key_enc || "");
 
-  useEffect(() => {
+  const refreshData = useCallback(() => {
     if (!projectId || !site?.id) return;
     setLoading(true);
     Promise.all([sbGetBrand(projectId, site.id), sbGetQuestions(projectId, site.id), sbGetGeoResults(projectId, site.id), sbGetUrlIndex(projectId), sbGetCalendarEntriesBatch(projectId, site.id), sbGetKeywords(projectId, site.id), sbGetCategories(projectId), sbGetCompetitors(projectId, site.id)])
       .then(([b, q, r, u, cal, kws, cats, comps]) => { setBrand(b); setQuestions(q); setResults(r); setUrlIndex(u); setCalendarEntries(cal || []); setKeywords(kws || []); setCategories(cats || []); setCompetitors(comps || []); setLoading(false); });
   }, [projectId, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => { refreshData(); }, [projectId, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const siteResults   = useMemo(() => results.filter(r => r.site_id === site?.id), [results, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const siteQuestions = useMemo(() => questions.filter(q => q.site_id === site?.id), [questions, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1488,10 +1508,17 @@ export default function GeoAuditTab({
       <div style={{ marginBottom: 24 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
           <div style={{ fontSize: 20, fontWeight: 800, color: C.text }}>📋 Audit GEO</div>
-          <button onClick={() => setShowTour(true)} disabled={noData || loading}
-            style={{ fontSize: 11, fontWeight: 700, color: "#1A3C2E", background: "#EAF0EC", border: "1px solid #B2CCBC", borderRadius: 8, padding: "5px 12px", cursor: noData || loading ? "not-allowed" : "pointer", opacity: noData || loading ? 0.4 : 1 }}>
-            🎓 Guide
-          </button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={refreshData} disabled={loading}
+              title="Recharger les données depuis la base"
+              style={{ fontSize: 11, fontWeight: 700, color: "#2563EB", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 8, padding: "5px 12px", cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.4 : 1 }}>
+              {loading ? "⏳" : "↺"} Rafraîchir
+            </button>
+            <button onClick={() => setShowTour(true)} disabled={noData || loading}
+              style={{ fontSize: 11, fontWeight: 700, color: "#1A3C2E", background: "#EAF0EC", border: "1px solid #B2CCBC", borderRadius: 8, padding: "5px 12px", cursor: noData || loading ? "not-allowed" : "pointer", opacity: noData || loading ? 0.4 : 1 }}>
+              🎓 Guide
+            </button>
+          </div>
         </div>
         <div style={{ display: "inline-flex", gap: 2, background: "#F1F5F9", borderRadius: 20, padding: 3 }}>
           {[{ key: "setup", label: "⚙️ Setup" }, { key: "audit", label: "📋 Génération Audit GEO" }].map(t => (
