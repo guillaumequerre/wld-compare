@@ -1673,7 +1673,7 @@ export default function GeoAuditTab({
                   <div style={{ fontSize: 10, color: C.textLight, marginBottom: 8, fontStyle: "italic" }}>
                     Favoris en premier · max 25 · triées par volume
                   </div>
-                  {audit.presentBrandQs.length ? audit.presentBrandQs.map((q, i) => (
+                  {audit.presentBrandQs.length ? audit.presentBrandQs.slice(0, qLimit).map((q, i) => (
                     <div key={i} style={{ fontSize: 12, padding: "6px 0", borderBottom: `1px solid ${C.borderLight}`, display: "flex", gap: 8, alignItems: "flex-start" }}>
                       <span style={{ color: "#059669", fontWeight: 700, flexShrink: 0 }}>✓</span>
                       {q.isFav && <span style={{ flexShrink: 0, fontSize: 11 }} title="Question favorite">⭐</span>}
@@ -1687,7 +1687,7 @@ export default function GeoAuditTab({
                   <div style={{ fontSize: 10, color: C.textLight, marginBottom: 8, fontStyle: "italic" }}>
                     Favoris en premier · max 25 · triées par volume
                   </div>
-                  {audit.missingBrandQs.length ? audit.missingBrandQs.map((q, i) => (
+                  {audit.missingBrandQs.length ? audit.missingBrandQs.slice(0, qLimit).map((q, i) => (
                     <div key={i} style={{ fontSize: 12, padding: "6px 0", borderBottom: `1px solid ${C.borderLight}`, display: "flex", gap: 8, alignItems: "flex-start" }}>
                       <span style={{ color: "#DC2626", fontWeight: 700, flexShrink: 0 }}>✗</span>
                       {q.isFav && <span style={{ flexShrink: 0, fontSize: 11 }} title="Question favorite">⭐</span>}
