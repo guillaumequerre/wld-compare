@@ -1454,8 +1454,12 @@ export default function GeoAuditTab({
         const compList = comps || [];
         const hasAnyConfig = compList.some(c => c.enabled === true || c.enabled === false);
         if (!hasAnyConfig && compList.length > 5) {
-          // Trier par mentions pour trouver le top-5
-          const sorted = [...compList].sort((a, b) => (b.mentions || 0) - (a.mentions || 0));
+          // Top-5 par meilleure position moyenne (avgPos la plus basse = mieux placé)
+          const sorted = [...compList].sort((a, b) => {
+            const posA = (a.avg_position != null) ? a.avg_position : 9999;
+            const posB = (b.avg_position != null) ? b.avg_position : 9999;
+            return posA - posB;
+          });
           const top5ids = new Set(sorted.slice(0, 5).map(c => c.id));
           setCompetitors(compList.map(c => ({ ...c, enabled: top5ids.has(c.id) })));
         } else {
