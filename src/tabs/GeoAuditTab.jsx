@@ -1426,7 +1426,10 @@ export default function GeoAuditTab({
   const [exporting, setExporting]       = useState(false);
   const [showTour, setShowTour]         = useState(false);
   const [compSort, setCompSort]         = useState({ col: "mentions", dir: "desc" });
-  const [compTableOpen, setCompTableOpen] = useState(true);
+  const [compTableOpen, setCompTableOpen] = useState(false);
+  const [compSearch, setCompSearch]     = useState("");    // regex/texte pour filtrer concurrents
+  const [sfCorrFilter, setSfCorrFilter] = useState("all"); // "all" | "gsc" | "bing" | "fanout"
+  const [newCompName, setNewCompName]   = useState("");    // ajout concurrent manuel
   const [brand, setBrand]               = useState(null);
   const [questions, setQuestions]       = useState([]);
   const [results, setResults]           = useState([]);
@@ -1444,7 +1447,22 @@ export default function GeoAuditTab({
     if (!projectId || !site?.id) return;
     setLoading(true);
     Promise.all([sbGetBrand(projectId, site.id), sbGetQuestions(projectId, site.id), sbGetGeoResults(projectId, site.id), sbGetUrlIndex(projectId), sbGetCalendarEntriesBatch(projectId, site.id), sbGetKeywords(projectId, site.id), sbGetCategories(projectId), sbGetCompetitors(projectId, site.id)])
-      .then(([b, q, r, u, cal, kws, cats, comps]) => { setBrand(b); setQuestions(q); setResults(r); setUrlIndex(u); setCalendarEntries(cal || []); setKeywords(kws || []); setCategories(cats || []); setCompetitors(comps || []); setLoading(false); });
+      .then(([b, q, r, u, cal, kws, cats, comps]) => {
+        setBrand(b); setQuestions(q); setResults(r); setUrlIndex(u);
+        setCalendarEntries(cal || []); setKeywords(kws || []); setCategories(cats || []);
+        // Init enabled : top-5 par mentions, le reste désactivé (seulement si aucun n'a été configuré)
+        const compList = comps || [];
+        const hasAnyConfig = compList.some(c => c.enabled === true || c.enabled === false);
+        if (!hasAnyConfig && compList.length > 5) {
+          // Trier par mentions pour trouver le top-5
+          const sorted = [...compList].sort((a, b) => (b.mentions || 0) - (a.mentions || 0));
+          const top5ids = new Set(sorted.slice(0, 5).map(c => c.id));
+          setCompetitors(compList.map(c => ({ ...c, enabled: top5ids.has(c.id) })));
+        } else {
+          setCompetitors(compList);
+        }
+        setLoading(false);
+      });
   }, [projectId, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { refreshData(); }, [projectId, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1667,6 +1685,13 @@ export default function GeoAuditTab({
                   )) : <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>Toutes les questions ont une présence !</div>}
                 </div>
               </div>
+
+              {/* Analyse Fan-out — en bas de Visibilité marque */}
+              <div style={{ marginTop: 16, borderTop: `1px solid ${C.border}`, paddingTop: 16 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 4 }}>✨ Analyse Fan-out</div>
+                <div style={{ fontSize: 11, color: C.textLight, marginBottom: 12 }}>Recommandations basées sur vos données de présence et sources</div>
+                <FanoutAnalysis questions={siteQuestions} results={siteResults} brand={brand} claudeKey={claudeKey} />
+              </div>
             </Section>
 
             </div>{/* ══════════════════════════════════════════════════════
@@ -1697,14 +1722,65 @@ export default function GeoAuditTab({
               {/* Table concurrents — collapsible avec header sticky */}
               {Object.keys(audit.compStats).length > 0 ? (
                 <div style={{ marginBottom: 20 }}>
-                  {/* Header collapsible */}
-                  <button
-                    onClick={() => setCompTableOpen(o => !o)}
-                    style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "8px 12px", background: C.bg, border: `1px solid ${C.border}`, borderRadius: compTableOpen ? "8px 8px 0 0" : 8, cursor: "pointer", fontSize: 11, fontWeight: 700, color: C.textMid, userSelect: "none" }}>
-                    <span style={{ transform: compTableOpen ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.2s", display: "inline-block" }}>▼</span>
-                    <span style={{ textTransform: "uppercase", letterSpacing: 0.7 }}>Détail des concurrents ({Object.keys(audit.compStats).length})</span>
-                  </button>
-                  {compTableOpen && (
+                  {/* Header collapsible + recherche + ajout */}
+                  <div style={{ border: `1px solid ${C.border}`, borderRadius: compTableOpen ? "8px 8px 0 0" : 8, background: C.bg }}>
+                    <button
+                      onClick={() => setCompTableOpen(o => !o)}
+                      style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "8px 12px", background: "transparent", border: "none", cursor: "pointer", fontSize: 11, fontWeight: 700, color: C.textMid, userSelect: "none" }}>
+                      <span style={{ transform: compTableOpen ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.2s", display: "inline-block" }}>▼</span>
+                      <span style={{ textTransform: "uppercase", letterSpacing: 0.7 }}>Détail des concurrents ({Object.keys(audit.compStats).length})</span>
+                    </button>
+                    {compTableOpen && (
+                      <div style={{ padding: "0 12px 10px", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", borderTop: `1px solid ${C.borderLight}` }}>
+                        {/* Recherche regex */}
+                        <input
+                          value={compSearch}
+                          onChange={e => setCompSearch(e.target.value)}
+                          placeholder="🔍 Filtrer (texte ou regex)…"
+                          style={{ flex: "1 1 160px", padding: "5px 10px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11, marginTop: 8 }}
+                        />
+                        {/* Ajout concurrent non identifié */}
+                        <input
+                          value={newCompName}
+                          onChange={e => setNewCompName(e.target.value)}
+                          placeholder="+ Ajouter concurrent…"
+                          style={{ flex: "1 1 160px", padding: "5px 10px", border: `1px solid #BFDBFE`, borderRadius: 6, fontSize: 11, marginTop: 8 }}
+                          onKeyDown={async e => {
+                            if (e.key === "Enter" && newCompName.trim()) {
+                              try {
+                                const { sbSaveCompetitor } = await import("../lib/supabase");
+                                const site2 = (Array.isArray(sites) ? sites : []).find(s => s.id === selectedSite) || sites?.[0];
+                                const saved = await sbSaveCompetitor({ project_id: projectId, site_id: site2?.id, name: newCompName.trim(), category: "other", color: "#64748B", enabled: true });
+                                setCompetitors(prev => [...prev, saved]);
+                                setNewCompName("");
+                              } catch(e2) { console.error(e2); }
+                            }
+                          }}
+                        />
+                        {newCompName.trim() && (
+                          <button onClick={async () => {
+                            try {
+                              const { sbSaveCompetitor } = await import("../lib/supabase");
+                              const site2 = (Array.isArray(sites) ? sites : []).find(s => s.id === selectedSite) || sites?.[0];
+                              const saved = await sbSaveCompetitor({ project_id: projectId, site_id: site2?.id, name: newCompName.trim(), category: "other", color: "#64748B", enabled: true });
+                              setCompetitors(prev => [...prev, saved]);
+                              setNewCompName("");
+                            } catch(e2) { console.error(e2); }
+                          }} style={{ padding: "5px 12px", background: "#2563EB", color: "#fff", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer", marginTop: 8 }}>
+                            + Ajouter
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  {compTableOpen && (() => {
+                    // Appliquer le filtre regex sur les entrées
+                    let searchRe = null;
+                    try { searchRe = compSearch.trim() ? new RegExp(compSearch.trim(), "i") : null; } catch {}
+                    const filteredStats = Object.entries(audit.compStats).filter(([name]) =>
+                      !searchRe || searchRe.test(name)
+                    );
+                    return (
                     <div style={{ border: `1px solid ${C.border}`, borderTop: "none", borderRadius: "0 0 8px 8px", overflow: "auto", maxHeight: 420 }}>
                       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                         <thead style={{ position: "sticky", top: 0, zIndex: 1, background: C.bg }}>
@@ -1724,7 +1800,7 @@ export default function GeoAuditTab({
                             ))}
                           </tr>
                         </thead>
-                        <tbody>{Object.entries(audit.compStats)
+                        <tbody>{filteredStats
                           .filter(([, s]) => s.category !== "other" || s.mentions > 0)
                           .sort((a, b) => {
                             const [na, sa] = a; const [nb, sb] = b;
@@ -1786,7 +1862,8 @@ export default function GeoAuditTab({
                         }</tbody>
                       </table>
                     </div>
-                  )}
+                    );
+                  })()}
                 </div>
               ) : (
                 <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic", marginBottom: 16 }}>Aucun concurrent détecté dans les réponses LLM</div>
@@ -2042,8 +2119,8 @@ export default function GeoAuditTab({
                   </CrossCard>
 
                   {/* GSC × GEO */}
-                  <CrossCard icon="🔍" title="Données SEO (GSC) × Présence GEO"
-                    sub="Relation entre les performances SEO organiques et la visibilité générative">
+                  <CrossCard icon="🔍" title="GSC × Fan-outs"
+                    sub="Corrélation entre vos performances SEO organiques et votre visibilité dans les Fan-outs LLM">
                     <div style={{ display: "grid", gridTemplateColumns: hasGSC ? "1fr 1fr" : "1fr", gap: 20 }}>
                       <div>
                         <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>État actuel</div>
@@ -2069,30 +2146,48 @@ export default function GeoAuditTab({
                     </div>
                   </CrossCard>
 
-                  {/* B7 — Corrélations Screaming Frog — tableau unique */}
+                  {/* B7 — Corrélations Screaming Frog — avec dropdown filtre */}
                   {hasCorr && (
-                    <CrossCard icon="🕷️" title="Corrélations Screaming Frog" sub="SF × Bing AI · SF × GSC · SF × Fan-outs">
+                    <CrossCard icon="🕷️" title="Corrélations Screaming Frog" sub="Choisissez le croisement à observer">
                       {(() => {
-                        // SF × Fan-outs : corrélations avec brand_mentioned (src=bing proxy)
                         const fanoutCorrs = corrMatrix.flatMap(row =>
                           row.corrs.filter(c => c.kpi.src === "bing" && c.value !== null)
-                            .map(c => ({ dim: row.dim.label, kpi: c.kpi.label, src: "bing", value: c.value }))
+                            .map(c => ({ dim: row.dim.label, kpi: c.kpi.label, src: "fanout", value: c.value }))
                         );
                         const gscCorrsAll = corrMatrix.flatMap(row =>
                           row.corrs.filter(c => c.kpi.src === "gsc" && c.value !== null)
                             .map(c => ({ dim: row.dim.label, kpi: c.kpi.label, src: "gsc", value: c.value }))
                         );
-                        const allCorrs = [...fanoutCorrs, ...gscCorrsAll]
+                        const bingCorrs = corrMatrix.flatMap(row =>
+                          row.corrs.filter(c => c.kpi.key === "geoMentions" && c.value !== null)
+                            .map(c => ({ dim: row.dim.label, kpi: c.kpi.label, src: "bing", value: c.value }))
+                        );
+                        const SRC_LABELS = {
+                          gsc:    { label: "SF × GSC",      color: "#2563EB" },
+                          bing:   { label: "SF × Bing AI",  color: "#7C3AED" },
+                          fanout: { label: "SF × Fan-outs", color: "#059669" },
+                        };
+                        const allCorrs = (sfCorrFilter === "gsc" ? gscCorrsAll : sfCorrFilter === "bing" ? bingCorrs : sfCorrFilter === "fanout" ? fanoutCorrs : [...fanoutCorrs, ...gscCorrsAll, ...bingCorrs])
                           .sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
                           .slice(0, 15);
 
-                        if (!allCorrs.length) return (
-                          <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>
-                            Importez un CSV Screaming Frog et interrogez plus de questions pour calculer les corrélations.
-                          </div>
-                        );
-
                         return (
+                          <div>
+                            <div style={{ marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
+                              <span style={{ fontSize: 11, color: C.textLight, fontWeight: 600 }}>Croisement :</span>
+                              <select value={sfCorrFilter} onChange={e => setSfCorrFilter(e.target.value)}
+                                style={{ fontSize: 12, padding: "5px 10px", border: `1px solid ${C.border}`, borderRadius: 7, background: C.white, cursor: "pointer", fontWeight: 600 }}>
+                                <option value="all">Tous les croisements</option>
+                                <option value="gsc">SF × GSC</option>
+                                <option value="bing">SF × Bing AI</option>
+                                <option value="fanout">SF × Fan-outs</option>
+                              </select>
+                            </div>
+                            {allCorrs.length === 0 ? (
+                              <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>
+                                Importez un CSV Screaming Frog et interrogez plus de questions pour calculer les corrélations.
+                              </div>
+                            ) : (
                           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                             <thead>
                               <tr style={{ background: C.bg }}>
@@ -2105,14 +2200,13 @@ export default function GeoAuditTab({
                               {allCorrs.map((c, i) => {
                                 const pos = c.value > 0;
                                 const strong = Math.abs(c.value) >= 0.4;
-                                const srcLabel = c.src === "gsc" ? "SF × GSC" : "SF × Fan-out";
-                                const srcColor = c.src === "gsc" ? "#2563EB" : "#7C3AED";
+                                const srcDef = SRC_LABELS[c.src] || { label: c.src, color: C.textMid };
                                 return (
                                   <tr key={i} style={{ borderBottom: `1px solid ${C.borderLight}` }}>
                                     <td style={{ padding: "7px 12px", color: C.text }}>{c.dim}</td>
                                     <td style={{ padding: "7px 12px", color: C.textMid }}>{c.kpi}</td>
                                     <td style={{ padding: "7px 12px" }}>
-                                      <span style={{ fontSize: 10, fontWeight: 700, color: srcColor, background: srcColor + "15", borderRadius: 4, padding: "1px 6px" }}>{srcLabel}</span>
+                                      <span style={{ fontSize: 10, fontWeight: 700, color: srcDef.color, background: srcDef.color + "15", borderRadius: 4, padding: "1px 6px" }}>{srcDef.label}</span>
                                     </td>
                                     <td style={{ padding: "7px 12px" }}>
                                       <span style={{ fontSize: 12, fontWeight: strong ? 700 : 500, color: pos ? "#059669" : "#DC2626", background: pos ? "#ECFDF5" : "#FEF2F2", borderRadius: 5, padding: "2px 10px" }}>
@@ -2124,6 +2218,8 @@ export default function GeoAuditTab({
                               })}
                             </tbody>
                           </table>
+                            )}
+                          </div>
                         );
                       })()}
                     </CrossCard>
@@ -2156,28 +2252,11 @@ export default function GeoAuditTab({
                 })}
               </div>
 
-              {/* B1 — Scatter plot concurrents : citations × position */}
-              {Object.keys(audit.compStats).length > 0 && (
-                <div style={{ marginBottom: 24 }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>
-                    Cartographie concurrentielle — Citations × Position
-                  </div>
-                  <CompetitorScatter compStats={audit.compStats} total={audit.total} brandName={brand?.brand_name} brandWithBrand={audit.withBrand} brandAvgPos={audit.avgPos} />
-                </div>
-              )}
-
-              {/* B9 — CTAs harmonisés : Analyse Fan-out + Analyse Détaillée côte à côte */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-                <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 12, padding: "16px 20px" }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 4 }}>✨ Analyse Fan-out</div>
-                  <div style={{ fontSize: 11, color: C.textLight, marginBottom: 12 }}>Recommandations basées sur vos données de présence et sources</div>
-                  <FanoutAnalysis questions={siteQuestions} results={siteResults} brand={brand} claudeKey={claudeKey} />
-                </div>
-                <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 12, padding: "16px 20px" }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 4 }}>✦ Analyse IA détaillée</div>
-                  <div style={{ fontSize: 11, color: C.textLight, marginBottom: 12 }}>Interprétation contextuelle complète générée par Claude</div>
-                  <AIAnalysis audit={audit} brand={brand} site={site} questions={siteQuestions} onTextReady={setAiText} />
-                </div>
+              {/* B9 — Analyse IA détaillée */}
+              <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 12, padding: "16px 20px" }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 4 }}>✦ Analyse IA détaillée</div>
+                <div style={{ fontSize: 11, color: C.textLight, marginBottom: 12 }}>Interprétation contextuelle complète générée par Claude</div>
+                <AIAnalysis audit={audit} brand={brand} site={site} questions={siteQuestions} onTextReady={setAiText} />
               </div>
             </Section>
 
