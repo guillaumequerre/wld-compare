@@ -434,16 +434,24 @@ function Section({ icon, title, sub, children, accent }) {
 }
 
 // ── Scatter plot concurrents : citations (X) × position moy. (Y) ──
-function CompetitorScatter({ compStats, total, brandName, brandWithBrand, brandAvgPos }) {
+function CompetitorScatter({ compStats, total, brandName, brandWithBrand, brandAvgPos, competitors = [] }) {
   const W = 560, H = 300, PL = 44, PR = 16, PT = 16, PB = 36;
   const plotW = W - PL - PR, plotH = H - PT - PB;
 
   const COLORS = ["#DC2626","#D97706","#7C3AED","#2563EB","#0891B2","#059669","#9333EA","#EA580C"];
 
   // Préparer les points concurrents — utilise la couleur de catégorie si dispo
-  const entries = Object.entries(compStats)
-    .filter(([, s]) => s.enabled !== false)
-    .map(([name, s], idx) => ({
+  // Construire un Set des noms actifs depuis la liste source (competitors)
+const activeNames = competitors.length > 0
+  ? new Set(competitors.filter(c => c.enabled !== false).map(c => c.name))
+  : null;
+
+const entries = Object.entries(compStats)
+  .filter(([name, s]) => {
+    if (activeNames) return activeNames.has(name);
+    return s.enabled !== false;
+  })
+  .map(([name, s], idx) => ({
     name,
     citations: s.mentions,
     pct: Math.round(s.mentions / Math.max(total, 1) * 100),
@@ -1425,7 +1433,7 @@ export default function GeoAuditTab({
   const [aiText, setAiText]             = useState("");
   const [exporting, setExporting]       = useState(false);
   const [showTour, setShowTour]         = useState(false);
-  const [compSort, setCompSort]         = useState({ col: "mentions", dir: "desc" });
+  const [compSort, setCompSort]         = useState({ col: "enabled", dir: "desc" });
   const [compTableOpen, setCompTableOpen] = useState(false);
   const [compSearch, setCompSearch]     = useState("");    // regex/texte pour filtrer concurrents
   const [sfCorrFilter, setSfCorrFilter] = useState("all"); // "all" | "gsc" | "bing" | "fanout"
@@ -1719,8 +1727,7 @@ export default function GeoAuditTab({
               {/* Cartographie concurrentielle — au-dessus du tableau */}
               {Object.keys(audit.compStats).filter(k => audit.compStats[k].enabled !== false).length > 0 && (
                 <div style={{ marginBottom: 20 }}>
-                  <CompetitorScatter compStats={audit.compStats} total={audit.total} brandName={brand?.brand_name} brandWithBrand={audit.withBrand} brandAvgPos={audit.avgPos} />
-                </div>
+                <CompetitorScatter compStats={audit.compStats} total={audit.total} brandName={brand?.brand_name} brandWithBrand={audit.withBrand} brandAvgPos={audit.avgPos} competitors={competitors} />                </div>
               )}
 
               {/* Table concurrents — collapsible avec header sticky */}
