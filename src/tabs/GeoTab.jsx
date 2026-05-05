@@ -971,20 +971,7 @@ function detectBrand(answer, sources, brandName, brandAliases = [], competitors 
 
 // ── Small UI helpers ──────────────────────────────────────────────
 
-function Pill({ children, color, bg, onClick, active, title }) {
-  return (
-    <span onClick={onClick} title={title} style={{
-      display: "inline-flex", alignItems: "center", gap: 4,
-      padding: "3px 11px", borderRadius: 20, fontSize: 11, fontWeight: 500,
-      letterSpacing: "0.01em",
-      background: active ? "#1A3C2E" : "transparent",
-      color: active ? "#F0EBE0" : "#1A3C2E99",
-      border: active ? "1px solid #1A3C2E" : "1px solid #1A3C2E18",
-      cursor: onClick ? "pointer" : "default",
-      transition: "all 0.2s",
-    }}>{children}</span>
-  );
-}
+
 
 function Btn({ children, onClick, disabled, color, variant = "solid", small, title, style: extraStyle }) {
   const base = {
@@ -2027,7 +2014,6 @@ function ProviderRow({ provider, results, brandName, brandAliases, brandDomain =
   const sources = result?.sources || [];
   const comps   = result?.competitors_mentioned || [];
 
-  const resultDateStr = result?.created_at?.slice(0, 10) || null;
   const displayDate = result?.created_at || lastCalDate || null;
 
   const presenceLabel = presenceType === "ranked"
