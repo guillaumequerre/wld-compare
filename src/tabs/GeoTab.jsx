@@ -4049,6 +4049,33 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
   }, [apiKeyEnc]); // eslint-disable-line react-hooks/exhaustive-deps
 
 
+  const GEO_TOUR_STEPS = [
+    {
+      target: "subnav", icon: "🧭", title: "Navigation Fan-outs",
+      desc: "5 onglets structurent l'analyse : Mots-clés, Questions, Concurrents, Automatisation et Sources.",
+      tip: "Commencez par les Mots-clés.", position: "bottom",
+      onActivate: () => { setMainTab("analyse"); setSubTab("keywords"); },
+    },
+    {
+      target: "keywords-section", icon: "🔑", title: "Mots-clés",
+      desc: "Saisissez vos requêtes cibles (une par ligne) ou importez un CSV. Générez les questions avec OpenAI.",
+      tip: "Commencez par 5–10 mots-clés stratégiques.", position: "bottom",
+      onActivate: () => { setMainTab("analyse"); setSubTab("keywords"); },
+    },
+    {
+      target: "stats-header", icon: "📊", title: "Tableau de bord de présence",
+      desc: "% de présence marque, position moyenne, concurrents détectés. Se met à jour après chaque interrogation.",
+      tip: "Filtrez par provider pour analyser les tendances.", position: "bottom",
+      onActivate: () => { setMainTab("analyse"); setSubTab("questions"); },
+    },
+    {
+      target: "run-all", icon: "▶", title: "Lancer les interrogations",
+      desc: "Interroge uniquement les questions sans réponse aujourd'hui. ↺ force le rechargement total.",
+      tip: "L'historique est consultable dans l'Audit GEO.", position: "top",
+      onActivate: () => { setMainTab("analyse"); setSubTab("questions"); },
+    },
+  ];
+
   return (
     <div style={{ fontFamily: "inherit" }}>
 
