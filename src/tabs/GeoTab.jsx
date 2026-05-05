@@ -1892,6 +1892,14 @@ function isBrandPresent(r) {
   return !!r && (r.brand_mentioned === true || r.brand_mentioned === 1);
 }
 
+function getPresenceType(r) {
+  if (!r) return null;
+  if (r.brand_position && (r.brand_mentioned === true || r.brand_mentioned === 1)) return "ranked";
+  if (r.brand_in_sources) return "source";
+  if (r.brand_mentioned === true || r.brand_mentioned === 1) return "mention";
+  return null;
+}
+
 // history: [{ test_date: "YYYY-MM-DD", brand_mentioned: bool }]
 // results: current geo_results for this provider (for today's optimistic update)
 
