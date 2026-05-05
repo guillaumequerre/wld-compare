@@ -272,10 +272,10 @@
 
 /* ── Items (questions, mots-clés) ────────────────────────────── */
 .gt-item {
-  padding: 12px 0;
+  padding: 12px 0 12px 0;
   border-bottom: 0.5px solid #1A3C2E08;
   background: transparent;
-  transition: background 0.1s;
+  transition: background 0.1s, border-left-color 0.2s;
 }
 
 .gt-item:last-child { border-bottom: none; }

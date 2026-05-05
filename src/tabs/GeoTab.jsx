@@ -1054,22 +1054,22 @@ function StatsHeader({ questions, results, brandName }) {
       </div>
 
       {/* Position moy. */}
-      <div style={{ background: "#fff", border: "0.5px solid #1A3C2E0D", borderRadius: 12, padding: "14px 18px" }}>
-        <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E55", marginBottom: 4 }}>Position moy.</div>
-        <div style={{ fontSize: 28, fontWeight: 800, color: C.text }}>{avgPos}</div>
-        <div style={{ fontSize: 11, color: C.textLight }}>dans les fan-outs</div>
+      <div className="gt-kpi-card">
+        <div className="gt-kpi-label">Position moy.</div>
+        <div className="gt-kpi-val">{avgPos || "—"}</div>
+        <div className="gt-kpi-sub">dans les fan-outs</div>
       </div>
 
       {/* Dans les sources */}
-      <div style={{ background: "#fff", border: "0.5px solid #1A3C2E0D", borderRadius: 12, padding: "14px 18px" }}>
-        <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E55", marginBottom: 4 }}>Dans les sources</div>
-        <div style={{ fontSize: 28, fontWeight: 800, color: "#2563EB" }}>{withSources}</div>
-        <div style={{ fontSize: 11, color: C.textLight }}>questions citées</div>
+      <div className="gt-kpi-card">
+        <div className="gt-kpi-label">Dans les sources</div>
+        <div className="gt-kpi-val">{withSources}</div>
+        <div className="gt-kpi-sub">questions citées</div>
       </div>
 
       {/* Top concurrents — always shown */}
-      <div style={{ background: "#fff", border: "0.5px solid #1A3C2E0D", borderRadius: 12, padding: "14px 18px" }}>
-        <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E55", marginBottom: 8 }}>Top concurrents cités</div>
+      <div className="gt-kpi-card">
+        <div className="gt-kpi-label" style={{ marginBottom: 8 }}>Concurrents cités</div>
         {topComps.length > 0 ? topComps.map(([name, cnt]) => (
           <div key={name} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 3 }}>
             <span style={{ color: C.text, fontWeight: 500 }}>{name}</span>
@@ -2884,7 +2884,11 @@ ${question}`;
             const cat = categories.find(c => c.id === q.category_id);
             const kwTag = keywords.find(k => k.id === q.keyword_id);
             return (
-              <div key={q.id} className={`gt-item${isSel ? " gt-item--selected" : ""}`}>
+              <div key={q.id} className={`gt-item${isSel ? " gt-item--selected" : ""}`} style={{
+              borderLeft: `2px solid ${hasBrand ? "#1A7A4A" : q.is_favorite ? "#C97820" : "#1A3C2E11"}`,
+              paddingLeft: 12,
+              borderRadius: 0,
+            }}>
                 <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
                   <input type="checkbox" checked={isSel} onChange={() => { setSelected(prev => { const n = new Set(prev); n.has(q.id) ? n.delete(q.id) : n.add(q.id); return n; }); }} style={{ cursor: "pointer", flexShrink: 0, marginTop: 2 }} />
                   <button onClick={() => toggleFav(q.id, q.is_favorite)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, flexShrink: 0, opacity: q.is_favorite ? 0.9 : 0.2, transition: "opacity 0.2s" }}>⭐</button>
