@@ -974,12 +974,13 @@ function Pill({ children, color, bg, onClick, active, title }) {
   return (
     <span onClick={onClick} title={title} style={{
       display: "inline-flex", alignItems: "center", gap: 4,
-      padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: active ? 500 : 400,
-      background: active ? "#1A3C2E" : (bg || "#F0EBE0"),
-      color: active ? "#F0EBE0" : "#1A3C2E",
-      border: active ? "1px solid #1A3C2E" : "1px solid #1A3C2E22",
+      padding: "3px 11px", borderRadius: 20, fontSize: 11, fontWeight: 500,
+      letterSpacing: "0.01em",
+      background: active ? "#1A3C2E" : "transparent",
+      color: active ? "#F0EBE0" : "#1A3C2E99",
+      border: active ? "1px solid #1A3C2E" : "1px solid #1A3C2E18",
       cursor: onClick ? "pointer" : "default",
-      transition: "all 0.15s",
+      transition: "all 0.2s",
     }}>{children}</span>
   );
 }
@@ -987,17 +988,19 @@ function Pill({ children, color, bg, onClick, active, title }) {
 function Btn({ children, onClick, disabled, color, variant = "solid", small, title, style: extraStyle }) {
   const base = {
     display: "inline-flex", alignItems: "center", gap: 5,
-    padding: small ? "4px 12px" : "7px 18px",
+    padding: small ? "4px 14px" : "7px 20px",
     fontSize: small ? 11 : 12, fontWeight: 500,
+    letterSpacing: "0.02em",
     borderRadius: 20, cursor: disabled ? "not-allowed" : "pointer",
-    opacity: disabled ? 0.4 : 1,
-    transition: "all 0.12s", border: "1px solid transparent",
-    userSelect: "none",
+    opacity: disabled ? 0.35 : 1,
+    transition: "opacity 0.2s, background 0.2s",
+    border: "1px solid transparent",
+    userSelect: "none", whiteSpace: "nowrap",
     ...(variant === "solid"
       ? { background: "#1A3C2E", color: "#F0EBE0", borderColor: "#1A3C2E" }
-      : variant === "ghost"
-      ? { background: "transparent", color: "#1A3C2E", borderColor: "#1A3C2E44" }
-      : { background: "#F0EBE0", color: "#1A3C2E", borderColor: "#1A3C2E22" }),
+      : variant === "outline" || variant === "ghost"
+      ? { background: "transparent", color: "#1A3C2E", borderColor: "#1A3C2E33" }
+      : { background: "#F0EBE0", color: "#1A3C2E", borderColor: "#1A3C2E11" }),
     ...extraStyle,
   };
   return <button onClick={disabled ? undefined : onClick} disabled={disabled} title={title} style={base}>{children}</button>;
@@ -1005,16 +1008,19 @@ function Btn({ children, onClick, disabled, color, variant = "solid", small, tit
 
 function StatusBadge({ status }) {
   const map = {
-    pending:       { label: "🚀 Prêt pour génération !", color: "#2563EB", bg: "#EFF6FF" },
-    generating_q:  { label: "⏳ Génération…",  color: "#D97706", bg: "#FFFBEB" },
-    done_q:        { label: "✓ Généré",         color: "#059669", bg: "#ECFDF5" },
-    generating_r:  { label: "Appel LLM…",   color: "#7C3AED", bg: "#F5F3FF" },
-    done:          { label: "Terminé",       color: "#2563EB", bg: "#EFF6FF" },
-    error:         { label: "⚠ Erreur",      color: "#DC2626", bg: "#FEF2F2" },
+    pending:       { label: "Prêt",       color: "#1A3C2E55" },
+    generating_q:  { label: "Génération…", color: "#E8541A" },
+    done_q:        { label: "Généré",      color: "#1A7A4A" },
+    generating_r:  { label: "LLM…",       color: "#E8541A" },
+    done:          { label: "Terminé",     color: "#1A3C2E" },
+    error:         { label: "Erreur",      color: "#C0352A" },
   };
   const s = map[status] || map.pending;
   return (
-    <span style={{ fontSize: 10, fontWeight: 700, color: s.color, background: s.bg, border: `1px solid ${s.color}33`, borderRadius: 5, padding: "2px 7px" }}>
+    <span style={{
+      fontSize: 10, fontWeight: 500, letterSpacing: "0.06em", textTransform: "uppercase",
+      color: s.color, padding: "0 0", background: "none", border: "none",
+    }}>
       {s.label}
     </span>
   );
@@ -1053,29 +1059,29 @@ function StatsHeader({ questions, results, brandName }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginBottom: 24 }}>
       {/* Présence */}
-      <div style={{ background: presence >= 50 ? "#ECFDF5" : presence > 0 ? "#FFFBEB" : "#FEF2F2", border: `1px solid ${presence >= 50 ? "#059669" : presence > 0 ? "#D97706" : "#DC2626"}33`, borderRadius: 12, padding: "14px 18px" }}>
-        <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 4 }}>Présence {brandName}</div>
-        <div style={{ fontSize: 28, fontWeight: 800, color: presence >= 50 ? "#059669" : presence > 0 ? "#D97706" : "#DC2626" }}>{presence}%</div>
-        <div style={{ fontSize: 11, color: C.textLight }}>{withBrand} / {total} questions</div>
+      <div style={{ background: "#fff", border: "0.5px solid #1A3C2E11", borderRadius: 12, padding: "16px 20px" }}>
+        <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.12em", textTransform: "uppercase", color: "#1A3C2E55", marginBottom: 8 }}>Présence {brandName}</div>
+        <div style={{ fontSize: 32, fontWeight: 300, color: presence >= 50 ? "#1A7A4A" : presence > 0 ? "#C97820" : "#C0352A", letterSpacing: "-0.02em" }}>{presence}%</div>
+        <div style={{ fontSize: 11, color: "#1A3C2E44", marginTop: 2 }}>{withBrand} / {total}</div>
       </div>
 
       {/* Position moy. */}
-      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px" }}>
-        <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 4 }}>Position moy.</div>
+      <div style={{ background: "#fff", border: "0.5px solid #1A3C2E0D", borderRadius: 12, padding: "14px 18px" }}>
+        <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E55", marginBottom: 4 }}>Position moy.</div>
         <div style={{ fontSize: 28, fontWeight: 800, color: C.text }}>{avgPos}</div>
         <div style={{ fontSize: 11, color: C.textLight }}>dans les fan-outs</div>
       </div>
 
       {/* Dans les sources */}
-      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px" }}>
-        <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 4 }}>Dans les sources</div>
+      <div style={{ background: "#fff", border: "0.5px solid #1A3C2E0D", borderRadius: 12, padding: "14px 18px" }}>
+        <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E55", marginBottom: 4 }}>Dans les sources</div>
         <div style={{ fontSize: 28, fontWeight: 800, color: "#2563EB" }}>{withSources}</div>
         <div style={{ fontSize: 11, color: C.textLight }}>questions citées</div>
       </div>
 
       {/* Top concurrents — always shown */}
-      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px" }}>
-        <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>Top concurrents cités</div>
+      <div style={{ background: "#fff", border: "0.5px solid #1A3C2E0D", borderRadius: 12, padding: "14px 18px" }}>
+        <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E55", marginBottom: 8 }}>Top concurrents cités</div>
         {topComps.length > 0 ? topComps.map(([name, cnt]) => (
           <div key={name} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 3 }}>
             <span style={{ color: C.text, fontWeight: 500 }}>{name}</span>
@@ -1087,8 +1093,8 @@ function StatsHeader({ questions, results, brandName }) {
       </div>
 
       {/* Top domaines — always shown */}
-      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px" }}>
-        <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>Sites les plus cités</div>
+      <div style={{ background: "#fff", border: "0.5px solid #1A3C2E11", borderRadius: 12, padding: "16px 20px" }}>
+        <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.12em", textTransform: "uppercase", color: "#1A3C2E55", marginBottom: 12 }}>Sites les plus cités</div>
         {topDomains.length > 0 ? topDomains.map(([domain, cnt]) => (
           <div key={domain} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 3 }}>
             <span style={{ color: "#2563EB", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 120 }}>{domain}</span>
@@ -1195,8 +1201,8 @@ function CompetitorManager({ projectId, siteId, allResults, competitors, setComp
   return (
     <div>
       {/* Formulaire ajout */}
-      <div style={{ background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 10, padding: "12px 16px", marginBottom: 16 }}>
-        <div style={{ fontSize: 10, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>Ajouter un concurrent</div>
+      <div style={{ background: "transparent", border: "none", borderBottom: "0.5px solid #1A3C2E0D", padding: "0 0 16px 0", marginBottom: 16 }}>
+        <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.12em", textTransform: "uppercase", color: "#1A3C2E44", marginBottom: 10 }}>Ajouter un concurrent</div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
           <input value={newName} onChange={e => setNewName(e.target.value)} placeholder="Nom du concurrent…"
             onKeyDown={e => e.key === "Enter" && save()}
@@ -1245,7 +1251,7 @@ function CompetitorManager({ projectId, siteId, allResults, competitors, setComp
               const mentions = detectedNames.find(d => d.lower === comp.name.toLowerCase())?.mentions || 0;
               const enabled = comp.enabled !== false;
               return (
-                <div key={comp.id} style={{ border: `1px solid ${catDef.color}22`, borderLeft: `3px solid ${catDef.color}`, borderRadius: 9, background: catDef.bg, padding: "8px 12px", display: "flex", alignItems: "center", gap: 8, opacity: enabled ? 1 : 0.5 }}>
+                <div key={comp.id} style={{ border: "none", borderBottom: "0.5px solid #1A3C2E08", borderRadius: 0, background: "transparent", padding: "9px 0", display: "flex", alignItems: "center", gap: 8, opacity: enabled ? 1 : 0.4 }}>
                   <div style={{ width: 8, height: 8, borderRadius: "50%", background: catDef.color, flexShrink: 0 }} />
                   <span style={{ fontSize: 12, fontWeight: 600, color: "#1A3C2E", flex: 1 }}>{comp.name}</span>
                   {mentions > 0 && <span style={{ fontSize: 10, color: catDef.color, background: "#fff", border: `1px solid ${catDef.color}33`, borderRadius: 5, padding: "1px 6px", fontWeight: 600 }}>{mentions}×</span>}
@@ -1307,12 +1313,12 @@ function CategoryManager({ projectId, categories, setCategories, compact }) {
           {CAT_COLORS.map(col => (
             <button key={col} onClick={() => setNewColor(col)} style={{ width: 14, height: 14, borderRadius: "50%", background: col, border: `2px solid ${newColor === col ? "#000" : "transparent"}`, cursor: "pointer" }} />
           ))}
-          <input autoFocus value={newName} onChange={e => setNewName(e.target.value)} onKeyDown={e => e.key === "Enter" && add()} placeholder="Nom…" style={{ padding: "2px 6px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11, width: 100 }} />
+          <input autoFocus value={newName} onChange={e => setNewName(e.target.value)} onKeyDown={e => e.key === "Enter" && add()} placeholder="Nom…" style={{ padding: "2px 6px", border: "0.5px solid #1A3C2E0D", borderRadius: 6, fontSize: 11, width: 100 }} />
           <button onClick={add} style={{ padding: "2px 7px", borderRadius: 6, background: newColor, color: "#fff", border: "none", fontSize: 11, cursor: "pointer" }}>OK</button>
-          <button onClick={() => setAdding(false)} style={{ padding: "2px 6px", borderRadius: 6, background: C.bg, border: `1px solid ${C.border}`, fontSize: 11, cursor: "pointer" }}>✕</button>
+          <button onClick={() => setAdding(false)} style={{ padding: "2px 6px", borderRadius: 6, background: "#FAFAF8", border: "0.5px solid #1A3C2E0D", fontSize: 11, cursor: "pointer" }}>✕</button>
         </span>
       ) : (
-        <button onClick={() => setAdding(true)} style={{ padding: "2px 8px", borderRadius: 12, fontSize: 11, background: C.bg, border: `1px dashed ${C.border}`, color: C.textLight, cursor: "pointer" }}>+ Catégorie</button>
+        <button onClick={() => setAdding(true)} style={{ padding: "2px 8px", borderRadius: 12, fontSize: 11, background: "#FAFAF8", border: `1px dashed ${C.border}`, color: C.textLight, cursor: "pointer" }}>+ Catégorie</button>
       )}
     </div>
   );
@@ -1340,7 +1346,7 @@ function TagSelect({ values = [], categories, onChange, placeholder = "Tags…" 
   return (
     <div ref={ref} style={{ position: "relative", display: "inline-block" }}>
       <div onClick={() => setOpen(o => !o)}
-        style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center", minWidth: 80, padding: "3px 6px", border: `1px solid ${C.border}`, borderRadius: 7, cursor: "pointer", background: C.white, fontSize: 11 }}>
+        style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center", minWidth: 80, padding: "3px 6px", border: "0.5px solid #1A3C2E0D", borderRadius: 7, cursor: "pointer", background: "#fff", fontSize: 11 }}>
         {selected.length === 0
           ? <span style={{ color: C.textLight }}>{placeholder}</span>
           : selected.map(c => (
@@ -1352,7 +1358,7 @@ function TagSelect({ values = [], categories, onChange, placeholder = "Tags…" 
         <span style={{ color: C.textLight, marginLeft: 2 }}>▾</span>
       </div>
       {open && (
-        <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 200, background: C.white, border: `1px solid ${C.border}`, borderRadius: 9, boxShadow: "0 4px 16px rgba(0,0,0,0.1)", padding: 6, minWidth: 160 }}>
+        <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 200, background: "#fff", border: "0.5px solid #1A3C2E0D", borderRadius: 9, boxShadow: "0 4px 16px rgba(0,0,0,0.1)", padding: 6, minWidth: 160 }}>
           {categories.length === 0
             ? <div style={{ fontSize: 11, color: C.textLight, padding: "4px 8px" }}>Aucune catégorie</div>
             : categories.map(c => (
@@ -1380,7 +1386,7 @@ function TagSelect({ values = [], categories, onChange, placeholder = "Tags…" 
 function CatSelect({ value, categories, onChange, placeholder = "Catégorie…" }) {
   return (
     <select value={value || ""} onChange={e => onChange(e.target.value || null)}
-      style={{ padding: "4px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11, color: C.text, background: C.white, cursor: "pointer" }}>
+      style={{ padding: "4px 8px", border: "0.5px solid #1A3C2E0D", borderRadius: 6, fontSize: 11, color: C.text, background: "#fff", cursor: "pointer" }}>
       <option value="">{placeholder}</option>
       {(Array.isArray(categories) ? categories : []).filter(c => c.id && c.name).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
     </select>
@@ -1699,19 +1705,19 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
       )}
 
       {/* Input + CSV import */}
-      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20, marginBottom: 16 }}>
+      <div style={{ background: "#fff", border: "0.5px solid #1A3C2E0D", borderRadius: 12, padding: 20, marginBottom: 16 }}>
         <div style={{ display: "flex", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
           <div style={{ flex: 1, minWidth: 220 }}>
             <div style={{ fontSize: 11, fontWeight: 600, color: C.textMid, marginBottom: 6 }}>Ajouter des mots-clés (un par ligne)</div>
             <textarea value={input} onChange={e => setInput(e.target.value)}
               placeholder={"Mot clé 1\nMot clé 2\nMot clé 3"}
-              style={{ width: "100%", minHeight: 90, padding: "8px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, color: C.text, resize: "vertical", fontFamily: "inherit", boxSizing: "border-box" }} />
+              style={{ width: "100%", minHeight: 90, padding: "8px 12px", border: "0.5px solid #1A3C2E0D", borderRadius: 8, fontSize: 12, color: C.text, resize: "vertical", fontFamily: "inherit", boxSizing: "border-box" }} />
             <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
               <Btn onClick={addKeywords} disabled={loading || !input.trim()}>{loading ? "Ajout…" : "➕ Ajouter"}</Btn>
             </div>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingTop: 22 }}>
-            <label style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, fontWeight: 600, color: C.textMid, cursor: "pointer", background: C.white }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", border: "0.5px solid #1A3C2E0D", borderRadius: 8, fontSize: 12, fontWeight: 600, color: C.textMid, cursor: "pointer", background: C.white }}>
               📥 Importer CSV
               <input type="file" accept=".csv,.txt" onChange={importCSV} style={{ display: "none" }} />
             </label>
@@ -1721,7 +1727,7 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
       </div>
 
       {/* Categories */}
-      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 16px", marginBottom: 16 }}>
+      <div style={{ background: "#fff", border: "0.5px solid #1A3C2E0D", borderRadius: 12, padding: "12px 16px", marginBottom: 16 }}>
         <div style={{ fontSize: 11, fontWeight: 600, color: C.textMid, marginBottom: 8 }}>Catégories du projet</div>
         <CategoryManager projectId={projectId} categories={categories} setCategories={setCategories} compact />
       </div>
@@ -1746,7 +1752,7 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
               style={{ flex: 1, minWidth: 160, padding: "4px 10px", border: `1px solid ${filterSearch ? "#7C3AED" : C.border}`, borderRadius: 7, fontSize: 11, color: C.text }}
             />
             {filterSearch && (
-              <button onClick={() => setFilterSearch("")} style={{ fontSize: 11, padding: "3px 8px", border: `1px solid ${C.border}`, borderRadius: 5, background: C.white, cursor: "pointer", color: C.textMid }}>✕</button>
+              <button onClick={() => setFilterSearch("")} style={{ fontSize: 11, padding: "3px 8px", border: "0.5px solid #1A3C2E0D", borderRadius: 5, background: "#fff", cursor: "pointer", color: C.textMid }}>✕</button>
             )}
 
             {/* Filter by category */}
@@ -1830,7 +1836,13 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
           {filtered.map(kw => {
             const isSel = selected.has(kw.id);
             return (
-              <div key={kw.id} style={{ background: isSel ? "#EFF6FF" : C.white, border: `1px solid ${kw.status === "done_q" ? "#05966933" : isSel ? "#2563EB55" : C.border}`, borderRadius: 10, padding: "10px 14px", display: "flex", alignItems: "center", gap: 10, borderLeft: `3px solid ${kw.status === "done_q" ? "#059669" : kw.status === "generating_q" ? "#D97706" : "transparent"}` }}>
+              <div key={kw.id} style={{
+                background: isSel ? "#F0EBE044" : "#fff",
+                border: "none",
+                borderBottom: "0.5px solid #1A3C2E0D",
+                padding: "11px 0",
+                display: "flex", alignItems: "center", gap: 10,
+              }}>
                 <input type="checkbox" checked={isSel} onChange={() => toggleSelect(kw.id)} style={{ cursor: "pointer", flexShrink: 0 }} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{kw.keyword}</div>
@@ -1866,7 +1878,7 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
                     title={(!apiKey && !providerKeys?.openai?.dec) ? "Clé OpenAI manquante — ajoutez-la dans ⚙️ Gestion des Providers (en haut de page)" : undefined}>
                     {busy[kw.id] === "q" ? "⏳" : kw.status === "done_q" ? "🔄" : "💬"}
                   </Btn>
-                  <button onClick={() => deleteKw(kw.id)} style={{ padding: "3px 7px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.white, color: C.textLight, fontSize: 10, cursor: "pointer" }}>🗑</button>
+                  <button onClick={() => deleteKw(kw.id)} style={{ padding: "3px 7px", border: "0.5px solid #1A3C2E0D", borderRadius: 6, background: "#fff", color: C.textLight, fontSize: 10, cursor: "pointer" }}>🗑</button>
                 </div>
               </div>
             );
@@ -1957,9 +1969,9 @@ function HintPanelQuestion({ questionId, question, sources, brandName, brandAlia
   };
 
   return (
-    <div style={{ borderRadius: 8, overflow: "hidden", border: `1px solid ${hasHint ? "#FCD34D" : C.border}` }}>
+    <div style={{ borderRadius: 0, overflow: "hidden", border: "none", borderTop: "0.5px solid #1A3C2E08" }}>
       <div
-        style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: hasHint ? "#FFFBEB" : C.bg, cursor: "pointer" }}
+        style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", background: "transparent", cursor: "pointer" }}
         onClick={() => hasHint ? setOpen(o => !o) : (!status.includes("loading") && run())}>
         <span style={{ fontSize: 14 }}>💡</span>
         {status === "loading" ? (
@@ -1985,7 +1997,7 @@ function HintPanelQuestion({ questionId, question, sources, brandName, brandAlia
         )}
       </div>
       {open && hint && (
-        <div style={{ padding: "8px 12px", background: "#FFFBEB", borderTop: "1px solid #FEF3C7" }}>
+        <div style={{ padding: "10px 0 4px 0", background: "transparent" }}>
           {(savedHintDate || status === "done") && (
             <div style={{ fontSize: 10, color: "#B45309", marginBottom: 6 }}>
               🕐 {savedHintDate ? new Date(savedHintDate).toLocaleString("fr-FR", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : new Date().toLocaleString("fr-FR", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
@@ -2018,7 +2030,7 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
     <div style={{ border: `1px solid ${result ? (hasBrand ? '#059669' : C.border) : p.color+'33'}`, borderLeft: `3px solid ${hasBrand ? '#059669' : p.color}`, borderRadius: 9, overflow: 'hidden', background: hasBrand ? '#F0FDF4' : C.white }}>
 
       {/* ── Row ── */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px', minHeight: 36 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", minHeight: 32 }}>
 
         {/* Provider name */}
         <span style={{ fontSize: 10, fontWeight: 800, color: p.color, minWidth: 68, flexShrink: 0 }}>{p.icon} {p.label}</span>
@@ -2063,9 +2075,9 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
 
         {hasKey && (
           <button onClick={onRun} disabled={isRunning || !hasKey}
-            title={!hasKey ? `Clé ${p.label} manquante — ajoutez-la dans ⚙️ Gestion des Providers` : `Interroger ${p.label}`}
-            style={{ width: 22, height: 22, borderRadius: '50%', border: 'none', cursor: (!hasKey || isRunning) ? 'not-allowed' : 'pointer', background: !hasKey ? C.bg : isRunning ? C.bg : '#059669', color: (!hasKey || isRunning) ? C.textLight : '#fff', fontSize: 11, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, opacity: (isRunning || !hasKey) ? 0.5 : 1 }}>
-            {isRunning ? '⏳' : '▶'}
+            title={!hasKey ? `Clé ${p.label} manquante` : `Interroger ${p.label}`}
+            style={{ width: 20, height: 20, borderRadius: "50%", border: "1px solid #1A3C2E22", cursor: (!hasKey || isRunning) ? "not-allowed" : "pointer", background: isRunning ? "transparent" : "#1A3C2E", color: isRunning ? "#1A3C2E44" : "#F0EBE0", fontSize: 10, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, opacity: (isRunning || !hasKey) ? 0.3 : 1, transition: "opacity 0.2s" }}>
+            {isRunning ? "·" : "▶"}
           </button>
         )}
       </div>
@@ -2073,7 +2085,7 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
       {/* ── Accordion: answer + sources + competitors ── */}
 
       {open && result && (
-        <div style={{ borderTop: `1px solid ${C.border}`, padding: '10px 12px', background: C.bg }}>
+        <div style={{ padding: "10px 0 10px 76px", background: "transparent" }}>
           <div style={{ fontSize: 12, color: C.text, lineHeight: 1.7 }}>
             {renderMarkdown(result.answer || '')}
           </div>
@@ -2264,7 +2276,7 @@ RÈGLES :
   if (!results.length) return null;
 
   return (
-    <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: "14px 20px", marginBottom: 20 }}>
+    <div style={{ background: "#fff", border: "0.5px solid #1A3C2E0D", borderRadius: 14, padding: "18px 24px", marginBottom: 24 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div>
           <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>🔬 Analyse des présences Fan-out</div>
@@ -2273,7 +2285,7 @@ RÈGLES :
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           {status === "done" && (
             <button onClick={() => setOpen(o => !o)}
-              style={{ fontSize: 11, padding: "4px 10px", border: `1px solid ${C.border}`, borderRadius: 7, background: C.bg, cursor: "pointer", color: C.textMid }}>
+              style={{ fontSize: 11, padding: "4px 10px", border: "0.5px solid #1A3C2E0D", borderRadius: 7, background: "#FAFAF8", cursor: "pointer", color: C.textMid }}>
               {open ? "▲ Masquer" : "▼ Voir l'analyse"}
             </button>
           )}
@@ -2753,20 +2765,20 @@ ${question}`;
       <StatsHeader questions={filtered} results={filteredResults} brandName={brand_name} />
 
       {/* ── Ajout de questions : manuel + import CSV ── */}
-      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 16px", marginBottom: 14 }}>
+      <div style={{ background: "transparent", border: "none", borderBottom: "0.5px solid #1A3C2E0D", padding: "0 0 14px 0", marginBottom: 14 }}>
         {/* Saisie manuelle */}
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
           <span style={{ fontSize: 11, fontWeight: 600, color: C.textLight, flexShrink: 0 }}>➕ Manuel</span>
           <input value={manualQ} onChange={e => setManualQ(e.target.value)} onKeyDown={e => e.key === "Enter" && addManual()}
             placeholder="Saisir une question à ajouter manuellement…"
-            style={{ flex: 1, padding: "6px 10px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 12, color: C.text }} />
+            style={{ flex: 1, padding: "6px 10px", border: "0.5px solid #1A3C2E0D", borderRadius: 7, fontSize: 12, color: C.text }} />
           <Btn onClick={addManual} disabled={!manualQ.trim()} small>Ajouter</Btn>
         </div>
         {/* Import CSV */}
         <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${C.border}`, display: "flex", gap: 10, alignItems: "center" }}>
           <span style={{ fontSize: 11, fontWeight: 600, color: C.textLight, flexShrink: 0 }}>📥 Import CSV</span>
           <span style={{ fontSize: 11, color: C.textLight, flex: 1 }}>
-            Une question par ligne, ou colonne <code style={{ background: C.bg, padding: "1px 5px", borderRadius: 4, fontSize: 10 }}>question</code> si CSV avec header
+            Une question par ligne, ou colonne <code style={{ background: "#FAFAF8", padding: "1px 5px", borderRadius: 4, fontSize: 10 }}>question</code> si CSV avec header
           </span>
           <input
             ref={csvInputRef}
@@ -2787,13 +2799,13 @@ ${question}`;
       </div>
 
       {/* ── Filters ── */}
-      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 16px", marginBottom: 14 }}>
+      <div style={{ background: "#fff", border: "0.5px solid #1A3C2E0D", borderRadius: 12, padding: "12px 16px", marginBottom: 14 }}>
         {/* Row 1: search + category + keyword + fav + brand */}
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
           <input
             value={filterSearch} onChange={e => setFilterSearch(e.target.value)}
-            placeholder="🔍 Regex / texte sur les questions…"
-            style={{ padding: "5px 10px", border: `1px solid ${filterSearch ? "#2563EB" : C.border}`, borderRadius: 7, fontSize: 11, color: C.text, width: 230 }}
+            placeholder="Rechercher…"
+            style={{ padding: "6px 12px", border: "0.5px solid #1A3C2E22", borderRadius: 20, fontSize: 11, color: "#1A3C2E", width: 200, outline: "none", background: filterSearch ? "#F0EBE044" : "transparent" }}
           />
           <CatSelect value={filterCat} categories={categories} onChange={v => setFilterCat(v || "")} placeholder="Toutes catégories" />
           <select value={filterKeyword} onChange={e => setFilterKeyword(e.target.value)}
@@ -2812,7 +2824,7 @@ ${question}`;
           </Pill>
           {(filterSearch || filterCat || filterKeyword || filterFav || filterPositioned || filterLost || filterProviders.length > 0) && (
             <button onClick={() => { setFilterSearch(""); setFilterCat(""); setFilterKeyword(""); setFilterFav(false); setFilterPositioned(false); setFilterLost(false); setFilterProviders([]); }}
-              style={{ fontSize: 11, padding: "3px 8px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.bg, cursor: "pointer", color: C.textMid }}>
+              style={{ fontSize: 11, padding: "3px 8px", border: "0.5px solid #1A3C2E0D", borderRadius: 6, background: "#FAFAF8", cursor: "pointer", color: C.textMid }}>
               ✕ Réinitialiser
             </button>
           )}
@@ -2840,8 +2852,8 @@ ${question}`;
           </span>
 
           <div style={{ display: "flex", gap: 4, marginLeft: 4 }}>
-            <button onClick={() => setSelected(new Set(filtered.map(q => q.id)))} style={{ fontSize: 10, padding: "2px 7px", border: `1px solid ${C.border}`, borderRadius: 5, background: C.white, cursor: "pointer", color: C.textMid }}>Tout sélect.</button>
-            {selected.size > 0 && <button onClick={() => setSelected(new Set())} style={{ fontSize: 10, padding: "2px 7px", border: `1px solid ${C.border}`, borderRadius: 5, background: C.white, cursor: "pointer", color: C.textMid }}>Désélect.</button>}
+            <button onClick={() => setSelected(new Set(filtered.map(q => q.id)))} style={{ fontSize: 10, padding: "2px 7px", border: "0.5px solid #1A3C2E0D", borderRadius: 5, background: "#fff", cursor: "pointer", color: C.textMid }}>Tout sélect.</button>
+            {selected.size > 0 && <button onClick={() => setSelected(new Set())} style={{ fontSize: 10, padding: "2px 7px", border: "0.5px solid #1A3C2E0D", borderRadius: 5, background: "#fff", cursor: "pointer", color: C.textMid }}>Désélect.</button>}
             {selected.size > 0 && (
               <>
                 <CatSelect value={bulkCat} categories={categories} onChange={setBulkCat} placeholder="Catégoriser…" />
@@ -2865,7 +2877,7 @@ ${question}`;
 
           <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
             <button onClick={() => sbGetQuestions(projectId, site.id).then(setQuestions)}
-              title="Recharger les questions" style={{ padding: "4px 8px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.white, color: C.textLight, fontSize: 11, cursor: "pointer" }}>🔄</button>
+              title="Recharger les questions" style={{ padding: "4px 8px", border: "0.5px solid #1A3C2E0D", borderRadius: 6, background: "#fff", color: C.textLight, fontSize: 11, cursor: "pointer" }}>🔄</button>
             <Btn onClick={runAllQuestions} disabled={runAll || toRunCount === 0} color="#7C3AED"
               title={!runAll && toRunCount === 0 ? "Toutes les questions ont déjà été interrogées aujourd'hui — relancez manuellement une question pour forcer la ré-interrogation" : undefined}>
               {runAll ? "⏳ En cours…" : toRunCount > 0 ? `▶ Lancer tout (${toRunCount})` : "✓ Tout généré"}
@@ -2890,7 +2902,15 @@ ${question}`;
             const cat = categories.find(c => c.id === q.category_id);
             const kwTag = keywords.find(k => k.id === q.keyword_id);
             return (
-              <div key={q.id} style={{ background: isSel ? "#EFF6FF" : C.white, border: `1px solid ${hasBrand ? "#059669" : isSel ? "#2563EB55" : C.border}`, borderRadius: 12, padding: "12px 16px", borderLeft: `3px solid ${hasBrand ? "#059669" : q.is_favorite ? "#F59E0B" : isSel ? "#2563EB" : C.border}` }}>
+              <div key={q.id} style={{
+              background: isSel ? "#F0EBE033" : "#fff",
+              border: "none",
+              borderBottom: "0.5px solid #1A3C2E0D",
+              padding: "14px 0",
+              position: "relative",
+            }}>
+              {/* Indicateur présence marque */}
+              {hasBrand && <div style={{ position: "absolute", left: -16, top: "50%", transform: "translateY(-50%)", width: 3, height: 24, background: "#1A7A4A", borderRadius: 2 }} />}
                 <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
                   <input type="checkbox" checked={isSel} onChange={() => { setSelected(prev => { const n = new Set(prev); n.has(q.id) ? n.delete(q.id) : n.add(q.id); return n; }); }} style={{ cursor: "pointer", flexShrink: 0, marginTop: 2 }} />
                   <button onClick={() => toggleFav(q.id, q.is_favorite)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 15, flexShrink: 0, opacity: q.is_favorite ? 1 : 0.3, transition: "opacity 0.15s" }}>⭐</button>
@@ -2906,13 +2926,13 @@ ${question}`;
                           style={{ flex: 1, padding: "5px 10px", border: `1px solid #2563EB`, borderRadius: 7, fontSize: 13, fontWeight: 600, color: C.text }}
                         />
                         <button onClick={saveEdit} style={{ padding: "4px 10px", background: "#2563EB", color: "#fff", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>✓</button>
-                        <button onClick={() => setEditingQ(null)} style={{ padding: "4px 8px", background: C.bg, color: C.textLight, border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11, cursor: "pointer" }}>✕</button>
+                        <button onClick={() => setEditingQ(null)} style={{ padding: "4px 8px", background: "#FAFAF8", color: C.textLight, border: "0.5px solid #1A3C2E0D", borderRadius: 6, fontSize: 11, cursor: "pointer" }}>✕</button>
                       </div>
                     ) : (
                       <div style={{ fontSize: 13, fontWeight: 600, color: C.text, lineHeight: 1.5 }}>{q.question}</div>
                     )}
                     <div style={{ display: "flex", gap: 5, marginTop: 4, flexWrap: "wrap", alignItems: "center" }}>
-                      {kwTag && <span style={{ fontSize: 10, color: C.textLight, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: "1px 7px" }}>🔑 {kwTag.keyword}</span>}
+                      {kwTag && <span style={{ fontSize: 10, color: C.textLight, background: "#FAFAF8", border: "0.5px solid #1A3C2E0D", borderRadius: 10, padding: "1px 7px" }}>🔑 {kwTag.keyword}</span>}
                       {kwTag?.search_volume > 0 && (
                         <span style={{ fontSize: 10, fontWeight: 700, color: "#2563EB", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 10, padding: "1px 7px" }}
                           title="Volume de recherche mensuel (Semrush)">
@@ -2930,7 +2950,7 @@ ${question}`;
                   <div style={{ display: "flex", gap: 5, flexShrink: 0, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
                     <CatSelect value={q.category_id} categories={categories} onChange={v => setCatSingle(q.id, v)} />
                     <button onClick={() => setEditingQ(editingQ?.id === q.id ? null : { id: q.id, text: q.question })}
-                      style={{ padding: "3px 7px", border: `1px solid ${C.border}`, borderRadius: 6, background: editingQ?.id === q.id ? "#EFF6FF" : C.white, color: "#2563EB", fontSize: 11, cursor: "pointer" }}
+                      style={{ padding: "3px 7px", border: "0.5px solid #1A3C2E0D", borderRadius: 6, background: editingQ?.id === q.id ? "#EFF6FF" : C.white, color: "#2563EB", fontSize: 11, cursor: "pointer" }}
                       title="Modifier la question">✏️</button>
                     <button
                       onClick={() => {
@@ -2943,7 +2963,7 @@ ${question}`;
                       style={{ padding: "3px 10px", border: `1px solid ${site.color}`, borderRadius: 6, background: site.color, color: "#fff", fontSize: 11, fontWeight: 700, cursor: isRunning ? "wait" : "pointer", opacity: isRunning ? 0.6 : 1 }}>
                       {isRunning ? "⏳" : "▶ Tous"}
                     </button>
-                    <button onClick={() => deleteQ(q.id)} style={{ padding: "3px 7px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.white, color: C.textLight, fontSize: 10, cursor: "pointer" }}>🗑</button>
+                    <button onClick={() => deleteQ(q.id)} style={{ padding: "3px 7px", border: "0.5px solid #1A3C2E0D", borderRadius: 6, background: "#fff", color: C.textLight, fontSize: 10, cursor: "pointer" }}>🗑</button>
                   </div>
                 </div>
                 {/* One row per provider — calendar + info + accordion + run */}
@@ -3255,7 +3275,7 @@ function UrlsTab({ projectId, categories, brand, allResults }) {
         {/* "Tout" reset */}
         {filterType !== "all" && (
           <button onClick={() => setFilterType("all")}
-            style={{ padding: "6px 12px", borderRadius: 20, fontSize: 11, fontWeight: 600, cursor: "pointer", border: `1px solid ${C.border}`, background: C.bg, color: C.textMid }}>
+            style={{ padding: "6px 12px", borderRadius: 20, fontSize: 11, fontWeight: 600, cursor: "pointer", border: "0.5px solid #1A3C2E0D", background: "#FAFAF8", color: C.textMid }}>
             ✕ Tout afficher
           </button>
         )}
@@ -3264,14 +3284,14 @@ function UrlsTab({ projectId, categories, brand, allResults }) {
       {/* ── Filters + view toggle ── */}
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 14, flexWrap: "wrap" }}>
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 Rechercher…"
-          style={{ padding: "6px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, color: C.text, width: 220 }} />
+          style={{ padding: "6px 10px", border: "0.5px solid #1A3C2E0D", borderRadius: 8, fontSize: 12, color: C.text, width: 220 }} />
         <select value={filterTpl} onChange={e => setFilterTpl(e.target.value)}
-          style={{ padding: "5px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11, color: C.text }}>
+          style={{ padding: "5px 8px", border: "0.5px solid #1A3C2E0D", borderRadius: 6, fontSize: 11, color: C.text }}>
           <option value="">Tous templates</option>
           {TEMPLATE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
         </select>
         <select value={sortBy} onChange={e => setSortBy(e.target.value)}
-          style={{ padding: "5px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11, color: C.text }}>
+          style={{ padding: "5px 8px", border: "0.5px solid #1A3C2E0D", borderRadius: 6, fontSize: 11, color: C.text }}>
           <option value="citations">Trier : + citées</option>
           <option value="domain">Trier : domaine</option>
           <option value="alpha">Trier : URL A→Z</option>
@@ -3279,7 +3299,7 @@ function UrlsTab({ projectId, categories, brand, allResults }) {
         <span style={{ fontSize: 11, color: C.textLight }}>{filtered.length} URL{filtered.length > 1 ? "s" : ""} · {domains.length} domaine{domains.length > 1 ? "s" : ""}</span>
 
         {/* View toggle */}
-        <div style={{ marginLeft: "auto", display: "flex", gap: 3, background: C.bg, borderRadius: 8, padding: 3 }}>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 3, background: "#FAFAF8", borderRadius: 8, padding: 3 }}>
           {[{ key: "urls", label: "🔗 URLs" }, { key: "domains", label: "🌐 Domaines" }].map(v => (
             <button key={v.key} onClick={() => setView(v.key)} style={{
               padding: "4px 14px", borderRadius: 6, fontSize: 12, fontWeight: view === v.key ? 700 : 400,
@@ -3318,7 +3338,7 @@ function UrlsTab({ projectId, categories, brand, allResults }) {
                     <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
                       <span style={{ fontSize: 12, color: meta.color, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{stripQuery(u.url)}</span>
                       <a href={u.url} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}
-                        style={{ flexShrink: 0, fontSize: 10, color: C.textLight, border: `1px solid ${C.border}`, borderRadius: 4, padding: "1px 5px", textDecoration: "none" }}>↗</a>
+                        style={{ flexShrink: 0, fontSize: 10, color: C.textLight, border: "0.5px solid #1A3C2E0D", borderRadius: 4, padding: "1px 5px", textDecoration: "none" }}>↗</a>
                     </div>
                     <div style={{ fontSize: 10, color: C.textLight }}>{u.domain}</div>
                   </div>
@@ -3327,7 +3347,7 @@ function UrlsTab({ projectId, categories, brand, allResults }) {
                     {cat && <span style={{ fontSize: 10, fontWeight: 700, color: cat.color, background: cat.color+"18", borderRadius: 10, padding: "1px 7px" }}>{cat.name}</span>}
                     <CatSelect value={u.theme_category_id} categories={categories} onChange={v => setThemeCat(u.id, v)} placeholder="Thème…" />
                     <select value={u.template_type || ""} onChange={e => setTemplate(u.id, e.target.value || null)}
-                      style={{ padding: "3px 6px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 10, color: u.template_type ? C.text : C.textLight }}>
+                      style={{ padding: "3px 6px", border: "0.5px solid #1A3C2E0D", borderRadius: 6, fontSize: 10, color: u.template_type ? C.text : C.textLight }}>
                       <option value="">Template…</option>
                       {TEMPLATE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
                     </select>
@@ -3336,7 +3356,7 @@ function UrlsTab({ projectId, categories, brand, allResults }) {
                   <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
                     {hasSections && (
                       <button onClick={() => setOpenCrawl(isOpen ? null : u.id)}
-                        style={{ padding: "3px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 10, cursor: "pointer", background: isOpen ? C.bg : C.white, color: C.textMid }}>
+                        style={{ padding: "3px 8px", border: "0.5px solid #1A3C2E0D", borderRadius: 6, fontSize: 10, cursor: "pointer", background: isOpen ? C.bg : C.white, color: C.textMid }}>
                         {isOpen ? "▲" : "▼"} Sections
                       </button>
                     )}
@@ -3356,11 +3376,11 @@ function UrlsTab({ projectId, categories, brand, allResults }) {
                 </div>
                 {/* Crawl sections */}
                 {isOpen && hasSections && (
-                  <div style={{ borderTop: `1px solid ${meta.border}33`, background: C.bg, padding: "10px 14px" }}>
-                    <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>Sections · {u.crawl_sections.length}</div>
+                  <div style={{ borderTop: `1px solid ${meta.border}33`, background: "#FAFAF8", padding: "10px 14px" }}>
+                    <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E55", marginBottom: 8 }}>Sections · {u.crawl_sections.length}</div>
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 7 }}>
                       {u.crawl_sections.map((sec, i) => (
-                        <div key={i} style={{ background: C.white, border: `1px solid ${sec.used_in_llm ? "#059669" : C.border}`, borderRadius: 7, padding: "8px 10px", borderLeft: `3px solid ${sec.used_in_llm ? "#059669" : C.border}` }}>
+                        <div key={i} style={{ background: "#fff", border: `1px solid ${sec.used_in_llm ? "#059669" : C.border}`, borderRadius: 7, padding: "8px 10px", borderLeft: `3px solid ${sec.used_in_llm ? "#059669" : C.border}` }}>
                           <div style={{ display: "flex", gap: 5, alignItems: "center", marginBottom: 3 }}>
                             <span style={{ fontSize: 9, fontWeight: 700, color: "#7C3AED", background: "#F5F3FF", borderRadius: 4, padding: "1px 5px" }}>{sec.type}</span>
                             {sec.used_in_llm && <span style={{ fontSize: 9, color: "#059669", fontWeight: 600 }}>✓ LLM</span>}
@@ -3568,8 +3588,8 @@ function AutomationTab({ projectId, site, user, providerKeys }) {
       )}
 
       {/* Config form */}
-      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: "20px 24px", display: "flex", flexDirection: "column", gap: 20 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Configuration</div>
+      <div style={{ background: "#fff", border: "0.5px solid #1A3C2E0D", borderRadius: 14, padding: "24px 28px", display: "flex", flexDirection: "column", gap: 24 }}>
+        <div style={{ fontSize: 11, fontWeight: 500, letterSpacing: "0.12em", textTransform: "uppercase", color: "#1A3C2E55" }}>Configuration</div>
 
         {/* Frequency */}
         <div>
@@ -3637,7 +3657,7 @@ function AutomationTab({ projectId, site, user, providerKeys }) {
 
       {/* Manual trigger */}
       {schedule && (
-        <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 12, padding: "16px 20px" }}>
+        <div style={{ background: "#FAFAF8", border: "0.5px solid #1A3C2E0D", borderRadius: 12, padding: "16px 20px" }}>
           <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 8 }}>🚀 Test manuel</div>
           <div style={{ fontSize: 11, color: C.textLight, marginBottom: 12 }}>
             Déclenche immédiatement l'automatisation pour vérifier que tout fonctionne.
@@ -3826,7 +3846,7 @@ function FanoutSetupPanel({
                 const site = safeSites.find(s => s.id === row.site_id);
                 const lbl = { sf:"🐸 SF", gsc:"🔍 GSC", ga:"📊 GA4", bing:"🤖 Bing", sm:"📈 SM" }[row.source] || row.source;
                 return (
-                  <div key={row.id} style={{ display: "flex", gap: 8, padding: "4px 8px", background: C.bg, borderRadius: 5, fontSize: 10, alignItems: "center" }}>
+                  <div key={row.id} style={{ display: "flex", gap: 8, padding: "4px 8px", background: "#FAFAF8", borderRadius: 5, fontSize: 10, alignItems: "center" }}>
                     <span style={{ color: site?.color || C.text, fontWeight: 600, minWidth: 60 }}>{site?.label || "—"}</span>
                     <span style={{ color: C.textMid }}>{lbl}</span>
                     <span style={{ color: C.textLight, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.filename}</span>
