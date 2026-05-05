@@ -1874,11 +1874,12 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
                 </div>
                 <div style={{ display: "flex", gap: 6, flexShrink: 0, alignItems: "center" }}>
                   <TagSelect values={kw.tags || (kw.category_id ? [kw.category_id] : [])} categories={categories} onChange={tags => setTagsSingle(kw.id, tags)} />
-                  <Btn onClick={() => generateQuestions(kw, null)} disabled={!!busy[kw.id] || (!apiKey && !providerKeys?.openai?.dec)} variant="outline" small color={site.color}
-                    title={(!apiKey && !providerKeys?.openai?.dec) ? "Clé OpenAI manquante — ajoutez-la dans ⚙️ Gestion des Providers (en haut de page)" : undefined}>
-                    {busy[kw.id] === "q" ? "⏳" : kw.status === "done_q" ? "🔄" : "💬"}
-                  </Btn>
-                  <button onClick={() => deleteKw(kw.id)} style={{ padding: "3px 7px", border: "0.5px solid #1A3C2E0D", borderRadius: 6, background: "#fff", color: C.textLight, fontSize: 10, cursor: "pointer" }}>🗑</button>
+                  <button onClick={() => generateQuestions(kw, null)} disabled={!!busy[kw.id] || (!apiKey && !providerKeys?.openai?.dec)}
+                    style={{ padding: "4px 12px", border: "0.5px solid #1A3C2E22", borderRadius: 20, background: "transparent", color: "#1A3C2E", fontSize: 11, fontWeight: 500, cursor: (!!busy[kw.id] || (!apiKey && !providerKeys?.openai?.dec)) ? "not-allowed" : "pointer", opacity: (!!busy[kw.id] || (!apiKey && !providerKeys?.openai?.dec)) ? 0.35 : 1, letterSpacing: "0.01em", transition: "opacity 0.2s" }}
+                    title={(!apiKey && !providerKeys?.openai?.dec) ? "Clé OpenAI manquante" : undefined}>
+                    {busy[kw.id] === "q" ? "…" : kw.status === "done_q" ? "↺" : "▶"}
+                  </button>
+                  <button onClick={() => deleteKw(kw.id)} style={{ padding: "3px 8px", border: "none", background: "transparent", color: "#1A3C2E22", fontSize: 12, cursor: "pointer", transition: "color 0.15s" }}>✕</button>
                 </div>
               </div>
             );
@@ -2033,7 +2034,7 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", minHeight: 32 }}>
 
         {/* Provider name */}
-        <span style={{ fontSize: 10, fontWeight: 800, color: p.color, minWidth: 68, flexShrink: 0 }}>{p.icon} {p.label}</span>
+        <span style={{ fontSize: 11, fontWeight: 500, color: "#1A3C2E66", minWidth: 64, flexShrink: 0, letterSpacing: "0.02em" }}>{p.label}</span>
 
         {/* Calendar */}
         <PresenceCalendar questionId={questionId} providers={[provider]} newEntry={newCalEntry} />
@@ -2832,16 +2833,16 @@ ${question}`;
 
         {/* Row 2: providers multi-select + counters + actions */}
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <span style={{ fontSize: 10, fontWeight: 600, color: C.textLight, flexShrink: 0 }}>Providers :</span>
+          <span style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E44", flexShrink: 0 }}>Providers</span>
           {PROVIDERS.map(p => {
             const active = filterProviders.includes(p.id);
             const hasKey = !!providerKeys[p.id]?.dec;
             return (
               <button key={p.id} onClick={() => setFilterProviders(prev => active ? prev.filter(id => id !== p.id) : [...prev, p.id])}
                 title={!hasKey ? `Clé ${p.label} manquante — ajoutez-la dans ⚙️ Gestion des Providers (en haut de page)` : undefined}
-                style={{ padding: "2px 10px", border: `2px solid ${p.color}`, borderRadius: 10, fontSize: 10, fontWeight: 600, cursor: hasKey ? "pointer" : "not-allowed",
-                  background: active ? p.color : "transparent", color: active ? "#fff" : hasKey ? p.color : C.textLight, opacity: hasKey ? 1 : 0.4 }}>
-                {p.icon} {p.label}{!hasKey ? " 🔑" : ""}
+                style={{ padding: "3px 12px", border: "0.5px solid #1A3C2E22", borderRadius: 20, fontSize: 11, fontWeight: 500, letterSpacing: "0.01em", cursor: hasKey ? "pointer" : "not-allowed",
+                  background: active ? "#1A3C2E" : "transparent", color: active ? "#F0EBE0" : hasKey ? "#1A3C2E" : "#1A3C2E33", opacity: hasKey ? 1 : 0.35, transition: "all 0.15s" }}>
+                {p.label}{!hasKey ? " ·" : ""}
               </button>
             );
           })}
@@ -2852,8 +2853,8 @@ ${question}`;
           </span>
 
           <div style={{ display: "flex", gap: 4, marginLeft: 4 }}>
-            <button onClick={() => setSelected(new Set(filtered.map(q => q.id)))} style={{ fontSize: 10, padding: "2px 7px", border: "0.5px solid #1A3C2E0D", borderRadius: 5, background: "#fff", cursor: "pointer", color: C.textMid }}>Tout sélect.</button>
-            {selected.size > 0 && <button onClick={() => setSelected(new Set())} style={{ fontSize: 10, padding: "2px 7px", border: "0.5px solid #1A3C2E0D", borderRadius: 5, background: "#fff", cursor: "pointer", color: C.textMid }}>Désélect.</button>}
+            <button onClick={() => setSelected(new Set(filtered.map(q => q.id)))} style={{ fontSize: 11, padding: "3px 10px", border: "0.5px solid #1A3C2E18", borderRadius: 20, background: "transparent", cursor: "pointer", color: "#1A3C2E77", fontWeight: 500, letterSpacing: "0.01em" }}>Tout</button>
+            {selected.size > 0 && <button onClick={() => setSelected(new Set())} style={{ fontSize: 11, padding: "3px 10px", border: "0.5px solid #1A3C2E18", borderRadius: 20, background: "transparent", cursor: "pointer", color: "#1A3C2E77", fontWeight: 500, letterSpacing: "0.01em" }}>Aucun</button>}
             {selected.size > 0 && (
               <>
                 <CatSelect value={bulkCat} categories={categories} onChange={setBulkCat} placeholder="Catégoriser…" />
@@ -2903,17 +2904,15 @@ ${question}`;
             const kwTag = keywords.find(k => k.id === q.keyword_id);
             return (
               <div key={q.id} style={{
-              background: isSel ? "#F0EBE033" : "#fff",
+              background: isSel ? "#F0EBE022" : "transparent",
               border: "none",
-              borderBottom: "0.5px solid #1A3C2E0D",
+              borderBottom: "0.5px solid #1A3C2E08",
               padding: "14px 0",
               position: "relative",
             }}>
-              {/* Indicateur présence marque */}
-              {hasBrand && <div style={{ position: "absolute", left: -16, top: "50%", transform: "translateY(-50%)", width: 3, height: 24, background: "#1A7A4A", borderRadius: 2 }} />}
                 <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
                   <input type="checkbox" checked={isSel} onChange={() => { setSelected(prev => { const n = new Set(prev); n.has(q.id) ? n.delete(q.id) : n.add(q.id); return n; }); }} style={{ cursor: "pointer", flexShrink: 0, marginTop: 2 }} />
-                  <button onClick={() => toggleFav(q.id, q.is_favorite)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 15, flexShrink: 0, opacity: q.is_favorite ? 1 : 0.3, transition: "opacity 0.15s" }}>⭐</button>
+                  <button onClick={() => toggleFav(q.id, q.is_favorite)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, flexShrink: 0, opacity: q.is_favorite ? 0.9 : 0.2, transition: "opacity 0.2s" }}>⭐</button>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     {/* Question text — edit mode or display */}
                     {editingQ?.id === q.id ? (
@@ -2929,41 +2928,37 @@ ${question}`;
                         <button onClick={() => setEditingQ(null)} style={{ padding: "4px 8px", background: "#FAFAF8", color: C.textLight, border: "0.5px solid #1A3C2E0D", borderRadius: 6, fontSize: 11, cursor: "pointer" }}>✕</button>
                       </div>
                     ) : (
-                      <div style={{ fontSize: 13, fontWeight: 600, color: C.text, lineHeight: 1.5 }}>{q.question}</div>
+                      <div style={{ fontSize: 13, fontWeight: 500, color: "#1A3C2E", lineHeight: 1.5, letterSpacing: "-0.005em" }}>{q.question}</div>
                     )}
                     <div style={{ display: "flex", gap: 5, marginTop: 4, flexWrap: "wrap", alignItems: "center" }}>
                       {kwTag && <span style={{ fontSize: 10, color: C.textLight, background: "#FAFAF8", border: "0.5px solid #1A3C2E0D", borderRadius: 10, padding: "1px 7px" }}>🔑 {kwTag.keyword}</span>}
                       {kwTag?.search_volume > 0 && (
-                        <span style={{ fontSize: 10, fontWeight: 700, color: "#2563EB", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 10, padding: "1px 7px" }}
-                          title="Volume de recherche mensuel (Semrush)">
-                          🔍 {kwTag.search_volume >= 1000 ? (kwTag.search_volume / 1000).toFixed(1) + "k" : kwTag.search_volume}
+                        <span style={{ fontSize: 10, color: "#1A3C2E44", fontWeight: 400 }}
+                          title="Volume de recherche mensuel">
+                          {kwTag.search_volume >= 1000 ? (kwTag.search_volume / 1000).toFixed(1) + "k" : kwTag.search_volume} rech/mois
                         </span>
                       )}
-                      {cat && <span style={{ fontSize: 10, fontWeight: 700, color: cat.color, background: cat.color + "18", border: `1px solid ${cat.color}44`, borderRadius: 10, padding: "1px 7px" }}>{cat.name}</span>}
-                      {q.is_manual && <Pill color={C.textLight}>manuel</Pill>}
-                      {hasBrand && <Pill color="#059669">✓ {brand_name}</Pill>}
-                      {qResults.length > 0 && <span style={{ fontSize: 10, color: C.textLight }}>{qResults.length} résultat{qResults.length > 1 ? "s" : ""}</span>}
+                      {cat && <span style={{ fontSize: 10, fontWeight: 500, color: cat.color, background: "transparent", border: `0.5px solid ${cat.color}44`, borderRadius: 20, padding: "2px 9px" }}>{cat.name}</span>}
+                      {q.is_manual && <span style={{ fontSize: 10, color: "#1A3C2E33", fontWeight: 400, fontStyle: "italic" }}>manuel</span>}
+                      {hasBrand && <span style={{ fontSize: 10, color: "#1A7A4A", fontWeight: 500, letterSpacing: "0.01em" }}>✓ {brand_name}</span>}
+                      {qResults.length > 0 && <span style={{ fontSize: 10, color: "#1A3C2E33" }}>{qResults.length} réponse{qResults.length > 1 ? "s" : ""}</span>}
                     </div>
                     {/* Per-provider 30-day calendar */}
 
                   </div>
-                  <div style={{ display: "flex", gap: 5, flexShrink: 0, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                  <div style={{ display: "flex", gap: 6, flexShrink: 0, alignItems: "center" }}>
                     <CatSelect value={q.category_id} categories={categories} onChange={v => setCatSingle(q.id, v)} />
                     <button onClick={() => setEditingQ(editingQ?.id === q.id ? null : { id: q.id, text: q.question })}
-                      style={{ padding: "3px 7px", border: "0.5px solid #1A3C2E0D", borderRadius: 6, background: editingQ?.id === q.id ? "#EFF6FF" : C.white, color: "#2563EB", fontSize: 11, cursor: "pointer" }}
-                      title="Modifier la question">✏️</button>
+                      style={{ padding: "3px 8px", border: "0.5px solid #1A3C2E18", borderRadius: 20, background: "transparent", color: "#1A3C2E55", fontSize: 12, cursor: "pointer", fontWeight: 400 }}
+                      title="Modifier">✎</button>
                     <button
-                      onClick={() => {
-                        const toRun = getProvidersToRun(q, true); // force=true : relance tous les providers configurés
-                        if (!toRun.length) return;
-                        toRun.forEach(p => runProvider(q, p));
-                      }}
+                      onClick={() => { const toRun = getProvidersToRun(q, true); if (!toRun.length) return; toRun.forEach(p => runProvider(q, p)); }}
                       disabled={isRunning}
-                      title="Lancer tous les providers configurés"
-                      style={{ padding: "3px 10px", border: `1px solid ${site.color}`, borderRadius: 6, background: site.color, color: "#fff", fontSize: 11, fontWeight: 700, cursor: isRunning ? "wait" : "pointer", opacity: isRunning ? 0.6 : 1 }}>
-                      {isRunning ? "⏳" : "▶ Tous"}
+                      title="Lancer tous les providers"
+                      style={{ padding: "4px 16px", border: "0.5px solid #1A3C2E33", borderRadius: 20, background: "transparent", color: "#1A3C2E", fontSize: 11, fontWeight: 500, cursor: isRunning ? "wait" : "pointer", opacity: isRunning ? 0.35 : 1, letterSpacing: "0.02em", transition: "opacity 0.2s" }}>
+                      {isRunning ? "…" : "▶"}
                     </button>
-                    <button onClick={() => deleteQ(q.id)} style={{ padding: "3px 7px", border: "0.5px solid #1A3C2E0D", borderRadius: 6, background: "#fff", color: C.textLight, fontSize: 10, cursor: "pointer" }}>🗑</button>
+                    <button onClick={() => deleteQ(q.id)} style={{ padding: "3px 8px", border: "none", background: "transparent", color: "#1A3C2E22", fontSize: 12, cursor: "pointer", transition: "color 0.15s" }}>✕</button>
                   </div>
                 </div>
                 {/* One row per provider — calendar + info + accordion + run */}
