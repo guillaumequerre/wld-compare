@@ -7,7 +7,7 @@ import {
   sbSaveQuestions, sbGetQuestions, sbUpdateQuestion, sbDeleteQuestion,
   sbSaveGeoResult, sbGetGeoResults, sbSaveHint, sbGetHints, sbSetKeywordTags,
   sbGetSchedule, sbSaveSchedule, sbUpdateSchedule, sbTriggerScheduler,
-  sbSaveProjectSettings, sbSaveProviderKeys,
+  sbSaveProjectSettings,
   sbGetCategories, sbSaveCategory, sbDeleteCategory,
   sbSetQuestionCategory,
   sbBulkSetKeywordCategory, sbBulkSetQuestionCategory,
@@ -2074,7 +2074,7 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
       {open && result && (
         <div style={{ borderTop: `1px solid ${C.border}`, padding: '10px 12px', background: C.bg }}>
           <div style={{ fontSize: 12, color: C.text, lineHeight: 1.7 }}>
-            {renderMarkdown(result.answer || '')}
+            {renderMarkdownHighlighted(result.answer || '', brandTerms, competitorMap)}
           </div>
           {sources.length > 0 && (
             <div style={{ marginTop: 10 }}>
@@ -4039,6 +4039,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
     sbGetBrand(projectId, site.id).then(b => { setBrand(b); });
     sbGetGeoResults(projectId, site.id).then(r => { setAllResults(r); }); // keep previous data while loading
     sbGetKeywords(projectId, site.id).then(kws => { setKeywords(kws || []); });
+    sbGetCompetitors(projectId, site.id).then(c => { setCompetitors(c || []); });
   }, [projectId, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Decode key when enc changes
