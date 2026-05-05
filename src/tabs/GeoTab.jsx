@@ -101,6 +101,7 @@ function renderMarkdown(text) {
 }
 
 // ── renderMarkdownHighlighted — surligne marque (vert) et concurrents ──
+// eslint-disable-next-line no-unused-vars
 function renderMarkdownHighlighted(text, brandTerms = [], competitorMap = {}) {
   if (!text) return null;
   const hasHighlights = brandTerms.length > 0 || Object.keys(competitorMap).length > 0;
@@ -2074,7 +2075,7 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
       {open && result && (
         <div style={{ borderTop: `1px solid ${C.border}`, padding: '10px 12px', background: C.bg }}>
           <div style={{ fontSize: 12, color: C.text, lineHeight: 1.7 }}>
-            {renderMarkdownHighlighted(result.answer || '', brandTerms, competitorMap)}
+            {renderMarkdown(result.answer || '')}
           </div>
           {sources.length > 0 && (
             <div style={{ marginTop: 10 }}>
