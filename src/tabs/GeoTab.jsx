@@ -45,7 +45,6 @@ function decodeKey(enc) {
     return ""; // AES blob or corrupted — user must re-enter
   }
 }
-function encodeKey(k) { try { return k ? btoa(unescape(encodeURIComponent(k))) : ""; } catch { return ""; } }
 
 function extractDomain(url) {
   try { return new URL(url).hostname.replace("www.", ""); } catch { return url; }
@@ -101,43 +100,34 @@ function renderMarkdown(text) {
   });
 }
 
-// ── renderMarkdownHighlighted — surligne marque (vert) et concurrents (rouge) ──
-// competitorMap : { lowerName → { color, category } }
+// ── renderMarkdownHighlighted — surligne marque (vert) et concurrents ──
 function renderMarkdownHighlighted(text, brandTerms = [], competitorMap = {}) {
   if (!text) return null;
   const hasHighlights = brandTerms.length > 0 || Object.keys(competitorMap).length > 0;
   if (!hasHighlights) return renderMarkdown(text);
-
-  // Tokenize une ligne en spans avec surlignages
   function highlightLine(line) {
     if (!line) return [line];
-    // Construire regex de tous les termes (marque + concurrents), plus long d'abord
     const allTerms = [
       ...brandTerms.map(t => ({ term: t, type: "brand" })),
       ...Object.keys(competitorMap).map(t => ({ term: t, type: "competitor" })),
     ].filter(t => t.term).sort((a, b) => b.term.length - a.term.length);
-
     if (!allTerms.length) return [line];
-
     const pattern = allTerms.map(t => t.term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
     const re = new RegExp(`(${pattern})`, "gi");
     const parts = line.split(re);
-
     return parts.map((part, i) => {
       const lower = part.toLowerCase();
-      if (brandTerms.some(t => t.toLowerCase() === lower)) {
+      if (brandTerms.some(t => t.toLowerCase() === lower))
         return <mark key={i} style={{ background: "#DCFCE7", color: "#166534", borderRadius: 3, padding: "0 2px", fontWeight: 600 }}>{part}</mark>;
-      }
       if (competitorMap[lower]) {
         const cat = competitorMap[lower];
         const bg = cat.category === "direct" ? "#FEE2E2" : cat.category === "geo" ? "#FEF3C7" : "#F3F4F6";
         const color = cat.category === "direct" ? "#991B1B" : cat.category === "geo" ? "#92400E" : "#374151";
-        return <mark key={i} style={{ background: bg, color, borderRadius: 3, padding: "0 2px", fontWeight: 500, opacity: 0.9 }}>{part}</mark>;
+        return <mark key={i} style={{ background: bg, color, borderRadius: 3, padding: "0 2px", fontWeight: 500 }}>{part}</mark>;
       }
       return part;
     });
   }
-
   const lines = text.split("\n");
   return lines.map((line, li) => {
     const highlighted = highlightLine(line);
@@ -740,21 +730,22 @@ function getProviderId(model) {
 
 async function callProvider(provider, apiKey, prompt) {
   if (provider.id === "openai") {
-    // chat/completions — sans web_search_preview pour réduire les coûts
     const res = await fetch("/api/openai", {
       method: "POST",
-      headers: { "Content-Type": "application/json", "X-Openai-Key": apiKey, "X-Openai-Endpoint": "chat" },
+      headers: { "Content-Type": "application/json", "X-Openai-Key": apiKey, "X-Openai-Endpoint": "responses" },
       body: JSON.stringify({
         model: provider.model,
-        messages: [{ role: "user", content: prompt }],
-        max_tokens: 1200,
+        input: prompt,
+        tools: [{ type: "web_search_preview", search_context_size: "high" }],
+        max_output_tokens: 8000,
+        // No JSON schema — free text response so web search annotations contain real URLs
       }),
     });
     const raw = await res.text();
     if (raw.trimStart().startsWith("<")) throw new Error("Proxy /api/openai introuvable");
     const data = JSON.parse(raw);
     if (!res.ok) throw new Error(data.error?.message || `OpenAI ${res.status}`);
-    return parseOpenAIResponse(data, "chat");
+    return parseOpenAIResponse(data, "responses");
   }
 
   if (provider.id === "gemini") {
@@ -978,32 +969,37 @@ function detectBrand(answer, sources, brandName, brandAliases = [], competitors 
 
 // ── Small UI helpers ──────────────────────────────────────────────
 
-function Pill({ children, color = C.blue, bg, onClick, active, title }) {
+function Pill({ children, color, bg, onClick, active, title }) {
   return (
     <span onClick={onClick} title={title} style={{
       display: "inline-flex", alignItems: "center", gap: 4,
-      padding: "2px 9px", borderRadius: 20, fontSize: 11, fontWeight: 600,
-      background: active ? color : (bg || C.bg),
-      color: active ? "#fff" : color,
-      border: `1px solid ${color}44`,
+      padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: active ? 500 : 400,
+      background: active ? "#1A3C2E" : (bg || "#F0EBE0"),
+      color: active ? "#F0EBE0" : "#1A3C2E",
+      border: active ? "1px solid #1A3C2E" : "1px solid #1A3C2E22",
       cursor: onClick ? "pointer" : "default",
       transition: "all 0.15s",
     }}>{children}</span>
   );
 }
 
-function Btn({ children, onClick, disabled, color = C.blue, variant = "solid", small, title }) {
+function Btn({ children, onClick, disabled, color, variant = "solid", small, title, style: extraStyle }) {
   const base = {
-    padding: small ? "4px 10px" : "7px 16px",
-    borderRadius: 8, fontSize: small ? 11 : 12, fontWeight: 600,
-    cursor: disabled ? "not-allowed" : "pointer",
-    opacity: disabled ? 0.5 : 1,
-    transition: "all 0.15s", border: "none",
+    display: "inline-flex", alignItems: "center", gap: 5,
+    padding: small ? "4px 12px" : "7px 18px",
+    fontSize: small ? 11 : 12, fontWeight: 500,
+    borderRadius: 20, cursor: disabled ? "not-allowed" : "pointer",
+    opacity: disabled ? 0.4 : 1,
+    transition: "all 0.12s", border: "1px solid transparent",
+    userSelect: "none",
+    ...(variant === "solid"
+      ? { background: "#1A3C2E", color: "#F0EBE0", borderColor: "#1A3C2E" }
+      : variant === "ghost"
+      ? { background: "transparent", color: "#1A3C2E", borderColor: "#1A3C2E44" }
+      : { background: "#F0EBE0", color: "#1A3C2E", borderColor: "#1A3C2E22" }),
+    ...extraStyle,
   };
-  const styles = variant === "outline"
-    ? { ...base, background: "transparent", border: `1px solid ${color}`, color }
-    : { ...base, background: color, color: "#fff" };
-  return <button onClick={onClick} disabled={disabled} title={title} style={styles}>{children}</button>;
+  return <button onClick={disabled ? undefined : onClick} disabled={disabled} title={title} style={base}>{children}</button>;
 }
 
 function StatusBadge({ status }) {
@@ -1025,67 +1021,26 @@ function StatusBadge({ status }) {
 
 // ── Stats header ──────────────────────────────────────────────────
 
-function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [] }) {
+function StatsHeader({ questions, results, brandName }) {
   const total       = results.length;
   const withBrand   = results.filter(r => r.brand_mentioned === true || r.brand_mentioned === 1).length;
+  const withSources = results.filter(r => r.brand_in_sources).length;
   const positions   = results.filter(r => r.brand_position).map(r => r.brand_position);
   const avgPos      = positions.length ? (positions.reduce((a, b) => a + b, 0) / positions.length).toFixed(1) : "—";
   const presence    = total ? Math.round(withBrand / total * 100) : 0;
 
-  // ── Breakdown 3 types — mutuellement exclusifs (type le plus fort) ──
-  // ranked  = a une position dans un top (le plus fort)
-  // source  = URL citée en source SANS position
-  // mention = brand_mentioned SANS position NI source (anecdotique)
-  const withRanked      = results.filter(r => getPresenceType(r) === "ranked").length;
-  const withSourceOnly  = results.filter(r => getPresenceType(r) === "source").length;
-  const withMentionOnly = results.filter(r => getPresenceType(r) === "mention").length;
-
-  // Top competitors — enrichis avec catégories qualifiées
-  const compCount = {}; // lower → count
-  const compNameMap = {}; // lower → display name (première occurrence)
-
-  // 1. Depuis competitors_mentioned
+  // Top competitors — 1 mention max per question/result (not cumulated)
+  const compCount = {};
   results.forEach(r => {
     const seen = new Set();
     (r.competitors_mentioned || []).forEach(c => {
-      if (!c.name) return;
-      const lower = c.name.toLowerCase();
-      if (!seen.has(lower)) {
-        seen.add(lower);
-        compCount[lower] = (compCount[lower] || 0) + 1;
-        if (!compNameMap[lower]) compNameMap[lower] = c.name;
+      if (c.name && !seen.has(c.name)) {
+        seen.add(c.name);
+        compCount[c.name] = (compCount[c.name] || 0) + 1;
       }
     });
   });
-
-  // 2. Recherche textuelle rétroactive pour les concurrents qualifiés
-  qualifiedCompetitors.forEach(qc => {
-    const lower = qc.name.toLowerCase();
-    const re = new RegExp(qc.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-    results.forEach(r => {
-      if (re.test(r.answer || '')) {
-        const alreadyCounted = (r.competitors_mentioned || []).some(c => c.name?.toLowerCase() === lower);
-        if (!alreadyCounted) {
-          compCount[lower] = (compCount[lower] || 0) + 1;
-          if (!compNameMap[lower]) compNameMap[lower] = qc.name;
-        }
-      }
-    });
-  });
-  // Fusionner avec concurrents qualifiés
-  const allCompLowers = new Set([
-    ...Object.keys(compCount),
-    ...qualifiedCompetitors.map(c => c.name.toLowerCase()),
-  ]);
-  const enrichedComps = [...allCompLowers].map(lower => {
-    const qual = qualifiedCompetitors.find(c => c.name.toLowerCase() === lower);
-    const catDef = qual
-      ? (COMP_CATEGORIES.find(c => c.key === qual.category) || COMP_CATEGORIES[3])
-      : null;
-    const name = qual?.name || compNameMap[lower] || lower;
-    const count = compCount[lower] || 0;
-    return { name, count, qual, catDef };
-  }).sort((a, b) => b.count - a.count).slice(0, 8);
+  const topComps = Object.entries(compCount).sort((a, b) => b[1] - a[1]).slice(0, 5);
 
   // Top domains
   const domainCount = {};
@@ -1096,68 +1051,41 @@ function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [] 
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginBottom: 24 }}>
-      {/* Présence globale */}
+      {/* Présence */}
       <div style={{ background: presence >= 50 ? "#ECFDF5" : presence > 0 ? "#FFFBEB" : "#FEF2F2", border: `1px solid ${presence >= 50 ? "#059669" : presence > 0 ? "#D97706" : "#DC2626"}33`, borderRadius: 12, padding: "14px 18px" }}>
         <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 4 }}>Présence {brandName}</div>
         <div style={{ fontSize: 28, fontWeight: 800, color: presence >= 50 ? "#059669" : presence > 0 ? "#D97706" : "#DC2626" }}>{presence}%</div>
         <div style={{ fontSize: 11, color: C.textLight }}>{withBrand} / {total} questions</div>
       </div>
 
-      {/* Breakdown 3 types de présence */}
-      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px", gridColumn: "span 2" }}>
-        <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>Types de présence</div>
-        {/* Barre de proportion */}
-        <div style={{ display: "flex", height: 8, borderRadius: 4, overflow: "hidden", marginBottom: 10, background: "#F1F5F9" }}>
-          {total > 0 && <>
-            <div style={{ width: `${withRanked / total * 100}%`, background: "#059669", transition: "width 0.3s" }} title={`Classé : ${withRanked}`} />
-            <div style={{ width: `${withSourceOnly / total * 100}%`, background: "#2563EB", transition: "width 0.3s" }} title={`Source : ${withSourceOnly}`} />
-            <div style={{ width: `${withMentionOnly / total * 100}%`, background: "#D97706", transition: "width 0.3s" }} title={`Mention : ${withMentionOnly}`} />
-          </>}
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
-          {[
-            { icon: "🏆", label: "Classé", count: withRanked, color: "#059669", bg: "#ECFDF5", border: "#A7F3D0", desc: "Position dans un top" },
-            { icon: "🔗", label: "Source", count: withSourceOnly, color: "#2563EB", bg: "#DBEAFE", border: "#BFDBFE", desc: "URL citée en source" },
-            { icon: "💬", label: "Mention", count: withMentionOnly, color: "#D97706", bg: "#FEF3C7", border: "#FDE68A", desc: "Présence textuelle" },
-          ].map(t => (
-            <div key={t.label} style={{ background: t.bg, border: `1px solid ${t.border}`, borderRadius: 8, padding: "8px 10px" }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: t.color, marginBottom: 2 }}>{t.icon} {t.label}</div>
-              <div style={{ fontSize: 20, fontWeight: 800, color: t.color, lineHeight: 1 }}>{t.count}</div>
-              <div style={{ fontSize: 9, color: C.textLight, marginTop: 2 }}>{t.desc}</div>
-            </div>
-          ))}
-        </div>
-      </div>
-
       {/* Position moy. */}
       <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px" }}>
         <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 4 }}>Position moy.</div>
         <div style={{ fontSize: 28, fontWeight: 800, color: C.text }}>{avgPos}</div>
-        <div style={{ fontSize: 11, color: C.textLight }}>dans les tops LLM</div>
+        <div style={{ fontSize: 11, color: C.textLight }}>dans les fan-outs</div>
       </div>
 
-      {/* Top concurrents enrichis avec catégories */}
-      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px", gridColumn: "span 2" }}>
+      {/* Dans les sources */}
+      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px" }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 4 }}>Dans les sources</div>
+        <div style={{ fontSize: 28, fontWeight: 800, color: "#2563EB" }}>{withSources}</div>
+        <div style={{ fontSize: 11, color: C.textLight }}>questions citées</div>
+      </div>
+
+      {/* Top concurrents — always shown */}
+      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px" }}>
         <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>Top concurrents cités</div>
-        {enrichedComps.length > 0 ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            {enrichedComps.map(({ name, count, qual, catDef }) => (
-              <div key={name} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                {catDef && <div style={{ width: 8, height: 8, borderRadius: "50%", background: catDef.color, flexShrink: 0 }} />}
-                {!catDef && <div style={{ width: 8, height: 8, borderRadius: "50%", background: C.border, flexShrink: 0 }} />}
-                <span style={{ fontSize: 11, fontWeight: 600, color: catDef?.color || C.text, flex: 1 }}>{name}</span>
-                {catDef && <span style={{ fontSize: 9, color: catDef.color, background: catDef.bg, borderRadius: 4, padding: "1px 5px", fontWeight: 700 }}>{catDef.label}</span>}
-                {!catDef && <span style={{ fontSize: 9, color: C.textLight, fontStyle: "italic" }}>non qualifié</span>}
-                <span style={{ fontSize: 10, color: C.textLight, minWidth: 24, textAlign: "right", fontWeight: count > 0 ? 600 : 400 }}>{count > 0 ? `${count}×` : "—"}</span>
-              </div>
-            ))}
+        {topComps.length > 0 ? topComps.map(([name, cnt]) => (
+          <div key={name} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 3 }}>
+            <span style={{ color: C.text, fontWeight: 500 }}>{name}</span>
+            <span style={{ color: C.textLight }}>{cnt}×</span>
           </div>
-        ) : (
-          <span style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>Aucun concurrent identifié</span>
+        )) : (
+          <span style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>Aucune citation concurrent identifiée</span>
         )}
       </div>
 
-      {/* Top domaines */}
+      {/* Top domaines — always shown */}
       <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px" }}>
         <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>Sites les plus cités</div>
         {topDomains.length > 0 ? topDomains.map(([domain, cnt]) => (
@@ -1173,8 +1101,7 @@ function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [] 
   );
 }
 
-// ── Competitor Manager ────────────────────────────────────────────
-
+// ── Competitor categories ─────────────────────────────────────────
 const COMP_CATEGORIES = [
   { key: "direct",  label: "Concurrent direct",  color: "#DC2626", bg: "#FEF2F2" },
   { key: "geo",     label: "Concurrent GEO",      color: "#D97706", bg: "#FFFBEB" },
@@ -1183,104 +1110,53 @@ const COMP_CATEGORIES = [
 ];
 
 function CompetitorManager({ projectId, siteId, allResults, competitors, setCompetitors }) {
-  const [newName,    setNewName]    = useState("");
-  const [newDomain,  setNewDomain]  = useState("");
-  const [newCat,     setNewCat]     = useState("direct");
-  const [customCats, setCustomCats] = useState([]);
-  const [newCustom,  setNewCustom]  = useState("");
-  const [saving,     setSaving]     = useState(false);
-  const [sortBy,     setSortBy]     = useState("mentions"); // "alpha" | "cat" | "mentions"
-  const [filterCat,  setFilterCat]  = useState("all");
+  const [newName, setNewName] = useState("");
+  const [newCat,  setNewCat]  = useState("direct");
+  const [saving,  setSaving]  = useState(false);
+  const [sortBy,  setSortBy]  = useState("mentions");
 
-  // ── Calcul des mentions par concurrent (avec agrégation des alias) ─────
   const detectedNames = useMemo(() => {
-    const mentions = {};
-    const asSrc    = {};
-    const display  = {};
-
-    const allNames = new Map();
-    competitors.forEach(c => allNames.set(c.name.toLowerCase(), c.name));
-
-    // 1. Depuis competitors_mentioned
+    const mentions = {}; const display = {};
     allResults.forEach(r => {
-      const seenMention = new Set();
       (r.competitors_mentioned || []).forEach(c => {
         if (!c.name) return;
         const lower = c.name.toLowerCase();
-        if (!seenMention.has(lower)) {
-          seenMention.add(lower);
-          mentions[lower] = (mentions[lower] || 0) + 1;
-          if (!display[lower]) display[lower] = c.name;
-          allNames.set(lower, display[lower]);
-        }
-        if (c.in_sources) asSrc[lower] = (asSrc[lower] || 0) + 1;
+        mentions[lower] = (mentions[lower] || 0) + 1;
+        if (!display[lower]) display[lower] = c.name;
       });
     });
-
-    // 2. Recherche textuelle rétroactive
-    allNames.forEach((dispName, lower) => {
-      const re = new RegExp(dispName.replace(/[.*+?^${}()|[\\]]/g, '\\\\$&'), 'i');
-      const domainRe = (() => {
-        const comp = competitors.find(c => c.name.toLowerCase() === lower);
-        if (!comp?.domain) return null;
-        try { return new RegExp(comp.domain.replace(/[.*+?^${}()|[\\]]/g, '\\\\$&'), 'i'); } catch { return null; }
-      })();
+    // Recherche rétroactive
+    competitors.forEach(comp => {
+      const lower = comp.name.toLowerCase();
+      const re = new RegExp(comp.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
       allResults.forEach(r => {
-        const alreadyMentioned = (r.competitors_mentioned || []).some(c => c.name?.toLowerCase() === lower);
-        if (!alreadyMentioned && re.test(r.answer || '')) {
+        const already = (r.competitors_mentioned || []).some(c => c.name?.toLowerCase() === lower);
+        if (!already && re.test(r.answer || "")) {
           mentions[lower] = (mentions[lower] || 0) + 1;
-          if (!display[lower]) display[lower] = dispName;
-        }
-        if (domainRe) {
-          const alreadySource = (r.competitors_mentioned || []).some(c => c.name?.toLowerCase() === lower && c.in_sources);
-          if (!alreadySource && (r.sources || []).some(s => domainRe.test(s)))
-            asSrc[lower] = (asSrc[lower] || 0) + 1;
+          if (!display[lower]) display[lower] = comp.name;
         }
       });
     });
-
-    const allLowers = new Set([...Object.keys(mentions), ...Object.keys(asSrc)]);
-    return [...allLowers].map(lower => ({
-      name: display[lower] || allNames.get(lower) || lower,
-      lower,
+    return Object.keys(mentions).map(lower => ({
+      name: display[lower] || lower, lower,
       mentions: mentions[lower] || 0,
-      asSources: asSrc[lower] || 0,
-    })).sort((a, b) => (b.mentions + b.asSources) - (a.mentions + a.asSources));
+    })).sort((a, b) => b.mentions - a.mentions);
   }, [allResults, competitors]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Mention totales avec alias agrégés ────────────────────────────
-  const getMentionsWithAliases = (comp) => {
-    const own = detectedNames.find(d => d.lower === comp.name.toLowerCase());
-    const ownM = own?.mentions || 0;
-    const ownS = own?.asSources || 0;
-    // Chercher tous les alias qui pointent vers ce concurrent
-    const aliases = competitors.filter(c => c.alias_of === comp.name);
-    const aliasM = aliases.reduce((acc, a) => {
-      const s = detectedNames.find(d => d.lower === a.name.toLowerCase());
-      return acc + (s?.mentions || 0);
-    }, 0);
-    const aliasS = aliases.reduce((acc, a) => {
-      const s = detectedNames.find(d => d.lower === a.name.toLowerCase());
-      return acc + (s?.asSources || 0);
-    }, 0);
-    return { mentions: ownM + aliasM, asSources: ownS + aliasS, aliasCount: aliases.length };
-  };
+  const getCatDef = (cat) => COMP_CATEGORIES.find(c => c.key === cat) || COMP_CATEGORIES[3];
 
-  const allCats = [...COMP_CATEGORIES, ...customCats.map(k => ({ key: k, label: k, color: "#7C3AED", bg: "#F5F3FF" }))];
-  const getCatDef = (cat) => allCats.find(c => c.key === cat) || COMP_CATEGORIES[3];
-
-  const save = async (name, domain, category) => {
-    if (!name.trim() || !projectId || !siteId) return;
+  const save = async () => {
+    if (!newName.trim() || !projectId || !siteId) return;
     setSaving(true);
     try {
-      const catDef = getCatDef(category);
-      const saved = await sbSaveCompetitor({ project_id: projectId, site_id: siteId, name: name.trim(), domain, category, color: catDef.color });
+      const catDef = getCatDef(newCat);
+      const saved = await sbSaveCompetitor({ project_id: projectId, site_id: siteId, name: newName.trim(), category: newCat, color: catDef.color, enabled: true });
       setCompetitors(prev => {
-        const idx = prev.findIndex(c => c.name.toLowerCase() === name.trim().toLowerCase());
+        const idx = prev.findIndex(c => c.name.toLowerCase() === newName.trim().toLowerCase());
         if (idx >= 0) { const n = [...prev]; n[idx] = saved; return n; }
         return [...prev, saved].sort((a, b) => a.name.localeCompare(b.name));
       });
-      setNewName(""); setNewDomain(""); setNewCat("direct");
+      setNewName("");
     } catch(e) { console.error(e); }
     setSaving(false);
   };
@@ -1300,206 +1176,100 @@ function CompetitorManager({ projectId, siteId, allResults, competitors, setComp
     } catch(e) { console.error(e); }
   };
 
-  const updateAlias = async (comp, alias_of) => {
-    try {
-      await sbUpdateCompetitor(comp.id, { alias_of: alias_of || null });
-      setCompetitors(prev => prev.map(c => c.id === comp.id ? { ...c, alias_of: alias_of || null } : c));
-    } catch(e) { console.error(e); }
-  };
-
   const remove = async (id) => {
-    try {
-      await sbDeleteCompetitor(id);
-      setCompetitors(prev => prev.filter(c => c.id !== id));
-    } catch(e) { console.error(e); }
+    try { await sbDeleteCompetitor(id); setCompetitors(prev => prev.filter(c => c.id !== id)); }
+    catch(e) { console.error(e); }
   };
 
-  // ── Tri + filtre ──────────────────────────────────────────────────
-  const displayedComps = useMemo(() => {
-    let list = [...competitors];
-    // Filtre catégorie
-    if (filterCat !== "all") list = list.filter(c => c.category === filterCat);
-    // Tri
-    list.sort((a, b) => {
+  const displayed = useMemo(() => {
+    return [...competitors].sort((a, b) => {
       if (sortBy === "alpha") return a.name.localeCompare(b.name);
-      if (sortBy === "cat")   return (a.category||"").localeCompare(b.category||"");
-      // "mentions" — tri par mentions total (avec alias)
-      const ma = getMentionsWithAliases(a);
-      const mb = getMentionsWithAliases(b);
-      return (mb.mentions + mb.asSources) - (ma.mentions + ma.asSources);
+      if (sortBy === "cat") return (a.category||"").localeCompare(b.category||"");
+      const ma = detectedNames.find(d => d.lower === a.name.toLowerCase())?.mentions || 0;
+      const mb = detectedNames.find(d => d.lower === b.name.toLowerCase())?.mentions || 0;
+      return mb - ma;
     });
-    return list;
-  }, [competitors, sortBy, filterCat, detectedNames]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Concurrents pouvant être référent (non alias eux-mêmes)
-  const referents = competitors.filter(c => !c.alias_of);
+  }, [competitors, sortBy, detectedNames]);
 
   return (
     <div>
-      {/* ── Formulaire ajout concurrent ── */}
-      <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 16px", marginBottom: 16 }}>
-        <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>Ajouter un concurrent</div>
+      {/* Formulaire ajout */}
+      <div style={{ background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 10, padding: "12px 16px", marginBottom: 16 }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>Ajouter un concurrent</div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
-          <div style={{ flex: "1 1 160px" }}>
-            <div style={{ fontSize: 10, color: C.textLight, marginBottom: 3 }}>Nom</div>
-            <input value={newName} onChange={e => setNewName(e.target.value)} placeholder="ex: HubSpot"
-              style={{ width: "100%", padding: "6px 10px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 12 }} />
-          </div>
-          <div style={{ flex: "1 1 140px" }}>
-            <div style={{ fontSize: 10, color: C.textLight, marginBottom: 3 }}>Domaine (optionnel)</div>
-            <input value={newDomain} onChange={e => setNewDomain(e.target.value)} placeholder="ex: hubspot.com"
-              style={{ width: "100%", padding: "6px 10px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 12 }} />
-          </div>
-          <div style={{ flex: "1 1 160px" }}>
-            <div style={{ fontSize: 10, color: C.textLight, marginBottom: 3 }}>Catégorie</div>
-            <select value={newCat} onChange={e => setNewCat(e.target.value)}
-              style={{ width: "100%", padding: "6px 10px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 12 }}>
-              {allCats.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
-            </select>
-          </div>
-          <button onClick={() => save(newName, newDomain, newCat)} disabled={saving || !newName.trim()}
-            style={{ padding: "7px 16px", background: newName.trim() ? "#2563EB" : C.bg, color: newName.trim() ? "#fff" : C.textLight, border: "none", borderRadius: 7, fontSize: 12, fontWeight: 700, cursor: newName.trim() ? "pointer" : "default" }}>
-            {saving ? "…" : "Enregistrer"}
-          </button>
-        </div>
-        <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "center" }}>
-          <input value={newCustom} onChange={e => setNewCustom(e.target.value)} placeholder="Nouvelle catégorie…"
-            style={{ padding: "4px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11, width: 180 }} />
-          <button onClick={() => { if (newCustom.trim()) { setCustomCats(p => [...p, newCustom.trim()]); setNewCustom(""); } }}
-            disabled={!newCustom.trim()}
-            style={{ padding: "4px 10px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11, cursor: "pointer", background: C.white }}>
-            + Catégorie
+          <input value={newName} onChange={e => setNewName(e.target.value)} placeholder="Nom du concurrent…"
+            onKeyDown={e => e.key === "Enter" && save()}
+            style={{ flex: "1 1 180px", padding: "6px 10px", border: "1px solid #E2E8F0", borderRadius: 7, fontSize: 12 }} />
+          <select value={newCat} onChange={e => setNewCat(e.target.value)}
+            style={{ padding: "6px 10px", border: "1px solid #E2E8F0", borderRadius: 7, fontSize: 12 }}>
+            {COMP_CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+          </select>
+          <button onClick={save} disabled={saving || !newName.trim()}
+            style={{ padding: "6px 14px", background: newName.trim() ? "#1A3C2E" : "#F1F5F9", color: newName.trim() ? "#F0EBE0" : "#94A3B8", border: "none", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: newName.trim() ? "pointer" : "default" }}>
+            {saving ? "…" : "Ajouter"}
           </button>
         </div>
       </div>
-
-      {/* ── Liste des concurrents qualifiés ── */}
+      {/* Détectés non qualifiés */}
+      {detectedNames.filter(d => !competitors.some(c => c.name.toLowerCase() === d.lower)).length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 6 }}>Détectés dans les réponses — non qualifiés</div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {detectedNames.filter(d => !competitors.some(c => c.name.toLowerCase() === d.lower)).slice(0, 12).map(d => (
+              <button key={d.lower} onClick={() => { setNewName(d.name); }}
+                style={{ padding: "3px 10px", borderRadius: 20, fontSize: 11, border: "1px solid #E2E8F0", background: "#F8FAFC", color: "#64748B", cursor: "pointer" }}>
+                {d.name} <span style={{ color: "#94A3B8" }}>{d.mentions}×</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      {/* Liste qualifiés */}
       {competitors.length > 0 && (
         <div>
-          {/* Controls tri + filtre */}
-          <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7 }}>
-              {displayedComps.length} concurrent{displayedComps.length > 1 ? "s" : ""}
-            </span>
-            <div style={{ flex: 1 }} />
-            {/* Filtre catégorie */}
-            <select value={filterCat} onChange={e => setFilterCat(e.target.value)}
-              style={{ fontSize: 11, padding: "4px 8px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.white, cursor: "pointer" }}>
-              <option value="all">Toutes catégories</option>
-              {allCats.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
-            </select>
-            {/* Tri */}
-            <div style={{ display: "flex", gap: 4 }}>
-              {[
-                { key: "mentions", label: "💬 Mentions" },
-                { key: "alpha",   label: "A→Z" },
-                { key: "cat",     label: "Catégorie" },
-              ].map(s => (
+          <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 10 }}>
+            <span style={{ fontSize: 11, color: "#94A3B8" }}>{competitors.length} concurrent{competitors.length > 1 ? "s" : ""} qualifié{competitors.length > 1 ? "s" : ""}</span>
+            <div style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
+              {[{ key: "mentions", label: "Mentions" }, { key: "alpha", label: "A→Z" }, { key: "cat", label: "Catégorie" }].map(s => (
                 <button key={s.key} onClick={() => setSortBy(s.key)}
-                  style={{ fontSize: 10, padding: "4px 10px", borderRadius: 6, border: `1px solid ${sortBy === s.key ? "#2563EB" : C.border}`, background: sortBy === s.key ? "#EFF6FF" : C.white, color: sortBy === s.key ? "#2563EB" : C.textMid, cursor: "pointer", fontWeight: sortBy === s.key ? 700 : 400 }}>
+                  style={{ fontSize: 10, padding: "3px 8px", borderRadius: 6, border: `1px solid ${sortBy === s.key ? "#1A3C2E" : "#E2E8F0"}`, background: sortBy === s.key ? "#1A3C2E" : "transparent", color: sortBy === s.key ? "#F0EBE0" : "#64748B", cursor: "pointer" }}>
                   {s.label}
                 </button>
               ))}
             </div>
           </div>
-
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {displayedComps.map(comp => {
-              const catDef   = getCatDef(comp.category);
-              const { mentions, asSources, aliasCount } = getMentionsWithAliases(comp);
-              const enabled  = comp.enabled !== false;
-              const isAlias  = !!comp.alias_of;
-
+          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+            {displayed.map(comp => {
+              const catDef = getCatDef(comp.category);
+              const mentions = detectedNames.find(d => d.lower === comp.name.toLowerCase())?.mentions || 0;
+              const enabled = comp.enabled !== false;
               return (
-                <div key={comp.id} style={{ border: `1px solid ${catDef.color}33`, borderLeft: `3px solid ${isAlias ? "#94A3B8" : catDef.color}`, borderRadius: 9, overflow: "hidden", background: isAlias ? "#F8FAFC" : catDef.bg, opacity: enabled ? 1 : 0.5 }}>
-                  {/* Ligne principale */}
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px" }}>
-                    <div style={{ width: 10, height: 10, borderRadius: "50%", background: isAlias ? "#94A3B8" : catDef.color, flexShrink: 0 }} />
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                        <span style={{ fontSize: 12, fontWeight: 700, color: isAlias ? C.textMid : C.text }}>{comp.name}</span>
-                        {isAlias && (
-                          <span style={{ fontSize: 9, fontWeight: 700, color: "#64748B", background: "#E2E8F0", borderRadius: 4, padding: "1px 5px" }}>
-                            alias de {comp.alias_of}
-                          </span>
-                        )}
-                        {!isAlias && aliasCount > 0 && (
-                          <span title={`${aliasCount} alias fusionné${aliasCount > 1 ? "s" : ""}`} style={{ fontSize: 9, fontWeight: 700, color: "#7C3AED", background: "#F5F3FF", borderRadius: 4, padding: "1px 5px", cursor: "default" }}>
-                            +{aliasCount} alias
-                          </span>
-                        )}
-                      </div>
-                      {comp.domain && <div style={{ fontSize: 10, color: C.textLight }}>{comp.domain}</div>}
-                    </div>
-
-                    {/* Compteurs */}
-                    <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-                      {mentions > 0 && (
-                        <span title={`Cité dans les réponses${aliasCount > 0 ? " (alias inclus)" : ""}`}
-                          style={{ fontSize: 10, color: catDef.color, background: C.white, border: `1px solid ${catDef.color}44`, borderRadius: 5, padding: "1px 6px", fontWeight: 600 }}>
-                          💬 {mentions}{aliasCount > 0 ? "*" : ""}
-                        </span>
-                      )}
-                      {asSources > 0 && (
-                        <span title={`Cité en tant que source URL${aliasCount > 0 ? " (alias inclus)" : ""}`}
-                          style={{ fontSize: 10, color: "#2563EB", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 5, padding: "1px 6px", fontWeight: 600 }}>
-                          📎 {asSources}{aliasCount > 0 ? "*" : ""}
-                        </span>
-                      )}
-                      {mentions === 0 && asSources === 0 && <span style={{ fontSize: 10, color: C.textLight }}>—</span>}
-                    </div>
-
-                    {/* Toggle actif */}
-                    <button onClick={() => updateEnabled(comp, !enabled)}
-                      title={enabled ? "Désactiver" : "Activer"}
-                      style={{ width: 34, height: 18, borderRadius: 9, border: "none", cursor: "pointer", background: enabled ? "#059669" : "#CBD5E1", position: "relative", transition: "background 0.2s", flexShrink: 0 }}>
-                      <span style={{ position: "absolute", top: 1, left: enabled ? 17 : 1, width: 16, height: 16, borderRadius: "50%", background: "#fff", transition: "left 0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.2)" }} />
-                    </button>
-
-                    {/* Catégorie */}
-                    <select value={comp.category} onChange={e => updateCat(comp, e.target.value)}
-                      style={{ fontSize: 10, padding: "3px 6px", border: `1px solid ${catDef.color}66`, borderRadius: 5, background: catDef.bg, color: catDef.color, fontWeight: 700, cursor: "pointer" }}>
-                      {allCats.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
-                    </select>
-
-                    {/* Suppression */}
-                    <button onClick={() => remove(comp.id)}
-                      style={{ background: "none", border: "none", cursor: "pointer", color: C.textLight, fontSize: 12, padding: "0 2px" }}>✕</button>
-                  </div>
-
-                  {/* Ligne alias — sélecteur */}
-                  <div style={{ borderTop: `1px solid ${C.borderLight}`, padding: "5px 12px 6px 30px", background: "rgba(0,0,0,0.015)", display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ fontSize: 10, color: C.textLight, flexShrink: 0 }}>🔗 Alias de :</span>
-                    <select
-                      value={comp.alias_of || ""}
-                      onChange={e => updateAlias(comp, e.target.value)}
-                      style={{ fontSize: 11, padding: "2px 6px", border: `1px solid ${C.border}`, borderRadius: 5, background: C.white, color: comp.alias_of ? "#7C3AED" : C.textLight, maxWidth: 220, cursor: "pointer" }}>
-                      <option value="">— Concurrent principal —</option>
-                      {referents.filter(r => r.id !== comp.id).map(r => (
-                        <option key={r.id} value={r.name}>{r.name}</option>
-                      ))}
-                    </select>
-                    {comp.alias_of && (
-                      <span style={{ fontSize: 10, color: C.textLight, fontStyle: "italic" }}>
-                        Ses mentions sont comptées sur "{comp.alias_of}"
-                      </span>
-                    )}
-                  </div>
+                <div key={comp.id} style={{ border: `1px solid ${catDef.color}22`, borderLeft: `3px solid ${catDef.color}`, borderRadius: 9, background: catDef.bg, padding: "8px 12px", display: "flex", alignItems: "center", gap: 8, opacity: enabled ? 1 : 0.5 }}>
+                  <div style={{ width: 8, height: 8, borderRadius: "50%", background: catDef.color, flexShrink: 0 }} />
+                  <span style={{ fontSize: 12, fontWeight: 600, color: "#1A3C2E", flex: 1 }}>{comp.name}</span>
+                  {mentions > 0 && <span style={{ fontSize: 10, color: catDef.color, background: "#fff", border: `1px solid ${catDef.color}33`, borderRadius: 5, padding: "1px 6px", fontWeight: 600 }}>{mentions}×</span>}
+                  <button onClick={() => updateEnabled(comp, !enabled)}
+                    style={{ width: 32, height: 18, borderRadius: 9, border: "none", cursor: "pointer", background: enabled ? "#1A3C2E" : "#CBD5E1", position: "relative", transition: "background 0.2s", flexShrink: 0 }}>
+                    <span style={{ position: "absolute", top: 1, left: enabled ? 15 : 1, width: 16, height: 16, borderRadius: "50%", background: "#fff", transition: "left 0.2s" }} />
+                  </button>
+                  <select value={comp.category} onChange={e => updateCat(comp, e.target.value)}
+                    style={{ fontSize: 10, padding: "2px 5px", border: `1px solid ${catDef.color}44`, borderRadius: 5, background: "#fff", color: catDef.color, fontWeight: 700, cursor: "pointer" }}>
+                    {COMP_CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+                  </select>
+                  <button onClick={() => remove(comp.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "#94A3B8", fontSize: 11 }}>✕</button>
                 </div>
               );
             })}
           </div>
         </div>
       )}
-
-      {competitors.length === 0 && (
-        <div style={{ fontSize: 12, color: C.textLight, fontStyle: "italic" }}>
-          Aucun concurrent qualifié. Ajoutez des concurrents via le formulaire ci-dessus.
-        </div>
+      {competitors.length === 0 && detectedNames.length === 0 && (
+        <div style={{ fontSize: 12, color: "#94A3B8", fontStyle: "italic" }}>Interrogez des questions pour détecter les concurrents cités.</div>
       )}
     </div>
   );
 }
+
 // ── Category Manager ─────────────────────────────────────────────
 
 const CAT_COLORS = ["#2563EB","#059669","#7C3AED","#D97706","#DC2626","#0891B2","#EA580C","#64748B"];
@@ -1652,66 +1422,29 @@ function KeywordsTab({ site, projectId, apiKey, model, axes, context, categories
     try {
       const rows = lines.map(keyword => ({ project_id: projectId, site_id: site.id, keyword, status: "pending" }));
       const saved = await sbSaveKeywords(rows);
-      setKeywords(prev => [...prev, ...saved]);
+      setKeywords(prev => [...saved, ...prev]);
       setInput("");
     } catch(e) { console.error(e); }
     setLoading(false);
   };
 
-  // Import CSV: col1=keyword, col2=category name (optionnel), col3=volume (optionnel)
-  // Accepte aussi un CSV avec headers : keyword, category, volume
+  // Import CSV: col1=keyword, col2=category name
   const importCSV = (e) => {
     const file = e.target.files[0];
     if (!file) return;
     const reader = new FileReader();
     reader.onload = async (ev) => {
-      const text = ev.target.result;
-      const allRows = parseCSV(text).filter(r => r[0]);
-      if (!allRows.length) return;
-
-      // Détecter si la première ligne est un header
-      const firstLow = allRows[0][0]?.toLowerCase().trim();
-      const hasHeader = firstLow === "keyword" || firstLow === "mot-clé" || firstLow === "keywords";
-      const dataRows = hasHeader ? allRows.slice(1) : allRows;
-
-      // Détecter les indices de colonnes si header présent
-      let kwIdx = 0, catIdx = 1, volIdx = 2;
-      if (hasHeader) {
-        const headers = allRows[0].map(h => h.toLowerCase().trim());
-        kwIdx  = headers.findIndex(h => h === "keyword" || h === "mot-clé" || h.startsWith("keyword")) ?? 0;
-        catIdx = headers.findIndex(h => h === "category" || h === "catégorie");
-        volIdx = headers.findIndex(h => h === "volume" || h.includes("volume") || h === "search volume");
-        if (kwIdx === -1) kwIdx = 0;
-      }
-
+      const rows = parseCSV(ev.target.result).filter(r => r[0]);
       const toAdd = [];
-      const volOverrides = []; // { keyword, vol } à mettre à jour après save
-      for (const row of dataRows) {
-        const keyword = row[kwIdx]?.trim();
-        if (!keyword) continue;
-        const catName = catIdx >= 0 && row[catIdx] ? row[catIdx].trim() : null;
+      for (const [keyword, catName] of rows) {
         const cat = catName ? categories.find(c => c.name.toLowerCase() === catName.toLowerCase()) : null;
-        const vol = volIdx >= 0 && row[volIdx] ? parseInt(row[volIdx].replace(/[^0-9]/g, ""), 10) : NaN;
-        const entry = { project_id: projectId, site_id: site.id, keyword, status: "pending", ...(cat ? { category_id: cat.id } : {}) };
-        if (!isNaN(vol) && vol > 0) entry.search_volume = vol;
-        toAdd.push(entry);
-        if (!isNaN(vol) && vol > 0) volOverrides.push({ keyword: keyword.toLowerCase(), vol });
+        toAdd.push({ project_id: projectId, site_id: site.id, keyword, status: "pending", ...(cat ? { category_id: cat.id } : {}) });
       }
       if (!toAdd.length) return;
       const saved = await sbSaveKeywords(toAdd);
-      // Mettre à jour les volumes pour les keywords déjà en base qui n'ont pas reçu le volume via save
-      if (volOverrides.length) {
-        for (const kw of saved) {
-          const override = volOverrides.find(v => v.keyword === kw.keyword?.toLowerCase());
-          if (override && !kw.search_volume) {
-            await sbUpdateKeywordVolume(kw.id, override.vol, "csv_import").catch(() => {});
-            kw.search_volume = override.vol;
-          }
-        }
-      }
-      setKeywords(prev => [...prev, ...saved]);
+      setKeywords(prev => [...saved, ...prev]);
     };
-    reader.readAsText(file, "UTF-8");
+    reader.readAsText(file);
     e.target.value = "";
   };
 
@@ -1746,37 +1479,21 @@ function KeywordsTab({ site, projectId, apiKey, model, axes, context, categories
     if (!file) return;
     const reader = new FileReader();
     reader.onload = async (ev) => {
-      // Supprimer le BOM UTF-8 éventuel (\uFEFF) ajouté par Excel / Semrush
-      let text = ev.target.result.replace(/^\uFEFF/, "");
+      const text = ev.target.result;
       const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
       if (lines.length < 2) return;
-      // Auto-détecter le séparateur : virgule ou point-virgule
-      const sep = lines[0].includes(";") ? ";" : ",";
-      const splitLine = (l) => {
-        // Gère les champs entre guillemets contenant le séparateur
-        const result = []; let cur = ""; let inQ = false;
-        for (const ch of l) {
-          if (ch === '"') { inQ = !inQ; }
-          else if (ch === sep && !inQ) { result.push(cur.trim()); cur = ""; }
-          else { cur += ch; }
-        }
-        result.push(cur.trim());
-        return result;
-      };
-      const header = splitLine(lines[0]).map(h => h.toLowerCase().trim());
+      const header = lines[0].split(";").map(h => h.toLowerCase().replace(/"/g, "").trim());
       const kwIdx  = header.findIndex(h => h === "keyword" || h === "mot-clé" || h.startsWith("keyword"));
       const volIdx = header.findIndex(h => h === "volume" || h.includes("volume"));
       if (kwIdx === -1 || volIdx === -1) {
-        alert(`Colonnes non trouvées (séparateur détecté : '${sep}').\nEn-tête lue : ${header.join(" | ")}\nLe CSV doit avoir des colonnes 'Keyword' et 'Volume'.`);
+        alert("Colonnes non trouvées. Le CSV doit avoir des colonnes 'Keyword' et 'Volume'.");
         return;
       }
       const volMap = {};
       for (const line of lines.slice(1)) {
-        const cols = splitLine(line);
-        const kw  = cols[kwIdx]?.trim().toLowerCase();
-        // Nettoyer le volume : supprimer guillemets, espaces, et TOUS les séparateurs de milliers
-        const raw = (cols[volIdx] || "").replace(/"/g, "").replace(/[\s,]/g, "");
-        const vol = parseInt(raw, 10);
+        const cols = line.split(";").map(c => c.replace(/"/g, "").trim());
+        const kw  = cols[kwIdx]?.toLowerCase();
+        const vol = parseInt(cols[volIdx], 10);
         if (kw && !isNaN(vol)) volMap[kw] = vol;
       }
       let updated = 0;
@@ -1967,15 +1684,6 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
           </span>
           <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
             <input ref={fileVolRef} type="file" accept=".csv" style={{ display: "none" }} onChange={enrichFromCsv} />
-            <button
-              onClick={() => {
-                const list = keywords.map(k => k.keyword).join(", ");
-                navigator.clipboard.writeText(list).catch(() => {});
-              }}
-              title="Copier tous les mots-clés séparés par des virgules (pour Semrush)"
-              style={{ fontSize: 11, fontWeight: 600, padding: "4px 10px", border: "1px solid #E2E8F0", borderRadius: 7, background: "#fff", color: "#64748B", cursor: "pointer" }}>
-              📋 Copier liste
-            </button>
             <button onClick={() => fileVolRef.current?.click()}
               style={{ fontSize: 11, fontWeight: 600, padding: "4px 10px", border: "1px solid #BFDBFE", borderRadius: 7, background: "#fff", color: "#2563EB", cursor: "pointer" }}>
               📄 CSV Semrush
@@ -2174,23 +1882,6 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
 function isBrandPresent(r) {
   return !!r && (r.brand_mentioned === true || r.brand_mentioned === 1);
 }
-// Retourne le type de présence le plus fort dans un résultat :
-// "ranked"  → brand_position non nul (citée dans un top/liste) — présence la plus forte
-// "source"  → brand_in_sources true (URL dans les sources, pas dans un top)
-// "mention" → brand_mentioned mais sans position ni source (présence textuelle anecdotique)
-// null      → marque absente
-function getPresenceType(r) {
-  if (!r) return null;
-  if (r.brand_position && (r.brand_mentioned === true || r.brand_mentioned === 1)) return "ranked";
-  if (r.brand_in_sources) return "source";
-  if (r.brand_mentioned === true || r.brand_mentioned === 1) return "mention";
-  return null;
-}
-const PRESENCE_STYLES = {
-  ranked:  { border: "#059669", bg: "#F0FDF4", badge: "🏆 Classé",       badgeColor: "#059669", badgeBg: "#ECFDF5", badgeBorder: "#A7F3D0" },
-  source:  { border: "#2563EB", bg: "#EFF6FF", badge: "🔗 Source",        badgeColor: "#2563EB", badgeBg: "#DBEAFE", badgeBorder: "#BFDBFE" },
-  mention: { border: "#D97706", bg: "#FFFBEB", badge: "💬 Mention",       badgeColor: "#D97706", badgeBg: "#FEF3C7", badgeBorder: "#FDE68A" },
-};
 
 // history: [{ test_date: "YYYY-MM-DD", brand_mentioned: bool }]
 // results: current geo_results for this provider (for today's optimistic update)
@@ -2310,26 +2001,20 @@ function HintPanelQuestion({ questionId, question, sources, brandName, brandAlia
 
 // ── ProviderRow — calendar + info + accordion + run button ────────
 
-function ProviderRow({ provider, results, allProviderResults, brandName, brandAliases, brandDomain = "", hasKey, isRunning, onRun, questionId, newCalEntry = null, question = "", claudeKey = "", projectId = null, siteId = null, savedHint = "", brandTerms = [], competitorMap = {}, lastCalDate = null, isReadOnly = false }) {
+function ProviderRow({ provider, results, allProviderResults, brandName, brandAliases, brandDomain = "", hasKey, isRunning, onRun, questionId, newCalEntry = null, question = "", claudeKey = "", projectId = null, siteId = null, savedHint = "" }) {
   const [open, setOpen] = useState(false);
   const p = provider;
 
   // Most recent result for this provider
   const result = [...(results || [])].sort((a,b) => new Date(b.created_at||0) - new Date(a.created_at||0))[0] || null;
-  const presenceType = getPresenceType(result);
-  const ps = presenceType ? PRESENCE_STYLES[presenceType] : null;
+  const hasBrand = isBrandPresent(result);
   const sources = result?.sources || [];
   const comps   = result?.competitors_mentioned || [];
-
-  // Date à afficher : la plus récente entre le résultat en mémoire et la dernière entrée de calendrier DB
-  const resultDateStr = result?.created_at?.slice(0, 10) || null;
-  const useCalDate = lastCalDate && (!resultDateStr || lastCalDate > resultDateStr);
-  const displayDate = useCalDate ? lastCalDate : result?.created_at || null;
 
 
 
   return (
-    <div style={{ border: `1px solid ${result ? (ps ? ps.border + "66" : C.border) : p.color+"33"}`, borderLeft: `3px solid ${ps ? ps.border : p.color}`, borderRadius: 9, overflow: "hidden", background: ps ? ps.bg : C.white }}>
+    <div style={{ border: `1px solid ${result ? (hasBrand ? '#059669' : C.border) : p.color+'33'}`, borderLeft: `3px solid ${hasBrand ? '#059669' : p.color}`, borderRadius: 9, overflow: 'hidden', background: hasBrand ? '#F0FDF4' : C.white }}>
 
       {/* ── Row ── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px', minHeight: 36 }}>
@@ -2340,18 +2025,9 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
         {/* Calendar */}
         <PresenceCalendar questionId={questionId} providers={[provider]} newEntry={newCalEntry} />
 
-        {/* Presence type badge */}
-        {ps && (
-          <span style={{ fontSize: 9, fontWeight: 700, color: ps.badgeColor, background: ps.badgeBg, border: `1px solid ${ps.badgeBorder}`, borderRadius: 8, padding: "1px 6px", flexShrink: 0 }}>
-            {ps.badge}{presenceType === "ranked" && result.brand_position ? ` #${result.brand_position}` : ""}
-          </span>
-        )}
-
-        {/* Also show source badge if ranked + source */}
-        {presenceType === "ranked" && result?.brand_in_sources && (
-          <span style={{ fontSize: 9, fontWeight: 700, color: PRESENCE_STYLES.source.badgeColor, background: PRESENCE_STYLES.source.badgeBg, border: `1px solid ${PRESENCE_STYLES.source.badgeBorder}`, borderRadius: 8, padding: "1px 6px", flexShrink: 0 }}>
-            {PRESENCE_STYLES.source.badge}
-          </span>
+        {/* Source badge */}
+        {result?.brand_in_sources && (
+          <span style={{ fontSize: 9, fontWeight: 700, color: '#2563EB', background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 8, padding: '1px 6px', flexShrink: 0 }}>🔗 Source</span>
         )}
 
         {/* Intent / answer type */}
@@ -2376,15 +2052,15 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
             {(result.input_tokens||0)+(result.output_tokens||0)} tok
           </span>
         )}
-        {displayDate && (
-          <span style={{ fontSize: 9, color: useCalDate ? C.blue : C.textLight, flexShrink: 0 }}
-            title={useCalDate ? "Date depuis le calendrier DB (résultat plus récent non chargé en mémoire)" : undefined}>
-            {new Date(displayDate).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' })}
-            {!useCalDate && <>{' '}{new Date(displayDate).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}</>}
+        {result?.created_at && (
+          <span style={{ fontSize: 9, color: C.textLight, flexShrink: 0 }}>
+            {new Date(result.created_at).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' })}
+            {' '}
+            {new Date(result.created_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
           </span>
         )}
 
-        {hasKey && !isReadOnly && (
+        {hasKey && (
           <button onClick={onRun} disabled={isRunning || !hasKey}
             title={!hasKey ? `Clé ${p.label} manquante — ajoutez-la dans ⚙️ Gestion des Providers` : `Interroger ${p.label}`}
             style={{ width: 22, height: 22, borderRadius: '50%', border: 'none', cursor: (!hasKey || isRunning) ? 'not-allowed' : 'pointer', background: !hasKey ? C.bg : isRunning ? C.bg : '#059669', color: (!hasKey || isRunning) ? C.textLight : '#fff', fontSize: 11, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, opacity: (isRunning || !hasKey) ? 0.5 : 1 }}>
@@ -2397,9 +2073,8 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
 
       {open && result && (
         <div style={{ borderTop: `1px solid ${C.border}`, padding: '10px 12px', background: C.bg }}>
-          {/* Réponse — responsive word-break */}
-          <div style={{ fontSize: 12, color: C.text, lineHeight: 1.7, wordBreak: 'break-word', overflowWrap: 'break-word', minWidth: 0 }}>
-            {renderMarkdownHighlighted(result.answer || '', brandTerms, competitorMap)}
+          <div style={{ fontSize: 12, color: C.text, lineHeight: 1.7 }}>
+            {renderMarkdown(result.answer || '')}
           </div>
           {sources.length > 0 && (
             <div style={{ marginTop: 10 }}>
@@ -2407,12 +2082,9 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
               {sources.map((url, i) => {
                 const ib = [brandName, ...(brandAliases||[])].some(t => url.toLowerCase().includes((t||'').toLowerCase()));
                 return (
-                  <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 5, marginBottom: 4, minWidth: 0 }}>
-                    <span style={{ fontSize: 10, color: C.textLight, minWidth: 18, flexShrink: 0, paddingTop: 1 }}>[{i+1}]</span>
-                    <a href={url} target="_blank" rel="noreferrer"
-                      style={{ fontSize: 11, color: ib ? '#059669' : '#2563EB', wordBreak: 'break-all', overflowWrap: 'anywhere', flex: 1, minWidth: 0 }}>
-                      {stripQuery(url)}
-                    </a>
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 3 }}>
+                    <span style={{ fontSize: 10, color: C.textLight, minWidth: 18 }}>[{i+1}]</span>
+                    <a href={url} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: ib ? '#059669' : '#2563EB', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{stripQuery(url)}</a>
                     {ib && <span style={{ fontSize: 9, background: '#ECFDF5', color: '#059669', borderRadius: 4, padding: '1px 4px', flexShrink: 0 }}>marque</span>}
                   </div>
                 );
@@ -2646,13 +2318,9 @@ RÈGLES :
 
 // ── Questions sub-tab (v2) ────────────────────────────────────────
 
-function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allResults, onResultSaved, activeProviders = ["openai"], providerKeys = {}, runMode = "parallel", keywordsOrder = [], refreshTrigger = 0, competitors: competitorsProp = [], setCompetitors: setCompetitorsProp = null, onSaveKey = null, isReadOnly = false }) {
+function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allResults, onResultSaved, activeProviders = ["openai"], providerKeys = {}, runMode = "parallel", keywordsOrder = [], refreshTrigger = 0 }) {
   const [questions, setQuestions]   = useState([]);
   const [results, setResults]       = useState(allResults || []);
-  // Utiliser le state remonté depuis GeoTab si disponible, sinon local
-  const [competitorsLocal, setCompetitorsLocal] = useState([]);
-  const competitors    = competitorsProp.length > 0 ? competitorsProp : competitorsLocal;
-  const setCompetitors = setCompetitorsProp || setCompetitorsLocal; // eslint-disable-line no-unused-vars
   // Sort: favorites first, then by keyword order, then by creation date
   const sortedQuestions = useMemo(() => {
     const kwIndexMap = {};
@@ -2670,6 +2338,8 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
     });
   }, [questions, keywordsOrder]); // eslint-disable-line react-hooks/exhaustive-deps
   const [manualQ, setManualQ]       = useState("");
+  const [csvImporting, setCsvImporting] = useState(false);
+  const csvInputRef = useRef(null);
   const [editingQ, setEditingQ]     = useState(null); // { id, text } — question being edited
   const [hintsMap, setHintsMap]     = useState({}); // { questionId: hint_text }
   // Filters — persisted per project+site in localStorage
@@ -2702,76 +2372,13 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
   const setFilterProviders  = (v) => { setFilterProvidersRaw(v);  persistFilters({ filterProviders: v }); };
   const [running, setRunning]       = useState({});
   const [runAll, setRunAll]         = useState(false);
-  const [keyInputOpen, setKeyInputOpen] = useState(null); // provider id dont le popover est ouvert
-  const [keyInputVal,  setKeyInputVal]  = useState("");   // valeur saisie dans le popover
   const stopAllRef = useRef(false);
   // Refs so callbacks always read current values without stale closure issues
   const activeProvidersRef = useRef(activeProviders);
   const providerKeysRef    = useRef(providerKeys);
-  const resultsRef         = useRef([]); // toujours à jour pour getProvidersToRun
-  const competitorsRef     = useRef(competitors); // pour autoRegisterCompetitors
   // Keep refs in sync with props on every render (not just via useEffect)
   activeProvidersRef.current = activeProviders;
   providerKeysRef.current    = providerKeys;
-  resultsRef.current         = results;
-  competitorsRef.current     = competitors;
-
-  // Auto-enregistrement des marques citées dans les réponses
-  const autoRegisterCompetitors = useCallback(async (answer, brandTerms) => {
-    if (!answer || !projectId || !site?.id) return;
-    const lowerBrand = brandTerms.map(t => t.toLowerCase());
-    const lines = answer.split('\n');
-    const extracted = new Set();
-
-    for (const line of lines) {
-      const trimmed = line.trimStart();
-      let name = null;
-
-      // Format 1 — liste numérotée : "1. **Ingenico**" ou "1. Ingenico"
-      // On s'arrête au premier séparateur (- — : ( [) ou fin de ligne
-      const mNum = trimmed.match(/^\d+[.)]\s+\**([^*\n]+?)\**(?:\s*$|\s*[-\u2013\u2014:([])/);
-      if (mNum) name = mNum[1].trim();
-
-      // Format 2 — gras seul sur sa ligne : "**Bain & Company**"
-      // Rien (ou whitespace) après le ** fermant → c'est un nom de marque
-      // "**Site web**: url" ou "**Description**: text" ont un : après → ignorés
-      if (!name) {
-        const mBold = trimmed.match(/^\*\*([^*\n]+?)\*\*\s*$/);
-        if (mBold) name = mBold[1].trim();
-      }
-
-      if (!name || name.length < 2) continue;
-
-      // Exclure les labels structurels
-      const lower = name.toLowerCase();
-      if (/^(description|site web|site|url|lien|contact|adresse|prix|note|t\u00e9l\u00e9phone|email|secteur|type|cat\u00e9gorie|si\u00e8ge|pays|country|conseil|conseils|consulting|solutions|services|prestataire|prestataires|acteurs|acteur|entreprise|entreprises|fournisseur|fournisseurs|partenaire|partenaires|sp\u00e9cialiste|sp\u00e9cialistes|cabinet|cabinets|agence|agences|plateforme|plateformes|outil|outils|logiciel|logiciels|option|options|exemple|exemples)$/i.test(lower)) continue;
-
-      // Exclure la marque analysée
-      if (lowerBrand.some(b => b && (lower === b || lower.includes(b) || b.includes(lower)))) continue;
-
-      extracted.add(name);
-    }
-
-    if (!extracted.size) return;
-    const currentComps = competitorsRef.current;
-    const qualifiedNames = new Set(currentComps.map(c => c.name.toLowerCase()));
-    for (const name of extracted) {
-      if (qualifiedNames.has(name.toLowerCase())) continue;
-      try {
-        const saved = await sbSaveCompetitor({
-          project_id: projectId, site_id: site.id,
-          name, domain: '', category: 'other', color: '#64748B',
-        });
-        if (saved) {
-          setCompetitors(prev => {
-            if (prev.some(c => c.name.toLowerCase() === name.toLowerCase())) return prev;
-            return [...prev, saved].sort((a, b) => a.name.localeCompare(b.name));
-          });
-          qualifiedNames.add(name.toLowerCase());
-        }
-      } catch {} // silencieux si doublon
-    }
-  }, [projectId, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const [selected, setSelected]     = useState(new Set());
   const [bulkCat, setBulkCat]       = useState("");
   const [keywords, setKeywords]     = useState([]);
@@ -2826,8 +2433,63 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
     const q = manualQ.trim();
     if (!q) return;
     const saved = await sbSaveQuestions([{ project_id: projectId, site_id: site.id, question: q, is_manual: true }]);
-    setQuestions(prev => [...prev, ...saved]);
+    setQuestions(prev => [...saved, ...prev]);
     setManualQ("");
+  };
+
+  const importCsvQuestions = async (file) => {
+    if (!file) return;
+    setCsvImporting(true);
+    try {
+      const text = await file.text();
+      const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+
+      // Détecter si CSV avec header ou liste brute (une question par ligne)
+      let questions = [];
+      const firstLine = lines[0] || "";
+      const sep = firstLine.includes(";") ? ";" : ",";
+      const headers = firstLine.split(sep).map(h => h.replace(/^["']|["']$/g, "").trim().toLowerCase());
+      const qColIdx = headers.findIndex(h => h === "question" || h === "questions" || h === "query" || h === "requête");
+
+      if (qColIdx >= 0) {
+        // CSV avec header — on prend la colonne question
+        questions = lines.slice(1)
+          .map(l => l.split(sep)[qColIdx]?.replace(/^["']|["']$/g, "").trim())
+          .filter(Boolean);
+      } else {
+        // Pas de header détecté — une question par ligne
+        questions = lines.map(l => l.replace(/^["']|["']$/g, "").trim()).filter(Boolean);
+      }
+
+      // Dédoublonner et filtrer les questions déjà existantes
+      const existing = new Set(questions.map(q => q.question.trim().toLowerCase()));
+      const toAdd = [...new Set(questions)]
+        .filter(q => q.length > 5 && !existing.has(q.toLowerCase()))
+        .map(q => ({ project_id: projectId, site_id: site.id, question: q, is_manual: true }));
+
+      if (toAdd.length === 0) {
+        alert("Aucune nouvelle question à importer (doublons ou fichier vide).");
+        return;
+      }
+
+      // Sauvegarder par batch de 50
+      const batchSize = 50;
+      const allSaved = [];
+      for (let i = 0; i < toAdd.length; i += batchSize) {
+        const batch = toAdd.slice(i, i + batchSize);
+        const saved = await sbSaveQuestions(batch);
+        allSaved.push(...(saved || []));
+      }
+
+      setQuestions(prev => [...allSaved, ...prev]);
+      alert(`✓ ${allSaved.length} question${allSaved.length > 1 ? "s" : ""} importée${allSaved.length > 1 ? "s" : ""} sur ${toAdd.length} détectée${toAdd.length > 1 ? "s" : ""}.`);
+    } catch(e) {
+      console.error("CSV import error:", e);
+      alert("Erreur lors de l'import : " + e.message);
+    } finally {
+      setCsvImporting(false);
+      if (csvInputRef.current) csvInputRef.current.value = "";
+    }
   };
 
   const toggleFav = async (qId, cur) => {
@@ -2862,9 +2524,6 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allRe
     if (!pk?.dec) { console.warn("No key for provider", provider.id); return; }
     setRunning(r => ({ ...r, [`${q.id}-${provider.id}`]: true }));
     const { brand_name = "", brand_aliases = [], competitors = [], context = "" } = brand || {};
-    // Fusionner brand.competitors (ancienne liste) avec les noms qualifiés de geo_competitors
-    const qualifiedCompNames = competitorsRef.current.map(c => c.name);
-    const allCompetitorNames = [...new Set([...competitors.filter(Boolean), ...qualifiedCompNames])];
     const baseContext = context ? `Contexte : "${context}"\n` : "";
     const question = `Question : ${q.question}`;
     const promptForClaude = `${baseContext}Tu es un expert en recommandation d'entreprises et prestataires. Réponds à la question suivante en te basant sur tes connaissances pour donner une liste de vrais acteurs, entreprises ou prestataires du marché.
@@ -2879,7 +2538,7 @@ ${question}`;
     const prompt = provider.id === "claude" ? promptForClaude : provider.id === "gemini" ? promptForGemini : promptForWeb;
     try {
       const parsed = await callProvider(provider, pk.dec, prompt);
-      const { brandMentioned, brandPosition, brandInSources, competitorsMentioned } = detectBrand(parsed.answer, parsed.sources, brand_name, brand_aliases, allCompetitorNames);
+      const { brandMentioned, brandPosition, brandInSources, competitorsMentioned } = detectBrand(parsed.answer, parsed.sources, brand_name, brand_aliases, competitors);
       const domain_counts = {};
       (parsed.sources || []).forEach(url => {
         if (!domain_counts[url]) domain_counts[url] = { as_source: 0, in_answer: 0, domain: extractDomain(url) };
@@ -2925,10 +2584,6 @@ ${question}`;
       // Persist to DB (best effort)
       sbAddCalendarEntry(q.id, provider.id, brandMentioned).catch(() => {});
 
-      // Auto-enregistrement des concurrents détectés dans la réponse
-      const brandTermsForAuto = [brand_name, ...(brand?.brand_aliases || [])].filter(Boolean);
-      autoRegisterCompetitors(parsed.answer, brandTermsForAuto).catch(() => {});
-
       // Update cached answers on question
       const cachePatch = { has_result: true, last_answer: parsed.answer, last_model: record.model, last_date: now };
       if (brandMentioned) Object.assign(cachePatch, { best_answer: parsed.answer, best_model: record.model, best_date: now });
@@ -2950,18 +2605,6 @@ ${question}`;
     });
     return out;
   }, [resultsByQ]);
-
-  // Dernière date connue (DB) par question+provider — pour corriger l'affichage de date dans ProviderRow
-  const lastCalDateByQP = useMemo(() => {
-    const map = {}; // { `${qId}|${providerId}` → "YYYY-MM-DD HH:MM" }
-    calendarEntries.forEach(e => {
-      if (!e.question_id || !e.provider_id) return;
-      const key = `${e.question_id}|${e.provider_id}`;
-      const dateStr = e.test_date || (e.created_at || "").slice(0, 10);
-      if (!map[key] || dateStr > map[key]) map[key] = dateStr;
-    });
-    return map;
-  }, [calendarEntries]);
 
   // Per question: était positionnée dans les 30 derniers jours (carré vert calendrier)
   // mais absente du dernier résultat → "Positionnée précédemment"
@@ -3035,11 +2678,11 @@ ${question}`;
     const currentKeys = providerKeysRef.current;
     const currentActive = activeProvidersRef.current;
     const configuredProviders = PROVIDERS.filter(p => currentActive.includes(p.id) && currentKeys[p.id]?.dec);
-    if (force) return configuredProviders;
+    if (force) return configuredProviders; // always run all when forced (individual ▶ button)
     const today = new Date().toISOString().slice(0, 10);
-    // Lire depuis resultsRef.current pour avoir toujours les données fraîches
-    const qResults = resultsRef.current.filter(r => r.question_id === q.id);
+    const qResults = resultsByQ[q.id] || [];
     return configuredProviders.filter(p => {
+      // Skip if already generated today for this provider
       const alreadyToday = qResults.some(r =>
         getProviderId(r.model) === p.id &&
         r.created_at && r.created_at.slice(0, 10) === today
@@ -3066,20 +2709,6 @@ ${question}`;
 
   const { brand_name = "", brand_aliases = [] } = brand || {};
 
-  // Construire competitorMap pour le surlignement dans les réponses
-  // { lowerName → { color, category, bg } }
-  const competitorMap = useMemo(() => {
-    const map = {};
-    competitors.forEach(c => {
-      const catDef = COMP_CATEGORIES.find(cat => cat.key === c.category) || COMP_CATEGORIES[3];
-      map[c.name.toLowerCase()] = { color: catDef.color, category: c.category, bg: catDef.bg };
-      if (c.domain) map[c.domain.toLowerCase().replace(/^www\./, "")] = { color: catDef.color, category: c.category, bg: catDef.bg };
-    });
-    return map;
-  }, [competitors]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const brandTermsForHighlight = [brand_name, ...brand_aliases].filter(Boolean);
-
   // Results for filtered questions, filtered by provider selection
   const filteredResults = useMemo(() => {
     const qIds = new Set(filtered.map(q => q.id));
@@ -3090,21 +2719,16 @@ ${question}`;
     });
   }, [filtered, results, filterProviders]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Count questions to generate for "Lancer tout" indicator — utilise resultsRef pour être frais
+  // Count questions to generate for "Lancer tout" indicator
   const toRunCount = useMemo(() => {
     const today = new Date().toISOString().slice(0, 10);
     const configuredProviders = PROVIDERS.filter(p =>
       activeProviders.includes(p.id) && providerKeys[p.id]?.dec
     );
     if (!configuredProviders.length) return 0;
-    // Construire une map fraîche depuis resultsRef.current
-    const freshByQ = {};
-    resultsRef.current.forEach(r => {
-      if (!freshByQ[r.question_id]) freshByQ[r.question_id] = [];
-      freshByQ[r.question_id].push(r);
-    });
     return filtered.filter(q => {
-      const qResults = freshByQ[q.id] || [];
+      const qResults = resultsByQ[q.id] || [];
+      // Count questions that have at least one provider not yet done today
       return configuredProviders.some(p =>
         !qResults.some(r =>
           getProviderId(r.model) === p.id &&
@@ -3112,7 +2736,7 @@ ${question}`;
         )
       );
     }).length;
-  }, [filtered, results, activeProviders, providerKeys]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [filtered, resultsByQ, activeProviders, providerKeys]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div>
@@ -3125,15 +2749,40 @@ ${question}`;
       />
 
       {/* ── Stats header (filtered) ── */}
-      <div data-tour="stats-header"><StatsHeader questions={filtered} results={filteredResults} brandName={brand_name} qualifiedCompetitors={competitors.filter(c => c.enabled !== false)} /></div>
+      <StatsHeader questions={filtered} results={filteredResults} brandName={brand_name} />
 
-      {/* ── Manual question input ── */}
-      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 16px", marginBottom: 14, display: "flex", gap: 10, alignItems: "center" }}>
-        <span style={{ fontSize: 11, fontWeight: 600, color: C.textLight, flexShrink: 0 }}>➕ Question manuelle</span>
-        <input value={manualQ} onChange={e => setManualQ(e.target.value)} onKeyDown={e => e.key === "Enter" && addManual()}
-          placeholder="Saisir une question à ajouter manuellement…"
-          style={{ flex: 1, padding: "6px 10px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 12, color: C.text }} />
-        <Btn onClick={addManual} disabled={!manualQ.trim()} small>Ajouter</Btn>
+      {/* ── Ajout de questions : manuel + import CSV ── */}
+      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 16px", marginBottom: 14 }}>
+        {/* Saisie manuelle */}
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <span style={{ fontSize: 11, fontWeight: 600, color: C.textLight, flexShrink: 0 }}>➕ Manuel</span>
+          <input value={manualQ} onChange={e => setManualQ(e.target.value)} onKeyDown={e => e.key === "Enter" && addManual()}
+            placeholder="Saisir une question à ajouter manuellement…"
+            style={{ flex: 1, padding: "6px 10px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 12, color: C.text }} />
+          <Btn onClick={addManual} disabled={!manualQ.trim()} small>Ajouter</Btn>
+        </div>
+        {/* Import CSV */}
+        <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${C.border}`, display: "flex", gap: 10, alignItems: "center" }}>
+          <span style={{ fontSize: 11, fontWeight: 600, color: C.textLight, flexShrink: 0 }}>📥 Import CSV</span>
+          <span style={{ fontSize: 11, color: C.textLight, flex: 1 }}>
+            Une question par ligne, ou colonne <code style={{ background: C.bg, padding: "1px 5px", borderRadius: 4, fontSize: 10 }}>question</code> si CSV avec header
+          </span>
+          <input
+            ref={csvInputRef}
+            type="file"
+            accept=".csv,.txt"
+            style={{ display: "none" }}
+            onChange={e => importCsvQuestions(e.target.files?.[0])}
+          />
+          <Btn
+            onClick={() => csvInputRef.current?.click()}
+            disabled={csvImporting}
+            small
+            style={{ background: csvImporting ? C.bg : "#EFF6FF", color: csvImporting ? C.textLight : "#2563EB", border: "1px solid #BFDBFE" }}
+          >
+            {csvImporting ? "⏳ Import…" : "📥 Importer"}
+          </Btn>
+        </div>
       </div>
 
       {/* ── Filters ── */}
@@ -3174,64 +2823,13 @@ ${question}`;
           {PROVIDERS.map(p => {
             const active = filterProviders.includes(p.id);
             const hasKey = !!providerKeys[p.id]?.dec;
-            const isOpen = keyInputOpen === p.id;
             return (
-              <div key={p.id} style={{ position: "relative" }}>
-                <button
-                  onClick={() => {
-                    if (!hasKey && !isReadOnly) {
-                      setKeyInputOpen(isOpen ? null : p.id);
-                      setKeyInputVal("");
-                    } else {
-                      setFilterProviders(prev => active ? prev.filter(id => id !== p.id) : [...prev, p.id]);
-                    }
-                  }}
-                  title={!hasKey && !isReadOnly ? `Cliquez pour configurer la clé ${p.label}` : `Filtrer par ${p.label}`}
-                  style={{ padding: "2px 10px", border: `2px solid ${p.color}`, borderRadius: 10, fontSize: 10, fontWeight: 600, cursor: "pointer",
-                    background: active && hasKey ? p.color : "transparent",
-                    color: active && hasKey ? "#fff" : hasKey ? p.color : C.textLight,
-                    opacity: 1 }}>
-                  {p.icon} {p.label}{!hasKey ? " 🔑" : ""}
-                </button>
-                {/* Popover saisie clé */}
-                {isOpen && (
-                  <div style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 100, background: C.white, border: `1.5px solid ${p.color}`, borderRadius: 10, padding: "10px 12px", minWidth: 260, boxShadow: "0 4px 20px rgba(0,0,0,0.12)" }}>
-                    <div style={{ fontSize: 11, fontWeight: 700, color: p.color, marginBottom: 6 }}>🔑 Clé {p.label}</div>
-                    <div style={{ display: "flex", gap: 6 }}>
-                      <input
-                        autoFocus
-                        type="password"
-                        value={keyInputVal}
-                        onChange={e => setKeyInputVal(e.target.value)}
-                        onKeyDown={async e => {
-                          if (e.key === "Enter" && keyInputVal.trim()) {
-                            const enc = encodeKey(keyInputVal.trim());
-                            await sbSaveProviderKeys(projectId, { [p.keyField]: enc });
-                            onSaveKey?.({ [p.keyField]: enc });
-                            setKeyInputOpen(null); setKeyInputVal("");
-                          }
-                          if (e.key === "Escape") { setKeyInputOpen(null); setKeyInputVal(""); }
-                        }}
-                        placeholder={p.keyPlaceholder}
-                        style={{ flex: 1, padding: "5px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11, fontFamily: "monospace" }}
-                      />
-                      <button
-                        onClick={async () => {
-                          if (!keyInputVal.trim()) return;
-                          const enc = encodeKey(keyInputVal.trim());
-                          await sbSaveProviderKeys(projectId, { [p.keyField]: enc });
-                          onSaveKey?.({ [p.keyField]: enc });
-                          setKeyInputOpen(null); setKeyInputVal("");
-                        }}
-                        disabled={!keyInputVal.trim()}
-                        style={{ padding: "5px 10px", background: p.color, color: "#fff", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: keyInputVal.trim() ? "pointer" : "default", opacity: keyInputVal.trim() ? 1 : 0.5 }}>
-                        ✓
-                      </button>
-                    </div>
-                    <div style={{ fontSize: 9, color: C.textLight, marginTop: 4 }}>Entrée ou ✓ pour enregistrer · Échap pour annuler</div>
-                  </div>
-                )}
-              </div>
+              <button key={p.id} onClick={() => setFilterProviders(prev => active ? prev.filter(id => id !== p.id) : [...prev, p.id])}
+                title={!hasKey ? `Clé ${p.label} manquante — ajoutez-la dans ⚙️ Gestion des Providers (en haut de page)` : undefined}
+                style={{ padding: "2px 10px", border: `2px solid ${p.color}`, borderRadius: 10, fontSize: 10, fontWeight: 600, cursor: hasKey ? "pointer" : "not-allowed",
+                  background: active ? p.color : "transparent", color: active ? "#fff" : hasKey ? p.color : C.textLight, opacity: hasKey ? 1 : 0.4 }}>
+                {p.icon} {p.label}{!hasKey ? " 🔑" : ""}
+              </button>
             );
           })}
 
@@ -3265,39 +2863,13 @@ ${question}`;
           />
 
           <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-            <button
-              onClick={async () => {
-                await Promise.all([
-                  sbGetQuestions(projectId, site.id).then(setQuestions),
-                  sbGetGeoResults(projectId, site.id).then(setResults),
-                ]);
-              }}
-              title="Recharger questions et résultats"
-              style={{ padding: "4px 8px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.white, color: C.textLight, fontSize: 11, cursor: "pointer" }}>🔄</button>
-            {!isReadOnly && (
-              <span data-tour="run-all" style={{ display: "contents" }}>
-                <Btn onClick={runAllQuestions} disabled={runAll || toRunCount === 0} color="#7C3AED"
-                  title={!runAll && toRunCount === 0 ? "Toutes les questions ont déjà été interrogées aujourd'hui — utilisez ↺ pour forcer le relancement" : `Interroge uniquement les questions sans réponse aujourd'hui (${toRunCount})`}>
-                  {runAll ? "⏳ En cours…" : toRunCount > 0 ? `▶ Lancer tout (${toRunCount})` : "✓ Tout généré"}
-                </Btn>
-                {!runAll && toRunCount === 0 && (
-                  <Btn onClick={async () => {
-                    const toRun = filtered.map(q => ({ q, providers: getProvidersToRun(q, true) })).filter(({ providers }) => providers.length > 0);
-                    if (!toRun.length) return;
-                    stopAllRef.current = false;
-                    setRunAll(true);
-                    for (const { q, providers } of toRun) {
-                      if (stopAllRef.current) break;
-                      setRunning(r => ({ ...r, [q.id]: true }));
-                      await Promise.all(providers.map(p => runProvider(q, p)));
-                      setRunning(r => ({ ...r, [q.id]: false }));
-                    }
-                    setRunAll(false);
-                  }} color="#64748B" variant="outline" small title="Relancer toutes les questions même si déjà générées aujourd'hui">↺ Relancer tout</Btn>
-                )}
-                {runAll && <Btn onClick={() => { stopAllRef.current = true; setRunAll(false); }} color="#DC2626" variant="outline" small>⏹ Arrêter</Btn>}
-              </span>
-            )}
+            <button onClick={() => sbGetQuestions(projectId, site.id).then(setQuestions)}
+              title="Recharger les questions" style={{ padding: "4px 8px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.white, color: C.textLight, fontSize: 11, cursor: "pointer" }}>🔄</button>
+            <Btn onClick={runAllQuestions} disabled={runAll || toRunCount === 0} color="#7C3AED"
+              title={!runAll && toRunCount === 0 ? "Toutes les questions ont déjà été interrogées aujourd'hui — relancez manuellement une question pour forcer la ré-interrogation" : undefined}>
+              {runAll ? "⏳ En cours…" : toRunCount > 0 ? `▶ Lancer tout (${toRunCount})` : "✓ Tout généré"}
+            </Btn>
+            {runAll && <Btn onClick={() => { stopAllRef.current = true; setRunAll(false); }} color="#DC2626" variant="outline" small>⏹ Arrêter</Btn>}
           </div>
         </div>
       </div>
@@ -3311,11 +2883,7 @@ ${question}`;
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {filtered.map(q => {
             const qResults = resultsByQ[q.id] || [];
-            // Couleur basée sur le résultat le plus récent (pas sur l'historique entier)
-            const latestQResult = qResults.length
-              ? [...qResults].sort((a, b) => new Date(b.created_at||0) - new Date(a.created_at||0))[0]
-              : null;
-            const hasBrand = !!(latestQResult && (latestQResult.brand_mentioned === true || latestQResult.brand_mentioned === 1));
+            const hasBrand = qResults.some(r => r.brand_mentioned === true || r.brand_mentioned === 1);
             const isRunning = running[q.id];
             const isSel = selected.has(q.id);
             const cat = categories.find(c => c.id === q.category_id);
@@ -3403,10 +2971,6 @@ ${question}`;
                         siteId={site?.id}
                         savedHint={hintsMap[q.id]?.text || ""}
                         savedHintDate={hintsMap[q.id]?.date || null}
-                        brandTerms={brandTermsForHighlight}
-                        competitorMap={competitorMap}
-                        lastCalDate={lastCalDateByQP[`${q.id}|${p.id}`] || null}
-                        isReadOnly={isReadOnly}
                       />
                     );
                   })}
@@ -3480,7 +3044,7 @@ ${question}`;
 // ── URL Index sub-tab ─────────────────────────────────────────────
 
 
-function UrlsTab({ projectId, categories, brand, allResults, qualifiedCompetitors = [] }) {
+function UrlsTab({ projectId, categories, brand, allResults }) {
   const [urls, setUrls]         = useState([]);
   const [loading, setLoading]   = useState(true);
   const [error, setError]       = useState(false);
@@ -3495,8 +3059,8 @@ function UrlsTab({ projectId, categories, brand, allResults, qualifiedCompetitor
   const [openCrawl, setOpenCrawl]   = useState(null);
 
   const brandName    = brand?.brand_name || "";
-  const brandAliases = useMemo(() => brand?.brand_aliases || [], [brand?.brand_aliases]); // eslint-disable-line react-hooks/exhaustive-deps
-  const competitors  = useMemo(() => brand?.competitors  || [], [brand?.competitors]);  // eslint-disable-line react-hooks/exhaustive-deps
+  const brandAliases = brand?.brand_aliases || [];
+  const competitors  = brand?.competitors  || [];
 
   useEffect(() => {
     if (!projectId) return;
@@ -3507,44 +3071,24 @@ function UrlsTab({ projectId, categories, brand, allResults, qualifiedCompetitor
       .catch(() => { setUrls([]); setLoading(false); setError(true); });
   }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Classify a URL — utilise les concurrents qualifiés en priorité
-  const classifyUrl = useCallback((u) => {
+  // Classify a URL
+  const classifyUrl = (u) => {
     const d = (u.domain || "").toLowerCase();
     const allBrand = [brandName, ...brandAliases].filter(Boolean).map(t => t.toLowerCase());
+    const knownComps = competitors.filter(Boolean).map(t => t.toLowerCase());
+
     if (allBrand.some(t => d.includes(t))) return "brand";
 
-    // Concurrents qualifiés (depuis geo_competitors) — priorité sur l'ancienne liste
-    for (const qc of qualifiedCompetitors) {
-      const name = (qc.name || "").toLowerCase();
-      const dom  = (qc.domain || "").toLowerCase().replace(/^www\./, "");
-      if ((dom && d.includes(dom)) || d.includes(name.replace(/\s+/g, ""))) {
-        return `competitor_q_${qc.category}`; // ex: competitor_q_direct
-      }
-    }
-
-    // Fallback : ancienne logique (brand.competitors + noms détectés)
-    const knownComps = competitors.filter(Boolean).map(t => t.toLowerCase());
+    // Identified competitors from results
     const compNames = new Set();
     allResults.forEach(r => (r.competitors_mentioned || []).forEach(c => { if (c.name) compNames.add(c.name.toLowerCase()); }));
     const identifiedComps = [...compNames];
+
     if (knownComps.some(t => d.includes(t))) return "competitor_known";
     if (identifiedComps.some(t => d.includes(t) || t.includes(d.split(".")[0]))) return "competitor_identified";
     return "other";
-  }, [brandName, brandAliases, competitors, qualifiedCompetitors, allResults]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Obtenir la def de style pour une classe
-  const getClassStyle = useCallback((cls) => {
-    if (cls === "brand") return { color: "#059669", bg: "#ECFDF5", border: "#059669", label: `✓ ${brandName || "Marque"}` };
-    if (cls.startsWith("competitor_q_")) {
-      const cat = cls.replace("competitor_q_", "");
-      const catDef = COMP_CATEGORIES.find(c => c.key === cat) || COMP_CATEGORIES[3];
-      return { color: catDef.color, bg: catDef.bg, border: catDef.color, label: `⚔️ ${catDef.label}` };
-    }
-    if (cls.startsWith("competitor")) return { color: "#DC2626", bg: "#FEF2F2", border: "#DC2626", label: "⚔️ Concurrent" };
-    return { color: "#64748B", bg: "#F8FAFC", border: "#E2E8F0", label: "🔗 Autre source" };
-  }, [brandName, qualifiedCompetitors]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Map detailed class to display class (pour filtres)
+  };
+  // Map detailed class to display class
   const mapCls = (c) => c.startsWith("competitor") ? "competitor" : c;
 
   const classColors = {
@@ -3751,8 +3295,8 @@ function UrlsTab({ projectId, categories, brand, allResults, qualifiedCompetitor
       {view === "urls" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
           {filtered.map(u => {
-            const rawCls = classifyUrl(u);
-            const meta   = getClassStyle(rawCls);
+            const cls  = mapCls(classifyUrl(u));
+            const meta = classColors[cls];
             const isOpen = openCrawl === u.id;
             const hasSections = u.crawl_sections?.length > 0;
             const cat = categories.find(c => c.id === u.theme_category_id);
@@ -3860,8 +3404,8 @@ function UrlsTab({ projectId, categories, brand, allResults, qualifiedCompetitor
       {view === "domains" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {domains.map((d, i) => {
-            const rawCls = classifyUrl({ domain: d.domain });
-            const meta   = getClassStyle(rawCls);
+            const cls  = mapCls(classifyUrl({ domain: d.domain }));
+            const meta = classColors[cls];
             const total = d.count_as_source + d.count_in_answer;
             const maxTotal = domains[0] ? domains[0].count_as_source + domains[0].count_in_answer : 1;
             return (
@@ -4293,50 +3837,6 @@ function FanoutSetupPanel({
         </div>
       </SetupSection>
 
-      {/* ── Imports SF / GSC / GA4 / Bing ── */}
-      <SetupSection icon="📥" title="Imports CSV — SF, GSC, GA4, Bing">
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          {safeSites.map(site => (
-            <div key={site.id} style={{ flex: "1 1 200px", background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 10, padding: "10px 14px" }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: site.color, marginBottom: 8 }}>{site.label}</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {[
-                  { key: "sf",   label: "Screaming Frog", icon: "🐸", data: sfData,   setter: setSfData },
-                  { key: "gsc",  label: "Search Console",  icon: "🔍", data: gscData,  setter: setGscData },
-                  { key: "ga",   label: "Analytics 4",     icon: "📊", data: gaData,   setter: setGaData },
-                  { key: "bing", label: "Bing Webmaster",  icon: "🤖", data: bingData, setter: setBingData },
-                ].map(({ key, label, icon, data, setter }) => {
-                  const hasData = (data||{})[site.id]?.length > 0;
-                  const lastRow = lastImports[`${site.id}_${key}`];
-                  return (
-                    <div key={key}>
-                      <UploadCard
-                        label={`${icon} ${label}`} icon={icon} color={site.color}
-                        loaded={hasData} rows={(data||{})[site.id]}
-                        onData={rows => setter?.(p => ({...p, [site.id]: rows}))}
-                        onClear={() => setter?.(p => ({...p, [site.id]: []}))}
-                        siteId={site.id} source={key} projectId={projectId}
-                        onAfterUpload={refreshHistory}
-                        onLoadFromHistory={async row => {
-                          try { const t = await sbDownload(row.storage_path); setter?.(p => ({...p, [site.id]: parseCSV(t)})); } catch(e) {}
-                        }}
-                      />
-                      {lastRow?.storage_path && !hasData && (
-                        <button onClick={async () => {
-                          try { const t = await sbDownload(lastRow.storage_path); setter?.(p => ({...p, [site.id]: parseCSV(t)})); } catch(e) {}
-                        }} style={{ marginTop: 3, width: "100%", padding: "2px 0", border: `1px solid ${site.color}`, borderRadius: 6, background: site.bg, color: site.color, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>
-                          ↩ {lastRow.filename}
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
-        </div>
-      </SetupSection>
-
       {/* ── Import Semrush ── */}
       <SetupSection icon="📈" title="Import Semrush — volumes de recherche">
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -4345,33 +3845,15 @@ function FanoutSetupPanel({
               <div style={{ fontSize: 11, fontWeight: 700, color: site.color, marginBottom: 8 }}>{site.label}</div>
               <UploadCard label="Semrush" icon="📈" hint="Organic pages export" color={site.color}
                 loaded={(smData||{})[site.id]?.length > 0} rows={(smData||{})[site.id]}
-                onData={(_, rawText) => {
-                  const parsed = parseSemrushCSV(rawText);
-                  const rows = parseSemrush(parsed);
-                  setSmData(p => ({...p, [site.id]: rows}));
-                  // Enrichir les volumes de mots-clés si le CSV contient des keywords
-                  if (parsed.length > 0 && (parsed[0].keyword !== undefined || parsed[0].Keyword !== undefined)) {
-                    onSemrushVolumes?.(site.id, parsed);
-                  }
-                }}
+                onData={(_, rawText) => { const rows = parseSemrush(parseSemrushCSV(rawText)); setSmData(p => ({...p, [site.id]: rows})); }}
                 onClear={() => setSmData(p => ({...p, [site.id]: []}))}
                 rawMode siteId={site.id} source="sm" projectId={projectId}
                 onAfterUpload={refreshHistory}
-                onLoadFromHistory={async row => {
-                  try {
-                    const t = await sbDownload(row.storage_path);
-                    const parsed = parseSemrushCSV(t);
-                    const rows = parseSemrush(parsed);
-                    setSmData(p => ({...p, [site.id]: rows}));
-                    if (parsed.length > 0 && (parsed[0].keyword !== undefined || parsed[0].Keyword !== undefined)) {
-                      onSemrushVolumes?.(site.id, parsed);
-                    }
-                  } catch(e) {}
-                }}
+                onLoadFromHistory={async row => { try { const t = await sbDownload(row.storage_path); const rows = parseSemrush(parseSemrushCSV(t)); setSmData(p => ({...p, [site.id]: rows})); } catch(e) {} }}
               />
               {(smData||{})[site.id]?.length > 0 && <div style={{ marginTop: 4, fontSize: 10, color: site.color, fontWeight: 600 }}>✓ {(smData||{})[site.id].length} pages</div>}
               {lastImports[`${site.id}_sm`]?.storage_path && !(smData||{})[site.id]?.length && (
-                <button onClick={async () => { try { const t = await sbDownload(lastImports[`${site.id}_sm`].storage_path); const parsed = parseSemrushCSV(t); const rows = parseSemrush(parsed); setSmData(p => ({...p, [site.id]: rows})); if (parsed.length > 0 && (parsed[0].keyword !== undefined || parsed[0].Keyword !== undefined)) { onSemrushVolumes?.(site.id, parsed); } } catch(e) {} }}
+                <button onClick={async () => { try { const t = await sbDownload(lastImports[`${site.id}_sm`].storage_path); const rows = parseSemrush(parseSemrushCSV(t)); setSmData(p => ({...p, [site.id]: rows})); } catch(e) {} }}
                   style={{ marginTop: 4, width: "100%", padding: "3px 0", border: `1px solid ${site.color}`, borderRadius: 6, background: site.bg, color: site.color, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>↩ Dernier</button>
               )}
             </div>
@@ -4438,14 +3920,13 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
 }) {
   const [mainTab, setMainTab]       = useState("analyse"); // "setup" | "analyse"
   const [subTab, setSubTab]         = useState("keywords"); // keywords | questions | urls
-  const [questionsKey, setQuestionsKey] = useState(0);
-  const [showTour, setShowTour]     = useState(false);
-
-  // Démarrer le tour automatiquement si demandé (depuis HomeTab)
+  const [questionsKey, setQuestionsKey] = useState(0); // incremented to force QuestionsTab reload
+  const [selectedSite, setSelectedSite] = useState(sites[0]?.id || "");
+  // Démarrer le tour automatiquement si demandé
   useEffect(() => {
     if (autoStartTour) { setMainTab("analyse"); setShowTour(true); onTourStarted?.(); }
   }, [autoStartTour]); // eslint-disable-line react-hooks/exhaustive-deps
-  const [selectedSite, setSelectedSite] = useState(sites[0]?.id || "");
+
   // Sync selectedSite quand le projet change
   useEffect(() => {
     setSelectedSite(sites[0]?.id || "");
@@ -4536,7 +4017,8 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
   const [keywords, setKeywords]     = useState([]); // lifted from KeywordsTab for cross-tab ordering
   const [categories, setCategories] = useState([]);
   const [axes, setAxes]             = useState(Array.isArray(geoAxes) ? geoAxes : DEFAULT_AXES);
-  const [competitors, setCompetitors] = useState([]); // concurrents qualifiés, partagés entre onglets
+  const [competitors, setCompetitors] = useState([]);
+  const [showTour, setShowTour]       = useState(false);
 
   const site = (Array.isArray(sites) ? sites : []).find(s => s.id === selectedSite) || (Array.isArray(sites) ? sites : [])[0];
 
@@ -4557,7 +4039,6 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
     sbGetBrand(projectId, site.id).then(b => { setBrand(b); });
     sbGetGeoResults(projectId, site.id).then(r => { setAllResults(r); }); // keep previous data while loading
     sbGetKeywords(projectId, site.id).then(kws => { setKeywords(kws || []); });
-    sbGetCompetitors(projectId, site.id).then(c => { setCompetitors(c || []); });
   }, [projectId, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Decode key when enc changes
@@ -4567,108 +4048,58 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
     setApiKeyDec(k);
   }, [apiKeyEnc]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const GEO_TOUR_STEPS = [
-    {
-      target: "subnav",
-      icon: "🧭",
-      title: "Navigation Fan-outs",
-      desc: "5 onglets structurent l'analyse : Mots-clés, Questions, Concurrents, Automatisation et Sources. Commencez par les Mots-clés.",
-      tip: "Chaque onglet correspond à une étape du workflow GEO.",
-      position: "bottom",
-      onActivate: () => { setMainTab("analyse"); setSubTab("keywords"); },
-    },
-    {
-      target: "keywords-section",
-      icon: "🔑",
-      title: "1. Mots-clés",
-      desc: "Saisissez vos requêtes cibles (une par ligne) ou importez un CSV Semrush. Utilisez 📋 Copier liste pour récupérer les volumes sur Semrush, puis importez le CSV.",
-      tip: "Commencez par 5–10 mots-clés stratégiques pour un premier test.",
-      position: "bottom",
-      onActivate: () => { setMainTab("analyse"); setSubTab("keywords"); },
-    },
-    {
-      target: "subnav",
-      icon: "🔑",
-      title: "2. Clés API providers",
-      desc: "Cliquez sur un badge provider (OpenAI, Claude, Gemini…) sans clé configurée pour ouvrir la saisie. Au moins un provider est requis pour interroger les LLMs.",
-      tip: "Claude est aussi utilisé pour les analyses IA et les hints.",
-      position: "bottom",
-      onActivate: () => { setMainTab("analyse"); setSubTab("questions"); },
-    },
-    {
-      target: "stats-header",
-      icon: "📊",
-      title: "3. Tableau de bord de présence",
-      desc: "Ce bloc affiche en temps réel : % de présence marque, position moyenne, nombre de providers actifs et top concurrents. Il se met à jour après chaque interrogation.",
-      tip: "Filtrez par provider ou par date pour analyser les tendances.",
-      position: "bottom",
-      onActivate: () => { setMainTab("analyse"); setSubTab("questions"); },
-    },
-    {
-      target: "run-all",
-      icon: "▶",
-      title: "4. Lancer les interrogations",
-      desc: "▶ Lancer tout interroge uniquement les questions sans réponse aujourd'hui. ↺ Relancer tout force le rechargement de toutes les questions.",
-      tip: "Chaque interrogation est sauvegardée en base — l'historique est consultable dans l'Audit GEO.",
-      position: "top",
-      onActivate: () => { setMainTab("analyse"); setSubTab("questions"); },
-    },
-    {
-      target: null,
-      icon: "📋",
-      title: "5. Consultez l'Audit GEO",
-      desc: "Une fois les premières interrogations lancées, rendez-vous dans l'onglet 📋 Audit GEO pour voir le score de présence, le paysage concurrentiel et les recommandations actionnables.",
-      tip: "L'analyse IA détaillée nécessite une clé Claude configurée.",
-      position: "center",
-    },
-  ];
 
   return (
-    <div>
-      {/* Guide Tour */}
-      {showTour && (
-        <TourGuide
-          steps={GEO_TOUR_STEPS}
-          onClose={() => setShowTour(false)}
-        />
-      )}
-      {/* ── Header + onglets principaux Setup / Analyse ── */}
-      <div style={{ marginBottom: 24 }}>
+    <div style={{ fontFamily: "inherit" }}>
+
+      {showTour && <TourGuide steps={GEO_TOUR_STEPS} onClose={() => setShowTour(false)} />}
+
+      {/* ── Header ── */}
+      <div style={{ marginBottom: 28 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
-          <div style={{ fontSize: 20, fontWeight: 800, color: C.text }}>🔍 Fan-outs</div>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", color: "#1A3C2E", opacity: 0.5, marginBottom: 4 }}>Fan-outs GEO</div>
+            <div style={{ fontSize: 22, fontWeight: 500, color: "#1A3C2E" }}>Visibilité générative</div>
+          </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             {!isReadOnly && (
               <button onClick={() => { setMainTab("analyse"); setShowTour(true); }}
-                style={{ fontSize: 11, fontWeight: 700, color: "#1A3C2E", background: "#EAF0EC", border: "1px solid #B2CCBC", borderRadius: 8, padding: "5px 12px", cursor: "pointer" }}>
-                🎓 Guide
+                style={{ fontSize: 11, fontWeight: 500, color: "#1A3C2E", background: "#F0EBE0", border: "1px solid #1A3C2E22", borderRadius: 20, padding: "5px 14px", cursor: "pointer" }}>
+                Guide
               </button>
             )}
-          {isReadOnly && (
-            <span style={{ fontSize: 11, fontWeight: 700, color: "#D97706", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, padding: "4px 12px" }}>
-              👁 Mode lecture — Interrogations désactivées
-            </span>
-          )}
-          </div>{/* end flex buttons */}
-        </div>{/* end flex header row */}
+            {isReadOnly && (
+              <span style={{ fontSize: 11, fontWeight: 500, color: "#D97706", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 20, padding: "4px 12px" }}>
+                Lecture seule
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Nav principale */}
         {!isReadOnly && (
-          <div style={{ display: "inline-flex", gap: 2, background: "#F1F5F9", borderRadius: 20, padding: 3 }}>
-            {[
-              { key: "setup",  label: "⚙️ Setup" },
-              { key: "main",   label: "📊 Analyse Fan-outs" },
-            ].map(t => (
-              <button key={t.key} onClick={() => setMainTab(t.key === "main" ? ("analyse") : "setup")} style={{
-                padding: "6px 16px", borderRadius: 16, fontSize: 12, fontWeight: 700,
-                border: "none", cursor: "pointer", transition: "all 0.15s",
-                background: (t.key === "setup" ? mainTab === "setup" : mainTab !== "setup") ? "#fff" : "transparent",
-                color: (t.key === "setup" ? mainTab === "setup" : mainTab !== "setup") ? "#1A3C2E" : "#94A3B8",
-                boxShadow: (t.key === "setup" ? mainTab === "setup" : mainTab !== "setup") ? "0 1px 4px rgba(0,0,0,0.1)" : "none",
-              }}>{t.label}</button>
-            ))}
+          <div style={{ display: "flex", borderBottom: "1px solid #1A3C2E22" }}>
+            {[{ key: "analyse", label: "Analyse" }, { key: "setup", label: "Configuration" }].map(t => {
+              const isActive = t.key === "setup" ? mainTab === "setup" : mainTab !== "setup";
+              return (
+                <button key={t.key}
+                  onClick={() => setMainTab(t.key === "analyse" ? "analyse" : "setup")}
+                  style={{
+                    padding: "8px 20px", fontSize: 13, fontWeight: isActive ? 500 : 400,
+                    color: isActive ? "#1A3C2E" : "#1A3C2E66",
+                    background: "none", border: "none",
+                    borderBottom: isActive ? "1.5px solid #1A3C2E" : "1.5px solid transparent",
+                    marginBottom: -1, cursor: "pointer", transition: "all 0.15s",
+                  }}>
+                  {t.label}
+                </button>
+              );
+            })}
           </div>
         )}
       </div>
 
-      {/* ── Setup ── */}
+      {/* ── Configuration ── */}
       {mainTab === "setup" && (
         <FanoutSetupPanel
           projects={projects}
@@ -4703,142 +4134,135 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
           onSaveAxes={onSaveAxes}
           onAxesChange={(a) => setAxes(a)}
           onSemrushVolumes={async (siteId, parsedRows) => {
-            // Construire une map keyword → volume depuis le CSV Semrush
             const volMap = {};
             parsedRows.forEach(row => {
-              const kw  = (row.keyword || row.Keyword || row["mot-clé"] || "").toLowerCase().trim();
-              const vol = parseInt(row.volume || row.Volume || row["Search Volume"] || row["search volume"] || 0, 10);
+              const kw  = (row.keyword || row.Keyword || "").toLowerCase().trim();
+              const vol = parseInt(row.volume || row.Volume || row["Search Volume"] || 0, 10);
               if (kw && !isNaN(vol)) volMap[kw] = vol;
             });
             if (!Object.keys(volMap).length) return;
-            // Charger les mots-clés du projet pour ce site
             try {
               const kws = await sbGetKeywords(projectId, siteId);
-              let updated = 0;
               for (const kw of kws) {
                 const vol = volMap[kw.keyword.toLowerCase().trim()];
-                if (vol !== undefined && vol !== kw.search_volume) {
-                  await sbUpdateKeywordVolume(kw.id, vol, "semrush_csv");
-                  updated++;
-                }
+                if (vol !== undefined && vol !== kw.search_volume)
+                  await sbUpdateKeywordVolume(kw.id, vol, "semrush_csv").catch(() => {});
               }
-              if (updated > 0) {
-                setQuestionsKey(k => k + 1); // force reload dans QuestionsTab
-              }
+              setQuestionsKey(k => k + 1);
             } catch(e) { console.warn("onSemrushVolumes error:", e); }
           }}
         />
       )}
 
-      {/* ── Analyse Fan-outs ── */}
-      {mainTab === "analyse" && (<div>
+      {/* ── Analyse ── */}
+      {mainTab !== "setup" && (<div>
 
-      {/* ── Sub-nav ── */}
-      <div data-tour="subnav" style={{ display: "flex", gap: 6, marginBottom: 20 }}>
-        {[
-          { key: "keywords",    label: "🔑 Mots-clés",         color: "#D97706" },
-          { key: "questions",   label: "💬 Questions",          color: "#7C3AED" },
-          { key: "competitors", label: "⚔️ Concurrents",        color: "#DC2626" },
-          { key: "automation",  label: "⏰ Automatisation",     color: "#7C3AED" },
-          { key: "urls",        label: "🔗 Sources & Mentions", color: "#2563EB" },
-        ].map(t => (
-          <button key={t.key} onClick={() => setSubTab(t.key)} style={{
-            flex: 1, padding: "12px 16px", borderRadius: 10, fontSize: 14, fontWeight: 800,
-            border: "2px solid " + (subTab === t.key ? t.color : t.color + "44"),
-            cursor: "pointer",
-            background: subTab === t.key ? t.color : "#fff",
-            color: subTab === t.key ? "#fff" : t.color,
-            boxShadow: subTab === t.key ? "0 4px 14px " + t.color + "44" : "0 1px 3px rgba(0,0,0,0.05)",
-            transition: "all 0.15s",
-          }}>{t.label}</button>
-        ))}
-      </div>
-
-      {/* ── Sub-tabs ── */}
-      {subTab === "keywords" && (
-        <div data-tour="keywords-section"><KeywordsTab
-          site={site}
-          projectId={projectId}
-          apiKey={apiKeyDec}
-          model={model}
-          axes={axes}
-          context={brand?.context || ""}
-          categories={categories}
-          setCategories={setCategories}
-          onAxesChange={(a) => setAxes(a)}
-          semrushKey={semrushKeyDec}
-          providerKeys={providerKeys}
-          onQuestionsGenerated={() => { setQuestionsKey(k => k + 1); }}
-        />
-      </div>)}
-      <div style={{ display: subTab === "questions" ? "block" : "none" }}>
-        <QuestionsTab
-          site={site}
-          projectId={projectId}
-          apiKey={apiKeyDec}
-          model={model}
-          brand={brand}
-          categories={categories}
-          allResults={allResults.filter(r => r.site_id === site?.id)}
-          onResultSaved={() => sbGetGeoResults(projectId, site.id).then(setAllResults)}
-          activeProviders={activeProviders}
-          providerKeys={providerKeys}
-          runMode={runMode}
-          keywordsOrder={keywords.map(k => k.id)}
-          refreshTrigger={questionsKey}
-          competitors={competitors}
-          setCompetitors={setCompetitors}
-          onSaveKey={(keyPatch) => {
-            setProviderKeys(prev => {
-              const next = { ...prev };
-              PROVIDERS.forEach(p => {
-                if (keyPatch[p.keyField]) {
-                  const dec = decodeKey(keyPatch[p.keyField]);
-                  next[p.id] = { enc: keyPatch[p.keyField], dec, input: "", status: dec ? "ok" : "error" };
-                }
-              });
-              return next;
-            });
-            setProjects?.(prev => prev.map(proj => proj.id === projectId ? { ...proj, ...keyPatch } : proj));
-            onSaveProviderKeys?.(keyPatch);
-          }}
-          isReadOnly={isReadOnly}
-        />
-      </div>
-      {subTab === "competitors" && (
-        <div style={{ background: "#fff", border: `1px solid #E8E8ED`, borderRadius: 14, padding: "20px 24px" }}>
-          <div style={{ fontSize: 16, fontWeight: 800, color: "#1C1C1C", marginBottom: 4 }}>⚔️ Concurrents</div>
-          <div style={{ fontSize: 12, color: "#909090", marginBottom: 20 }}>
-            Qualifiez les marques détectées dans les réponses LLM. Les concurrents qualifiés sont mis en valeur dans les réponses et intégrés dans les analyses.
+        {/* Site switcher */}
+        {(Array.isArray(sites) ? sites : []).length > 1 && (
+          <div style={{ display: "flex", gap: 6, marginBottom: 20 }}>
+            {(Array.isArray(sites) ? sites : []).map(s => (
+              <button key={s.id} onClick={() => setSelectedSite(s.id)} style={{
+                padding: "5px 14px", fontSize: 12, fontWeight: 500, cursor: "pointer",
+                border: "none", borderRadius: 20,
+                background: selectedSite === s.id ? "#1A3C2E" : "#F0EBE0",
+                color: selectedSite === s.id ? "#F0EBE0" : "#1A3C2E99",
+                transition: "all 0.15s",
+              }}>{s.label}</button>
+            ))}
           </div>
-          <CompetitorManager
-            projectId={projectId}
-            siteId={site?.id}
+        )}
+
+        {/* Sous-nav */}
+        <div data-tour="subnav" style={{ display: "flex", gap: 4, marginBottom: 24, flexWrap: "wrap" }}>
+          {[
+            { key: "keywords",    label: "Mots-clés" },
+            { key: "questions",   label: "Questions" },
+            { key: "competitors", label: "Concurrents" },
+            { key: "automation",  label: "Automatisation" },
+            { key: "urls",        label: "Sources" },
+          ].map(t => {
+            const active = subTab === t.key;
+            return (
+              <button key={t.key} onClick={() => setSubTab(t.key)} style={{
+                padding: "6px 16px", fontSize: 12, fontWeight: active ? 500 : 400,
+                color: active ? "#1A3C2E" : "#1A3C2E66",
+                background: active ? "#F0EBE0" : "transparent",
+                border: active ? "1px solid #1A3C2E33" : "1px solid transparent",
+                borderRadius: 20, cursor: "pointer", transition: "all 0.15s",
+              }}>{t.label}</button>
+            );
+          })}
+        </div>
+
+        {/* ── Mots-clés ── */}
+        {subTab === "keywords" && (
+          <div data-tour="keywords-section"><KeywordsTab
+            site={site} projectId={projectId} apiKey={apiKeyDec} model={model}
+            axes={axes} context={brand?.context || ""} categories={categories}
+            setCategories={setCategories} onAxesChange={(a) => setAxes(a)}
+            semrushKey={semrushKeyDec} providerKeys={providerKeys}
+            onQuestionsGenerated={() => setQuestionsKey(k => k + 1)}
+          /></div>
+        )}
+
+        {/* ── Questions ── */}
+        <div style={{ display: subTab === "questions" ? "block" : "none" }}>
+          <QuestionsTab
+            site={site} projectId={projectId} apiKey={apiKeyDec} model={model}
+            brand={brand} categories={categories}
             allResults={allResults.filter(r => r.site_id === site?.id)}
-            competitors={competitors}
-            setCompetitors={setCompetitors}
+            onResultSaved={() => sbGetGeoResults(projectId, site.id).then(setAllResults)}
+            activeProviders={activeProviders} providerKeys={providerKeys}
+            runMode={runMode} keywordsOrder={keywords.map(k => k.id)}
+            refreshTrigger={questionsKey}
+            competitors={competitors} setCompetitors={setCompetitors}
+            onSaveKey={(keyPatch) => {
+              setProviderKeys(prev => {
+                const next = { ...prev };
+                PROVIDERS.forEach(p => {
+                  if (keyPatch[p.keyField]) {
+                    const dec = decodeKey(keyPatch[p.keyField]);
+                    next[p.id] = { enc: keyPatch[p.keyField], dec, input: "", status: dec ? "ok" : "error" };
+                  }
+                });
+                return next;
+              });
+              setProjects?.(prev => prev.map(proj => proj.id === projectId ? { ...proj, ...keyPatch } : proj));
+              onSaveProviderKeys?.(keyPatch);
+            }}
+            isReadOnly={isReadOnly}
           />
         </div>
-      )}
-      {subTab === "automation" && (
-        <AutomationTab
-          projectId={projectId}
-          site={site}
-          user={user}
-          providerKeys={providerKeys}
-        />
-      )}
-      {subTab === "urls" && (
-        <UrlsTab
-          projectId={projectId}
-          categories={categories}
-          brand={brand}
-          allResults={allResults.filter(r => r.site_id === site?.id)}
-          qualifiedCompetitors={competitors}
-        />
-      )}
 
-      </div>)} {/* end Analyse Fan-outs */}
+        {/* ── Concurrents ── */}
+        {subTab === "competitors" && (
+          <div style={{ background: "#fff", border: "1px solid #1A3C2E11", borderRadius: 14, padding: "20px 24px" }}>
+            <div style={{ fontSize: 11, fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", color: "#1A3C2E55", marginBottom: 4 }}>Paysage concurrentiel</div>
+            <div style={{ fontSize: 16, fontWeight: 500, color: "#1A3C2E", marginBottom: 4 }}>Concurrents</div>
+            <div style={{ fontSize: 12, color: "#1A3C2E77", marginBottom: 20 }}>
+              Qualifiez les marques détectées dans les réponses LLM. Elles apparaissent dans les analyses et sont mises en valeur dans les réponses.
+            </div>
+            <CompetitorManager
+              projectId={projectId} siteId={site?.id}
+              allResults={allResults.filter(r => r.site_id === site?.id)}
+              competitors={competitors} setCompetitors={setCompetitors}
+            />
+          </div>
+        )}
+
+        {/* ── Automatisation ── */}
+        {subTab === "automation" && (
+          <AutomationTab projectId={projectId} site={site} user={user} providerKeys={providerKeys} />
+        )}
+
+        {/* ── Sources ── */}
+        {subTab === "urls" && (
+          <UrlsTab projectId={projectId} categories={categories} brand={brand}
+            allResults={allResults.filter(r => r.site_id === site?.id)}
+            qualifiedCompetitors={competitors} />
+        )}
+
+      </div>)}
     </div>
   );
 }
