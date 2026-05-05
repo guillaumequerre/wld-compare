@@ -4,6 +4,7 @@ import { emptyDataMap, makeInitialProject, parseCSV, parseSemrushCSV } from "./l
 import { extractSF, extractGSC, extractGA, extractBing, extractSemrush, parseSemrush, filterByMode } from "./lib/parsers";
 import { buildUrlMaps, buildSfPageVectors, intraCorrFast, smIntraCorr } from "./lib/correlations";
 import { sbSaveProject, sbGetHistory, sbGetLatest, sbDownload, sbGetPageTypes, sbSaveGeoAxes, sbGetGeoResultsAll, sbGetUrlIndex } from "./lib/supabase";
+import { sbLoadAccessibleProjects } from "./lib/auth";
 import AnalyseTab from "./tabs/AnalyseTab";
 import ImportTab from "./tabs/ImportTab";
 import MatrixTab from "./tabs/MatrixTab";
@@ -17,7 +18,7 @@ import GeoAuditTab from "./tabs/GeoAuditTab";
 import HomeTab from "./tabs/HomeTab";
 import ManageTab from "./tabs/ManageTab";
 import ResetPasswordPage from "./components/ResetPasswordPage"; // ← AJOUTÉ
-import { getCurrentUser, authLogout, sbLoadAccessibleProjects, sbGetMyRole, sbAddProjectMember, sbGetProjectMembers, sbRemoveProjectMember } from "./lib/auth";
+import { getCurrentUser, authLogout } from "./lib/auth";
 
 const NAV_TABS = [
   { key: "geo",         label: "🔍 Fan-outs"         },
@@ -37,7 +38,7 @@ const BURGER_TABS = [
   { key: "import",      label: "⚙️ Setup avancé"     },
 ];
 
-function NavBar({ tab, setTab, user, onLogout, isReadOnly = false, visibleNavTabs = NAV_TABS }) {
+function NavBar({ tab, setTab, user, onLogout }) {
   const [burgerOpen, setBurgerOpen] = useState(false);
   const burgerRef = useRef(null);
   const isBurgerTab = BURGER_TABS.some(t => t.key === tab);
@@ -63,25 +64,9 @@ function NavBar({ tab, setTab, user, onLogout, isReadOnly = false, visibleNavTab
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-      {/* Items nav — masqués si non connecté */}
-      {user && visibleNavTabs.map(tabBtn)}
+      {NAV_TABS.map(tabBtn)}
 
-      {/* Badge lecture seule */}
-      {user && isReadOnly && (
-        <span style={{ fontSize: 10, fontWeight: 700, color: "#D97706", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 6, padding: "3px 8px", whiteSpace: "nowrap" }}>
-          👁 Lecture
-        </span>
-      )}
-
-      {/* Bouton connexion si non connecté */}
-      {!user && (
-        <button onClick={() => setTab("home")} style={{ padding: "7px 16px", border: "none", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 700, background: C.blue, color: "#fff" }}>
-          🔐 Se connecter
-        </button>
-      )}
-
-      {/* Menu burger — uniquement si connecté */}
-      {user && <div ref={burgerRef} style={{ position: "relative" }}>
+      <div ref={burgerRef} style={{ position: "relative" }}>
         <button onClick={() => setBurgerOpen(o => !o)} style={{
           padding: "6px 10px", border: "none", borderRadius: 7, cursor: "pointer", fontSize: 13,
           background: isBurgerTab || burgerOpen ? C.blue : "transparent",
@@ -153,7 +138,7 @@ function NavBar({ tab, setTab, user, onLogout, isReadOnly = false, visibleNavTab
             )}
           </div>
         )}
-      </div>}
+      </div>
     </div>
   );
 }
@@ -163,8 +148,7 @@ export default function App() {
   // Détecte le hash Supabase #access_token=xxx&type=recovery au chargement
   const [isResetFlow, setIsResetFlow] = useState(() => { // ← AJOUTÉ
     const params = new URLSearchParams(window.location.hash.replace(/^#/, ""));
-    const type = params.get("type");
-    return (type === "recovery" || type === "invite") && !!params.get("access_token");
+    return params.get("type") === "recovery" && !!params.get("access_token");
   });
 
   // ── Projects ─────────────────────────────────────────────────────
@@ -172,17 +156,6 @@ export default function App() {
   const [currentProjectId, setCurrentProjectId] = useState(null);
   const [editingProjectName, setEditingProjectName] = useState(null);
   const [user, setUser] = useState(() => getCurrentUser());
-  const [myRole, setMyRole] = useState("owner"); // owner | member | reader
-  const [fanoutTourActive, setFanoutTourActive] = useState(false);
-  const [auditTourActive,  setAuditTourActive]  = useState(false);
-
-  // Rôle effectif sur le projet courant
-  const isReadOnly = myRole === "reader";
-
-  // Onglets disponibles selon le rôle
-  const visibleNavTabs = isReadOnly
-    ? NAV_TABS.filter(t => t.key === "geo" || t.key === "geo_audit")
-    : NAV_TABS;
 
   const EMPTY_PROJECT = useMemo(() => ({ sites: [], sfData: {}, gscData: {}, gaData: {}, bingData: {}, smData: {} }), []);
   const currentProject = useMemo(
@@ -220,8 +193,6 @@ export default function App() {
 
   const goTo = (t) => {
     if (!user && t !== "home") { setTab("home"); return; }
-    // Readers : accès uniquement à geo et geo_audit
-    if (isReadOnly && t !== "geo" && t !== "geo_audit" && t !== "home") return;
     setTab(t);
   };
   const [pageMode, setPageMode]         = useState("all");
@@ -256,12 +227,30 @@ export default function App() {
   const [geoUrlIndex, setGeoUrlIndex] = useState([]);
   const [showHistory, setShowHistory] = useState(false);
 
-  const loadedProjectsRef = useRef(new Set());
 
   const loadProjectData = useCallback(async (pid) => {
-    const [latest, history] = await Promise.all([sbGetLatest(pid), sbGetHistory(pid)]);
-    setDbHistory(history);
-    const updates = await Promise.all(Object.values(latest).map(async (row) => {
+    // sbGetHistory n'est PAS chargé ici — uniquement via refreshHistory() à la demande
+    const latest = await sbGetLatest(pid);
+
+    // ── Cache check : ne pas retélécharger les CSV déjà en mémoire ──
+    // On récupère le projet courant pour vérifier quelles sources sont déjà chargées
+    const currentP = await new Promise(resolve => {
+      setProjects(prev => { resolve(prev.find(p => p.id === pid)); return prev; });
+    });
+    const alreadyLoaded = new Set();
+    if (currentP) {
+      const dataKeys = { sfData: "sf", gscData: "gsc", gaData: "ga", bingData: "bing", smData: "sm" };
+      for (const [key, src] of Object.entries(dataKeys)) {
+        const data = currentP[key] || {};
+        if (Object.values(data).some(rows => Array.isArray(rows) && rows.length > 0)) {
+          alreadyLoaded.add(src);
+        }
+      }
+    }
+
+    // Télécharger uniquement les sources pas encore en mémoire
+    const toDownload = Object.values(latest).filter(row => !alreadyLoaded.has(row.source));
+    const updates = await Promise.all(toDownload.map(async (row) => {
       try {
         const text = await sbDownload(row.storage_path);
         const src = row.source;
@@ -309,29 +298,23 @@ export default function App() {
       });
     }
     return valid.length;
-  }, []);
+  }, []);;
 
   useEffect(() => {
     (async () => {
       setDbLoading(true);
       try {
-        // Retry jusqu'à 3 fois avec 300ms d'intervalle — gère la race condition
-        // où sessionStorage n'est pas encore lisible au premier mount
+        // Retry jusqu'à 3 fois — gère la race condition sessionStorage
         let currentUser = getCurrentUser();
-        if (!currentUser) {
-          await new Promise(r => setTimeout(r, 300));
-          currentUser = getCurrentUser();
-        }
-        if (!currentUser) {
-          await new Promise(r => setTimeout(r, 500));
-          currentUser = getCurrentUser();
-        }
-        if (!currentUser) {
-          setDbLoading(false);
-          return;
-        }
+        if (!currentUser) { await new Promise(r => setTimeout(r, 300)); currentUser = getCurrentUser(); }
+        if (!currentUser) { await new Promise(r => setTimeout(r, 500)); currentUser = getCurrentUser(); }
+        if (!currentUser) { setDbLoading(false); return; }
+
         const savedProjects = await sbLoadAccessibleProjects(currentUser.email);
-          if (savedProjects && savedProjects.length > 0) {
+        if (savedProjects && savedProjects.length > 0) {
+          // ── BOOT LÉGER : on charge uniquement les métadonnées des projets ──
+          // Les CSV ne sont PAS téléchargés ici — ils le seront à la demande
+          // via loadProjectData() quand l'utilisateur navigue vers un projet.
           const restored = savedProjects.map(p => ({
             ...p,
             sfData:   emptyDataMap(p.sites),
@@ -339,55 +322,16 @@ export default function App() {
             gaData:   emptyDataMap(p.sites),
             bingData: emptyDataMap(p.sites),
             smData:   emptyDataMap(p.sites),
-          }));
-          const allData = await Promise.all(restored.map(async (p) => {
-            loadedProjectsRef.current.add(p.id);
-            const [latest, history] = await Promise.all([sbGetLatest(p.id), sbGetHistory(p.id)]);
-            if (p.id === restored[0].id) setDbHistory(history);
-            const updates = await Promise.all(Object.values(latest).map(async (row) => {
-              try {
-                const text = await sbDownload(row.storage_path);
-                const rows = parseCSV(text);
-                const src = row.source;
-                const key = src === "sf" ? "sfData" : src === "gsc" ? "gscData" : src === "ga" ? "gaData" : src === "bing" ? "bingData" : src === "sm" ? "smData" : null;
-                return key ? { key, sid: row.site_id, rows } : null;
-              } catch(e) { return null; }
-            }));
-            const valid = updates.filter(Boolean);
-            return { id: p.id, count: valid.length, valid };
-          }));
-          const loaded = restored.map(p => {
-            const { valid } = allData.find(d => d.id === p.id) || { valid: [] };
-            const patch = {};
-            const siteIds = new Set(p.sites.map(s => s.id));
-            for (const { key, sid, rows } of valid) {
-              if (siteIds.has(sid)) patch[key] = { ...(patch[key] || p[key]), [sid]: rows };
-            }
-            const sites = p.sites.map(s => ({
+            sites: p.sites.map(s => ({
               ...s,
               color: s.color || DEFAULT_SITES[0].color,
               bg:    s.bg    || DEFAULT_SITES[0].bg,
-            }));
-            return { ...p, ...patch, sites };
-          });
-          setProjects(loaded);
-
-          const allPt = await Promise.all(restored.flatMap(p =>
-            p.sites.map(s => sbGetPageTypes(p.id, s.id).then(rows => ({ pid: p.id, sid: s.id, rows })))
-          ));
-          const ptMap = {};
-          allPt.forEach(({ pid, sid, rows }) => {
-            if (!rows.length) return;
-            if (!ptMap[pid]) ptMap[pid] = {};
-            const map = {};
-            rows.forEach(r => { map[r.url] = r.page_type; });
-            ptMap[pid][sid] = map;
-          });
-
-          const bestId = allData.sort((a, b) => b.count - a.count)[0]?.id || restored[0].id;
-          setCurrentProjectId(bestId);
-
-          if (ptMap[bestId]) setPageTypes(ptMap[bestId]);
+            })),
+          }));
+          setProjects(restored);
+          // Activer le premier projet — ses données CSV seront chargées
+          // par le useEffect [currentProjectId] qui se déclenche juste après
+          setCurrentProjectId(restored[0].id);
         } else {
           setProjects([]);
           setCurrentProjectId(null);
@@ -412,18 +356,6 @@ export default function App() {
     })();
   }, [currentProjectId, loadProjectData]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Charger le rôle de l'utilisateur sur le projet courant
-  useEffect(() => {
-    if (!currentProjectId || !user?.email) { setMyRole("owner"); return; }
-    const proj = projects.find(p => p.id === currentProjectId);
-    // Si le projet a déjà myRole (depuis sbLoadAccessibleProjects), l'utiliser directement
-    if (proj?.myRole) { setMyRole(proj.myRole); return; }
-    // Sinon calculer
-    sbGetMyRole(currentProjectId, user.email, proj?.owner_email).then(role => {
-      setMyRole(role || "owner");
-    });
-  }, [currentProjectId, user?.email, projects]); // eslint-disable-line react-hooks/exhaustive-deps
-
   useEffect(() => {
     if (!currentProject?.id || !currentProjectId) return;
     if (!projects.some(p => p.id === currentProject.id)) return;
@@ -436,11 +368,12 @@ export default function App() {
     setDbHistory(history);
   }, [currentProjectId]);
 
+  // Lazy load GEO — uniquement quand l'onglet geo ou geo_audit est actif
   useEffect(() => {
-    if (!currentProjectId) { setGeoResults([]); setGeoUrlIndex([]); return; }
+    if (!currentProjectId || (tab !== "geo" && tab !== "geo_audit")) return;
     sbGetGeoResultsAll(currentProjectId).then(setGeoResults).catch(() => setGeoResults([]));
     sbGetUrlIndex(currentProjectId).then(setGeoUrlIndex).catch(() => setGeoUrlIndex([]));
-  }, [currentProjectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [currentProjectId, tab]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Computed metrics ─────────────────────────────────────────────
   const baseMetrics = useMemo(() => sites.map(s => ({
@@ -541,38 +474,39 @@ export default function App() {
     return row;
   }), [metrics]);
 
-  const allProjectsMatrix = useMemo(() => {
-    const allSf = projects.flatMap(p => Object.values(p.sfData || {}).flat());
-    if (!allSf.length) return SF_DIMS.map(dim => ({ dim, corrs: RES_KPIS.map(kpi => ({ kpi, value: null, n: 0 })) }));
-    const allGsc  = projects.flatMap(p => Object.values(p.gscData  || {}).flat());
-    const allGa   = projects.flatMap(p => Object.values(p.gaData   || {}).flat());
-    const allBing = projects.flatMap(p => Object.values(p.bingData || {}).flat());
-    const allSfFiltered = templateFilter?.length
-      ? allSf.filter(r => {
-          const url = (r["adresse"] || r["address"] || r["url"] || "").trim();
-          const type = projects.flatMap(p => Object.keys(pageTypes[Object.keys(p.sfData||{})[0]]||{})).length
-            ? Object.values(pageTypes).reduce((found, map) => found || map[url] || null, null)
-            : null;
-          return type && templateFilter.includes(type);
-        })
-      : allSf;
-    const sfPages = buildSfPageVectors(allSfFiltered);
+  // ── Tous les projets — dataset incrémental ──────────────────────
+  // Chargé uniquement quand l'onglet "allprojects" est ouvert.
+  // Chaque projet chargé est ajouté au dataset (Set pour éviter les doublons).
+  const [allProjectsData, setAllProjectsData] = useState(null); // null = pas encore chargé
+  const [allProjectsLoading, setAllProjectsLoading] = useState(false);
+  const allProjectsLoadedRef = useRef(new Set()); // IDs déjà intégrés dans le dataset
+
+  // Construit le dataset "Tous les projets" à partir des projets en mémoire
+  const buildAllProjectsData = useCallback(() => {
+    const projectsWithData = projects.filter(p =>
+      Object.values(p.sfData || {}).some(rows => Array.isArray(rows) && rows.length > 0)
+    );
+    if (!projectsWithData.length) return null;
+
+    const allSf   = projectsWithData.flatMap(p => Object.values(p.sfData  || {}).flat());
+    const allGsc  = projectsWithData.flatMap(p => Object.values(p.gscData || {}).flat());
+    const allGa   = projectsWithData.flatMap(p => Object.values(p.gaData  || {}).flat());
+    const allBing = projectsWithData.flatMap(p => Object.values(p.bingData|| {}).flat());
+
+    const sfPages = buildSfPageVectors(allSf);
     const urlMaps = buildUrlMaps(allGsc, allGa, allBing);
-    return SF_DIMS.map(dim => ({
+
+    const matrix = SF_DIMS.map(dim => ({
       dim,
       corrs: RES_KPIS.map(kpi => {
         const res = intraCorrFast(sfPages, urlMaps, dim.key, kpi.key);
         return { kpi, value: res ? res.value : null, n: res ? res.n : 0 };
       }),
     }));
-  }, [projects]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const allProjectsRadar = useMemo(() => {
-    const anyData = projects.some(p => Object.values(p.sfData || {}).flat().length > 0);
-    if (!anyData) return RADAR_DIMS.map(d => ({ dim: d.label }));
-    return RADAR_DIMS.map(d => {
+    const radar = RADAR_DIMS.map(d => {
       const row = { dim: d.label };
-      projects.forEach(p => {
+      projectsWithData.forEach(p => {
         const allSfRows = Object.values(p.sfData || {}).flat();
         if (!allSfRows.length) { row[p.id] = 0; return; }
         const sfAgg = extractSF(allSfRows, "all", Object.values(p.bingData || {}).flat(), Object.values(p.gscData || {}).flat());
@@ -580,6 +514,48 @@ export default function App() {
       });
       return row;
     });
+
+    return { matrix, radar, projectCount: projectsWithData.length };
+  }, [projects]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Charge le dataset "Tous les projets" à la demande (premier clic sur l'onglet)
+  const loadAllProjectsData = useCallback(async () => {
+    if (allProjectsLoading) return;
+    setAllProjectsLoading(true);
+    try {
+      // Charger les CSV des projets qui n'ont pas encore de données
+      const toLoad = projects.filter(p =>
+        !allProjectsLoadedRef.current.has(p.id) &&
+        !Object.values(p.sfData || {}).some(rows => Array.isArray(rows) && rows.length > 0)
+      );
+      if (toLoad.length > 0) {
+        // Charger les projets sans données en parallèle
+        await Promise.all(toLoad.map(async p => {
+          try {
+            await loadProjectData(p.id);
+            allProjectsLoadedRef.current.add(p.id);
+          } catch(e) { console.warn("AllProjects load failed for", p.id, e); }
+        }));
+      }
+      // Marquer tous les projets déjà chargés
+      projects.forEach(p => {
+        if (Object.values(p.sfData || {}).some(rows => Array.isArray(rows) && rows.length > 0)) {
+          allProjectsLoadedRef.current.add(p.id);
+        }
+      });
+    } finally {
+      setAllProjectsLoading(false);
+      setAllProjectsData(buildAllProjectsData());
+    }
+  }, [projects, loadProjectData, buildAllProjectsData]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Quand un projet est chargé et que l'onglet allprojects est ouvert, mettre à jour le dataset
+  useEffect(() => {
+    if (tab !== "allprojects" || allProjectsLoading) return;
+    if (allProjectsData !== null) {
+      // Mise à jour incrémentale : recalcul si un projet a été chargé
+      setAllProjectsData(buildAllProjectsData());
+    }
   }, [projects]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Render ───────────────────────────────────────────────────────
@@ -605,14 +581,13 @@ export default function App() {
               <span style={{ fontWeight: 800, fontSize: 15, letterSpacing: -0.3, color: "#1A3C2E" }}>Dashboard GEO par Sonate</span>
               <span style={{ color: C.textLight, fontSize: 12 }}>· Votre croissance est clé</span>
             </div>
-            <NavBar tab={tab} setTab={goTo} user={user} isReadOnly={isReadOnly} visibleNavTabs={visibleNavTabs} onLogout={() => { authLogout(); setUser(null); setTab("home"); }} />
+            <NavBar tab={tab} setTab={goTo} user={user} onLogout={() => { authLogout(); setUser(null); setTab("home"); }} />
           </div>
         </div>
 
         {/* ── CONTENT ── */}
         <div style={{ maxWidth: 1400, margin: "0 auto", padding: "32px 28px" }}>
           {!user && tab !== "home" && (() => { setTimeout(() => setTab("home"), 0); return null; })()}
-          {isReadOnly && tab !== "geo" && tab !== "geo_audit" && tab !== "home" && (() => { setTimeout(() => setTab("geo"), 0); return null; })()}
 
           {tab === "home" && (
             <HomeTab
@@ -623,8 +598,6 @@ export default function App() {
               onGoSetup={() => goTo("import")}
               onGoFanout={() => goTo("geo")}
               onGoAudit={() => goTo("geo_audit")}
-              onGoFanoutTour={() => { goTo("geo"); setFanoutTourActive(true); }}
-              onGoAuditTour={() => { goTo("geo_audit"); setAuditTourActive(true); }}
               onLogin={async (u) => {
                 setUser(u);
                 setDbLoading(true);
@@ -632,47 +605,27 @@ export default function App() {
                   const { sbLoadAccessibleProjects: loadAP } = await import("./lib/auth");
                   const ps = await loadAP(u.email);
                   if (ps && ps.length > 0) {
+                    // ── LOGIN LÉGER : métadonnées seulement, CSV chargés à la demande ──
                     const restored = ps.map(p => ({
                       ...p,
-                      sfData: emptyDataMap(p.sites), gscData: emptyDataMap(p.sites),
-                      gaData: emptyDataMap(p.sites), bingData: emptyDataMap(p.sites), smData: emptyDataMap(p.sites),
+                      sfData:   emptyDataMap(p.sites),
+                      gscData:  emptyDataMap(p.sites),
+                      gaData:   emptyDataMap(p.sites),
+                      bingData: emptyDataMap(p.sites),
+                      smData:   emptyDataMap(p.sites),
+                      sites: p.sites.map(s => ({
+                        ...s,
+                        color: s.color || DEFAULT_SITES[0].color,
+                        bg:    s.bg    || DEFAULT_SITES[0].bg,
+                      })),
                     }));
-                    // Charger les données CSV en parallèle pour tous les projets
-                    const allData = await Promise.all(restored.map(async (p) => {
-                      try {
-                        const [latest, history] = await Promise.all([sbGetLatest(p.id), sbGetHistory(p.id)]);
-                        if (p.id === restored[0].id) setDbHistory(history);
-                        const updates = await Promise.all(Object.values(latest).map(async (row) => {
-                          try {
-                            const text = await sbDownload(row.storage_path);
-                            const src = row.source;
-                            const key = src === "sf" ? "sfData" : src === "gsc" ? "gscData" : src === "ga" ? "gaData" : src === "bing" ? "bingData" : src === "sm" ? "smData" : null;
-                            if (!key) return null;
-                            const rows = src === "sm" ? parseSemrush(parseSemrushCSV(text)) : parseCSV(text);
-                            return { key, sid: row.site_id, rows };
-                          } catch(e) { return null; }
-                        }));
-                        return { id: p.id, valid: updates.filter(Boolean) };
-                      } catch(e) { return { id: p.id, valid: [] }; }
-                    }));
-                    // Construire les projets chargés en une seule mise à jour
-                    const loaded = restored.map(p => {
-                      const { valid } = allData.find(d => d.id === p.id) || { valid: [] };
-                      const patch = {};
-                      const siteIds = new Set(p.sites.map(s => s.id));
-                      for (const { key, sid, rows } of valid) {
-                        if (siteIds.has(sid)) patch[key] = { ...(patch[key] || p[key]), [sid]: rows };
-                      }
-                      return { ...p, ...patch };
-                    });
-                    setProjects(loaded);
-                    setCurrentProjectId(loaded[0].id);
+                    setProjects(restored);
+                    setCurrentProjectId(restored[0].id);
                   }
                 } catch(e) { console.warn("Project reload failed:", e); }
                 finally { setDbLoading(false); }
                 goTo("geo");
-              }}
-              onLogout={() => { authLogout(); setUser(null); }}
+              }}              onLogout={() => { authLogout(); setUser(null); }}
               onSelectProject={(id) => { setCurrentProjectId(id); setTab("geo"); }}
               onCreateProject={() => {
                 const p = makeInitialProject(user?.email || null);
@@ -737,9 +690,6 @@ export default function App() {
             <MatrixTab
               sites={sites}
               sfData={sfData}
-              gscData={gscData}
-              gaData={gaData}
-              bingData={bingData}
               smData={smData}
               semrushCorrMatrix={semrushCorrMatrix}
               pageMode={pageMode}
@@ -752,7 +702,6 @@ export default function App() {
               pageTypes={pageTypes}
               geoResults={geoResults}
               geoQuestions={[]}
-              geoUrlIndex={geoUrlIndex}
             />
           )}
 
@@ -836,9 +785,6 @@ export default function App() {
               project={currentProject}
               geoAxes={currentProject?.geo_axes || null}
               user={user}
-              isReadOnly={isReadOnly}
-              autoStartTour={fanoutTourActive}
-              onTourStarted={() => setFanoutTourActive(false)}
               onSaveAxes={async (axes) => {
                 await sbSaveGeoAxes(currentProjectId, axes);
                 setProjects(prev => prev.map(p => p.id === currentProjectId ? { ...p, geo_axes: axes } : p));
@@ -854,14 +800,6 @@ export default function App() {
               setSites={setSites}
               smData={smData}
               setSmData={setSmData}
-              sfData={sfData}
-              setSfData={setSfData}
-              gscData={gscData}
-              setGscData={setGscData}
-              gaData={gaData}
-              setGaData={setGaData}
-              bingData={bingData}
-              setBingData={setBingData}
               dbHistory={dbHistory}
               dbLoading={dbLoading}
               refreshHistory={refreshHistory}
@@ -899,9 +837,6 @@ export default function App() {
               setConfirmModal={setConfirmModal}
               pageTypes={pageTypes}
               setPageTypes={setPageTypes}
-              isReadOnly={isReadOnly}
-              autoStartTour={auditTourActive}
-              onTourStarted={() => setAuditTourActive(false)}
             />
           )}
 
@@ -913,35 +848,27 @@ export default function App() {
               setCurrentProjectId={setCurrentProjectId}
               onLogin={(u) => setUser(u)}
               onLogout={() => { authLogout(); setUser(null); }}
-              myRole={myRole}
-              onInvite={async (email, role) => {
-                if (!currentProjectId || !user?.email) return { ok: false, error: "Aucun projet sélectionné" };
-                const ok = await sbAddProjectMember(currentProjectId, email, user.email, role);
-                return { ok, error: ok ? null : "Erreur lors de l'invitation" };
-              }}
-              onRemoveMember={async (email) => {
-                if (!currentProjectId) return false;
-                return sbRemoveProjectMember(currentProjectId, email);
-              }}
-              onGetMembers={async () => {
-                if (!currentProjectId) return [];
-                return sbGetProjectMembers(currentProjectId);
-              }}
             />
           )}
 
-          {tab === "allprojects" && (
-            <AllProjectsTab
-              projects={projects}
-              sites={sites}
-              sfData={sfData}
-              allProjectsMatrix={allProjectsMatrix}
-              allProjectsRadar={allProjectsRadar}
-              templateFilter={templateFilter}
-              setTemplateFilter={setTemplateFilter}
-              pageTypes={pageTypes}
-            />
-          )}
+          {tab === "allprojects" && (() => {
+            // Déclencher le chargement au premier rendu de cet onglet
+            if (allProjectsData === null && !allProjectsLoading) { loadAllProjectsData(); }
+            return (
+              <AllProjectsTab
+                projects={projects}
+                sites={sites}
+                sfData={sfData}
+                allProjectsMatrix={allProjectsData?.matrix || []}
+                allProjectsRadar={allProjectsData?.radar || []}
+                allProjectsLoading={allProjectsLoading}
+                allProjectsCount={allProjectsData?.projectCount || 0}
+                templateFilter={templateFilter}
+                setTemplateFilter={setTemplateFilter}
+                pageTypes={pageTypes}
+              />
+            );
+          })()}
         </div>
 
         {/* ── CONFIRM MODAL ── */}
