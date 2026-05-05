@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import "./geo-tab.css";
 import TourGuide from "./TourGuide";
 import PresenceCalendar from "../components/PresenceCalendar";
 import {
@@ -1057,12 +1058,12 @@ function StatsHeader({ questions, results, brandName }) {
   const topDomains = Object.entries(domainCount).sort((a, b) => b[1] - a[1]).slice(0, 5);
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginBottom: 24 }}>
+    <div className="gt-kpi-grid">
       {/* Présence */}
-      <div style={{ background: "#fff", border: "0.5px solid #1A3C2E11", borderRadius: 12, padding: "16px 20px" }}>
-        <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.12em", textTransform: "uppercase", color: "#1A3C2E55", marginBottom: 8 }}>Présence {brandName}</div>
-        <div style={{ fontSize: 32, fontWeight: 300, color: presence >= 50 ? "#1A7A4A" : presence > 0 ? "#C97820" : "#C0352A", letterSpacing: "-0.02em" }}>{presence}%</div>
-        <div style={{ fontSize: 11, color: "#1A3C2E44", marginTop: 2 }}>{withBrand} / {total}</div>
+      <div className="gt-kpi-card">
+        <div className="gt-kpi-label">Présence {brandName}</div>
+        <div className={`gt-kpi-val ${presence >= 50 ? "gt-success" : presence > 0 ? "gt-warn" : "gt-danger"}`}>{presence}%</div>
+        <div className="gt-kpi-sub">{withBrand} / {total}</div>
       </div>
 
       {/* Position moy. */}
@@ -1836,13 +1837,7 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
           {filtered.map(kw => {
             const isSel = selected.has(kw.id);
             return (
-              <div key={kw.id} style={{
-                background: isSel ? "#F0EBE044" : "#fff",
-                border: "none",
-                borderBottom: "0.5px solid #1A3C2E0D",
-                padding: "11px 0",
-                display: "flex", alignItems: "center", gap: 10,
-              }}>
+              <div key={kw.id} className={`gt-item${isSel ? " gt-item--selected" : ""}`} style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 <input type="checkbox" checked={isSel} onChange={() => toggleSelect(kw.id)} style={{ cursor: "pointer", flexShrink: 0 }} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{kw.keyword}</div>
@@ -2015,91 +2010,91 @@ function HintPanelQuestion({ questionId, question, sources, brandName, brandAlia
 
 // ── ProviderRow — calendar + info + accordion + run button ────────
 
-function ProviderRow({ provider, results, allProviderResults, brandName, brandAliases, brandDomain = "", hasKey, isRunning, onRun, questionId, newCalEntry = null, question = "", claudeKey = "", projectId = null, siteId = null, savedHint = "" }) {
+function ProviderRow({ provider, results, brandName, brandAliases, brandDomain = "", hasKey, isRunning, onRun, questionId, newCalEntry = null, question = "", claudeKey = "", projectId = null, siteId = null, savedHint = "", brandTerms = [], competitorMap = {}, lastCalDate = null, isReadOnly = false }) {
   const [open, setOpen] = useState(false);
   const p = provider;
 
-  // Most recent result for this provider
   const result = [...(results || [])].sort((a,b) => new Date(b.created_at||0) - new Date(a.created_at||0))[0] || null;
-  const hasBrand = isBrandPresent(result);
+  const presenceType = getPresenceType(result);
   const sources = result?.sources || [];
   const comps   = result?.competitors_mentioned || [];
 
+  const resultDateStr = result?.created_at?.slice(0, 10) || null;
+  const displayDate = result?.created_at || lastCalDate || null;
 
+  const presenceLabel = presenceType === "ranked"
+    ? `#${result?.brand_position || "?"}`
+    : presenceType === "source" ? "src" : null;
 
   return (
-    <div style={{ border: `1px solid ${result ? (hasBrand ? '#059669' : C.border) : p.color+'33'}`, borderLeft: `3px solid ${hasBrand ? '#059669' : p.color}`, borderRadius: 9, overflow: 'hidden', background: hasBrand ? '#F0FDF4' : C.white }}>
+    <div>
+      {/* ── Ligne provider ── */}
+      <div className="gt-provider-row">
 
-      {/* ── Row ── */}
-      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", minHeight: 32 }}>
+        {/* Nom */}
+        <span className="gt-provider-name">{p.label}</span>
 
-        {/* Provider name */}
-        <span style={{ fontSize: 11, fontWeight: 500, color: "#1A3C2E66", minWidth: 64, flexShrink: 0, letterSpacing: "0.02em" }}>{p.label}</span>
-
-        {/* Calendar */}
+        {/* Calendrier de présence 30j */}
         <PresenceCalendar questionId={questionId} providers={[provider]} newEntry={newCalEntry} />
 
-        {/* Source badge */}
-        {result?.brand_in_sources && (
-          <span style={{ fontSize: 9, fontWeight: 700, color: '#2563EB', background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 8, padding: '1px 6px', flexShrink: 0 }}>🔗 Source</span>
+        {/* Statut de présence */}
+        {presenceLabel && (
+          <span className={`gt-provider-status ${presenceType === "ranked" ? "gt-success" : presenceType === "source" ? "gt-dimmed" : "gt-warn"}`}>
+            {presenceLabel}
+          </span>
         )}
 
-        {/* Intent / answer type */}
-        {result?.intent_type && (
-          <span style={{ fontSize: 9, color: '#7C3AED', background: '#F5F3FF', border: '1px solid #DDD6FE', borderRadius: 8, padding: '1px 6px', flexShrink: 0 }}>{result.intent_type}</span>
-        )}
-
-        {/* Accordion toggle */}
+        {/* Bouton voir réponse */}
         {result && (
-          <button onClick={() => setOpen(o => !o)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.textLight, fontSize: 11, padding: '2px 6px', borderRadius: 5, display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0 }} title="Voir la réponse">
-            <span>Réponse</span><span>{open ? '▲' : '▼'}</span>
+          <button className="gt-provider-toggle" onClick={() => setOpen(o => !o)}>
+            {open ? "▲" : "Réponse ▾"}
           </button>
         )}
 
-
-        {/* Spacer */}
         <div style={{ flex: 1 }} />
 
-        {/* Right side: tokens · date+heure · brand · run */}
-        {result && (
-          <span style={{ fontSize: 9, color: C.textLight, flexShrink: 0 }}>
-            {(result.input_tokens||0)+(result.output_tokens||0)} tok
+        {/* Date et tokens — méta discrète */}
+        {displayDate && (
+          <span className="gt-mono">
+            {new Date(displayDate).toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit" })}
           </span>
         )}
-        {result?.created_at && (
-          <span style={{ fontSize: 9, color: C.textLight, flexShrink: 0 }}>
-            {new Date(result.created_at).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' })}
-            {' '}
-            {new Date(result.created_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
-          </span>
+        {result && (
+          <span className="gt-mono">{(result.input_tokens||0)+(result.output_tokens||0)} tok</span>
         )}
 
-        {hasKey && (
-          <button onClick={onRun} disabled={isRunning || !hasKey}
-            title={!hasKey ? `Clé ${p.label} manquante` : `Interroger ${p.label}`}
-            style={{ width: 20, height: 20, borderRadius: "50%", border: "1px solid #1A3C2E22", cursor: (!hasKey || isRunning) ? "not-allowed" : "pointer", background: isRunning ? "transparent" : "#1A3C2E", color: isRunning ? "#1A3C2E44" : "#F0EBE0", fontSize: 10, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, opacity: (isRunning || !hasKey) ? 0.3 : 1, transition: "opacity 0.2s" }}>
+        {/* Bouton run */}
+        {hasKey && !isReadOnly && (
+          <button
+            className="gt-provider-run"
+            onClick={onRun}
+            disabled={isRunning || !hasKey}
+            title={`Interroger ${p.label}`}
+          >
             {isRunning ? "·" : "▶"}
           </button>
         )}
       </div>
 
-      {/* ── Accordion: answer + sources + competitors ── */}
-
+      {/* ── Accordéon réponse ── */}
       {open && result && (
-        <div style={{ padding: "10px 0 10px 76px", background: "transparent" }}>
-          <div style={{ fontSize: 12, color: C.text, lineHeight: 1.7 }}>
-            {renderMarkdown(result.answer || '')}
+        <div className="gt-provider-answer">
+          <div className="gt-body" style={{ lineHeight: 1.7, wordBreak: "break-word" }}>
+            {renderMarkdown(result.answer || "")}
           </div>
           {sources.length > 0 && (
             <div style={{ marginTop: 10 }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: 'uppercase', letterSpacing: 0.7, marginBottom: 5 }}>Sources</div>
+              <div className="gt-label" style={{ marginBottom: 6 }}>Sources</div>
               {sources.map((url, i) => {
-                const ib = [brandName, ...(brandAliases||[])].some(t => url.toLowerCase().includes((t||'').toLowerCase()));
+                const ib = [brandName, ...(brandAliases||[])].some(t => url.toLowerCase().includes((t||"").toLowerCase()));
                 return (
-                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 3 }}>
-                    <span style={{ fontSize: 10, color: C.textLight, minWidth: 18 }}>[{i+1}]</span>
-                    <a href={url} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: ib ? '#059669' : '#2563EB', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{stripQuery(url)}</a>
-                    {ib && <span style={{ fontSize: 9, background: '#ECFDF5', color: '#059669', borderRadius: 4, padding: '1px 4px', flexShrink: 0 }}>marque</span>}
+                  <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 5, marginBottom: 4, minWidth: 0 }}>
+                    <span className="gt-caption" style={{ minWidth: 18, flexShrink: 0, paddingTop: 1 }}>[{i+1}]</span>
+                    <a href={url} target="_blank" rel="noreferrer"
+                      style={{ fontSize: 11, color: ib ? "#1A7A4A" : "#1A3C2E88", wordBreak: "break-all", flex: 1, minWidth: 0 }}>
+                      {stripQuery(url)}
+                    </a>
+                    {ib && <span className="gt-badge gt-badge--success">marque</span>}
                   </div>
                 );
               })}
@@ -2107,11 +2102,11 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
           )}
           {comps.length > 0 && (
             <div style={{ marginTop: 8 }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: 'uppercase', letterSpacing: 0.7, marginBottom: 5 }}>Concurrents</div>
-              <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+              <div className="gt-label" style={{ marginBottom: 6 }}>Concurrents</div>
+              <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
                 {comps.map(c => (
-                  <span key={c.name} style={{ fontSize: 10, background: '#FEF2F2', color: '#DC2626', border: '1px solid #FECACA', borderRadius: 5, padding: '2px 7px' }}>
-                    {c.name}{c.position ? ` #${c.position}` : ''}
+                  <span key={c.name} className="gt-badge gt-badge--warn">
+                    {c.name}{c.position ? ` #${c.position}` : ""}
                   </span>
                 ))}
               </div>
@@ -2122,6 +2117,8 @@ function ProviderRow({ provider, results, allProviderResults, brandName, brandAl
     </div>
   );
 }
+
+
 
 
 // ── GeoAnalysis — AI analysis of fan-out presence ─────────────────
@@ -2766,7 +2763,7 @@ ${question}`;
       <StatsHeader questions={filtered} results={filteredResults} brandName={brand_name} />
 
       {/* ── Ajout de questions : manuel + import CSV ── */}
-      <div style={{ background: "transparent", border: "none", borderBottom: "0.5px solid #1A3C2E0D", padding: "0 0 14px 0", marginBottom: 14 }}>
+      <div className="gt-toolbar">
         {/* Saisie manuelle */}
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
           <span style={{ fontSize: 11, fontWeight: 600, color: C.textLight, flexShrink: 0 }}>➕ Manuel</span>
@@ -2803,26 +2800,16 @@ ${question}`;
       <div style={{ background: "#fff", border: "0.5px solid #1A3C2E0D", borderRadius: 12, padding: "12px 16px", marginBottom: 14 }}>
         {/* Row 1: search + category + keyword + fav + brand */}
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
-          <input
-            value={filterSearch} onChange={e => setFilterSearch(e.target.value)}
-            placeholder="Rechercher…"
-            style={{ padding: "6px 12px", border: "0.5px solid #1A3C2E22", borderRadius: 20, fontSize: 11, color: "#1A3C2E", width: 200, outline: "none", background: filterSearch ? "#F0EBE044" : "transparent" }}
-          />
+          <input value={filterSearch} onChange={e => setFilterSearch(e.target.value)} placeholder="Rechercher…" className="gt-input" style={{ width: 200 }} />
           <CatSelect value={filterCat} categories={categories} onChange={v => setFilterCat(v || "")} placeholder="Toutes catégories" />
           <select value={filterKeyword} onChange={e => setFilterKeyword(e.target.value)}
             style={{ padding: "5px 8px", border: `1px solid ${filterKeyword ? "#2563EB" : C.border}`, borderRadius: 7, fontSize: 11, color: C.text }}>
             <option value="">Tous les mots-clés</option>
             {keywords.map(k => <option key={k.id} value={k.id}>{k.keyword}</option>)}
           </select>
-          <Pill color="#F59E0B" active={filterFav} onClick={() => setFilterFav(f => !f)}>⭐ Favoris</Pill>
-          <Pill color="#059669" active={filterPositioned} onClick={() => setFilterPositioned(f => !f)}
-            title="Questions dont le dernier résultat en date montre la marque présente">
-            📍 Positionnée
-          </Pill>
-          <Pill color="#D97706" active={filterLost} onClick={() => setFilterLost(f => !f)}
-            title="Questions positionnées dans les 30 derniers jours mais absentes du dernier résultat (OU avec Positionnée si les deux sont actifs)">
-            📉 Positionnée précédemment
-          </Pill>
+          <button className={`gt-filter-pill${filterFav ? " gt-filter-pill--active" : ""}`} onClick={() => setFilterFav(f => !f)}>⭐ Favoris</button>
+          <button className={`gt-filter-pill${filterPositioned ? " gt-filter-pill--active" : ""}`} onClick={() => setFilterPositioned(f => !f)} title="Questions dont le dernier résultat montre la marque présente">📍 Positionnée</button>
+          <button className={`gt-filter-pill${filterLost ? " gt-filter-pill--active" : ""}`} onClick={() => setFilterLost(f => !f)} title="Positionnée dans les 30j mais absente du dernier résultat">📉 Perdue</button>
           {(filterSearch || filterCat || filterKeyword || filterFav || filterPositioned || filterLost || filterProviders.length > 0) && (
             <button onClick={() => { setFilterSearch(""); setFilterCat(""); setFilterKeyword(""); setFilterFav(false); setFilterPositioned(false); setFilterLost(false); setFilterProviders([]); }}
               style={{ fontSize: 11, padding: "3px 8px", border: "0.5px solid #1A3C2E0D", borderRadius: 6, background: "#FAFAF8", cursor: "pointer", color: C.textMid }}>
@@ -2903,13 +2890,7 @@ ${question}`;
             const cat = categories.find(c => c.id === q.category_id);
             const kwTag = keywords.find(k => k.id === q.keyword_id);
             return (
-              <div key={q.id} style={{
-              background: isSel ? "#F0EBE022" : "transparent",
-              border: "none",
-              borderBottom: "0.5px solid #1A3C2E08",
-              padding: "14px 0",
-              position: "relative",
-            }}>
+              <div key={q.id} className={`gt-item${isSel ? " gt-item--selected" : ""}`}>
                 <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
                   <input type="checkbox" checked={isSel} onChange={() => { setSelected(prev => { const n = new Set(prev); n.has(q.id) ? n.delete(q.id) : n.add(q.id); return n; }); }} style={{ cursor: "pointer", flexShrink: 0, marginTop: 2 }} />
                   <button onClick={() => toggleFav(q.id, q.is_favorite)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, flexShrink: 0, opacity: q.is_favorite ? 0.9 : 0.2, transition: "opacity 0.2s" }}>⭐</button>
@@ -2928,7 +2909,7 @@ ${question}`;
                         <button onClick={() => setEditingQ(null)} style={{ padding: "4px 8px", background: "#FAFAF8", color: C.textLight, border: "0.5px solid #1A3C2E0D", borderRadius: 6, fontSize: 11, cursor: "pointer" }}>✕</button>
                       </div>
                     ) : (
-                      <div style={{ fontSize: 13, fontWeight: 500, color: "#1A3C2E", lineHeight: 1.5, letterSpacing: "-0.005em" }}>{q.question}</div>
+                      <div className="gt-item-text">{q.question}</div>
                     )}
                     <div style={{ display: "flex", gap: 5, marginTop: 4, flexWrap: "wrap", alignItems: "center" }}>
                       {kwTag && <span style={{ fontSize: 10, color: C.textLight, background: "#FAFAF8", border: "0.5px solid #1A3C2E0D", borderRadius: 10, padding: "1px 7px" }}>🔑 {kwTag.keyword}</span>}
@@ -2962,7 +2943,7 @@ ${question}`;
                   </div>
                 </div>
                 {/* One row per provider — calendar + info + accordion + run */}
-                <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 5 }}>
+                <div style={{ marginTop: 10, display: "flex", flexDirection: "column" }}>
                   {PROVIDERS.map(p => {
                     const pResults = qResults.filter(r => getProviderId(r.model) === p.id);
                     const hasKey = !!providerKeys[p.id]?.dec;

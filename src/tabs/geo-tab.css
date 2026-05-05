@@ -1,0 +1,471 @@
+/*
+ * geo-tab.css — Design System Sonate GEO Dashboard
+ * Import dans GeoTab.jsx : import "./geo-tab.css";
+ *
+ * ═══════════════════════════════════════════════════════════════════
+ * CLASSES DÉFINIES ET USAGE PRÉVU
+ * ═══════════════════════════════════════════════════════════════════
+ *
+ * TYPOGRAPHIE — TEXTES
+ * .gt-label      Label de section : 10px, uppercase, letterSpacing 0.12em, vert 40%
+ * .gt-heading    Titre de bloc : 16px, weight 400, vert foncé, letterSpacing -0.01em
+ * .gt-body       Corps de texte standard : 13px, weight 400, vert foncé
+ * .gt-body-sm    Corps secondaire : 12px, weight 400, vert 60%
+ * .gt-caption    Légende / métadonnée : 10px, weight 400, vert 35%, no-transform
+ * .gt-mono       Données numériques inline (tokens, dates) : 11px, tabular-nums
+ *
+ * TYPOGRAPHIE — CHIFFRES (KPI)
+ * .gt-kpi-val    Grande valeur KPI : 28px, weight 300, letterSpacing -0.03em
+ * .gt-kpi-label  Label KPI : même que .gt-label
+ * .gt-kpi-sub    Sous-texte KPI : même que .gt-caption
+ *
+ * ÉTATS SÉMANTIQUES — COULEURS TEXTE
+ * .gt-success    Couleur succès / présence marque : #1A7A4A
+ * .gt-warn       Couleur avertissement : #C97820
+ * .gt-danger     Couleur erreur / absence : #C0352A
+ * .gt-muted      Texte très atténué : #1A3C2E33
+ * .gt-dimmed     Texte atténué : #1A3C2E55
+ *
+ * BADGES / TAGS INLINE
+ * .gt-badge      Petit badge texte : 10px, pill 20px radius, border 0.5px
+ * .gt-badge--success  Badge vert (présence)
+ * .gt-badge--warn     Badge orange
+ * .gt-badge--neutral  Badge neutre crème
+ *
+ * PROVIDER ROW
+ * .gt-provider-row       Ligne d'un provider : flex, height fixe 32px, séparateur fin
+ * .gt-provider-name      Nom du provider : 11px, weight 500, minWidth 64px, vert 50%
+ * .gt-provider-status    Indicateur de présence : 11px, weight 500
+ * .gt-provider-run       Bouton lancement : cercle 24px, border 0.5px, sobre
+ * .gt-provider-toggle    Bouton accordéon réponse : texte léger, no-border
+ * .gt-provider-answer    Zone réponse accordéon : padding 12px 0, fond transparent
+ *
+ * LISTE ITEMS (questions, mots-clés)
+ * .gt-item           Ligne item : padding 12px 0, border-bottom 0.5px, transparent
+ * .gt-item--selected Item sélectionné : fond crème très léger
+ * .gt-item-text      Texte principal de l'item : .gt-body
+ * .gt-item-meta      Zone meta (tags, badges) : flex, gap 6px, wrap
+ * .gt-item-actions   Zone actions droite : flex, gap 6px, align-center
+ *
+ * ACTIONS / BOUTONS
+ * .gt-btn         Bouton principal : pill, 0.5px border vert, transparent
+ * .gt-btn--solid  Bouton solide : fond #1A3C2E, texte crème
+ * .gt-btn--ghost  Bouton fantôme : transparent, texte vert 60%
+ * .gt-btn-icon    Bouton icône seul : 28px carré ou cercle, no-border, texte vert 25%
+ *
+ * FILTRE / TOOLBAR
+ * .gt-toolbar     Barre de filtres : flex, gap 8px, padding 0 0 14px, border-bottom 0.5px
+ * .gt-filter-pill Pill filtre cliquable : même que .gt-btn--ghost mais plus petit
+ * .gt-filter-pill--active Pill actif : fond #1A3C2E, texte crème
+ *
+ * CARDS KPI (StatsHeader)
+ * .gt-kpi-card    Card KPI : fond blanc, border 0.5px, radius 10px, padding 16px 20px
+ * .gt-kpi-grid    Grille de KPI cards : CSS grid, gap 12px, auto-fit minmax 180px
+ *
+ * LAYOUT GRAND ÉCRAN
+ * .gt-content-wide  Conteneur pleine largeur avec max-width 1200px et padding responsive
+ * .gt-two-col       Layout deux colonnes sur grand écran (>= 1200px)
+ *
+ * ═══════════════════════════════════════════════════════════════════
+ */
+
+/* ── Réinitialisation focus ───────────────────────────────────── */
+.gt-btn:focus-visible,
+.gt-provider-run:focus-visible,
+.gt-btn-icon:focus-visible {
+  outline: 2px solid #1A3C2E44;
+  outline-offset: 2px;
+}
+
+/* ── Typographie de base ──────────────────────────────────────── */
+.gt-label {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #1A3C2E55;
+  line-height: 1.4;
+}
+
+.gt-heading {
+  font-size: 16px;
+  font-weight: 400;
+  color: #1A3C2E;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+}
+
+.gt-body {
+  font-size: 13px;
+  font-weight: 400;
+  color: #1A3C2E;
+  line-height: 1.5;
+  letter-spacing: -0.005em;
+}
+
+.gt-body-sm {
+  font-size: 12px;
+  font-weight: 400;
+  color: #1A3C2EAA;
+  line-height: 1.5;
+}
+
+.gt-caption {
+  font-size: 10px;
+  font-weight: 400;
+  color: #1A3C2E44;
+  line-height: 1.4;
+}
+
+.gt-mono {
+  font-size: 11px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  color: #1A3C2E44;
+}
+
+/* ── Chiffres KPI ─────────────────────────────────────────────── */
+.gt-kpi-val {
+  font-size: 28px;
+  font-weight: 300;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  color: #1A3C2E;
+}
+
+.gt-kpi-label {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #1A3C2E55;
+  margin-bottom: 8px;
+}
+
+.gt-kpi-sub {
+  font-size: 10px;
+  font-weight: 400;
+  color: #1A3C2E33;
+  margin-top: 4px;
+}
+
+/* ── Couleurs sémantiques ────────────────────────────────────── */
+.gt-success { color: #1A7A4A; }
+.gt-warn    { color: #C97820; }
+.gt-danger  { color: #C0352A; }
+.gt-muted   { color: #1A3C2E33; }
+.gt-dimmed  { color: #1A3C2E55; }
+
+/* ── Badges inline ───────────────────────────────────────────── */
+.gt-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10px;
+  font-weight: 500;
+  padding: 2px 9px;
+  border-radius: 20px;
+  border: 0.5px solid transparent;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.gt-badge--success {
+  color: #1A7A4A;
+  border-color: #1A7A4A33;
+  background: transparent;
+}
+
+.gt-badge--warn {
+  color: #C97820;
+  border-color: #C9782033;
+  background: transparent;
+}
+
+.gt-badge--neutral {
+  color: #1A3C2E77;
+  border-color: #1A3C2E18;
+  background: transparent;
+}
+
+/* ── Provider Row ─────────────────────────────────────────────── */
+.gt-provider-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 32px;
+  border-bottom: 0.5px solid #1A3C2E08;
+  padding: 0;
+  transition: background 0.1s;
+}
+
+.gt-provider-row:last-child {
+  border-bottom: none;
+}
+
+.gt-provider-name {
+  font-size: 11px;
+  font-weight: 500;
+  color: #1A3C2E55;
+  min-width: 72px;
+  flex-shrink: 0;
+  letter-spacing: 0.03em;
+}
+
+.gt-provider-status {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  flex-shrink: 0;
+}
+
+.gt-provider-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 400;
+  color: #1A3C2E44;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  letter-spacing: 0.01em;
+  transition: color 0.15s;
+}
+
+.gt-provider-toggle:hover { color: #1A3C2E; }
+
+.gt-provider-run {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 0.5px solid #1A3C2E22;
+  background: transparent;
+  color: #1A3C2E;
+  font-size: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+}
+
+.gt-provider-run:hover {
+  background: #1A3C2E;
+  color: #F0EBE0;
+}
+
+.gt-provider-run:disabled {
+  opacity: 0.25;
+  cursor: not-allowed;
+}
+
+.gt-provider-answer {
+  padding: 10px 0 10px 82px;
+  background: transparent;
+  border-top: 0.5px solid #1A3C2E08;
+}
+
+/* ── Items (questions, mots-clés) ────────────────────────────── */
+.gt-item {
+  padding: 12px 0;
+  border-bottom: 0.5px solid #1A3C2E08;
+  background: transparent;
+  transition: background 0.1s;
+}
+
+.gt-item:last-child { border-bottom: none; }
+
+.gt-item--selected { background: #F0EBE018; }
+
+.gt-item-text {
+  font-size: 13px;
+  font-weight: 500;
+  color: #1A3C2E;
+  line-height: 1.5;
+  letter-spacing: -0.005em;
+}
+
+.gt-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.gt-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* ── Boutons ──────────────────────────────────────────────────── */
+.gt-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 16px;
+  border-radius: 6px;
+  border: 0.5px solid #1A3C2E22;
+  background: transparent;
+  color: #1A3C2E;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+  user-select: none;
+}
+
+.gt-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+.gt-btn--solid {
+  background: #1A3C2E;
+  color: #F0EBE0;
+  border-color: #1A3C2E;
+}
+
+.gt-btn--solid:hover:not(:disabled) { opacity: 0.85; }
+
+.gt-btn--ghost {
+  color: #1A3C2E77;
+  border-color: #1A3C2E11;
+}
+
+.gt-btn--ghost:hover:not(:disabled) { color: #1A3C2E; border-color: #1A3C2E33; }
+
+.gt-btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: #1A3C2E22;
+  font-size: 13px;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+
+.gt-btn-icon:hover { color: #1A3C2E77; }
+
+/* ── Filtre / toolbar ────────────────────────────────────────── */
+.gt-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-bottom: 14px;
+  border-bottom: 0.5px solid #1A3C2E08;
+  margin-bottom: 14px;
+}
+
+.gt-filter-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 12px;
+  border-radius: 20px;
+  border: 0.5px solid #1A3C2E18;
+  background: transparent;
+  color: #1A3C2E77;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.gt-filter-pill:hover { border-color: #1A3C2E44; color: #1A3C2E; }
+
+.gt-filter-pill--active {
+  background: #1A3C2E;
+  color: #F0EBE0;
+  border-color: #1A3C2E;
+}
+
+/* ── KPI Cards ───────────────────────────────────────────────── */
+.gt-kpi-card {
+  background: #fff;
+  border: 0.5px solid #1A3C2E0D;
+  border-radius: 10px;
+  padding: 16px 20px;
+}
+
+.gt-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+  margin-bottom: 24px;
+}
+
+/* ── Layout ───────────────────────────────────────────────────── */
+.gt-content-wide {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+/* Grand écran : layout deux colonnes pour questions */
+@media (min-width: 1200px) {
+  .gt-two-col {
+    display: grid;
+    grid-template-columns: 1fr 340px;
+    gap: 40px;
+    align-items: start;
+  }
+
+  .gt-kpi-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+
+  /* Provider row plus aéré sur grand écran */
+  .gt-provider-row {
+    height: 34px;
+  }
+}
+
+@media (min-width: 1600px) {
+  .gt-content-wide {
+    max-width: 1440px;
+  }
+}
+
+/* ── Input style unifié ──────────────────────────────────────── */
+.gt-input {
+  padding: 6px 12px;
+  border: 0.5px solid #1A3C2E18;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 400;
+  color: #1A3C2E;
+  background: transparent;
+  outline: none;
+  transition: border-color 0.15s;
+  font-family: inherit;
+}
+
+.gt-input:focus { border-color: #1A3C2E44; }
+.gt-input::placeholder { color: #1A3C2E33; }
+
+/* ── Select unifié ───────────────────────────────────────────── */
+.gt-select {
+  padding: 5px 10px;
+  border: 0.5px solid #1A3C2E18;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 400;
+  color: #1A3C2E77;
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+}
