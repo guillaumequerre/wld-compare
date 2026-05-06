@@ -3443,17 +3443,16 @@ function AutomationTab({ projectId, site, user, providerKeys }) {
   const [triggerResult, setTriggerResult] = useState(null);
   const [error, setError]         = useState("");
 
-  // Form state
   const [active, setActive]       = useState(true);
   const [frequency, setFrequency] = useState("weekly");
   const [providers, setProviders] = useState(["openai"]);
   const [maxQ, setMaxQ]           = useState(10);
 
   const FREQUENCIES = [
-    { key: "daily",    label: "Quotidien",      desc: "Chaque jour", icon: "📅" },
-    { key: "weekly",   label: "Hebdomadaire",   desc: "Chaque semaine", icon: "📆" },
-    { key: "biweekly", label: "Bi-mensuel",     desc: "Toutes les 2 semaines", icon: "🗓️" },
-    { key: "monthly",  label: "Mensuel",        desc: "Chaque mois", icon: "📊" },
+    { key: "daily",    label: "Quotidien",    desc: "Chaque jour" },
+    { key: "weekly",   label: "Hebdomadaire", desc: "Chaque semaine" },
+    { key: "biweekly", label: "Bi-mensuel",   desc: "Toutes les 2 semaines" },
+    { key: "monthly",  label: "Mensuel",      desc: "Chaque mois" },
   ];
 
   useEffect(() => {
@@ -3511,138 +3510,133 @@ function AutomationTab({ projectId, site, user, providerKeys }) {
   const fmtDate = (d) => d ? new Date(d).toLocaleString("fr-FR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "—";
 
   if (loading) return (
-    <div style={{ padding: 32, textAlign: "center", color: C.textLight, fontSize: 13 }}>
-      <span style={{ display: "inline-block", animation: "spin 1s linear infinite" }}>⟳</span> Chargement…
-    </div>
+    <div style={{ padding: 32, textAlign: "center", color: "#1A3C2E55", fontSize: 13 }}>Chargement…</div>
   );
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 0, maxWidth: 680 }}>
+
       {/* Header */}
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 28 }}>
         <div>
-          <div style={{ fontSize: 16, fontWeight: 800, color: C.text, marginBottom: 4 }}>⏰ Automatisation</div>
-          <div style={{ fontSize: 12, color: C.textLight }}>
-            Interrogation automatique des questions ⭐ favoris — sans connexion à l'app
-          </div>
+          <div className="gt-label" style={{ marginBottom: 4 }}>Automatisation</div>
+          <div className="gt-heading" style={{ marginBottom: 4 }}>Interrogation automatique</div>
+          <div className="gt-body-sm">Questions ⭐ favoris — sans connexion à l'app</div>
         </div>
         {schedule && (
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <span style={{ fontSize: 12, color: C.textLight }}>
-              {active ? "🟢 Actif" : "⚫ Inactif"}
-            </span>
-            <button onClick={toggleActive}
-              style={{ padding: "6px 14px", border: `1px solid ${active ? "#DC2626" : "#059669"}`, borderRadius: 8, background: "transparent", color: active ? "#DC2626" : "#059669", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
-              {active ? "Désactiver" : "Activer"}
-            </button>
-          </div>
+          <button
+            onClick={toggleActive}
+            className={`gt-btn ${active ? "gt-btn--ghost" : "gt-btn--solid"}`}
+            style={{ marginTop: 4 }}>
+            {active ? "Désactiver" : "Activer"}
+          </button>
         )}
       </div>
 
       {error && (
-        <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 10, padding: "10px 14px", fontSize: 12, color: "#DC2626" }}>{error}</div>
+        <div style={{ background: "#FEF2F2", border: "0.5px solid #C0352A22", borderRadius: 6, padding: "10px 14px", fontSize: 12, color: "#C0352A", marginBottom: 16 }}>{error}</div>
       )}
 
-      {/* Status card (if schedule exists) */}
+      {/* Status si schedule existe */}
       {schedule && (
-        <div style={{ background: active ? "#ECFDF5" : C.bg, border: `1px solid ${active ? "#BBF7D0" : C.border}`, borderRadius: 12, padding: "16px 20px" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
-            {[
-              { label: "Prochain run", value: fmtDate(schedule.next_run), icon: "⏭️" },
-              { label: "Dernier run", value: fmtDate(schedule.last_run), icon: "✅" },
-              { label: "Questions traitées", value: schedule.last_run_count || 0, icon: "📊" },
-            ].map(k => (
-              <div key={k.label}>
-                <div style={{ fontSize: 10, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 4 }}>{k.icon} {k.label}</div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{k.value}</div>
-              </div>
-            ))}
-          </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 28 }}>
+          {[
+            { label: "Prochain run", value: fmtDate(schedule.next_run) },
+            { label: "Dernier run",  value: fmtDate(schedule.last_run) },
+            { label: "Questions",    value: schedule.last_run_count || 0 },
+          ].map(k => (
+            <div key={k.label} className="gt-kpi-card">
+              <div className="gt-kpi-label" style={{ marginBottom: 6 }}>{k.label}</div>
+              <div className="gt-body" style={{ fontWeight: 500 }}>{k.value}</div>
+            </div>
+          ))}
         </div>
       )}
 
-      {/* Config form */}
-      <div style={{ background: "#fff", border: "0.5px solid #1A3C2E0D", borderRadius: 14, padding: "24px 28px", display: "flex", flexDirection: "column", gap: 24 }}>
-        <div style={{ fontSize: 11, fontWeight: 500, letterSpacing: "0.12em", textTransform: "uppercase", color: "#1A3C2E55" }}>Configuration</div>
-
-        {/* Frequency */}
-        <div>
-          <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>Fréquence</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
-            {FREQUENCIES.map(f => (
+      {/* ── Fréquence ── */}
+      <div style={{ marginBottom: 24 }}>
+        <div className="gt-label" style={{ marginBottom: 12 }}>Fréquence</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
+          {FREQUENCIES.map(f => {
+            const active = frequency === f.key;
+            return (
               <button key={f.key} onClick={() => setFrequency(f.key)}
-                style={{ padding: "10px 8px", border: `2px solid ${frequency === f.key ? "#7C3AED" : C.border}`, borderRadius: 10, background: frequency === f.key ? "#F5F3FF" : C.white, cursor: "pointer", textAlign: "center" }}>
-                <div style={{ fontSize: 18, marginBottom: 4 }}>{f.icon}</div>
-                <div style={{ fontSize: 11, fontWeight: 700, color: frequency === f.key ? "#7C3AED" : C.text }}>{f.label}</div>
-                <div style={{ fontSize: 10, color: C.textLight }}>{f.desc}</div>
+                style={{
+                  padding: "14px 10px", textAlign: "center", cursor: "pointer",
+                  border: active ? "1px solid #1A3C2E" : "0.5px solid #1A3C2E18",
+                  borderRadius: 8,
+                  background: active ? "#1A3C2E" : "transparent",
+                  transition: "all 0.15s",
+                }}>
+                <div className={`gt-body ${active ? "" : "gt-dimmed"}`} style={{ fontWeight: 500, fontSize: 12, color: active ? "#F0EBE0" : undefined, marginBottom: 3 }}>{f.label}</div>
+                <div style={{ fontSize: 10, color: active ? "#F0EBE077" : "#1A3C2E33" }}>{f.desc}</div>
               </button>
-            ))}
-          </div>
+            );
+          })}
         </div>
-
-        {/* Providers */}
-        <div>
-          <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>
-            Providers à interroger
-            {availableProviders.length === 0 && (
-              <span style={{ marginLeft: 8, fontSize: 10, color: "#DC2626", textTransform: "none", fontWeight: 400 }}>
-                ⚠ Aucune clé configurée — rendez-vous dans Gestion des Providers
-              </span>
-            )}
-          </div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {PROVIDERS.map(p => {
-              const hasKey = !!providerKeys[p.id]?.dec;
-              const selected = providers.includes(p.id);
-              return (
-                <button key={p.id} onClick={() => hasKey && toggleProvider(p.id)}
-                  title={!hasKey ? `Clé ${p.label} manquante` : undefined}
-                  style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", border: `2px solid ${selected && hasKey ? p.color : C.border}`, borderRadius: 8, background: selected && hasKey ? p.color + "18" : C.bg, cursor: hasKey ? "pointer" : "not-allowed", opacity: hasKey ? 1 : 0.4 }}>
-                  <span style={{ fontSize: 14 }}>{p.icon}</span>
-                  <span style={{ fontSize: 12, fontWeight: 600, color: selected && hasKey ? p.color : C.textMid }}>{p.label}</span>
-                  {hasKey ? (selected ? <span style={{ fontSize: 10, color: p.color }}>✓</span> : null) : <span style={{ fontSize: 10 }}>🔑</span>}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Max questions */}
-        <div>
-          <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>
-            Nb max de questions par run
-          </div>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <input type="range" min={1} max={50} value={maxQ} onChange={e => setMaxQ(+e.target.value)}
-              style={{ flex: 1, accentColor: "#7C3AED" }} />
-            <span style={{ fontSize: 14, fontWeight: 700, color: "#7C3AED", minWidth: 30, textAlign: "right" }}>{maxQ}</span>
-          </div>
-          <div style={{ fontSize: 11, color: C.textLight, marginTop: 4 }}>
-            Estimation : ~{maxQ} × {providers.length} provider{providers.length > 1 ? "s" : ""} = {maxQ * providers.length} appels API par run
-          </div>
-        </div>
-
-        {/* Save button */}
-        <button onClick={save} disabled={saving || !providers.length}
-          style={{ padding: "10px 24px", background: saving ? C.bg : "#7C3AED", color: saving ? C.textLight : "#fff", border: "none", borderRadius: 9, fontSize: 13, fontWeight: 700, cursor: saving ? "not-allowed" : "pointer", boxShadow: saving ? "none" : "0 2px 8px #7C3AED44" }}>
-          {saving ? "⏳ Sauvegarde…" : schedule ? "💾 Mettre à jour" : "✅ Activer l'automatisation"}
-        </button>
       </div>
 
-      {/* Manual trigger */}
+      {/* ── Providers ── */}
+      <div style={{ marginBottom: 24 }}>
+        <div className="gt-label" style={{ marginBottom: 12 }}>
+          Providers à interroger
+          {availableProviders.length === 0 && (
+            <span style={{ marginLeft: 8, fontSize: 10, color: "#C0352A", textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>
+              — aucune clé configurée
+            </span>
+          )}
+        </div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {PROVIDERS.map(p => {
+            const hasKey = !!providerKeys[p.id]?.dec;
+            const sel = providers.includes(p.id);
+            return (
+              <button key={p.id} onClick={() => hasKey && toggleProvider(p.id)}
+                title={!hasKey ? `Clé ${p.label} manquante` : undefined}
+                className={`gt-filter-pill${sel && hasKey ? " gt-filter-pill--active" : ""}`}
+                style={{ opacity: hasKey ? 1 : 0.3, cursor: hasKey ? "pointer" : "not-allowed" }}>
+                {p.label}{!hasKey ? " ·" : sel ? " ✓" : ""}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ── Nb max questions ── */}
+      <div style={{ marginBottom: 28 }}>
+        <div className="gt-label" style={{ marginBottom: 12 }}>Nb max de questions par run</div>
+        <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
+          <input type="range" min={1} max={50} value={maxQ} onChange={e => setMaxQ(+e.target.value)}
+            style={{ flex: 1, accentColor: "#1A3C2E", height: 2 }} />
+          <span className="gt-kpi-val" style={{ fontSize: 20, minWidth: 28, textAlign: "right" }}>{maxQ}</span>
+        </div>
+        <div className="gt-caption" style={{ marginTop: 6 }}>
+          ~{maxQ} × {providers.length} provider{providers.length > 1 ? "s" : ""} = {maxQ * providers.length} appels API par run
+        </div>
+      </div>
+
+      {/* ── Bouton save ── */}
+      <button onClick={save} disabled={saving || !providers.length}
+        className={`gt-btn gt-btn--solid`}
+        style={{ width: "100%", justifyContent: "center", padding: "11px 0", fontSize: 12, borderRadius: 8, opacity: (saving || !providers.length) ? 0.4 : 1 }}>
+        {saving ? "Sauvegarde…" : schedule ? "Mettre à jour" : "Activer l'automatisation"}
+      </button>
+
+      {/* ── Test manuel ── */}
       {schedule && (
-        <div style={{ background: "#FAFAF8", border: "0.5px solid #1A3C2E0D", borderRadius: 12, padding: "16px 20px" }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 8 }}>🚀 Test manuel</div>
-          <div style={{ fontSize: 11, color: C.textLight, marginBottom: 12 }}>
-            Déclenche immédiatement l'automatisation pour vérifier que tout fonctionne.
+        <div style={{ marginTop: 24, paddingTop: 20, borderTop: "0.5px solid #1A3C2E08" }}>
+          <div className="gt-label" style={{ marginBottom: 8 }}>Test manuel</div>
+          <div className="gt-caption" style={{ marginBottom: 12 }}>
+            Déclenche immédiatement l'automatisation pour vérifier le fonctionnement.
           </div>
           <button onClick={trigger} disabled={triggering}
-            style={{ padding: "7px 16px", background: triggering ? C.bg : "#2563EB", color: triggering ? C.textLight : "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: triggering ? "not-allowed" : "pointer" }}>
-            {triggering ? "⏳ En cours…" : "▶ Lancer maintenant"}
+            className="gt-btn"
+            style={{ opacity: triggering ? 0.4 : 1 }}>
+            {triggering ? "En cours…" : "▶ Lancer maintenant"}
           </button>
           {triggerResult && (
-            <div style={{ marginTop: 10, background: "#ECFDF5", border: "1px solid #BBF7D0", borderRadius: 8, padding: "8px 12px", fontSize: 11, color: "#059669" }}>
-              ✓ {triggerResult.processed || 0} schedule(s) traité(s) — {triggerResult.results?.[0]?.questions_processed || 0} question(s) interrogée(s)
+            <div style={{ marginTop: 10, fontSize: 11, color: "#1A7A4A", padding: "8px 12px", background: "transparent", border: "0.5px solid #1A7A4A22", borderRadius: 6 }}>
+              ✓ {triggerResult.processed || 0} schedule(s) — {triggerResult.results?.[0]?.questions_processed || 0} question(s) traitée(s)
             </div>
           )}
         </div>
@@ -3650,6 +3644,7 @@ function AutomationTab({ projectId, site, user, providerKeys }) {
     </div>
   );
 }
+
 
 
 // ── BrandConfigAccordion — wrapper qui ferme la card après save ───
