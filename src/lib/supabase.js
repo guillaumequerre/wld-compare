@@ -855,3 +855,48 @@ export async function sbTriggerScheduler() {
   }
   return res.json();
 }
+
+// ── Competitors (geo_competitors) ────────────────────────────────
+
+export async function sbGetCompetitors(project_id, site_id) {
+  const res = await fetch(
+    `${PROXY}/rest/v1/geo_competitors?project_id=eq.${encodeURIComponent(project_id)}&site_id=eq.${encodeURIComponent(site_id)}&order=name.asc`,
+    { headers: authHeaders() }
+  );
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function sbSaveCompetitor({ project_id, site_id, name, domain = "", category = "other", color = "#64748B", enabled = true }) {
+  const res = await fetch(`${PROXY}/rest/v1/geo_competitors`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json", "Prefer": "return=representation,resolution=merge-duplicates" }),
+    body: JSON.stringify({ project_id, site_id, name, domain, category, color, enabled }),
+  });
+  if (!res.ok) {
+    const err = await res.text().catch(() => "");
+    throw new Error(`sbSaveCompetitor: ${res.status} — ${err.slice(0, 120)}`);
+  }
+  const rows = await res.json();
+  return Array.isArray(rows) ? rows[0] : rows;
+}
+
+export async function sbUpdateCompetitor(id, patch) {
+  const res = await fetch(
+    `${PROXY}/rest/v1/geo_competitors?id=eq.${encodeURIComponent(id)}`,
+    {
+      method: "PATCH",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify(patch),
+    }
+  );
+  return res.ok;
+}
+
+export async function sbDeleteCompetitor(id) {
+  const res = await fetch(
+    `${PROXY}/rest/v1/geo_competitors?id=eq.${encodeURIComponent(id)}`,
+    { method: "DELETE", headers: authHeaders() }
+  );
+  return res.ok;
+}
