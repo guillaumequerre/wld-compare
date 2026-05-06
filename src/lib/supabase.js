@@ -1,1034 +1,395 @@
-const PROXY = "/api/supabase";
+// netlify/edge-functions/geo-scheduler.js
+// Scheduled function — runs every hour via Netlify Cron
+// Interrogates favorite questions for all active schedules
+// No user session required — uses SERVICE_ROLE key to bypass RLS
 
-// ── Décode le payload JWT sans librairie externe ──────────────────
-function jwtExp(token) {
-  try {
-    const payload = JSON.parse(atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
-    return payload.exp || 0;
-  } catch { return 0; }
-}
+export const config = {
+  schedule: "0 * * * *",   // every hour on the hour
+  path: "/api/geo-scheduler",
+};
 
-// ── Lit la session stockée ────────────────────────────────────────
-function getStoredSession() {
-  try {
-    const s = sessionStorage.getItem("correl_session") || localStorage.getItem("correl_session");
-    return s ? JSON.parse(s) : null;
-  } catch { return null; }
-}
+const SUPABASE_URL      = Deno.env.get("SUPABASE_URL")              || "";
+const SUPABASE_ANON     = Deno.env.get("SUPABASE_ANON")             || "";
+// FIX BUG 1 : utiliser la SERVICE_ROLE key pour bypasser les RLS policies
+const SUPABASE_SERVICE  = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ||
+                          Deno.env.get("SUPABASE_SERVICE_KEY")      || "";
 
-function storeSession(session) {
-  try {
-    const str = JSON.stringify(session);
-    sessionStorage.setItem("correl_session", str);
-    localStorage.setItem("correl_session", str);
-  } catch {}
-}
-
-// ── Vérifie l'expiry et rafraîchit si besoin (< 120s avant expiry) ─
-let _refreshPromise = null; // évite les refresh simultanés
-export async function ensureValidSession() {
-  const session = getStoredSession();
-  if (!session?.access_token) throw new Error("Non authentifié — reconnectez-vous");
-
-  const exp = jwtExp(session.access_token);
-  const now = Math.floor(Date.now() / 1000);
-
-  // Token encore valide (plus de 2 minutes restantes)
-  if (exp > now + 120) return session.access_token;
-
-  // Token expiré ou bientôt expiré → refresh
-  if (!session.refresh_token) throw new Error("Session expirée — reconnectez-vous");
-
-  // Éviter les appels refresh simultanés
-  if (!_refreshPromise) {
-    _refreshPromise = fetch("/api/auth?action=refresh", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ refresh_token: session.refresh_token }),
-    })
-      .then(async (res) => {
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Session expirée — reconnectez-vous");
-        const newSession = {
-          ...session,
-          access_token: data.access_token,
-          refresh_token: data.refresh_token,
-          user: data.user || session.user,
-        };
-        storeSession(newSession);
-        return newSession.access_token;
-      })
-      .finally(() => { _refreshPromise = null; });
-  }
-  return _refreshPromise;
-}
-
-// ── Headers auth — synchrone, lit le token courant ───────────────
-function authHeaders(extra = {}) {
-  const session = getStoredSession();
-  const token = session?.access_token || null;
-  if (token) return { "Authorization": `Bearer ${token}`, ...extra };
-  return extra;
-}
-
-
-export async function sbUpload(path, csvText) {
-  // Vérifier/rafraîchir le token avant l'upload
-  const token = await ensureValidSession();
-
-  const res = await fetch(`${PROXY}/storage/v1/object/csv-imports/${path}`, {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${token}`,
-      "Content-Type": "text/csv",
-      "x-upsert": "true",
-    },
-    body: csvText,
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    console.error("[sbUpload] failed:", res.status, body);
-    throw new Error(`Upload failed: ${res.status} — ${body.slice(0, 120)}`);
-  }
-  return path;
-}
-
-
-export async function sbInsertImport({ project_id, site_id, source, filename, storage_path, row_count }) {
-  // UPSERT: on_conflict en URL obligatoire pour que PostgREST génère un vrai
-  // INSERT … ON CONFLICT (project_id,site_id,source) DO UPDATE
-  // Sans ça, "resolution=merge-duplicates" est ignoré et un INSERT nu lève 409.
-  const payload = { project_id, site_id, source, filename, storage_path, row_count, uploaded_at: new Date().toISOString() };
-  const res = await fetch(`${PROXY}/rest/v1/imports?on_conflict=project_id,site_id,source`, {
-    method: "POST",
-    headers: {
-      ...authHeaders(),
-      "Content-Type": "application/json",
-      "Prefer": "resolution=merge-duplicates,return=representation",
-    },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    // Fallback si la contrainte unique n'existe pas en DB : PATCH sur la ligne existante
-    if (res.status === 409) {
-      const res2 = await fetch(
-        `${PROXY}/rest/v1/imports?project_id=eq.${encodeURIComponent(project_id)}&site_id=eq.${encodeURIComponent(site_id)}&source=eq.${encodeURIComponent(source)}`,
-        {
-          method: "PATCH",
-          headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "return=representation" },
-          body: JSON.stringify({ filename, storage_path, row_count, uploaded_at: payload.uploaded_at }),
-        }
-      );
-      if (!res2.ok) return null;
-      const data = await res2.json();
-      return Array.isArray(data) ? data[0] || null : data;
-    }
-    throw new Error(`Insert failed: ${res.status} — ${body.slice(0, 120)}`);
-  }
-  const data = await res.json();
-  return Array.isArray(data) ? data[0] || null : data;
-}
-
-export async function sbDeleteImport(id) {
-  const res = await fetch(`${PROXY}/rest/v1/imports?id=eq.${id}`, { method: "DELETE", headers: authHeaders() });
-  if (!res.ok) throw new Error(`Delete import failed: ${res.status}`);
-}
-
-export async function sbDeleteFile(storage_path) {
-  const res = await fetch(`${PROXY}/storage/v1/object/csv-imports/${storage_path}`, { method: "DELETE", headers: authHeaders() });
-  if (!res.ok) throw new Error(`Delete file failed: ${res.status}`);
-}
-
-export async function sbGetHistory(projectId, limit = 50) {
-  const filter = projectId ? `&project_id=eq.${encodeURIComponent(projectId)}` : "";
-  const res = await fetch(`${PROXY}/rest/v1/imports?select=*&order=uploaded_at.desc&limit=${limit}${filter}`, { headers: authHeaders() });
-  if (!res.ok) throw new Error(`Fetch history failed: ${res.status}`);
-  return res.json();
-}
-
-export async function sbGetLatest(projectId) {
-  const filter = projectId ? `&project_id=eq.${encodeURIComponent(projectId)}` : "";
-  // With fixed path strategy, there's only 1 row per (project, site, source)
-  const res = await fetch(`${PROXY}/rest/v1/imports?select=*&order=uploaded_at.desc&limit=50${filter}`, { headers: authHeaders() });
-  if (!res.ok) return {};
-  const rows = await res.json();
-  const latest = {};
-  for (const row of rows) {
-    if (!row.storage_path) continue;
-    const key = `${row.site_id}_${row.source}`;
-    if (!latest[key]) latest[key] = row;
-  }
-  return latest;
-}
-
-export async function sbDownload(storage_path) {
-  const token = await ensureValidSession().catch(() => null);
-  const headers = token ? { "Authorization": `Bearer ${token}` } : authHeaders();
-  const res = await fetch(`${PROXY}/storage/v1/object/csv-imports/${storage_path}`, { headers });
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    console.error("[sbDownload] failed:", res.status, body);
-    throw new Error(`Download failed: ${res.status}`);
-  }
-  return res.text();
-}
-
-export async function sbSaveProject(project) {
-  const res = await fetch(`${PROXY}/rest/v1/projects`, {
-    method: "POST",
-    headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
-    body: JSON.stringify({ id: project.id, name: project.name, owner_email: project.owner_email || null,
-      openai_key_enc:      project.openai_key_enc      || null,
-      gemini_key_enc:      project.gemini_key_enc      || null,
-      perplexity_key_enc:  project.perplexity_key_enc  || null,
-      claude_geo_key_enc:  project.claude_geo_key_enc  || null,
-      semrush_key_enc:     project.semrush_key_enc     || null,
-      sites_json: JSON.stringify(project.sites.map(s => ({ id: s.id, label: s.label, color: s.color, bg: s.bg }))),
-      settings_json: project.settings_json || null, geo_axes_json: JSON.stringify(project.geo_axes || ["Meilleur / top / recommandé","Pistes et approches pour utiliser / bénéficier du mot-clé","Avis / fiable / fiabilité","Pour atteindre un objectif lié au mot-clé","Pour résoudre une problématique liée au mot-clé"]), updated_at: new Date().toISOString() }),
-  });
-  if (!res.ok) console.warn("Save project failed:", res.status);
-}
-
-export async function sbLoadProjects() {
-  const res = await fetch(`${PROXY}/rest/v1/projects?select=*&order=created_at.asc`, { headers: authHeaders() });
-  if (!res.ok) return null;
-  const rows = await res.json();
-  return rows.map(r => ({ id: r.id, name: r.name, sites: JSON.parse(r.sites_json || "[]"), openai_key_enc: r.openai_key_enc || null, geo_axes: JSON.parse(r.geo_axes_json || "null") || ["Meilleur / top / recommandé","Pistes et approches pour utiliser / bénéficier du mot-clé","Avis / fiable / fiabilité","Pour atteindre un objectif lié au mot-clé","Pour résoudre une problématique liée au mot-clé"], gemini_key_enc: r.gemini_key_enc || null, perplexity_key_enc: r.perplexity_key_enc || null, claude_geo_key_enc: r.claude_geo_key_enc || null, semrush_key_enc: r.semrush_key_enc || null, owner_email: r.owner_email || null, updated_at: r.updated_at || null, settings_json: r.settings_json || null }));
-}
-
-export async function sbDeleteProject(projectId) {
-  await fetch(`${PROXY}/rest/v1/projects?id=eq.${encodeURIComponent(projectId)}`, { method: "DELETE", headers: authHeaders() });
-}
-
-// ── ANALYSES ─────────────────────────────────────────────────────
-export async function sbSaveAnalysis({ id, project_id, content }) {
-  const res = await fetch(`${PROXY}/rest/v1/analyses`, {
-    method: "POST",
-    headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
-    body: JSON.stringify({ id, project_id, content }),
-  });
-  if (!res.ok) throw new Error(`Save analysis failed: ${res.status}`);
-  return res.json();
-}
-
-export async function sbGetLatestAnalysis(project_id) {
-  const res = await fetch(`${PROXY}/rest/v1/analyses?project_id=eq.${encodeURIComponent(project_id)}&order=created_at.desc&limit=1`, { headers: authHeaders() });
-  if (!res.ok) return null;
-  const rows = await res.json();
-  return rows[0] || null;
-}
-
-// ── RECOMMENDATIONS ───────────────────────────────────────────────
-export async function sbSaveRecommendations(recs) {
-  if (!recs.length) return;
-  const res = await fetch(`${PROXY}/rest/v1/recommendations`, {
-    method: "POST",
-    headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
-    body: JSON.stringify(recs),
-  });
-  if (!res.ok) throw new Error(`Save recommendations failed: ${res.status}`);
-  return res.json();
-}
-
-export async function sbGetRecommendations(project_id) {
-  const res = await fetch(`${PROXY}/rest/v1/recommendations?project_id=eq.${encodeURIComponent(project_id)}&order=created_at.desc&limit=200`, { headers: authHeaders() });
-  if (!res.ok) return [];
-  return res.json();
-}
-
-export async function sbUpdateRecommendation(id, patch) {
-  const res = await fetch(`${PROXY}/rest/v1/recommendations?id=eq.${encodeURIComponent(id)}`, {
-    method: "PATCH",
-    headers: { ...authHeaders(), "Content-Type": "application/json" },
-    body: JSON.stringify(patch),
-  });
-  if (!res.ok) throw new Error(`Update recommendation failed: ${res.status}`);
-}
-
-// ── PAGE TYPES ───────────────────────────────────────────────────
-export async function sbSavePageTypes(rows) {
-  if (!rows.length) return;
-  const res = await fetch(`${PROXY}/rest/v1/page_types`, {
-    method: "POST",
-    headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates" },
-    body: JSON.stringify(rows),
-  });
-  if (!res.ok) console.warn("sbSavePageTypes failed:", res.status);
-  return res.ok;
-}
-
-export async function sbGetPageTypes(project_id, site_id) {
-  const params = new URLSearchParams({ project_id: `eq.${project_id}`, site_id: `eq.${site_id}`, select: "url,page_type,confidence" });
-  const res = await fetch(`${PROXY}/rest/v1/page_types?${params}`, {
-    headers: { ...authHeaders(), "Content-Type": "application/json" },
-  });
-  if (!res.ok) return [];
-  return res.json();
-}
-
-export async function sbDeletePageTypes(project_id, site_id) {
-  const params = new URLSearchParams({ project_id: `eq.${project_id}`, site_id: `eq.${site_id}` });
-  const res = await fetch(`${PROXY}/rest/v1/page_types?${params}`, {
-    method: "DELETE",
-    headers: { ...authHeaders(), "Content-Type": "application/json" },
-  });
-  return res.ok;
-}
-
-// ── SNAPSHOTS ─────────────────────────────────────────────────────
-export async function sbSaveSnapshot(snap) {
-  const res = await fetch(`${PROXY}/rest/v1/snapshots`, {
-    method: "POST",
-    headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
-    body: JSON.stringify(snap),
-  });
-  if (!res.ok) throw new Error(`Save snapshot failed: ${res.status}`);
-  return res.json();
-}
-
-export async function sbGetSnapshots(project_id, site_id) {
-  const q = `project_id=eq.${encodeURIComponent(project_id)}&site_id=eq.${encodeURIComponent(site_id)}&order=date_end.asc`;
-  const res = await fetch(`${PROXY}/rest/v1/snapshots?${q}`, { headers: authHeaders() });
-  if (!res.ok) return [];
-  return res.json();
-}
-
-export async function sbDeleteSnapshot(id) {
-  const res = await fetch(`${PROXY}/rest/v1/snapshots?id=eq.${encodeURIComponent(id)}`, {
-    method: "DELETE",
-    headers: { ...authHeaders(), "Content-Type": "application/json" },
-  });
-  return res.ok;
-}
-
-// ── MILESTONES ────────────────────────────────────────────────────
-export async function sbSaveMilestone(m) {
-  const res = await fetch(`${PROXY}/rest/v1/milestones`, {
-    method: "POST",
-    headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "return=representation" },
-    body: JSON.stringify(m),
-  });
-  if (!res.ok) throw new Error(`Save milestone failed: ${res.status}`);
-  return res.json();
-}
-
-export async function sbGetMilestones(project_id) {
-  const res = await fetch(`${PROXY}/rest/v1/milestones?project_id=eq.${encodeURIComponent(project_id)}&order=milestone_date.asc`, { headers: authHeaders() });
-  if (!res.ok) return [];
-  return res.json();
-}
-
-export async function sbDeleteMilestone(id) {
-  const res = await fetch(`${PROXY}/rest/v1/milestones?id=eq.${encodeURIComponent(id)}`, {
-    method: "DELETE",
-    headers: { ...authHeaders(), "Content-Type": "application/json" },
-  });
-  return res.ok;
-}
-
-export async function sbUpdateMilestone(id, patch) {
-  const res = await fetch(`${PROXY}/rest/v1/milestones?id=eq.${encodeURIComponent(id)}`, {
-    method: "PATCH",
-    headers: { ...authHeaders(), "Content-Type": "application/json" },
-    body: JSON.stringify(patch),
-  });
-  return res.ok;
-}
-
-// ── GEO — BRAND SETTINGS ─────────────────────────────────────────
-
-export async function sbSaveBrand({ project_id, site_id, brand_name, brand_domain, brand_aliases, competitors, context }) {
-  const res = await fetch(`${PROXY}/rest/v1/site_brand`, {
-    method: "POST",
-    headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
-    body: JSON.stringify({ project_id, site_id, brand_name, brand_domain, brand_aliases, competitors, context, updated_at: new Date().toISOString() }),
-  });
-  if (!res.ok) throw new Error(`Save brand failed: ${res.status}`);
-  return res.json();
-}
-
-export async function sbGetBrand(project_id, site_id) {
-  const res = await fetch(`${PROXY}/rest/v1/site_brand?project_id=eq.${encodeURIComponent(project_id)}&site_id=eq.${encodeURIComponent(site_id)}&limit=1`, { headers: authHeaders() });
-  if (!res.ok) return null;
-  const rows = await res.json();
-  return rows[0] || null;
-}
-
-// ── GEO — OPENAI KEY (encrypted) on project ──────────────────────
-
-export async function sbSaveGeoAxes(project_id, axes) {
-  const res = await fetch(`${PROXY}/rest/v1/projects?id=eq.${encodeURIComponent(project_id)}`, {
-    method: "PATCH",
-    headers: { ...authHeaders(), "Content-Type": "application/json" },
-    body: JSON.stringify({ geo_axes_json: JSON.stringify(axes) }),
-  });
-  return res.ok;
-}
-
-// ── GEO — KEYWORDS ───────────────────────────────────────────────
-
-export async function sbSaveKeywords(rows) {
-  // rows: [{ project_id, site_id, keyword }]
-  // Filtre les lignes vides ou invalides
-  const valid = rows.filter(r => r.keyword?.trim());
-  if (!valid.length) return [];
-  const res = await fetch(`${PROXY}/rest/v1/geo_keywords`, {
-    method: "POST",
-    headers: {
-      ...authHeaders(),
-      "Content-Type": "application/json",
-      "Prefer": "resolution=ignore-duplicates,return=representation",
-    },
-    body: JSON.stringify(valid),
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    // 409 = duplicate unique key — retourner tableau vide plutôt que planter
-    if (res.status === 409) return [];
-    throw new Error(`Save keywords failed: ${res.status} — ${body.slice(0, 120)}`);
-  }
-  const data = await res.json();
-  return Array.isArray(data) ? data : [];
-}
-
-export async function sbGetKeywords(project_id, site_id) {
-  const res = await fetch(`${PROXY}/rest/v1/geo_keywords?project_id=eq.${encodeURIComponent(project_id)}&site_id=eq.${encodeURIComponent(site_id)}&order=created_at.asc`, { headers: authHeaders() });
-  if (!res.ok) return [];
-  return res.json();
-}
-
-export async function sbUpdateKeywordStatus(id, status) {
-  const res = await fetch(`${PROXY}/rest/v1/geo_keywords?id=eq.${encodeURIComponent(id)}`, {
-    method: "PATCH",
-    headers: { ...authHeaders(), "Content-Type": "application/json" },
-    body: JSON.stringify({ status }),
-  });
-  return res.ok;
-}
-
-export async function sbUpdateKeywordVolume(id, volume, source = "semrush_api") {
-  const res = await fetch(`${PROXY}/rest/v1/geo_keywords?id=eq.${encodeURIComponent(id)}`, {
-    method: "PATCH",
-    headers: { ...authHeaders(), "Content-Type": "application/json" },
-    body: JSON.stringify({ search_volume: volume, volume_source: source, volume_updated_at: new Date().toISOString() }),
-  });
-  return res.ok;
-}
-
-export async function sbDeleteKeyword(id) {
-  await fetch(`${PROXY}/rest/v1/geo_keywords?id=eq.${encodeURIComponent(id)}`, { method: "DELETE", headers: authHeaders() });
-}
-
-// ── GEO — QUESTIONS ──────────────────────────────────────────────
-
-export async function sbSaveQuestions(rows) {
-  if (!rows.length) return [];
-  // Filtre les questions vides
-  const valid = rows.filter(r => r.question?.trim());
-  if (!valid.length) return [];
-  const res = await fetch(`${PROXY}/rest/v1/geo_questions`, {
-    method: "POST",
-    headers: {
-      ...authHeaders(),
-      "Content-Type": "application/json",
-      "Prefer": "return=representation,resolution=ignore-duplicates",
-    },
-    body: JSON.stringify(valid),
-  });
-  if (!res.ok) {
-    const errText = await res.text().catch(() => "");
-    // 409 = contrainte unique — les questions existent déjà, récupérer depuis la base
-    if (res.status === 409) {
-      const pid = valid[0].project_id; const sid = valid[0].site_id;
-      const res2 = await fetch(`${PROXY}/rest/v1/geo_questions?project_id=eq.${encodeURIComponent(pid)}&site_id=eq.${encodeURIComponent(sid)}&select=*&order=created_at.asc`, { headers: authHeaders() });
-      return res2.ok ? res2.json() : [];
-    }
-    throw new Error(`Save questions failed: ${res.status} — ${errText.slice(0, 200)}`);
-  }
-  const saved = await res.json();
-  // ignore-duplicates returns [] for existing rows — fetch them back
-  if (Array.isArray(saved) && saved.length === 0 && rows.length > 0) {
-    const pid = rows[0].project_id;
-    const sid = rows[0].site_id;
-    const texts = rows.map(r => r.question);
-    const qs = encodeURIComponent("(" + texts.map(t => `"${t.replace(/"/g, '\\"')}"`).join(",") + ")");
-    const res2 = await fetch(`${PROXY}/rest/v1/geo_questions?project_id=eq.${encodeURIComponent(pid)}&site_id=eq.${encodeURIComponent(sid)}&question=in.${qs}&select=*`);
-    if (res2.ok) return res2.json();
-  }
-  return saved;
-}
-
-export async function sbGetQuestions(project_id, site_id) {
-  const res = await fetch(`${PROXY}/rest/v1/geo_questions?project_id=eq.${encodeURIComponent(project_id)}&site_id=eq.${encodeURIComponent(site_id)}&order=created_at.asc&select=*`, { headers: authHeaders() });
-  if (!res.ok) return [];
-  return res.json();
-}
-
-export async function sbUpdateQuestion(id, patch) {
-  if (!id || id.startsWith("tmp-")) return false; // skip optimistic/temp IDs
-  const res = await fetch(`${PROXY}/rest/v1/geo_questions?id=eq.${encodeURIComponent(id)}`, {
-    method: "PATCH",
-    headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "return=representation" },
-    body: JSON.stringify(patch),
-  });
-  if (!res.ok) {
-    console.error("sbUpdateQuestion failed:", res.status, id, patch);
-    return false;
-  }
-  return res.json();
-}
-
-export async function sbDeleteQuestion(id) {
-  await fetch(`${PROXY}/rest/v1/geo_questions?id=eq.${encodeURIComponent(id)}`, { method: "DELETE", headers: authHeaders() });
-}
-
-// ── GEO — RESULTS ────────────────────────────────────────────────
-
-export async function sbSaveGeoResult(result) {
-  const row = {
-    question_id:           result.question_id,
-    project_id:            result.project_id,
-    site_id:               result.site_id,
-    model:                 result.model,
-    answer:                result.answer,
-    answer_type:           result.answer_type   || null,
-    intent_type:           result.intent_type   || null,
-    sources:               result.sources       || [],
-    source_types:          result.source_types  || [],
-    brand_mentioned:       result.brand_mentioned    ?? false,
-    brand_position:        result.brand_position     ?? null,
-    brand_in_sources:      result.brand_in_sources   ?? false,
-    competitors_mentioned: result.competitors_mentioned || [],
-    input_tokens:          result.input_tokens  ?? null,
-    output_tokens:         result.output_tokens ?? null,
-    created_at:            result.created_at    || new Date().toISOString(),
+// ── Supabase helpers ──────────────────────────────────────────────
+// Lecture : clé anon (respecte les RLS publiques)
+function sbReadHeaders() {
+  return {
+    "apikey":        SUPABASE_ANON,
+    "Authorization": `Bearer ${SUPABASE_ANON}`,
+    "Content-Type":  "application/json",
   };
-
-  const patchBody = JSON.stringify({
-    answer: row.answer, answer_type: row.answer_type, intent_type: row.intent_type,
-    sources: row.sources, source_types: row.source_types,
-    brand_mentioned: row.brand_mentioned, brand_position: row.brand_position,
-    brand_in_sources: row.brand_in_sources, competitors_mentioned: row.competitors_mentioned,
-    input_tokens: row.input_tokens, output_tokens: row.output_tokens, created_at: row.created_at,
-  });
-
-  // 1. Vérifier si une ligne existe déjà (évite le 409 en console navigateur)
-  const checkRes = await fetch(
-    `${PROXY}/rest/v1/geo_results?question_id=eq.${encodeURIComponent(row.question_id)}&model=eq.${encodeURIComponent(row.model)}&select=id&limit=1`,
-    { headers: authHeaders() }
-  );
-  if (checkRes.ok) {
-    const existing = await checkRes.json();
-    const existingId = Array.isArray(existing) ? existing[0]?.id : existing?.id;
-    if (existingId) {
-      // Ligne existante → PATCH par id
-      const patch = await fetch(
-        `${PROXY}/rest/v1/geo_results?id=eq.${encodeURIComponent(existingId)}`,
-        { method: "PATCH", headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "return=representation" }, body: patchBody }
-      );
-      if (patch.ok) return patch.json();
-      return null;
-    }
-  }
-
-  // 2. Pas de ligne existante → INSERT
-  const res = await fetch(`${PROXY}/rest/v1/geo_results`, {
-    method: "POST",
-    headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "return=representation" },
-    body: JSON.stringify(row),
-  });
-  if (res.ok) return res.json();
-
-  // 3. Fallback ultime si 409 résiduel (race condition)
-  if (res.status === 409) {
-    const retry = await fetch(
-      `${PROXY}/rest/v1/geo_results?question_id=eq.${encodeURIComponent(row.question_id)}&model=eq.${encodeURIComponent(row.model)}&select=id&limit=1`,
-      { headers: authHeaders() }
-    );
-    if (retry.ok) {
-      const rows2 = await retry.json();
-      const id2 = Array.isArray(rows2) ? rows2[0]?.id : rows2?.id;
-      if (id2) {
-        const patch2 = await fetch(
-          `${PROXY}/rest/v1/geo_results?id=eq.${encodeURIComponent(id2)}`,
-          { method: "PATCH", headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "return=representation" }, body: patchBody }
-        );
-        if (patch2.ok) return patch2.json();
-      }
-    }
-    return null;
-  }
-
-  const errBody = await res.text().catch(() => "");
-  console.error("[sbSaveGeoResult] failed:", res.status, errBody);
-  throw new Error(`Save geo result failed: ${res.status} — ${errBody.slice(0, 200)}`);
 }
 
-
-export async function sbGetGeoResultsAll(project_id) {
-  const res = await fetch(`${PROXY}/rest/v1/geo_results?project_id=eq.${encodeURIComponent(project_id)}&select=*&order=created_at.desc`, { headers: authHeaders() });
-  if (!res.ok) return [];
-  return res.json();
+// Écriture : clé service role (bypasse les RLS — requis pour écrire sans session)
+function sbWriteHeaders() {
+  const key = SUPABASE_SERVICE || SUPABASE_ANON;
+  return {
+    "apikey":        key,
+    "Authorization": `Bearer ${key}`,
+    "Content-Type":  "application/json",
+    "Prefer":        "return=representation",
+  };
 }
 
-export async function sbGetGeoResults(project_id, site_id) {
-  const res = await fetch(
-    `${PROXY}/rest/v1/geo_results?select=*&project_id=eq.${encodeURIComponent(project_id)}&site_id=eq.${encodeURIComponent(site_id)}&order=created_at.desc&limit=2000`,
-    { headers: authHeaders() }
-  );
+async function sbGet(path) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { headers: sbReadHeaders() });
   if (!res.ok) {
-    console.warn("[sbGetGeoResults] failed:", res.status, await res.text().catch(() => ""));
-    return [];
+    const err = await res.text().catch(() => "");
+    throw new Error(`sbGet ${path}: ${res.status} — ${err.slice(0, 120)}`);
   }
-  const data = await res.json();
-  if (!Array.isArray(data)) {
-    console.warn("[sbGetGeoResults] unexpected response:", data);
-    return [];
-  }
-  return data;
-}
-
-export async function sbGetResultsForQuestion(question_id) {
-  const res = await fetch(`${PROXY}/rest/v1/geo_results?question_id=eq.${encodeURIComponent(question_id)}&order=created_at.desc`, { headers: authHeaders() });
-  if (!res.ok) return [];
   return res.json();
 }
 
-// ── GEO v2 — CATEGORIES ──────────────────────────────────────────
-
-export async function sbGetCategories(project_id) {
-  const res = await fetch(`${PROXY}/rest/v1/geo_categories?project_id=eq.${encodeURIComponent(project_id)}&order=name.asc`, { headers: authHeaders() });
-  if (!res.ok) return [];
+async function sbPost(path, body) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    method:  "POST",
+    headers: sbWriteHeaders(),
+    body:    JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.text().catch(() => "");
+    throw new Error(`sbPost ${path}: ${res.status} — ${err.slice(0, 200)}`);
+  }
   return res.json();
 }
 
-export async function sbSaveCategory({ project_id, name, color }) {
-  const res = await fetch(`${PROXY}/rest/v1/geo_categories`, {
-    method: "POST",
-    headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
-    body: JSON.stringify({ project_id, name, color }),
+async function sbPatch(path, body) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    method:  "PATCH",
+    headers: sbWriteHeaders(),
+    body:    JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`Save category failed: ${res.status}`);
-  const rows = await res.json();
-  return rows[0] || rows;
-}
-
-export async function sbDeleteCategory(id) {
-  await fetch(`${PROXY}/rest/v1/geo_categories?id=eq.${encodeURIComponent(id)}`, { method: "DELETE", headers: authHeaders() });
-}
-
-export async function sbSetKeywordCategory(id, category_id) {
-  await fetch(`${PROXY}/rest/v1/geo_keywords?id=eq.${encodeURIComponent(id)}`, {
-    method: "PATCH",
-    headers: { ...authHeaders(), "Content-Type": "application/json" },
-    body: JSON.stringify({ category_id }),
-  });
-}
-
-export async function sbSetQuestionCategory(id, category_id) {
-  await fetch(`${PROXY}/rest/v1/geo_questions?id=eq.${encodeURIComponent(id)}`, {
-    method: "PATCH",
-    headers: { ...authHeaders(), "Content-Type": "application/json" },
-    body: JSON.stringify({ category_id }),
-  });
-}
-
-export async function sbSetKeywordTags(id, tags) {
-  const res = await fetch(`${PROXY}/rest/v1/geo_keywords?id=eq.${encodeURIComponent(id)}`, {
-    method: "PATCH",
-    headers: { ...authHeaders(), "Content-Type": "application/json" },
-    body: JSON.stringify({ tags: tags || [] }),
-  });
+  if (!res.ok) {
+    const err = await res.text().catch(() => "");
+    console.warn(`sbPatch ${path}: ${res.status} — ${err.slice(0, 120)}`);
+  }
   return res.ok;
 }
 
-export async function sbBulkSetKeywordTags(ids, tags) {
-  if (!ids.length) return;
-  const filter = ids.map(id => `"${id}"`).join(",");
-  const res = await fetch(`${PROXY}/rest/v1/geo_keywords?id=in.(${filter})`, {
-    method: "PATCH",
-    headers: { ...authHeaders(), "Content-Type": "application/json" },
-    body: JSON.stringify({ tags: tags || [] }),
-  });
-  return res.ok;
+// ── Key codec (base64, mirrors frontend encodeKey/decodeKey) ──────
+function decodeKey(enc) {
+  if (!enc) return "";
+  try { return atob(enc); } catch { return ""; }
 }
 
-export async function sbBulkSetKeywordCategory(ids, category_id) {
-  // Supabase REST: PATCH with in() filter
-  const filter = ids.map(id => encodeURIComponent(id)).join(",");
-  await fetch(`${PROXY}/rest/v1/geo_keywords?id=in.(${filter})`, {
-    method: "PATCH",
-    headers: { ...authHeaders(), "Content-Type": "application/json" },
-    body: JSON.stringify({ category_id }),
-  });
-}
+// ── Provider definitions ──────────────────────────────────────────
+const PROVIDERS = {
+  openai:     { model: "gpt-4o-mini",              keyField: "openai_key_enc" },
+  gemini:     { model: "gemini-2.0-flash",          keyField: "gemini_key_enc" },
+  perplexity: { model: "sonar",                    keyField: "perplexity_key_enc" },
+  claude:     { model: "claude-haiku-4-5-20251001", keyField: "claude_geo_key_enc" },
+};
 
-export async function sbBulkSetQuestionCategory(ids, category_id) {
-  const filter = ids.map(id => encodeURIComponent(id)).join(",");
-  await fetch(`${PROXY}/rest/v1/geo_questions?id=in.(${filter})`, {
-    method: "PATCH",
-    headers: { ...authHeaders(), "Content-Type": "application/json" },
-    body: JSON.stringify({ category_id }),
-  });
-}
+// ── Call each provider API ────────────────────────────────────────
+async function callProvider(providerId, apiKey, prompt) {
+  if (!apiKey) throw new Error(`No API key for ${providerId}`);
 
-// ── GEO v2 — URL INDEX ───────────────────────────────────────────
-
-export async function sbGetUrlIndex(project_id) {
-  const res = await fetch(`${PROXY}/rest/v1/geo_url_index?project_id=eq.${encodeURIComponent(project_id)}&order=count_as_source.desc`, { headers: authHeaders() });
-  if (!res.ok) return [];
-  return res.json();
-}
-
-export async function sbUpsertUrl({ project_id, url, domain, count_as_source = 0, count_in_answer = 0 }) {
-  const res = await fetch(`${PROXY}/rest/v1/geo_url_index`, {
-    method: "POST",
-    headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
-    body: JSON.stringify({ project_id, url, domain, count_as_source, count_in_answer, updated_at: new Date().toISOString() }),
-  });
-  if (!res.ok) return null;
-  const rows = await res.json();
-  return rows[0] || rows;
-}
-
-export async function sbIncrementUrlCounts(project_id, url, { as_source = 0, in_answer = 0 }) {
-  // Fetch current, then patch
-  const existing = await fetch(`${PROXY}/rest/v1/geo_url_index?project_id=eq.${encodeURIComponent(project_id)}&url=eq.${encodeURIComponent(url)}&limit=1`);
-  const rows = existing.ok ? await existing.json() : [];
-  const cur = rows[0];
-  if (!cur) {
-    return sbUpsertUrl({ project_id, url, domain: extractDomain(url), count_as_source: as_source, count_in_answer: in_answer });
-  }
-  await fetch(`${PROXY}/rest/v1/geo_url_index?id=eq.${cur.id}`, {
-    method: "PATCH",
-    headers: { ...authHeaders(), "Content-Type": "application/json" },
-    body: JSON.stringify({ count_as_source: cur.count_as_source + as_source, count_in_answer: cur.count_in_answer + in_answer, updated_at: new Date().toISOString() }),
-  });
-}
-
-export async function sbUpdateUrlMeta(id, patch) {
-  await fetch(`${PROXY}/rest/v1/geo_url_index?id=eq.${encodeURIComponent(id)}`, {
-    method: "PATCH",
-    headers: { ...authHeaders(), "Content-Type": "application/json" },
-    body: JSON.stringify({ ...patch, updated_at: new Date().toISOString() }),
-  });
-}
-
-export async function sbSaveUrlQuestion({ url_id, question_id, result_id, as_source, in_answer }) {
-  await fetch(`${PROXY}/rest/v1/geo_url_question`, {
-    method: "POST",
-    headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates" },
-    body: JSON.stringify({ url_id, question_id, result_id, as_source, in_answer }),
-  });
-}
-
-function extractDomain(url) {
-  try { return new URL(url).hostname.replace("www.", ""); } catch { return url; }
-}
-
-export async function sbSaveProviderKeys(project_id, keys) {
-  // keys: any of { openai_key_enc, gemini_key_enc, perplexity_key_enc, claude_geo_key_enc, semrush_key_enc }
-  const allowed = ["openai_key_enc", "gemini_key_enc", "perplexity_key_enc", "claude_geo_key_enc", "semrush_key_enc"];
-  const patch = {};
-  allowed.forEach(k => { if (keys[k] !== undefined) patch[k] = keys[k]; });
-  const res = await fetch(`${PROXY}/rest/v1/projects?id=eq.${encodeURIComponent(project_id)}`, {
-    method: "PATCH",
-    headers: { ...authHeaders(), "Content-Type": "application/json" },
-    body: JSON.stringify(patch),
-  });
-  return res.ok;
-}
-
-// ── GEO — PRESENCE HISTORY ───────────────────────────────────────
-
-export async function sbGetPresenceHistory(question_id) {
-  const res = await fetch(`${PROXY}/rest/v1/geo_presence_history?question_id=eq.${encodeURIComponent(question_id)}&order=test_date.asc&select=provider_id,test_date,brand_mentioned,brand_position,brand_in_sources`, { headers: authHeaders() });
-  if (!res.ok) return [];
-  return res.json();
-}
-
-export async function sbGetPresenceHistoryBatch(project_id, site_id) {
-  try {
-    const since = new Date(); since.setDate(since.getDate() - 30);
-    const sinceStr = since.toISOString().slice(0, 10);
-    const res = await fetch(`${PROXY}/rest/v1/geo_presence_history?project_id=eq.${encodeURIComponent(project_id)}&site_id=eq.${encodeURIComponent(site_id)}&test_date=gte.${sinceStr}&order=test_date.asc&select=question_id,provider_id,test_date,brand_mentioned`, { headers: authHeaders() });
-    if (!res.ok) return []; // table may not exist yet
-    return res.json();
-  } catch { return []; }
-}
-
-// ── GEO — CALENDAR ENTRIES ──────────────────────────────────────
-// Table : geo_calendar_dates
-// Columns: id, question_id, provider_id, brand_present, test_date, created_at
-
-export async function sbAddCalendarEntry(question_id, provider_id, brand_present) {
-  try {
-    const res = await fetch(`${PROXY}/rest/v1/geo_calendar_dates`, {
-      method: "POST",
-      headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "return=representation" },
-      body: JSON.stringify({
-        question_id,
-        provider_id,
-        brand_present: brand_present === true || brand_present === 1,
-        test_date: new Date().toISOString().slice(0, 10),
+  if (providerId === "openai") {
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
+      body:    JSON.stringify({
+        model:      PROVIDERS.openai.model,
+        messages:   [{ role: "user", content: prompt }],
+        max_tokens: 1200,
       }),
     });
-    if (!res.ok) { console.warn("sbAddCalendarEntry failed:", res.status); return null; }
     const data = await res.json();
-    return Array.isArray(data) ? data[0] : data;
-  } catch(e) { console.warn("sbAddCalendarEntry error:", e.message); return null; }
-}
+    if (!res.ok) throw new Error(data.error?.message || `OpenAI ${res.status}`);
+    return { text: data.choices?.[0]?.message?.content || "", sources: [] };
+  }
 
-// Par question (utilisé par PresenceCalendar)
-export async function sbGetCalendarEntries(question_id) {
-  try {
-    const since = new Date(); since.setDate(since.getDate() - 30);
-    const sinceStr = since.toISOString().slice(0, 10);
-    const res = await fetch(
-      `${PROXY}/rest/v1/geo_calendar_dates?question_id=eq.${encodeURIComponent(question_id)}&test_date=gte.${sinceStr}&order=test_date.asc&select=provider_id,test_date,brand_present`,
-      { headers: authHeaders() }
-    );
-    if (!res.ok) return [];
-    return res.json();
-  } catch { return []; }
-}
-
-// ── NOUVEAU : batch pour tout un projet/site (utilisé par QuestionsTab pour lostByQ) ──
-// Charge toutes les entrées des 30 derniers jours pour calculer "Positionnée précédemment"
-// en utilisant la même source de vérité que PresenceCalendar.
-export async function sbGetCalendarEntriesBatch(project_id, site_id) {
-  try {
-    const since = new Date(); since.setDate(since.getDate() - 30);
-    const sinceStr = since.toISOString().slice(0, 10);
-
-    // Étape 1 : récupérer les question_ids du projet/site
-    const qRes = await fetch(
-      `${PROXY}/rest/v1/geo_questions?project_id=eq.${encodeURIComponent(project_id)}&site_id=eq.${encodeURIComponent(site_id)}&select=id`,
-      { headers: authHeaders() }
-    );
-    if (!qRes.ok) {
-      console.warn("[sbGetCalendarEntriesBatch] geo_questions fetch failed:", qRes.status);
-      return [];
-    }
-    const questions = await qRes.json();
-    if (!Array.isArray(questions) || !questions.length) return [];
-
-    // Étape 2 : récupérer les entrées calendar pour ces question_ids
-    // PostgREST : in.(uuid1,uuid2,...) — les UUIDs n'ont pas besoin d'être quotés
-    const ids = questions.map(q => q.id).join(",");
-    const url = `${PROXY}/rest/v1/geo_calendar_dates?question_id=in.(${ids})&test_date=gte.${sinceStr}&order=test_date.asc&select=question_id,provider_id,test_date,brand_present`;
-    const res = await fetch(url, { headers: authHeaders() });
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      console.warn("[sbGetCalendarEntriesBatch] calendar fetch failed:", res.status, body.slice(0, 120));
-      return [];
-    }
+  if (providerId === "gemini") {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${PROVIDERS.gemini.model}:generateContent?key=${apiKey}`;
+    const res = await fetch(url, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+    });
     const data = await res.json();
-    console.log("[sbGetCalendarEntriesBatch] chargé:", data.length, "entrées pour", questions.length, "questions");
-    return data;
-  } catch(e) {
-    console.warn("[sbGetCalendarEntriesBatch] error:", e.message);
-    return [];
-  }
-}
-
-// ── GEO HINTS ────────────────────────────────────────────────────
-
-export async function sbSaveHint(question_id, site_id, project_id, hint_text) {
-  const res = await fetch(`${PROXY}/rest/v1/geo_hints`, {
-    method: "POST",
-    headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
-    body: JSON.stringify({ question_id, site_id, project_id, hint_text, updated_at: new Date().toISOString() }),
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    console.warn(`Save hint failed: ${res.status} — ${body.slice(0, 80)}`);
-    return null; // non-blocking
-  }
-  return res.json();
-}
-
-export async function sbGetHints(project_id, site_id) {
-  const res = await fetch(
-    `${PROXY}/rest/v1/geo_hints?select=question_id,hint_text,updated_at&project_id=eq.${encodeURIComponent(project_id)}&site_id=eq.${encodeURIComponent(site_id)}`,
-    { headers: authHeaders() }
-  );
-  if (!res.ok) {
-    console.warn("[sbGetHints] failed:", res.status);
-    return [];
-  }
-  const data = await res.json();
-  return Array.isArray(data) ? data : [];
-}
-
-// ── PROJECT SETTINGS (UI preferences per project) ────────────────
-export async function sbSaveProjectSettings(project_id, settings) {
-  const res = await fetch(`${PROXY}/rest/v1/projects?id=eq.${encodeURIComponent(project_id)}`, {
-    method: "PATCH",
-    headers: { ...authHeaders(), "Content-Type": "application/json" },
-    body: JSON.stringify({ settings_json: JSON.stringify(settings) }),
-  });
-  return res.ok;
-}
-
-// ── GEO SCHEDULES (automation) ───────────────────────────────────
-
-export async function sbGetSchedule(project_id, site_id) {
-  const res = await fetch(
-    `${PROXY}/rest/v1/geo_schedules?project_id=eq.${encodeURIComponent(project_id)}&site_id=eq.${encodeURIComponent(site_id)}&select=*&limit=1`,
-    { headers: authHeaders() }
-  );
-  if (!res.ok) return null;
-  const rows = await res.json();
-  return rows[0] || null;
-}
-
-export async function sbSaveSchedule({ project_id, site_id, owner_email, frequency, providers, active, max_questions }) {
-  // Compute initial next_run based on frequency
-  const now = new Date();
-  const nextRun = new Date(now);
-  switch (frequency) {
-    case "daily":    nextRun.setDate(now.getDate() + 1); break;
-    case "weekly":   nextRun.setDate(now.getDate() + 7); break;
-    case "biweekly": nextRun.setDate(now.getDate() + 14); break;
-    case "monthly":  nextRun.setDate(now.getDate() + 30); break;
-    default:         nextRun.setDate(now.getDate() + 7);
+    if (!res.ok) throw new Error(data.error?.message || `Gemini ${res.status}`);
+    return { text: data.candidates?.[0]?.content?.parts?.[0]?.text || "", sources: [] };
   }
 
-  const payload = {
-    project_id, site_id, owner_email,
-    frequency, providers: providers || ["openai"],
-    active: active !== false,
-    max_questions: max_questions || 10,
-    next_run: nextRun.toISOString(),
-  };
-
-  // Upsert : on_conflict dans l'URL est requis pour que PostgREST génère
-  // un vrai INSERT … ON CONFLICT(project_id, site_id) DO UPDATE
-  // plutôt qu'un INSERT pur qui lève une 409 si la ligne existe déjà.
-  const res = await fetch(`${PROXY}/rest/v1/geo_schedules?on_conflict=project_id,site_id`, {
-    method: "POST",
-    headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`Save schedule failed: ${res.status} — ${body.slice(0, 120)}`);
+  if (providerId === "perplexity") {
+    const res = await fetch("https://api.perplexity.ai/chat/completions", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
+      body:    JSON.stringify({
+        model:      PROVIDERS.perplexity.model,
+        messages:   [{ role: "user", content: prompt }],
+        max_tokens: 1200,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error?.message || `Perplexity ${res.status}`);
+    const citations = data.citations || data._citations || [];
+    return { text: data.choices?.[0]?.message?.content || "", sources: citations };
   }
-  return (await res.json())[0];
-}
 
-export async function sbUpdateSchedule(id, patch) {
-  const res = await fetch(`${PROXY}/rest/v1/geo_schedules?id=eq.${encodeURIComponent(id)}`, {
-    method: "PATCH",
-    headers: { ...authHeaders(), "Content-Type": "application/json" },
-    body: JSON.stringify(patch),
-  });
-  return res.ok;
-}
-
-export async function sbDeleteSchedule(id) {
-  const res = await fetch(`${PROXY}/rest/v1/geo_schedules?id=eq.${encodeURIComponent(id)}`, {
-    method: "DELETE",
-    headers: authHeaders(),
-  });
-  return res.ok;
-}
-
-export async function sbTriggerScheduler() {
-  // Manual trigger — force=true bypasse le filtre next_run du scheduler
-  const secret = process.env.REACT_APP_SCHEDULER_SECRET;
-  const res = await fetch("/api/geo-scheduler", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(secret ? { "X-Scheduler-Secret": secret } : {}),
-    },
-    body: JSON.stringify({ force: true }),
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`Trigger failed: ${res.status} — ${body.slice(0, 120)}`);
+  if (providerId === "claude") {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method:  "POST",
+      headers: {
+        "Content-Type":      "application/json",
+        "x-api-key":         apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model:      PROVIDERS.claude.model,
+        max_tokens: 1200,
+        messages:   [{ role: "user", content: prompt }],
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error?.message || `Claude ${res.status}`);
+    return { text: data.content?.[0]?.text || "", sources: [] };
   }
-  return res.json();
-} 
-// ── GEO COMPETITORS ───────────────────────────────────────────────
-// Table: geo_competitors (id, project_id, site_id, name, domain, category, color, created_at)
-// Catégories: "direct" | "geo" | "partner" | "other" | custom string
 
-export async function sbGetCompetitors(project_id, site_id) {
-  const res = await fetch(
-    `${PROXY}/rest/v1/geo_competitors?project_id=eq.${encodeURIComponent(project_id)}&site_id=eq.${encodeURIComponent(site_id)}&order=name.asc`,
-    { headers: authHeaders() }
-  );
-  if (!res.ok) return [];
-  return res.json();
+  throw new Error(`Unknown provider: ${providerId}`);
 }
 
-export async function sbSaveCompetitor({ project_id, site_id, name, domain, category, color }) {
-  const payload = {
-    project_id, site_id,
-    name: name.trim(),
-    domain: (domain || "").trim().toLowerCase(),
-    category: category || "other",
-    color: color || "#DC2626",
-  };
-  // Tentative upsert avec on_conflict dans l'URL
-  const res = await fetch(
-    `${PROXY}/rest/v1/geo_competitors?on_conflict=project_id,site_id,name`,
-    {
-      method: "POST",
-      headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
-      body: JSON.stringify(payload),
-    }
-  );
-  if (!res.ok) {
-    // Fallback : PATCH sur la ligne existante si 409 ou 403 sur l'upsert
-    if (res.status === 409 || res.status === 403) {
-      const res2 = await fetch(
-        `${PROXY}/rest/v1/geo_competitors?project_id=eq.${encodeURIComponent(project_id)}&site_id=eq.${encodeURIComponent(site_id)}&name=eq.${encodeURIComponent(name.trim())}`,
-        {
-          method: "PATCH",
-          headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "return=representation" },
-          body: JSON.stringify({ domain: payload.domain, category: payload.category, color: payload.color }),
-        }
-      );
-      if (res2.ok) {
-        const data2 = await res2.json();
-        if (Array.isArray(data2) && data2.length) return data2[0];
+// ── Brand detection ───────────────────────────────────────────────
+function detectBrand(answer, sources, brandName, brandAliases) {
+  if (!answer || !brandName) return { brandMentioned: false, brandInSources: false, brandPosition: null };
+  const lower = answer.toLowerCase();
+  const terms = [brandName, ...(brandAliases || [])].map(t => t.toLowerCase()).filter(Boolean);
+  const brandMentioned = terms.some(t => lower.includes(t));
+
+  let brandPosition = null;
+  if (brandMentioned) {
+    const lines = answer.split("\n").map(l => l.trim()).filter(Boolean);
+    let pos = 0;
+    for (const line of lines) {
+      if (/^(\d+[.)]|[-•*])/.test(line)) {
+        pos++;
+        if (terms.some(t => line.toLowerCase().includes(t))) { brandPosition = pos; break; }
       }
-      // Fallback ultime : GET pour renvoyer l'existant
-      const res3 = await fetch(
-        `${PROXY}/rest/v1/geo_competitors?project_id=eq.${encodeURIComponent(project_id)}&site_id=eq.${encodeURIComponent(site_id)}&name=eq.${encodeURIComponent(name.trim())}&limit=1`,
-        { headers: authHeaders() }
-      );
-      if (res3.ok) { const d3 = await res3.json(); return Array.isArray(d3) ? d3[0] : d3; }
     }
-    throw new Error(`Save competitor failed: ${res.status}`);
+    if (!brandPosition) brandPosition = 1;
   }
-  const data = await res.json();
-  return Array.isArray(data) ? data[0] : data;
+
+  const brandInSources = (sources || []).some(url =>
+    terms.some(t => url.toLowerCase().includes(t.replace(/\s+/g, "").toLowerCase()))
+  );
+
+  return { brandMentioned, brandInSources, brandPosition };
 }
 
-export async function sbUpdateCompetitor(id, patch) {
-  const res = await fetch(
-    `${PROXY}/rest/v1/geo_competitors?id=eq.${encodeURIComponent(id)}`,
-    {
-      method: "PATCH",
-      headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "return=representation" },
-      body: JSON.stringify(patch),
+function extractSources(text) {
+  const urlRegex = /https?:\/\/[^\s\)\],"']+/g;
+  const matches = [];
+  let m;
+  while ((m = urlRegex.exec(text)) !== null) {
+    matches.push(m[0].replace(/[.,;:]+$/, ""));
+  }
+  return [...new Set(matches)].slice(0, 10);
+}
+
+// ── Build prompt ──────────────────────────────────────────────────
+function buildPrompt(question, brandName, brandAliases, context) {
+  const ctx      = context ? `Contexte : ${context}\n\n` : "";
+  const aliasStr = (brandAliases || []).filter(Boolean).join(", ");
+  const brandCtx = brandName
+    ? `Marque à détecter : "${brandName}"${aliasStr ? ` (aussi connue comme : ${aliasStr})` : ""}.\n\n`
+    : "";
+  return `${ctx}${brandCtx}RÈGLE ABSOLUE : Ne demande jamais de clarification. Réponds directement.\n\nPour chaque acteur recommandé : donne le nom, le site web, et une description courte.\n\n${question}`;
+}
+
+// ── Process one schedule ──────────────────────────────────────────
+async function processSchedule(schedule, project, brand) {
+  const providerIds = schedule.providers || ["openai"];
+  const maxQ        = schedule.max_questions || 10;
+
+  const questions = await sbGet(
+    `geo_questions?project_id=eq.${encodeURIComponent(schedule.project_id)}&site_id=eq.${encodeURIComponent(schedule.site_id)}&is_favorite=eq.true&order=created_at.asc&limit=${maxQ}`
+  );
+
+  if (!questions.length) {
+    console.log(`[scheduler] No favorite questions for ${schedule.project_id}/${schedule.site_id}`);
+    return 0;
+  }
+
+  const brandName    = brand?.brand_name    || "";
+  const brandAliases = brand?.brand_aliases || [];
+  const context      = brand?.context       || "";
+  let savedCount = 0;
+
+  for (const q of questions) {
+    for (const providerId of providerIds) {
+      const pDef = PROVIDERS[providerId];
+      if (!pDef) continue;
+
+      const apiKey = decodeKey(project[pDef.keyField]);
+      if (!apiKey) {
+        console.warn(`[scheduler] Missing key for ${providerId} on project ${schedule.project_id}`);
+        continue;
+      }
+
+      try {
+        const prompt = buildPrompt(q.question, brandName, brandAliases, context);
+        const { text: answer, sources: providerSources } = await callProvider(providerId, apiKey, prompt);
+        const textSources = extractSources(answer);
+        const sources = [...new Set([...providerSources, ...textSources])];
+        const { brandMentioned, brandInSources, brandPosition } = detectBrand(answer, sources, brandName, brandAliases);
+
+        const now = new Date().toISOString();
+
+        // ── Sauvegarder dans geo_results ──────────────────────────
+        const record = {
+          question_id:           q.id,
+          project_id:            schedule.project_id,
+          site_id:               schedule.site_id,
+          model:                 `${providerId} (${pDef.model}) [auto]`,
+          answer,
+          sources,
+          source_types:          [],
+          brand_mentioned:       brandMentioned,
+          brand_in_sources:      brandInSources,
+          brand_position:        brandPosition,
+          competitors_mentioned: [],
+          answer_type:           "list",
+          intent_type:           "informational",
+          created_at:            now,
+        };
+
+        await sbPost("geo_results", record);
+
+        // FIX BUG 4 : insérer dans geo_presence_calendar pour le calendrier 30j
+        try {
+          await sbPost("geo_presence_calendar", {
+            question_id:   q.id,
+            provider_id:   providerId,
+            brand_present: brandMentioned,
+            test_date:     now.slice(0, 10),
+            created_at:    now,
+          });
+        } catch(calErr) {
+          // Non bloquant — la table peut ne pas exister encore
+          console.warn(`[scheduler] calendar insert failed: ${calErr.message}`);
+        }
+
+        savedCount++;
+        console.log(`[scheduler] ✓ q=${q.id} provider=${providerId} brand=${brandMentioned}`);
+
+        // Délai anti-rate-limit
+        await new Promise(r => setTimeout(r, 400));
+
+      } catch(e) {
+        console.error(`[scheduler] Error q=${q.id} provider=${providerId}:`, e.message);
+      }
     }
-  );
-  if (!res.ok) throw new Error(`Update competitor failed: ${res.status}`);
-  const data = await res.json();
-  return Array.isArray(data) ? data[0] : data;
+  }
+
+  return savedCount;
 }
 
-export async function sbDeleteCompetitor(id) {
-  const res = await fetch(
-    `${PROXY}/rest/v1/geo_competitors?id=eq.${encodeURIComponent(id)}`,
-    { method: "DELETE", headers: authHeaders() }
-  );
-  return res.ok;
+// ── Main handler ──────────────────────────────────────────────────
+export default async function(request) {
+  const start = Date.now();
+  console.log("[geo-scheduler] Run started at", new Date().toISOString());
+
+  // Auth : GET = cron Netlify, POST = trigger manuel avec secret optionnel
+  const secret    = request.headers.get("X-Scheduler-Secret");
+  const envSecret = Deno.env.get("SCHEDULER_SECRET");
+  if (request.method === "POST" && envSecret && secret !== envSecret) {
+    return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 });
+  }
+
+  // FIX BUG 2 : pour les triggers POST manuels, force=true par défaut
+  let forceRun = request.method === "POST"; // trigger manuel = toujours forcé
+  if (request.method === "POST") {
+    try {
+      const body = await request.clone().json().catch(() => ({}));
+      // Respecter un force:false explicite si envoyé
+      if (body?.force === false) forceRun = false;
+    } catch {}
+  }
+
+  try {
+    const now = new Date().toISOString();
+
+    // FIX BUG 2 : si force=true (trigger manuel), ignorer le filtre next_run
+    const filter = forceRun
+      ? `geo_schedules?active=eq.true&order=next_run.asc&limit=50`
+      : `geo_schedules?active=eq.true&next_run=lte.${encodeURIComponent(now)}&order=next_run.asc&limit=50`;
+
+    const schedules = await sbGet(filter);
+    console.log(`[geo-scheduler] ${forceRun ? "FORCED" : "SCHEDULED"} — found ${schedules.length} schedules`);
+
+    if (!schedules.length) {
+      return new Response(JSON.stringify({ ok: true, processed: 0, duration: Date.now() - start }), {
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    // FIX BUG 3 : syntaxe in.() correcte pour PostgREST — sans guillemets
+    const projectIds = [...new Set(schedules.map(s => s.project_id))];
+    const projectsRaw = await sbGet(
+      `projects?id=in.(${projectIds.join(",")})&select=*`
+    );
+    const projectsMap = Object.fromEntries(projectsRaw.map(p => [p.id, p]));
+
+    const brandsRaw = await sbGet(
+      `site_brand?project_id=in.(${projectIds.join(",")})&select=*`
+    );
+    const brandsMap = Object.fromEntries(brandsRaw.map(b => [`${b.project_id}__${b.site_id}`, b]));
+
+    const results = [];
+    for (const schedule of schedules) {
+      const project = projectsMap[schedule.project_id];
+      if (!project) {
+        console.warn(`[scheduler] Project not found: ${schedule.project_id}`);
+        continue;
+      }
+      const brand = brandsMap[`${schedule.project_id}__${schedule.site_id}`] || null;
+      console.log(`[scheduler] Processing schedule ${schedule.id}`);
+
+      let count = 0;
+      try {
+        count = await processSchedule(schedule, project, brand);
+      } catch(e) {
+        console.error(`[scheduler] Schedule ${schedule.id} failed:`, e.message);
+      }
+
+      const nextRun = computeNextRun(schedule.frequency);
+      await sbPatch(
+        `geo_schedules?id=eq.${schedule.id}`,
+        { next_run: nextRun, last_run: now, last_run_count: count }
+      );
+
+      results.push({ schedule_id: schedule.id, questions_processed: count, next_run: nextRun });
+    }
+
+    const duration = Date.now() - start;
+    console.log(`[geo-scheduler] Done in ${duration}ms — ${results.length} schedules`);
+
+    return new Response(JSON.stringify({ ok: true, processed: results.length, results, duration }), {
+      headers: { "Content-Type": "application/json" },
+    });
+
+  } catch(e) {
+    console.error("[geo-scheduler] Fatal error:", e.message);
+    return new Response(JSON.stringify({ ok: false, error: e.message }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+}
+
+// ── Compute next run ──────────────────────────────────────────────
+function computeNextRun(frequency) {
+  const d = new Date();
+  switch (frequency) {
+    case "daily":    d.setDate(d.getDate() + 1);  break;
+    case "weekly":   d.setDate(d.getDate() + 7);  break;
+    case "biweekly": d.setDate(d.getDate() + 14); break;
+    case "monthly":  d.setDate(d.getDate() + 30); break;
+    default:         d.setDate(d.getDate() + 7);
+  }
+  return d.toISOString();
 }
