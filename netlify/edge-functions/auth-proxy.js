@@ -171,68 +171,72 @@ export default async function handler(req) {
     }
 
     // ── INVITE MEMBER ───────────────────────────────────────────────
-    // Vérifie si le compte existe.
-    // - Nouveau compte  → email d'invitation Supabase (création de compte + mot de passe)
-    // - Compte existant → email magic link pour se connecter (notification d'accès au projet)
+    // Crée le compte + ajoute à project_members avec SERVICE_KEY (bypass RLS)
     if (action === "invite_member") {
-      if (!SUPABASE_SERVICE_KEY) {
-        return json({ error: "Configuration serveur manquante (SUPABASE_SERVICE_KEY)" }, 500);
-      }
-      const { email, redirectTo } = body;
-      if (!email) return json({ error: "Email requis" }, 400);
+      const { projectId, email, invitedBy } = body;
+      if (!email || !projectId) return json({ error: "email et projectId requis" }, 400);
+      if (!SUPABASE_SERVICE_KEY) return json({ error: "SUPABASE_SERVICE_KEY manquante" }, 500);
 
-      const adminHeaders = {
-        "Content-Type": "application/json",
-        "apikey": SUPABASE_SERVICE_KEY,
-        "Authorization": `Bearer ${SUPABASE_SERVICE_KEY}`,
-      };
+      const emailClean = email.toLowerCase().trim();
 
-      const redirect = redirectTo || `${url.origin}/`;
-      const cleanEmail = email.toLowerCase().trim();
-
-      // 1. Vérifier si l'utilisateur existe déjà
-      const checkRes = await fetch(
-        `${SUPABASE_URL}/auth/v1/admin/users?email=${encodeURIComponent(cleanEmail)}&page=1&per_page=1`,
-        { headers: adminHeaders }
-      );
-      if (checkRes.ok) {
-        const checkData = await checkRes.json();
-        const users = checkData.users || [];
-        if (users.length > 0) {
-          // Compte existant → envoyer un magic link pour se connecter
-          const mlRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/generate_link`, {
-            method: "POST",
-            headers: adminHeaders,
-            body: JSON.stringify({
-              type: "magiclink",
-              email: cleanEmail,
-              redirect_to: redirect,
-            }),
-          });
-          const mlOk = mlRes.ok;
-          return json({ existed: true, invited: mlOk, emailSent: mlOk });
-        }
-      }
-
-      // 2. Compte inexistant → envoyer l'invitation Supabase (email de création de compte)
-      const inviteRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/invite`, {
+      // Étape 1 : créer le compte via Supabase Admin API (SERVICE_KEY)
+      let accountCreated = false;
+      const signupRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/users`, {
         method: "POST",
-        headers: adminHeaders,
+        headers: {
+          "Content-Type": "application/json",
+          "apikey": SUPABASE_SERVICE_KEY,
+          "Authorization": `Bearer ${SUPABASE_SERVICE_KEY}`,
+        },
         body: JSON.stringify({
-          email: cleanEmail,
-          redirect_to: redirect,
+          email: emailClean,
+          password: body.tempPassword || "ChangeMe2024!",
+          email_confirm: true,  // confirme l'email automatiquement
         }),
       });
-      const inviteData = await inviteRes.json();
-      if (!inviteRes.ok) {
-        const msg = inviteData.message || inviteData.msg || inviteData.error_description || "Erreur lors de l'invitation";
-        return json({ error: msg }, 400);
+      const signupData = await signupRes.json();
+      if (signupRes.ok) {
+        accountCreated = true;
+      } else if (signupData.msg?.includes("already") || signupData.code === "email_exists") {
+        accountCreated = false; // compte existant — pas une erreur
+      } else {
+        console.warn("[invite_member] signup warning:", signupData);
+        // On continue quand même pour ajouter au projet
       }
 
-      return json({ existed: false, invited: true, user: inviteData });
+      // Étape 2 : insérer dans project_members avec SERVICE_KEY (bypass RLS)
+      const memberRes = await fetch(`${SUPABASE_URL}/rest/v1/project_members`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "apikey": SUPABASE_SERVICE_KEY,
+          "Authorization": `Bearer ${SUPABASE_SERVICE_KEY}`,
+          "Prefer": "return=representation,resolution=ignore-duplicates",
+        },
+        body: JSON.stringify({
+          project_id:  projectId,
+          user_email:  emailClean,
+          role:        "member",
+          invited_by:  invitedBy || "",
+        }),
+      });
+
+      if (!memberRes.ok) {
+        const err = await memberRes.text().catch(() => "");
+        console.error("[invite_member] project_members insert failed:", memberRes.status, err.slice(0, 200));
+        return json({
+          error: accountCreated
+            ? "Compte créé mais erreur d'ajout au projet — vérifiez la table project_members"
+            : "Erreur d'ajout au projet",
+          detail: err.slice(0, 200),
+          status: memberRes.status,
+        }, 500);
+      }
+
+      return json({ ok: true, accountCreated, email: emailClean });
     }
 
-    return json({ error: "Action inconnue" }, 400);
+        return json({ error: "Action inconnue" }, 400);
   } catch (e) {
     return json({ error: e.message }, 500);
   }

@@ -231,61 +231,25 @@ function parseProject(r) {
   };
 }
 
-// ── Invite member — crée le compte puis ajoute au projet ─────────
-// Utilisé depuis ManageTab pour inviter un nouveau membre.
-// Si le compte existe déjà, passe directement à l'ajout projet.
+// ── Invite member — passe par auth-proxy avec SERVICE_KEY ────────
+// Utilise /api/auth?action=invite_member qui bypass les RLS avec la clé service
 export async function sbInviteMember(projectId, email, invitedBy, tempPassword) {
-  const emailClean = email.toLowerCase().trim();
-
-  // 1. Créer le compte (ignore l'erreur si déjà existant)
-  let accountCreated = false;
-  try {
-    const res = await fetch("/api/auth?action=signup", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: emailClean, password: tempPassword || "ChangeMe2024!" }),
-    });
-    const data = await res.json();
-    if (res.ok || res.status === 409) {
-      // 409 = compte déjà existant — c'est OK
-      accountCreated = true;
-    } else {
-      throw new Error(data.error || `Signup failed: ${res.status}`);
-    }
-  } catch(e) {
-    // Si erreur réseau, on continue quand même avec l'ajout projet
-    console.warn("[sbInviteMember] signup error:", e.message);
-    accountCreated = false;
-  }
-
-  // 2. Ajouter au projet (avec token admin)
-  const token = getToken();
-  const headers = {
-    "Content-Type": "application/json",
-    "Prefer": "return=representation,resolution=ignore-duplicates",
-  };
-  if (token) headers["Authorization"] = `Bearer ${token}`;
-
-  const memberRes = await fetch(`/api/supabase/rest/v1/project_members`, {
+  const res = await fetch("/api/auth?action=invite_member", {
     method: "POST",
-    headers,
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      project_id:  projectId,
-      user_email:  emailClean,
-      role:        "member",
-      invited_by:  invitedBy,
+      projectId,
+      email:       email.toLowerCase().trim(),
+      invitedBy:   invitedBy || "",
+      tempPassword: tempPassword || "ChangeMe2024!",
     }),
   });
 
-  if (!memberRes.ok) {
-    const err = await memberRes.text().catch(() => "");
-    console.error("[sbInviteMember] member insert failed:", memberRes.status, err.slice(0, 200));
-    throw new Error(
-      accountCreated
-        ? "Compte créé mais erreur d'ajout au projet — vérifiez les permissions Supabase"
-        : "Erreur d'ajout au projet"
-    );
+  const data = await res.json().catch(() => ({}));
+
+  if (!res.ok) {
+    throw new Error(data.error || `Erreur invitation: ${res.status}`);
   }
 
-  return { accountCreated, email: emailClean };
+  return data; // { ok: true, accountCreated, email }
 }
