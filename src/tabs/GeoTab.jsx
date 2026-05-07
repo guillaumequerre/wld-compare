@@ -914,44 +914,93 @@ function parseOpenAIResponse(data, endpoint = "responses") {
   return parsed;
 }
 
-// ── Brand detection ───────────────────────────────────────────────
+// ── Brand detection — 3 types de présence ───────────────────────
+//
+// MENTION  = marque dans un item numéroté du Top (ligne "N. Marque")
+//            position = numéro du rang dans le classement
+//
+// EVOCATION = marque dans le corps narratif (hors items de top, hors sources)
+//             position = ordre d'apparition dans le texte narratif
+//
+// CITATION  = domaine de la marque dans les sources/URLs citées
+//             position = rang dans la liste de sources
 
 function detectBrand(answer, sources, brandName, brandAliases = [], competitors = []) {
-  const allBrandTerms = [brandName, ...brandAliases].filter(Boolean).map(t => t.toLowerCase().trim());
-  const allCompetitors = competitors.filter(Boolean).map(t => t.toLowerCase().trim());
+  const allTerms = [brandName, ...brandAliases].filter(Boolean).map(t => t.toLowerCase().trim());
+  const allCompetitorNames = competitors.filter(Boolean).map(t => t.toLowerCase().trim());
 
-  const answerLower = (answer || "").toLowerCase();
+  function matches(text) {
+    const t = (text || "").toLowerCase();
+    return allTerms.some(term => term && t.includes(term));
+  }
 
-  // Also extract URLs directly from answer text (covers sources listed at bottom of response)
-  const urlRe = /https?:\/\/[^\s\])"'>]+/g;
-  const answerUrls = [...(answer || "").matchAll(urlRe)].map(m => m[0].toLowerCase());
-  // Merge sources array with URLs found in text
-  const allSources = [...new Set([...(Array.isArray(sources) ? sources : []).map(s => s.toLowerCase()), ...answerUrls])];
+  const lines = (answer || "").split("\n");
+  // Pattern d'item de top : "1. Titre", "2) Titre", "• 3. Titre"
+  const topItemRe = /^\s*(?:[•\-\*]\s*)?(\d+)[.)\s]\s*(.+)/;
 
-  // Find brand position in numbered/bulleted list
-  const lines = (answer || "").split("\n").map(l => l.trim()).filter(Boolean);
-  let brandPosition = null;
-  let pos = 0;
+  // ── MENTION : présence dans un item numéroté ──────────────────
+  let mentionPosition = null;
+
   for (const line of lines) {
-    const isListItem = /^(\d+[.)]|[-•*]|\*\*)/.test(line);
-    if (isListItem) {
-      pos++;
-      if (allBrandTerms.some(t => line.toLowerCase().includes(t))) {
-        brandPosition = pos;
-        break;
+    const m = line.match(topItemRe);
+    if (m) {
+      const rank = parseInt(m[1], 10);
+      const itemText = m[2];
+      if (matches(itemText) && mentionPosition === null) {
+        mentionPosition = rank;
       }
     }
   }
 
-  const brandMentioned = allBrandTerms.some(t => answerLower.includes(t));
-  // Check sources: both the sources array AND URLs found in answer text
-  const brandInSources = allBrandTerms.some(t => allSources.some(s => s.includes(t)));
+  // ── EVOCATION : présence dans le corps narratif ───────────────
+  let evocationPosition = null;
+  let narrativeCount = 0;
 
-  const competitorsMentioned = allCompetitors
+  for (const line of lines) {
+    const stripped = line.trim();
+    if (!stripped) continue;
+    if (topItemRe.test(line)) continue;
+    // Ignorer les lignes de métadonnées
+    if (
+      stripped.startsWith("http") ||
+      stripped.startsWith("[") ||
+      stripped.startsWith("- Site") ||
+      stripped.startsWith("- Description") ||
+      stripped.startsWith("Source") ||
+      stripped.match(/^\d+\.\s*https?:/)
+    ) continue;
+
+    narrativeCount++;
+    if (matches(stripped) && evocationPosition === null) {
+      evocationPosition = narrativeCount;
+    }
+  }
+
+  // ── CITATION : domaine dans les sources ──────────────────────
+  let citationPosition = null;
+  const domainTerms = allTerms.map(t => t.replace(/\s+/g, ""));
+
+  // Aussi extraire les URLs du texte de réponse
+  const urlRe = /https?:\/\/[^\s\)\],"']+/g;
+  const textUrls = [...(answer || "").matchAll(urlRe)].map(m => m[0].replace(/[.,;:]+$/, ""));
+  const allSources = [...new Set([...(Array.isArray(sources) ? sources : []), ...textUrls])];
+
+  for (let i = 0; i < allSources.length; i++) {
+    const src = allSources[i].toLowerCase().replace("www.", "");
+    if (domainTerms.some(d => d && src.includes(d)) && citationPosition === null) {
+      citationPosition = i + 1;
+    }
+  }
+
+  // ── Concurrents mentionnés (rétrocompat) ─────────────────────
+  const answerLower = (answer || "").toLowerCase();
+  const competitorsMentioned = allCompetitorNames
     .map(name => {
-      let cpos = null; let cp = 0;
+      let cpos = null;
+      let cp = 0;
       for (const line of lines) {
-        if (/^(\d+[.)]|[-•*]|\*\*)/.test(line)) {
+        const m = line.match(topItemRe);
+        if (m) {
           cp++;
           if (line.toLowerCase().includes(name)) { cpos = cp; break; }
         }
@@ -960,13 +1009,26 @@ function detectBrand(answer, sources, brandName, brandAliases = [], competitors 
         name,
         mentioned: answerLower.includes(name),
         position: cpos,
-        in_sources: allSources.some(s => s.includes(name)),
+        in_sources: allSources.some(s => s.toLowerCase().replace("www.", "").includes(name.replace(/\s+/g, ""))),
       };
     })
     .filter(c => c.mentioned);
 
-  return { brandMentioned, brandPosition, brandInSources, competitorsMentioned };
+  return {
+    // Nouveaux champs structurés
+    mention:   { present: mentionPosition !== null,   position: mentionPosition },
+    evocation: { present: evocationPosition !== null, position: evocationPosition },
+    citation:  { present: citationPosition !== null,  position: citationPosition },
+
+    // Rétrocompat — champs utilisés par le reste de l'app
+    brandMentioned:       mentionPosition !== null || evocationPosition !== null,
+    brandPosition:        mentionPosition,
+    brandInSources:       citationPosition !== null,
+    competitorsMentioned,
+  };
 }
+
+
 
 
 // ── Small UI helpers ──────────────────────────────────────────────
@@ -1016,15 +1078,52 @@ function StatusBadge({ status }) {
 
 // ── Stats header ──────────────────────────────────────────────────
 
-function StatsHeader({ questions, results, brandName }) {
-  const total       = results.length;
-  const withBrand   = results.filter(r => r.brand_mentioned === true || r.brand_mentioned === 1).length;
-  const withSources = results.filter(r => r.brand_in_sources).length;
-  const positions   = results.filter(r => r.brand_position).map(r => r.brand_position);
-  const avgPos      = positions.length ? (positions.reduce((a, b) => a + b, 0) / positions.length).toFixed(1) : "—";
-  const presence    = total ? Math.round(withBrand / total * 100) : 0;
+function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [] }) {
+  const total = results.length;
 
-  // Top competitors — 1 mention max per question/result (not cumulated)
+  // ── Métriques par type de présence (nouveaux champs + rétrocompat) ──
+
+  // MENTION = dans un top numéroté
+  const mentionResults   = results.filter(r =>
+    r.brand_mention_position != null || r.brand_position != null
+  );
+  const mentionPositions = mentionResults
+    .map(r => r.brand_mention_position || r.brand_position)
+    .filter(Boolean);
+  const mentionCount    = mentionResults.length;
+  const mentionAvgPos   = mentionPositions.length
+    ? (mentionPositions.reduce((a, b) => a + b, 0) / mentionPositions.length).toFixed(1)
+    : null;
+
+  // ÉVOCATION = dans le corps narratif hors top
+  const evocationResults   = results.filter(r => r.brand_evocation_position != null);
+  const evocationPositions = evocationResults
+    .map(r => r.brand_evocation_position)
+    .filter(Boolean);
+  const evocationCount   = evocationResults.length;
+  const evocationAvgPos  = evocationPositions.length
+    ? (evocationPositions.reduce((a, b) => a + b, 0) / evocationPositions.length).toFixed(1)
+    : null;
+
+  // CITATION = domaine dans les sources
+  const citationResults   = results.filter(r =>
+    r.brand_citation_position != null || r.brand_in_sources
+  );
+  const citationPositions = citationResults
+    .map(r => r.brand_citation_position)
+    .filter(Boolean);
+  const citationCount   = citationResults.length;
+  const citationAvgPos  = citationPositions.length
+    ? (citationPositions.reduce((a, b) => a + b, 0) / citationPositions.length).toFixed(1)
+    : null;
+
+  // Rétrocompat — présence globale pour les autres composants
+  const withBrand = results.filter(r =>
+    r.brand_mentioned === true || r.brand_mentioned === 1
+  ).length;
+  const presence = total ? Math.round(withBrand / total * 100) : 0;
+
+  // Top competitors
   const compCount = {};
   results.forEach(r => {
     const seen = new Set();
@@ -1040,57 +1139,134 @@ function StatsHeader({ questions, results, brandName }) {
   // Top domains
   const domainCount = {};
   results.forEach(r => (r.sources || []).forEach(url => {
-    try { const d = new URL(url).hostname.replace("www.", ""); domainCount[d] = (domainCount[d] || 0) + 1; } catch {}
+    try {
+      const d = new URL(url).hostname.replace("www.", "");
+      domainCount[d] = (domainCount[d] || 0) + 1;
+    } catch {}
   }));
   const topDomains = Object.entries(domainCount).sort((a, b) => b[1] - a[1]).slice(0, 5);
 
+  // ── Helper : couleur selon le taux (nb / total) ───────────────
+  function rateColor(count) {
+    if (!total) return "";
+    const pct = count / total * 100;
+    return pct >= 50 ? "gt-success" : pct > 0 ? "gt-warn" : "gt-danger";
+  }
+
   return (
-    <div className="gt-kpi-grid">
-      {/* Présence */}
-      <div className="gt-kpi-card">
-        <div className="gt-kpi-label">Présence {brandName}</div>
-        <div className={`gt-kpi-val ${presence >= 50 ? "gt-success" : presence > 0 ? "gt-warn" : "gt-danger"}`}>{presence}%</div>
-        <div className="gt-kpi-sub">{withBrand} / {total}</div>
-      </div>
+    <div style={{ marginBottom: 24 }}>
 
-      {/* Position moy. */}
-      <div className="gt-kpi-card">
-        <div className="gt-kpi-label">Position moy.</div>
-        <div className="gt-kpi-val">{avgPos || "—"}</div>
-        <div className="gt-kpi-sub">dans les fan-outs</div>
-      </div>
+      {/* ── 3 couples Présence + Position ── */}
+      <div className="gt-kpi-grid" style={{ gridTemplateColumns: "repeat(3, 1fr)", marginBottom: 12 }}>
 
-      {/* Dans les sources */}
-      <div className="gt-kpi-card">
-        <div className="gt-kpi-label">Dans les sources</div>
-        <div className="gt-kpi-val">{withSources}</div>
-        <div className="gt-kpi-sub">questions citées</div>
-      </div>
-
-      {/* Top concurrents — always shown */}
-      <div className="gt-kpi-card">
-        <div className="gt-kpi-label" style={{ marginBottom: 8 }}>Concurrents cités</div>
-        {topComps.length > 0 ? topComps.map(([name, cnt]) => (
-          <div key={name} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 3 }}>
-            <span style={{ color: C.text, fontWeight: 500 }}>{name}</span>
-            <span style={{ color: C.textLight }}>{cnt}×</span>
+        {/* Mention */}
+        <div className="gt-kpi-card">
+          <div className="gt-kpi-label" style={{ marginBottom: 6 }}>
+            Mention
+            <span className="gt-caption" style={{ marginLeft: 6, textTransform: "none", letterSpacing: 0 }}>
+              dans le top
+            </span>
           </div>
-        )) : (
-          <span style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>Aucune citation concurrent identifiée</span>
-        )}
+          <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+            <div className={`gt-kpi-val ${rateColor(mentionCount)}`}>
+              {total ? Math.round(mentionCount / total * 100) : 0}%
+            </div>
+            {mentionAvgPos && (
+              <div className="gt-caption" style={{ fontVariantNumeric: "tabular-nums" }}>
+                pos. moy. #{mentionAvgPos}
+              </div>
+            )}
+          </div>
+          <div className="gt-kpi-sub">{mentionCount} / {total} réponses</div>
+        </div>
+
+        {/* Évocation */}
+        <div className="gt-kpi-card">
+          <div className="gt-kpi-label" style={{ marginBottom: 6 }}>
+            Évocation
+            <span className="gt-caption" style={{ marginLeft: 6, textTransform: "none", letterSpacing: 0 }}>
+              dans le texte
+            </span>
+          </div>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+            <div className={`gt-kpi-val ${rateColor(evocationCount)}`}>
+              {total ? Math.round(evocationCount / total * 100) : 0}%
+            </div>
+            {evocationAvgPos && (
+              <div className="gt-caption" style={{ fontVariantNumeric: "tabular-nums" }}>
+                pos. moy. #{evocationAvgPos}
+              </div>
+            )}
+          </div>
+          <div className="gt-kpi-sub">{evocationCount} / {total} réponses</div>
+        </div>
+
+        {/* Citation */}
+        <div className="gt-kpi-card">
+          <div className="gt-kpi-label" style={{ marginBottom: 6 }}>
+            Citation
+            <span className="gt-caption" style={{ marginLeft: 6, textTransform: "none", letterSpacing: 0 }}>
+              dans les sources
+            </span>
+          </div>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+            <div className={`gt-kpi-val ${rateColor(citationCount)}`}>
+              {total ? Math.round(citationCount / total * 100) : 0}%
+            </div>
+            {citationAvgPos && (
+              <div className="gt-caption" style={{ fontVariantNumeric: "tabular-nums" }}>
+                pos. moy. #{citationAvgPos}
+              </div>
+            )}
+          </div>
+          <div className="gt-kpi-sub">{citationCount} / {total} réponses</div>
+        </div>
       </div>
 
-      {/* Top domaines — always shown */}
-      <div style={{ background: "#fff", border: "0.5px solid #1A3C2E11", borderRadius: 12, padding: "16px 20px" }}>
-        <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.12em", textTransform: "uppercase", color: "#1A3C2E55", marginBottom: 12 }}>Sites les plus cités</div>
-        {topDomains.length > 0 ? topDomains.map(([domain, cnt]) => (
-          <div key={domain} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 3 }}>
-            <span style={{ color: "#2563EB", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 120 }}>{domain}</span>
-            <span style={{ color: C.textLight, flexShrink: 0 }}>{cnt}×</span>
-          </div>
-        )) : (
-          <span style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>Aucun domaine source identifié</span>
-        )}
+      {/* ── Concurrents + Sites ── */}
+      <div className="gt-kpi-grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
+
+        {/* Concurrents */}
+        <div className="gt-kpi-card">
+          <div className="gt-kpi-label" style={{ marginBottom: 10 }}>Concurrents cités</div>
+          {topComps.length > 0 ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+              {topComps.map(([name, cnt]) => (
+                <div key={name} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span className="gt-body-sm" style={{ fontWeight: 500 }}>{name}</span>
+                  <span className="gt-caption" style={{ fontVariantNumeric: "tabular-nums" }}>{cnt}×</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <span className="gt-caption" style={{ fontStyle: "italic" }}>Aucun concurrent identifié</span>
+          )}
+        </div>
+
+        {/* Sites */}
+        <div className="gt-kpi-card">
+          <div className="gt-kpi-label" style={{ marginBottom: 10 }}>Sites les plus cités</div>
+          {topDomains.length > 0 ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+              {topDomains.map(([domain, cnt]) => {
+                const isBrand = brandName && domain.toLowerCase().includes(brandName.toLowerCase().replace(/\s+/g, ""));
+                return (
+                  <div key={domain} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span className="gt-body-sm" style={{
+                      fontWeight: 500,
+                      color: isBrand ? "#1A7A4A" : undefined,
+                      background: isBrand ? "#1A7A4A11" : "transparent",
+                      borderRadius: 4, padding: isBrand ? "0 4px" : 0,
+                    }}>{domain}</span>
+                    <span className="gt-caption" style={{ fontVariantNumeric: "tabular-nums" }}>{cnt}×</span>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <span className="gt-caption" style={{ fontStyle: "italic" }}>Aucun domaine source identifié</span>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -1881,10 +2057,25 @@ function isBrandPresent(r) {
 
 function getPresenceType(r) {
   if (!r) return null;
+  // Nouveaux champs prioritaires
+  if (r.brand_mention_position)   return "ranked";
+  if (r.brand_citation_position)  return "source";
+  if (r.brand_evocation_position) return "mention";
+  // Rétrocompat anciens résultats
   if (r.brand_position && (r.brand_mentioned === true || r.brand_mentioned === 1)) return "ranked";
   if (r.brand_in_sources) return "source";
   if (r.brand_mentioned === true || r.brand_mentioned === 1) return "mention";
   return null;
+}
+
+// Retourne un résumé structuré des 3 types pour l'affichage
+function getPresenceSummary(r) {
+  if (!r) return { mention: null, evocation: null, citation: null };
+  return {
+    mention:   r.brand_mention_position   || (r.brand_position ? r.brand_position : null),
+    evocation: r.brand_evocation_position || null,
+    citation:  r.brand_citation_position  || (r.brand_in_sources ? 1 : null),
+  };
 }
 
 // history: [{ test_date: "YYYY-MM-DD", brand_mentioned: bool }]
@@ -2031,10 +2222,20 @@ function ProviderRow({ provider, results, brandName, brandAliases, brandDomain =
         {/* Calendrier de présence 30j */}
         <PresenceCalendar questionId={questionId} providers={[provider]} newEntry={newCalEntry} />
 
-        {/* Statut de présence */}
-        {presenceLabel && (
-          <span className={`gt-provider-status ${presenceType === "ranked" ? "gt-success" : presenceType === "source" ? "gt-dimmed" : "gt-warn"}`}>
-            {presenceLabel}
+        {/* Présence — 3 types ─────────────────────────────────── */}
+        {result?.mention?.present && (
+          <span className="gt-provider-status gt-success" title={`Mention dans le Top — position #${result.mention.position}`}>
+            Top #{result.mention.position}
+          </span>
+        )}
+        {result?.citation?.present && (
+          <span className="gt-provider-status gt-dimmed" title={`Cité en source — position #${result.citation.position}`}>
+            src #{result.citation.position}
+          </span>
+        )}
+        {!result?.mention?.present && result?.evocation?.present && (
+          <span className="gt-provider-status gt-warn" title={`Évocation dans le texte — position #${result.evocation.position}`}>
+            évoc.
           </span>
         )}
 
@@ -2558,6 +2759,10 @@ ${question}`;
         sources: parsed.sources, source_types: parsed.source_types,
         brand_mentioned: brandMentioned, brand_position: brandPosition,
         brand_in_sources: brandInSources, competitors_mentioned: competitorsMentioned,
+        // Nouveaux champs de présence détaillés
+        brand_mention_position:   detectedBrand.mention?.position   || null,
+        brand_evocation_position: detectedBrand.evocation?.position || null,
+        brand_citation_position:  detectedBrand.citation?.position  || null,
         input_tokens: parsed._input_tokens, output_tokens: parsed._output_tokens,
         created_at: now,
       };
@@ -2754,7 +2959,7 @@ ${question}`;
       />
 
       {/* ── Stats header (filtered) ── */}
-      <StatsHeader questions={filtered} results={filteredResults} brandName={brand_name} />
+      <StatsHeader questions={filtered} results={filteredResults} brandName={brand_name} qualifiedCompetitors={competitors.filter(c => c.enabled !== false)} />
 
       {/* ── Ajout de questions : manuel + import CSV ── */}
       <div className="gt-toolbar">

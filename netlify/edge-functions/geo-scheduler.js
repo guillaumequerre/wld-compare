@@ -153,31 +153,67 @@ async function callProvider(providerId, apiKey, prompt) {
   throw new Error(`Unknown provider: ${providerId}`);
 }
 
-// ── Brand detection ───────────────────────────────────────────────
+// ── Brand detection — 3 types (mirrors GeoTab.jsx detectBrand) ──
 function detectBrand(answer, sources, brandName, brandAliases) {
-  if (!answer || !brandName) return { brandMentioned: false, brandInSources: false, brandPosition: null };
-  const lower = answer.toLowerCase();
-  const terms = [brandName, ...(brandAliases || [])].map(t => t.toLowerCase()).filter(Boolean);
-  const brandMentioned = terms.some(t => lower.includes(t));
-
-  let brandPosition = null;
-  if (brandMentioned) {
-    const lines = answer.split("\n").map(l => l.trim()).filter(Boolean);
-    let pos = 0;
-    for (const line of lines) {
-      if (/^(\d+[.)]|[-•*])/.test(line)) {
-        pos++;
-        if (terms.some(t => line.toLowerCase().includes(t))) { brandPosition = pos; break; }
-      }
-    }
-    if (!brandPosition) brandPosition = 1;
+  if (!answer || !brandName) {
+    return { brandMentioned: false, brandInSources: false, brandPosition: null,
+             mention: { present: false, position: null },
+             evocation: { present: false, position: null },
+             citation: { present: false, position: null } };
   }
 
-  const brandInSources = (sources || []).some(url =>
-    terms.some(t => url.toLowerCase().includes(t.replace(/\s+/g, "").toLowerCase()))
-  );
+  const terms = [brandName, ...(brandAliases || [])].map(t => t.toLowerCase().trim()).filter(Boolean);
+  const domainTerms = terms.map(t => t.replace(/\s+/g, ""));
 
-  return { brandMentioned, brandInSources, brandPosition };
+  function matches(text) {
+    const t = (text || "").toLowerCase();
+    return terms.some(term => term && t.includes(term));
+  }
+
+  const lines = answer.split("\n");
+  const topItemRe = /^\s*(?:[•\-\*]\s*)?(\d+)[.)\s]\s*(.+)/;
+
+  // MENTION : item numéroté du top
+  let mentionPosition = null;
+  for (const line of lines) {
+    const m = line.match(topItemRe);
+    if (m && matches(m[2]) && mentionPosition === null) {
+      mentionPosition = parseInt(m[1], 10);
+    }
+  }
+
+  // EVOCATION : corps narratif hors top items
+  let evocationPosition = null;
+  let narrativeCount = 0;
+  for (const line of lines) {
+    const stripped = line.trim();
+    if (!stripped || topItemRe.test(line)) continue;
+    if (stripped.startsWith("http") || stripped.startsWith("[") || stripped.startsWith("Source")) continue;
+    narrativeCount++;
+    if (matches(stripped) && evocationPosition === null) evocationPosition = narrativeCount;
+  }
+
+  // CITATION : domaine dans les sources
+  let citationPosition = null;
+  const urlRe = /https?:\/\/[^\s\)\],"']+/g;
+  const textUrls = [...answer.matchAll(urlRe)].map(m => m[0].replace(/[.,;:]+$/, ""));
+  const allSources = [...new Set([...(sources || []), ...textUrls])];
+  for (let i = 0; i < allSources.length; i++) {
+    const src = allSources[i].toLowerCase().replace("www.", "");
+    if (domainTerms.some(d => d && src.includes(d)) && citationPosition === null) {
+      citationPosition = i + 1;
+    }
+  }
+
+  const brandMentioned = mentionPosition !== null || evocationPosition !== null;
+  return {
+    brandMentioned,
+    brandPosition:  mentionPosition,
+    brandInSources: citationPosition !== null,
+    mention:   { present: mentionPosition !== null,   position: mentionPosition },
+    evocation: { present: evocationPosition !== null, position: evocationPosition },
+    citation:  { present: citationPosition !== null,  position: citationPosition },
+  };
 }
 
 function extractSources(text) {
@@ -235,26 +271,30 @@ async function processSchedule(schedule, project, brand) {
         const { text: answer, sources: providerSources } = await callProvider(providerId, apiKey, prompt);
         const textSources = extractSources(answer);
         const sources = [...new Set([...providerSources, ...textSources])];
-        const { brandMentioned, brandInSources, brandPosition } = detectBrand(answer, sources, brandName, brandAliases);
+// détection inline dans le record ci-dessous
 
         const now = new Date().toISOString();
 
         // ── Sauvegarder dans geo_results ──────────────────────────
+        const detected = detectBrand(answer, sources, brandName, brandAliases);
         const record = {
-          question_id:           q.id,
-          project_id:            schedule.project_id,
-          site_id:               schedule.site_id,
-          model:                 `${providerId} (${pDef.model}) [auto]`,
+          question_id:              q.id,
+          project_id:               schedule.project_id,
+          site_id:                  schedule.site_id,
+          model:                    `${providerId} (${pDef.model}) [auto]`,
           answer,
           sources,
-          source_types:          [],
-          brand_mentioned:       brandMentioned,
-          brand_in_sources:      brandInSources,
-          brand_position:        brandPosition,
-          competitors_mentioned: [],
-          answer_type:           "list",
-          intent_type:           "informational",
-          created_at:            now,
+          source_types:             [],
+          brand_mentioned:          detected.brandMentioned,
+          brand_in_sources:         detected.brandInSources,
+          brand_position:           detected.brandPosition,
+          brand_mention_position:   detected.mention?.position   || null,
+          brand_evocation_position: detected.evocation?.position || null,
+          brand_citation_position:  detected.citation?.position  || null,
+          competitors_mentioned:    [],
+          answer_type:              "list",
+          intent_type:              "informational",
+          created_at:               now,
         };
 
         await sbPost("geo_results", record);
