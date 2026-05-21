@@ -2621,7 +2621,7 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, setCa
       const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
 
       // Détecter si CSV avec header ou liste brute (une question par ligne)
-      let questions = [];
+      let parsedQs = [];
       const firstLine = lines[0] || "";
       const sep = firstLine.includes(";") ? ";" : ",";
       const headers = firstLine.split(sep).map(h => h.replace(/^["']|["']$/g, "").trim().toLowerCase());
@@ -2629,18 +2629,20 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, setCa
 
       if (qColIdx >= 0) {
         // CSV avec header — on prend la colonne question
-        questions = lines.slice(1)
-          .map(l => l.split(sep)[qColIdx]?.replace(/^["']|["']$/g, "").trim())
+        parsedQs = lines.slice(1)
+          .map(l => { const col = l.split(sep)[qColIdx]; return col ? col.replace(/^["']|["']$/g, "").trim() : ""; })
           .filter(Boolean);
       } else {
         // Pas de header détecté — une question par ligne
-        questions = lines.map(l => l.replace(/^["']|["']$/g, "").trim()).filter(Boolean);
+        parsedQs = lines.map(l => l.replace(/^["']|["']$/g, "").trim()).filter(Boolean);
       }
 
-      // Dédoublonner et filtrer les questions déjà existantes
-      const existing = new Set(questions.map(q => q.question.trim().toLowerCase()));
-      const toAdd = [...new Set(questions)]
-        .filter(q => q.length > 5 && !existing.has(q.toLowerCase()))
+      // Dédoublonner avec les questions déjà en base
+      const existingInBase = new Set(
+        questions.map(q => (q.question || "").trim().toLowerCase())
+      );
+      const toAdd = [...new Set(parsedQs)]
+        .filter(q => q && q.length > 5 && !existingInBase.has(q.toLowerCase()))
         .map(q => ({ project_id: projectId, site_id: site.id, question: q, is_manual: true }));
 
       if (toAdd.length === 0) {
