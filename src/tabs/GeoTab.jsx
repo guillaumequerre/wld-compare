@@ -1099,7 +1099,7 @@ function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [] 
 
   // ÉVOCATION = dans le corps narratif hors top
   // Rétrocompat : brand_mentioned=true SANS position dans un top = évocation
-  const mentionSet = new Set(mentionResults.map(r => r.id || r.question_id + r.model));
+  // const mentionSet = new Set(mentionResults.map(r => r.id || r.question_id + r.model));
   const evocationResults   = results.filter(r => {
     if (r.brand_evocation_position != null) return true;
     // Ancien résultat : mentionné mais pas dans un top → évocation
