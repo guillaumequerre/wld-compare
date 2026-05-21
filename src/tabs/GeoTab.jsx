@@ -936,7 +936,7 @@ function detectBrand(answer, sources, brandName, brandAliases = [], competitors 
 
   const lines = (answer || "").split("\n");
   // Pattern d'item de top : "1. Titre", "2) Titre", "• 3. Titre"
-  const topItemRe = /^\s*(?:[•\-\*]\s*)?(\d+)[.)\s]\s*(.+)/;
+  const topItemRe = /^\s*(?:[•\-*]\s*)?(\d+)[.)]\s*(.+)/;
 
   // ── MENTION : présence dans un item numéroté ──────────────────
   let mentionPosition = null;
@@ -1121,7 +1121,6 @@ function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [] 
   const withBrand = results.filter(r =>
     r.brand_mentioned === true || r.brand_mentioned === 1
   ).length;
-  const presence = total ? Math.round(withBrand / total * 100) : 0;
 
   // Top competitors
   const compCount = {};
@@ -2068,15 +2067,7 @@ function getPresenceType(r) {
   return null;
 }
 
-// Retourne un résumé structuré des 3 types pour l'affichage
-function getPresenceSummary(r) {
-  if (!r) return { mention: null, evocation: null, citation: null };
-  return {
-    mention:   r.brand_mention_position   || (r.brand_position ? r.brand_position : null),
-    evocation: r.brand_evocation_position || null,
-    citation:  r.brand_citation_position  || (r.brand_in_sources ? 1 : null),
-  };
-}
+
 
 // history: [{ test_date: "YYYY-MM-DD", brand_mentioned: bool }]
 // results: current geo_results for this provider (for today's optimistic update)
@@ -2206,10 +2197,6 @@ function ProviderRow({ provider, results, brandName, brandAliases, brandDomain =
   const comps   = result?.competitors_mentioned || [];
 
   const displayDate = result?.created_at || lastCalDate || null;
-
-  const presenceLabel = presenceType === "ranked"
-    ? `#${result?.brand_position || "?"}`
-    : presenceType === "source" ? "src" : null;
 
   return (
     <div>
@@ -4522,7 +4509,6 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
               setProjects?.(prev => prev.map(proj => proj.id === projectId ? { ...proj, ...keyPatch } : proj));
               onSaveProviderKeys?.(keyPatch);
             }}
-            isReadOnly={isReadOnly}
           />
         </div>
 
