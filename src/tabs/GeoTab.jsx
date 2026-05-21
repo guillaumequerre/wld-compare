@@ -981,7 +981,7 @@ function detectBrand(answer, sources, brandName, brandAliases = [], competitors 
   const domainTerms = allTerms.map(t => t.replace(/\s+/g, ""));
 
   // Aussi extraire les URLs du texte de réponse
-  const urlRe = /https?:\/\/[^\s\)\],"']+/g;
+  const urlRe = /https?:\/\/[^\s),'"\]]+/g;
   const textUrls = [...(answer || "").matchAll(urlRe)].map(m => m[0].replace(/[.,;:]+$/, ""));
   const allSources = [...new Set([...(Array.isArray(sources) ? sources : []), ...textUrls])];
 
