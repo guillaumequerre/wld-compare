@@ -2961,95 +2961,156 @@ ${question}`;
       {/* ── Stats header (filtered) ── */}
       <StatsHeader questions={filtered} results={filteredResults} brandName={brand_name} qualifiedCompetitors={competitors.filter(c => c.enabled !== false)} />
 
-      {/* ── Ajout de questions : manuel + import CSV ── */}
-      <div className="gt-toolbar">
-        {/* Saisie manuelle */}
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <span style={{ fontSize: 11, fontWeight: 600, color: C.textLight, flexShrink: 0 }}>➕ Manuel</span>
-          <input value={manualQ} onChange={e => setManualQ(e.target.value)} onKeyDown={e => e.key === "Enter" && addManual()}
-            placeholder="Saisir une question à ajouter manuellement…"
-            style={{ flex: 1, padding: "6px 10px", border: "0.5px solid #1A3C2E0D", borderRadius: 7, fontSize: 12, color: C.text }} />
-          <Btn onClick={addManual} disabled={!manualQ.trim()} small>Ajouter</Btn>
-        </div>
-        {/* Import CSV */}
-        <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${C.border}`, display: "flex", gap: 10, alignItems: "center" }}>
-          <span style={{ fontSize: 11, fontWeight: 600, color: C.textLight, flexShrink: 0 }}>📥 Import CSV</span>
-          <span style={{ fontSize: 11, color: C.textLight, flex: 1 }}>
-            Une question par ligne, ou colonne <code style={{ background: "#FAFAF8", padding: "1px 5px", borderRadius: 4, fontSize: 10 }}>question</code> si CSV avec header
-          </span>
+      {/* ══════════════════════════════════════════════════════
+           ZONE AJOUT + FILTRES + ACTIONS
+           Layout : 3 lignes séparées par des dividers 0.5px
+           ══════════════════════════════════════════════════════ */}
+      <div style={{ marginBottom: 20 }}>
+
+        {/* ── Ligne 1 : Ajout de questions ── */}
+        <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
+
+          {/* Saisie manuelle */}
           <input
-            ref={csvInputRef}
-            type="file"
-            accept=".csv,.txt"
-            style={{ display: "none" }}
-            onChange={e => importCsvQuestions(e.target.files?.[0])}
+            value={manualQ}
+            onChange={e => setManualQ(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && addManual()}
+            placeholder="Ajouter une question…"
+            className="gt-input"
+            style={{ flex: "1 1 260px", minWidth: 200 }}
           />
-          <Btn
+          <button
+            onClick={addManual}
+            disabled={!manualQ.trim()}
+            className="gt-btn"
+            style={{ opacity: !manualQ.trim() ? 0.35 : 1 }}>
+            + Ajouter
+          </button>
+
+          {/* Séparateur vertical */}
+          <div style={{ width: "0.5px", height: 20, background: "#1A3C2E18", flexShrink: 0 }} />
+
+          {/* Import CSV */}
+          <input ref={csvInputRef} type="file" accept=".csv,.txt" style={{ display: "none" }} onChange={e => importCsvQuestions(e.target.files?.[0])} />
+          <button
             onClick={() => csvInputRef.current?.click()}
             disabled={csvImporting}
-            small
-            style={{ background: csvImporting ? C.bg : "#EFF6FF", color: csvImporting ? C.textLight : "#2563EB", border: "1px solid #BFDBFE" }}
-          >
-            {csvImporting ? "⏳ Import…" : "📥 Importer"}
-          </Btn>
-        </div>
-      </div>
+            className="gt-btn gt-btn--ghost"
+            style={{ opacity: csvImporting ? 0.4 : 1 }}>
+            {csvImporting ? "Import…" : "↑ CSV"}
+          </button>
 
-      {/* ── Filters ── */}
-      <div style={{ background: "#fff", border: "0.5px solid #1A3C2E0D", borderRadius: 12, padding: "12px 16px", marginBottom: 14 }}>
-        {/* Row 1: search + category + keyword + fav + brand */}
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
-          <input value={filterSearch} onChange={e => setFilterSearch(e.target.value)} placeholder="Rechercher…" className="gt-input" style={{ width: 200 }} />
-          <CatSelect value={filterCat} categories={categories} onChange={v => setFilterCat(v || "")} placeholder="Toutes catégories" />
-          <select value={filterKeyword} onChange={e => setFilterKeyword(e.target.value)}
-            style={{ padding: "5px 8px", border: `1px solid ${filterKeyword ? "#2563EB" : C.border}`, borderRadius: 7, fontSize: 11, color: C.text }}>
+          {/* Séparateur vertical */}
+          <div style={{ width: "0.5px", height: 20, background: "#1A3C2E18", flexShrink: 0 }} />
+
+          {/* Catégories — inline compact (comme KeywordsTab) */}
+          <CategoryManager
+            projectId={projectId}
+            categories={categories}
+            setCategories={setCategories}
+            compact
+          />
+        </div>
+
+        {/* ── Ligne 2 : Filtres ── */}
+        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", paddingBottom: 10, borderBottom: "0.5px solid #1A3C2E08", marginBottom: 10 }}>
+
+          {/* Recherche */}
+          <input
+            value={filterSearch}
+            onChange={e => setFilterSearch(e.target.value)}
+            placeholder="Rechercher…"
+            className="gt-input"
+            style={{ width: 160 }}
+          />
+
+          {/* Catégorie */}
+          <CatSelect value={filterCat} categories={categories} onChange={v => setFilterCat(v || "")} placeholder="Catégorie" />
+
+          {/* Mot-clé */}
+          <select value={filterKeyword} onChange={e => setFilterKeyword(e.target.value)} className="gt-select">
             <option value="">Tous les mots-clés</option>
             {keywords.map(k => <option key={k.id} value={k.id}>{k.keyword}</option>)}
           </select>
-          <button className={`gt-filter-pill${filterFav ? " gt-filter-pill--active" : ""}`} onClick={() => setFilterFav(f => !f)}>⭐ Favoris</button>
-          <button className={`gt-filter-pill${filterPositioned ? " gt-filter-pill--active" : ""}`} onClick={() => setFilterPositioned(f => !f)} title="Questions dont le dernier résultat montre la marque présente">📍 Positionnée</button>
-          <button className={`gt-filter-pill${filterLost ? " gt-filter-pill--active" : ""}`} onClick={() => setFilterLost(f => !f)} title="Positionnée dans les 30j mais absente du dernier résultat">📉 Perdue</button>
+
+          {/* Divider */}
+          <div style={{ width: "0.5px", height: 16, background: "#1A3C2E12", flexShrink: 0 }} />
+
+          {/* Pills de présence */}
+          <button className={`gt-filter-pill${filterFav ? " gt-filter-pill--active" : ""}`} onClick={() => setFilterFav(f => !f)} title="Questions favorites">⭐ Favoris</button>
+          <button className={`gt-filter-pill${filterPositioned ? " gt-filter-pill--active" : ""}`} onClick={() => setFilterPositioned(f => !f)} title="Marque présente dans le dernier résultat">Positionnée</button>
+          <button className={`gt-filter-pill${filterLost ? " gt-filter-pill--active" : ""}`} onClick={() => setFilterLost(f => !f)} title="Positionnée dans les 30j, absente du dernier résultat">Perdue</button>
+
+          {/* Reset — apparaît seulement si filtre actif */}
           {(filterSearch || filterCat || filterKeyword || filterFav || filterPositioned || filterLost || filterProviders.length > 0) && (
-            <button onClick={() => { setFilterSearch(""); setFilterCat(""); setFilterKeyword(""); setFilterFav(false); setFilterPositioned(false); setFilterLost(false); setFilterProviders([]); }}
-              style={{ fontSize: 11, padding: "3px 8px", border: "0.5px solid #1A3C2E0D", borderRadius: 6, background: "#FAFAF8", cursor: "pointer", color: C.textMid }}>
-              ✕ Réinitialiser
+            <button
+              onClick={() => { setFilterSearch(""); setFilterCat(""); setFilterKeyword(""); setFilterFav(false); setFilterPositioned(false); setFilterLost(false); setFilterProviders([]); }}
+              className="gt-btn-icon"
+              title="Effacer tous les filtres"
+              style={{ fontSize: 12, color: "#1A3C2E44" }}>
+              ✕
             </button>
           )}
+
+          {/* Compteur */}
+          <span className="gt-caption" style={{ marginLeft: 4 }}>
+            {filtered.length} question{filtered.length > 1 ? "s" : ""}
+          </span>
         </div>
 
-        {/* Row 2: providers multi-select + counters + actions */}
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <span style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E44", flexShrink: 0 }}>Providers</span>
+        {/* ── Ligne 3 : Providers + sélection + export + lancement ── */}
+        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+
+          {/* Providers — pills */}
           {PROVIDERS.map(p => {
             const active = filterProviders.includes(p.id);
             const hasKey = !!providerKeys[p.id]?.dec;
             return (
-              <button key={p.id} onClick={() => setFilterProviders(prev => active ? prev.filter(id => id !== p.id) : [...prev, p.id])}
-                title={!hasKey ? `Clé ${p.label} manquante — ajoutez-la dans ⚙️ Gestion des Providers (en haut de page)` : undefined}
-                style={{ padding: "3px 12px", border: "0.5px solid #1A3C2E22", borderRadius: 20, fontSize: 11, fontWeight: 500, letterSpacing: "0.01em", cursor: hasKey ? "pointer" : "not-allowed",
-                  background: active ? "#1A3C2E" : "transparent", color: active ? "#F0EBE0" : hasKey ? "#1A3C2E" : "#1A3C2E33", opacity: hasKey ? 1 : 0.35, transition: "all 0.15s" }}>
-                {p.label}{!hasKey ? " ·" : ""}
+              <button key={p.id}
+                onClick={() => hasKey && setFilterProviders(prev => active ? prev.filter(id => id !== p.id) : [...prev, p.id])}
+                className={`gt-filter-pill${active && hasKey ? " gt-filter-pill--active" : ""}`}
+                style={{ opacity: hasKey ? 1 : 0.3, cursor: hasKey ? "pointer" : "not-allowed" }}
+                title={!hasKey ? `Clé ${p.label} manquante` : p.label}>
+                {p.label}
               </button>
             );
           })}
 
-          <span style={{ fontSize: 11, color: C.textLight, marginLeft: 8 }}>
-            {filtered.length} question{filtered.length > 1 ? "s" : ""}
-            {selected.size > 0 && <strong style={{ color: C.text }}> · {selected.size} sél.</strong>}
-          </span>
+          {/* Divider */}
+          <div style={{ width: "0.5px", height: 16, background: "#1A3C2E12", flexShrink: 0 }} />
 
-          <div style={{ display: "flex", gap: 4, marginLeft: 4 }}>
-            <button onClick={() => setSelected(new Set(filtered.map(q => q.id)))} style={{ fontSize: 11, padding: "3px 10px", border: "0.5px solid #1A3C2E18", borderRadius: 20, background: "transparent", cursor: "pointer", color: "#1A3C2E77", fontWeight: 500, letterSpacing: "0.01em" }}>Tout</button>
-            {selected.size > 0 && <button onClick={() => setSelected(new Set())} style={{ fontSize: 11, padding: "3px 10px", border: "0.5px solid #1A3C2E18", borderRadius: 20, background: "transparent", cursor: "pointer", color: "#1A3C2E77", fontWeight: 500, letterSpacing: "0.01em" }}>Aucun</button>}
-            {selected.size > 0 && (
-              <>
-                <CatSelect value={bulkCat} categories={categories} onChange={setBulkCat} placeholder="Catégoriser…" />
-                <Btn onClick={applyBulkCat} small color="#7C3AED">Appliquer</Btn>
-              </>
-            )}
-          </div>
+          {/* Sélection */}
+          <button
+            onClick={() => setSelected(new Set(filtered.map(q => q.id)))}
+            className="gt-btn-icon"
+            title="Tout sélectionner"
+            style={{ fontSize: 11, color: "#1A3C2E55", padding: "3px 8px" }}>
+            Tout
+          </button>
+          {selected.size > 0 && (
+            <>
+              <button onClick={() => setSelected(new Set())} className="gt-btn-icon" style={{ fontSize: 11, color: "#1A3C2E55", padding: "3px 8px" }}>Aucun</button>
+              <span className="gt-caption" style={{ color: "#1A3C2E77" }}>{selected.size} sél.</span>
+              <CatSelect value={bulkCat} categories={categories} onChange={setBulkCat} placeholder="Catégoriser…" />
+              {bulkCat && (
+                <button onClick={applyBulkCat} className="gt-btn" style={{ padding: "3px 12px" }}>Appliquer</button>
+              )}
+            </>
+          )}
 
-          {/* ── Export CSV / PDF ── */}
+          {/* Spacer */}
+          <div style={{ flex: 1 }} />
+
+          {/* Rafraîchir */}
+          <button
+            onClick={() => sbGetQuestions(projectId, site.id).then(setQuestions)}
+            className="gt-btn-icon"
+            title="Rafraîchir"
+            style={{ fontSize: 13 }}>
+            ↺
+          </button>
+
+          {/* Export */}
           <ExportFanoutBtn
             questions={filtered}
             results={results}
@@ -3062,19 +3123,25 @@ ${question}`;
             lostByQ={lostByQ}
           />
 
-          <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-            <button onClick={() => sbGetQuestions(projectId, site.id).then(setQuestions)}
-              title="Recharger les questions" style={{ padding: "4px 8px", border: "0.5px solid #1A3C2E0D", borderRadius: 6, background: "#fff", color: C.textLight, fontSize: 11, cursor: "pointer" }}>🔄</button>
-            <Btn onClick={runAllQuestions} disabled={runAll || toRunCount === 0} color="#7C3AED"
-              title={!runAll && toRunCount === 0 ? "Toutes les questions ont déjà été interrogées aujourd'hui — relancez manuellement une question pour forcer la ré-interrogation" : undefined}>
-              {runAll ? "⏳ En cours…" : toRunCount > 0 ? `▶ Lancer tout (${toRunCount})` : "✓ Tout généré"}
-            </Btn>
-            {runAll && <Btn onClick={() => { stopAllRef.current = true; setRunAll(false); }} color="#DC2626" variant="outline" small>⏹ Arrêter</Btn>}
-          </div>
+          {/* Lancer tout */}
+          {!isReadOnly && (
+            <>
+              <button
+                onClick={runAllQuestions}
+                disabled={runAll || toRunCount === 0}
+                className={`gt-btn ${toRunCount > 0 ? "gt-btn--solid" : "gt-btn--ghost"}`}
+                title={toRunCount === 0 ? "Tout interrogé aujourd'hui" : `Interroger ${toRunCount} question${toRunCount > 1 ? "s" : ""} sans réponse`}>
+                {runAll ? "…" : toRunCount > 0 ? `▶ Lancer (${toRunCount})` : "✓ Généré"}
+              </button>
+              {runAll && (
+                <button onClick={() => { stopAllRef.current = true; setRunAll(false); }} className="gt-btn gt-btn--ghost" style={{ borderColor: "#C0352A33", color: "#C0352A" }}>⏹</button>
+              )}
+            </>
+          )}
         </div>
       </div>
 
-      {/* Questions list */}
+            {/* Questions list */}
       {filtered.length === 0 ? (
         <div style={{ textAlign: "center", padding: 40, color: C.textLight, fontSize: 12 }}>
           {questions.length === 0 ? "Aucune question — générez-en depuis les mots-clés ou ajoutez-en manuellement" : "Aucune question ne correspond aux filtres"}
@@ -4432,7 +4499,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
         <div style={{ display: subTab === "questions" ? "block" : "none" }}>
           <QuestionsTab
             site={site} projectId={projectId} apiKey={apiKeyDec} model={model}
-            brand={brand} categories={categories}
+            brand={brand} categories={categories} setCategories={setCategories}
             allResults={allResults.filter(r => r.site_id === site?.id)}
             onResultSaved={() => sbGetGeoResults(projectId, site.id).then(setAllResults)}
             activeProviders={activeProviders} providerKeys={providerKeys}
