@@ -1117,10 +1117,6 @@ function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [] 
     ? (citationPositions.reduce((a, b) => a + b, 0) / citationPositions.length).toFixed(1)
     : null;
 
-  // Rétrocompat — présence globale pour les autres composants
-  const withBrand = results.filter(r =>
-    r.brand_mentioned === true || r.brand_mentioned === 1
-  ).length;
 
   // Top competitors
   const compCount = {};
@@ -2192,7 +2188,6 @@ function ProviderRow({ provider, results, brandName, brandAliases, brandDomain =
   const p = provider;
 
   const result = [...(results || [])].sort((a,b) => new Date(b.created_at||0) - new Date(a.created_at||0))[0] || null;
-  const presenceType = getPresenceType(result);
   const sources = result?.sources || [];
   const comps   = result?.competitors_mentioned || [];
 
