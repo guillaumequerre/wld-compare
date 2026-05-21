@@ -2524,7 +2524,7 @@ RÈGLES :
 
 // ── Questions sub-tab (v2) ────────────────────────────────────────
 
-function QuestionsTab({ site, projectId, apiKey, model, brand, categories, allResults, onResultSaved, activeProviders = ["openai"], providerKeys = {}, runMode = "parallel", keywordsOrder = [], refreshTrigger = 0 }) {
+function QuestionsTab({ site, projectId, apiKey, model, brand, categories, setCategories, allResults, onResultSaved, activeProviders = ["openai"], providerKeys = {}, runMode = "parallel", keywordsOrder = [], refreshTrigger = 0, competitors = [], setCompetitors = null, onSaveKey = null, isReadOnly = false }) {
   const [questions, setQuestions]   = useState([]);
   const [results, setResults]       = useState(allResults || []);
   // Sort: favorites first, then by keyword order, then by creation date
@@ -4506,6 +4506,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
             runMode={runMode} keywordsOrder={keywords.map(k => k.id)}
             refreshTrigger={questionsKey}
             competitors={competitors} setCompetitors={setCompetitors}
+            isReadOnly={isReadOnly}
             onSaveKey={(keyPatch) => {
               setProviderKeys(prev => {
                 const next = { ...prev };
