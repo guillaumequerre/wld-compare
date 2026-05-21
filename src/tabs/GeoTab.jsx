@@ -1084,8 +1084,10 @@ function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [] 
   // ── Métriques par type de présence (nouveaux champs + rétrocompat) ──
 
   // MENTION = dans un top numéroté
+  // Rétrocompat : brand_position > 0 sur anciens résultats
   const mentionResults   = results.filter(r =>
-    r.brand_mention_position != null || r.brand_position != null
+    r.brand_mention_position != null ||
+    (r.brand_position != null && r.brand_position > 0)
   );
   const mentionPositions = mentionResults
     .map(r => r.brand_mention_position || r.brand_position)
@@ -1096,7 +1098,15 @@ function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [] 
     : null;
 
   // ÉVOCATION = dans le corps narratif hors top
-  const evocationResults   = results.filter(r => r.brand_evocation_position != null);
+  // Rétrocompat : brand_mentioned=true SANS position dans un top = évocation
+  const mentionSet = new Set(mentionResults.map(r => r.id || r.question_id + r.model));
+  const evocationResults   = results.filter(r => {
+    if (r.brand_evocation_position != null) return true;
+    // Ancien résultat : mentionné mais pas dans un top → évocation
+    const isMentioned = r.brand_mentioned === true || r.brand_mentioned === 1;
+    const hasTopPos   = (r.brand_mention_position != null) || (r.brand_position != null && r.brand_position > 0);
+    return isMentioned && !hasTopPos;
+  });
   const evocationPositions = evocationResults
     .map(r => r.brand_evocation_position)
     .filter(Boolean);
@@ -2192,22 +2202,38 @@ function ProviderRow({ provider, results, brandName, brandAliases, brandDomain =
         {/* Calendrier de présence 30j */}
         <PresenceCalendar questionId={questionId} providers={[provider]} newEntry={newCalEntry} />
 
-        {/* Présence — 3 types ─────────────────────────────────── */}
-        {result?.mention?.present && (
-          <span className="gt-provider-status gt-success" title={`Mention dans le Top — position #${result.mention.position}`}>
-            Top #{result.mention.position}
-          </span>
-        )}
-        {result?.citation?.present && (
-          <span className="gt-provider-status gt-dimmed" title={`Cité en source — position #${result.citation.position}`}>
-            src #{result.citation.position}
-          </span>
-        )}
-        {!result?.mention?.present && result?.evocation?.present && (
-          <span className="gt-provider-status gt-warn" title={`Évocation dans le texte — position #${result.evocation.position}`}>
-            évoc.
-          </span>
-        )}
+        {/* Présence — 3 types calculés depuis les champs DB ─────── */}
+        {(() => {
+          if (!result) return null;
+          // Champs nouveaux (post-migration)
+          const mentionPos   = result.brand_mention_position;
+          const evocPos      = result.brand_evocation_position;
+          const citationPos  = result.brand_citation_position;
+          // Rétrocompat champs anciens
+          const hasMention   = mentionPos != null || (result.brand_position != null && result.brand_position > 0);
+          const hasEvocation = evocPos != null || (
+            (result.brand_mentioned === true || result.brand_mentioned === 1) && !hasMention
+          );
+          const hasCitation  = citationPos != null || result.brand_in_sources;
+          const topPos       = mentionPos || result.brand_position;
+          return (<>
+            {hasMention && (
+              <span className="gt-provider-status gt-success" title={`Mention dans le Top${topPos ? ` — position #${topPos}` : ""}`}>
+                {topPos ? `Top #${topPos}` : "Top"}
+              </span>
+            )}
+            {hasCitation && (
+              <span className="gt-provider-status gt-dimmed" title={`Cité en source${citationPos ? ` — position #${citationPos}` : ""}`}>
+                {citationPos ? `src #${citationPos}` : "src"}
+              </span>
+            )}
+            {!hasMention && hasEvocation && (
+              <span className="gt-provider-status gt-warn" title="Évocation dans le texte">
+                évoc.
+              </span>
+            )}
+          </>);
+        })()}
 
         {/* Bouton voir réponse */}
         {result && (
