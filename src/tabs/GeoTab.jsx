@@ -2050,18 +2050,6 @@ function isBrandPresent(r) {
   return !!r && (r.brand_mentioned === true || r.brand_mentioned === 1);
 }
 
-function getPresenceType(r) {
-  if (!r) return null;
-  // Nouveaux champs prioritaires
-  if (r.brand_mention_position)   return "ranked";
-  if (r.brand_citation_position)  return "source";
-  if (r.brand_evocation_position) return "mention";
-  // Rétrocompat anciens résultats
-  if (r.brand_position && (r.brand_mentioned === true || r.brand_mentioned === 1)) return "ranked";
-  if (r.brand_in_sources) return "source";
-  if (r.brand_mentioned === true || r.brand_mentioned === 1) return "mention";
-  return null;
-}
 
 
 
