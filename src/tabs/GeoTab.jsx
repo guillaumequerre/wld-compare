@@ -2744,7 +2744,8 @@ ${question}`;
     const prompt = provider.id === "claude" ? promptForClaude : provider.id === "gemini" ? promptForGemini : promptForWeb;
     try {
       const parsed = await callProvider(provider, pk.dec, prompt);
-      const { brandMentioned, brandPosition, brandInSources, competitorsMentioned } = detectBrand(parsed.answer, parsed.sources, brand_name, brand_aliases, competitors);
+      const detectedBrand = detectBrand(parsed.answer, parsed.sources, brand_name, brand_aliases, competitors);
+      const { brandMentioned, brandPosition, brandInSources, competitorsMentioned } = detectedBrand;
       const domain_counts = {};
       (parsed.sources || []).forEach(url => {
         if (!domain_counts[url]) domain_counts[url] = { as_source: 0, in_answer: 0, domain: extractDomain(url) };
