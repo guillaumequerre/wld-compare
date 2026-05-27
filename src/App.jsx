@@ -61,11 +61,6 @@ function getBurgerTabs(isSuperAdmin) {
 
 
 
-// Emails superadmin — lus depuis la variable d'env Vite
-const SUPERADMIN_EMAILS = (
-  process.env.REACT_APP_SUPERADMINS || ""
-).split(",").map(e => e.trim().toLowerCase()).filter(Boolean);
-
 
 function NavBar({ tab, setTab, user, onLogout }) {
   const [burgerOpen, setBurgerOpen] = useState(false);
