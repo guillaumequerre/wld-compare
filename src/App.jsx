@@ -59,19 +59,13 @@ function getBurgerTabs(isSuperAdmin) {
     : BURGER_TABS_USER;
 }
 
-// Rétrocompat — garder NAV_TABS et BURGER_TABS pour les références existantes
-const NAV_TABS    = [...NAV_TABS_USER, ...NAV_TABS_SUPERADMIN];
-const BURGER_TABS = [...BURGER_TABS_USER, ...BURGER_TABS_SUPERADMIN];
+
 
 // Emails superadmin — lus depuis la variable d'env Vite
 const SUPERADMIN_EMAILS = (
   process.env.REACT_APP_SUPERADMINS || ""
 ).split(",").map(e => e.trim().toLowerCase()).filter(Boolean);
 
-function checkIsSuperAdmin(email) {
-  if (!email) return false;
-  return SUPERADMIN_EMAILS.includes(email.toLowerCase());
-}
 
 function NavBar({ tab, setTab, user, onLogout }) {
   const [burgerOpen, setBurgerOpen] = useState(false);

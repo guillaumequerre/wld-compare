@@ -1099,7 +1099,6 @@ function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [] 
 
   // ÉVOCATION = dans le corps narratif hors top
   // Rétrocompat : brand_mentioned=true SANS position dans un top = évocation
-  const mentionSet = new Set(mentionResults.map(r => r.id || r.question_id + r.model));
   const evocationResults   = results.filter(r => {
     if (r.brand_evocation_position != null) return true;
     // Ancien résultat : mentionné mais pas dans un top → évocation
@@ -2696,19 +2695,6 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, setCa
     setSelected(prev => { const n = new Set(prev); n.delete(qId); return n; });
   };
 
-  const setCatSingle = async (qId, catId) => {
-    if (!catId) return;
-    // Ajouter aux tags existants (multi-cat)
-    setQuestions(prev => prev.map(q => {
-      if (q.id !== qId) return q;
-      const existing = Array.isArray(q.tags) ? q.tags : (q.category_id ? [q.category_id] : []);
-      const newTags = existing.includes(catId) ? existing : [...existing, catId];
-      sbSetQuestionCategory(qId, catId).catch(() => {}); // persist primary
-      sbSetKeywordTags(qId, newTags).catch(() => {}); // persist tags (réutilise la même API)
-      return { ...q, category_id: catId, tags: newTags };
-    }));
-  };
-
   const removeCatFromQuestion = async (qId, catId) => {
     setQuestions(prev => prev.map(q => {
       if (q.id !== qId) return q;
@@ -3166,7 +3152,6 @@ ${question}`;
             const hasBrand = qResults.some(r => r.brand_mentioned === true || r.brand_mentioned === 1);
             const isRunning = running[q.id];
             const isSel = selected.has(q.id);
-            const cat = categories.find(c => c.id === q.category_id);
             const kwTag = keywords.find(k => k.id === q.keyword_id);
             return (
               <div key={q.id} className={`gt-item${isSel ? " gt-item--selected" : ""}`} style={{
