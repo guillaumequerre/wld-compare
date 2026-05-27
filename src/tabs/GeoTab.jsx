@@ -1099,7 +1099,7 @@ function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [] 
 
   // ÉVOCATION = dans le corps narratif hors top
   // Rétrocompat : brand_mentioned=true SANS position dans un top = évocation
-  // const mentionSet = new Set(mentionResults.map(r => r.id || r.question_id + r.model));
+  const mentionSet = new Set(mentionResults.map(r => r.id || r.question_id + r.model));
   const evocationResults   = results.filter(r => {
     if (r.brand_evocation_position != null) return true;
     // Ancien résultat : mentionné mais pas dans un top → évocation
@@ -2315,208 +2315,197 @@ function ProviderRow({ provider, results, brandName, brandAliases, brandDomain =
 // ── GeoAnalysis — AI analysis of fan-out presence ─────────────────
 
 function GeoAnalysis({ questions, results, brand, claudeKey }) {
-  const [status, setStatus] = useState("idle"); // idle | loading | done | error
-  const [analysis, setAnalysis] = useState("");
+  const [status, setStatus] = useState("idle");
+  const [sections, setSections] = useState([]);
   const [open, setOpen] = useState(false);
 
-  const brandName   = brand?.brand_name || "";
+  const brandName   = brand?.brand_name   || "";
   const brandDomain = brand?.brand_domain || "";
   const brandAliases = brand?.brand_aliases || [];
 
   const run = async () => {
     if (!claudeKey || !results.length) return;
-    setStatus("loading");
-    setAnalysis("");
-    setOpen(true);
+    setStatus("loading"); setSections([]); setOpen(true);
 
-    // ── Aggregate data ─────────────────────────────────
-    const total = results.length;
-    const withBrand = results.filter(r => r.brand_mentioned === true || r.brand_mentioned === 1).length;
-    const withSources = results.filter(r => r.brand_in_sources).length;
-    const positions = results.filter(r => r.brand_position).map(r => r.brand_position);
-    const avgPos = positions.length ? (positions.reduce((a,b)=>a+b,0)/positions.length).toFixed(1) : null;
+    const total      = results.length;
+    const withBrand  = results.filter(r => r.brand_mentioned === true || r.brand_mentioned === 1).length;
+    const withSrc    = results.filter(r => r.brand_in_sources).length;
+    const positions  = results.filter(r => r.brand_position).map(r => r.brand_position);
+    const avgPos     = positions.length ? (positions.reduce((a,b)=>a+b,0)/positions.length).toFixed(1) : null;
+    const presence   = total ? Math.round(withBrand/total*100) : 0;
 
-    // Top URLs cited overall
-    const urlCount = {};
-    results.forEach(r => (r.sources || []).forEach(url => {
-      urlCount[url] = (urlCount[url] || 0) + 1;
-    }));
-    const topUrls = Object.entries(urlCount).sort((a,b)=>b[1]-a[1]).slice(0, 15);
-
-    // Brand URLs cited
-    const allBrandTerms = [brandDomain, brandName, ...brandAliases].filter(Boolean).map(t => t.toLowerCase());
-    const brandUrls = topUrls.filter(([url]) => allBrandTerms.some(t => url.toLowerCase().includes(t)));
-    const competitorUrls = topUrls.filter(([url]) => !allBrandTerms.some(t => url.toLowerCase().includes(t)));
-
-    // Top competitors
-    const compCount = {};
-    results.forEach(r => (r.competitors_mentioned || []).forEach(c => {
-      compCount[c.name] = (compCount[c.name] || 0) + 1;
-    }));
-    const topComps = Object.entries(compCount).sort((a,b)=>b[1]-a[1]).slice(0,8);
-
-    // Questions without brand
+    // Questions sans présence
     const qMap = {};
     questions.forEach(q => { qMap[q.id] = q.question; });
-    const missingBrandQs = results
-      .filter(r => !(r.brand_mentioned === true || r.brand_mentioned === 1))
-      .map(r => qMap[r.question_id])
-      .filter(Boolean);
-    const uniqueMissing = [...new Set(missingBrandQs)].slice(0, 10);
+    const missing = [...new Set(results.filter(r => !(r.brand_mentioned===true||r.brand_mentioned===1)).map(r=>qMap[r.question_id]).filter(Boolean))].slice(0,8);
+    const present = [...new Set(results.filter(r => r.brand_mentioned===true||r.brand_mentioned===1).map(r=>qMap[r.question_id]).filter(Boolean))].slice(0,5);
 
-    // Questions with brand
-    const hasBrandQs = results
-      .filter(r => r.brand_mentioned === true || r.brand_mentioned === 1)
-      .map(r => qMap[r.question_id])
-      .filter(Boolean);
-    const uniquePresent = [...new Set(hasBrandQs)].slice(0, 8);
+    // Top concurrents
+    const compCount = {};
+    results.forEach(r => (r.competitors_mentioned||[]).forEach(c=>{
+      if(c.name) compCount[c.name]=(compCount[c.name]||0)+1;
+    }));
+    const topComps = Object.entries(compCount).sort((a,b)=>b[1]-a[1]).slice(0,5);
 
-    // Per-provider stats
-    const providerStats = {};
-    results.forEach(r => {
-      const pid = getProviderId(r.model);
-      if (!providerStats[pid]) providerStats[pid] = { total: 0, withBrand: 0 };
-      providerStats[pid].total++;
-      if (r.brand_mentioned === true || r.brand_mentioned === 1) providerStats[pid].withBrand++;
+    // URLs
+    const urlCount = {};
+    results.forEach(r=>(r.sources||[]).forEach(url=>{ urlCount[url]=(urlCount[url]||0)+1; }));
+    const allTerms = [brandName,...brandAliases].filter(Boolean).map(t=>t.toLowerCase());
+    const brandUrls = Object.entries(urlCount).filter(([u])=>allTerms.some(t=>u.toLowerCase().includes(t))).sort((a,b)=>b[1]-a[1]).slice(0,8);
+    const competitorUrls = Object.entries(urlCount).filter(([u])=>!allTerms.some(t=>u.toLowerCase().includes(t))).sort((a,b)=>b[1]-a[1]).slice(0,10);
+
+    // Provider stats
+    const provStats = {};
+    results.forEach(r=>{
+      const pid = r.model?.includes("openai")||r.model?.includes("gpt")?"OpenAI":r.model?.includes("gemini")?"Gemini":r.model?.includes("perplexity")||r.model?.includes("sonar")?"Perplexity":r.model?.includes("claude")?"Claude":"Autre";
+      if(!provStats[pid]) provStats[pid]={total:0,with:0};
+      provStats[pid].total++;
+      if(r.brand_mentioned===true||r.brand_mentioned===1) provStats[pid].with++;
     });
 
-    const prompt = `Tu es un expert en GEO (Generative Engine Optimization).
+    const prompt = `Tu es un expert GEO (Generative Engine Optimization) senior. Analyse la présence de "${brandName}" (${brandDomain}) dans les LLMs et produis des recommandations précises et actionnables.
 
-Voici les données de présence de la marque "${brandName}" (domaine : ${brandDomain || "non renseigné"}) dans les réponses des moteurs d'IA :
+DONNÉES DE PRÉSENCE :
+- Mention dans les tops : ${withBrand}/${total} réponses (${presence}%)
+- Citée en source : ${withSrc} fois
+- Position moyenne : ${avgPos ? "#"+avgPos : "non mesurée"}
 
-## MÉTRIQUES GLOBALES
-- Présence marque : ${withBrand}/${total} réponses (${total ? Math.round(withBrand/total*100) : 0}%)
-- Citée en source : ${withSources} réponses
-- Position moyenne : ${avgPos ? `#${avgPos}` : "non mesurée"}
+PAR PROVIDER :
+${Object.entries(provStats).map(([p,s])=>`- ${p}: ${s.with}/${s.total} (${Math.round(s.with/s.total*100)}%)`).join("\n")}
 
-## PAR PROVIDER
-${Object.entries(providerStats).map(([pid, s]) => `- ${pid} : ${s.withBrand}/${s.total} (${Math.round(s.withBrand/s.total*100)}%)`).join("\n")}
+QUESTIONS AVEC MENTION (${present.length}) :
+${present.map((q,i)=>`${i+1}. ${q}`).join("\n")||"Aucune"}
 
-## QUESTIONS OÙ LA MARQUE EST PRÉSENTE (${uniquePresent.length})
-${uniquePresent.map((q,i) => `${i+1}. ${q}`).join("\n")}
+QUESTIONS SANS MENTION — PRIORITÉS (${missing.length}) :
+${missing.map((q,i)=>`${i+1}. ${q}`).join("\n")||"Aucune"}
 
-## QUESTIONS OÙ LA MARQUE EST ABSENTE (${uniqueMissing.length} sur ${[...new Set(missingBrandQs)].length})
-${uniqueMissing.map((q,i) => `${i+1}. ${q}`).join("\n")}
+TOP CONCURRENTS CITÉS :
+${topComps.map(([n,c])=>`- ${n}: ${c}×`).join("\n")||"Aucun"}
 
-## TOP CONCURRENTS CITÉS
-${topComps.map(([n,c]) => `- ${n} : ${c}×`).join("\n") || "Aucun"}
+URLS MARQUE CITÉES EN SOURCE :
+${brandUrls.map(([u,c])=>`- ${u} (${c}×)`).join("\n")||"Aucune"}
 
-## URLS MARQUE CITÉES EN SOURCE
-${brandUrls.map(([u,c]) => `- ${u} (${c}×)`).join("\n") || "Aucune URL marque détectée"}
-
-## TOP URLS CONCURRENTES CITÉES EN SOURCE  
-${competitorUrls.slice(0,10).map(([u,c]) => `- ${u} (${c}×)`).join("\n") || "Aucune"}
+TOP URLS CONCURRENTES :
+${competitorUrls.slice(0,8).map(([u,c])=>`- ${u} (${c}×)`).join("\n")||"Aucune"}
 
 ---
 
-Produis une analyse GEO structurée en 3 sections EXACTEMENT dans ce format :
+Produis exactement 4 sections dans ce format :
 
-## 🔍 ÉTAT DES LIEUX
-[Forces et faiblesses concrètes — 4-6 points, basés sur les chiffres]
+## ÉTAT DES LIEUX
+[Diagnostic factuel en 4-5 points clés. Cite les chiffres exacts. Identifie les providers où la présence est faible vs forte.]
 
-## 📈 RECOMMANDATIONS — PAGES CITÉES PAR LES IA
-[3-5 recommandations actionnables basées sur les URLs concurrentes les plus citées — qu'est-ce que ces pages ont que nos pages n'ont pas ?]
+## MAILLAGE INTERNE — PAGES À RELIER
+[2-4 recommandations de maillage interne : quelles pages du site ${brandDomain} doivent pointer vers quelles autres. Base-toi sur les URLs citées en source et les thèmes des questions sans mention.]
 
-## 🏠 RECOMMANDATIONS — OPTIMISATION DES PAGES MARQUE
-[3-5 recommandations pour améliorer les pages de ${brandDomain || "la marque"} déjà citées, ou créer les pages manquantes pour les questions sans présence]
+## PAGES À CRÉER OU ADAPTER
+[3-5 pages à créer ou adapter sur ${brandDomain}. Pour chaque page : indiquer le titre H1 suggéré, l'angle éditorial, et la question sans présence qu'elle ciblerait.]
+
+## URLS CONCURRENTES — CE QUI FONCTIONNE
+[Pour les 3-5 URLs concurrentes les plus citées : analyser pourquoi les LLMs les citent. Identifier les patterns (format liste, comparatif, chiffres clés, FAQ) et recommander comment les reproduire sur ${brandDomain}.]
 
 RÈGLES :
-- Commence directement par ## 🔍 ÉTAT DES LIEUX, aucune introduction
-- Chiffres précis, recommandations concrètes
-- Pas de formules de politesse`;
+- Commence DIRECTEMENT par ## ÉTAT DES LIEUX, pas d'introduction
+- Recommandations concrètes : noms de pages, H1 suggérés, types de contenu
+- Chaque recommandation = une action précise, réalisable, avec un résultat attendu
+- Pas de formules génériques comme "améliorer le contenu" — être spécifique`;
 
     try {
       const res = await fetch("/api/claude-geo", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Claude-Key": claudeKey },
-        body: JSON.stringify({
-          model: "claude-haiku-4-5-20251001",
-          max_tokens: 1200,
-          messages: [{ role: "user", content: prompt }],
-        }),
+        body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 1800, messages: [{ role: "user", content: prompt }] }),
       });
-      const raw = await res.text();
-      if (raw.trimStart().startsWith("<")) throw new Error("Proxy claude-geo introuvable");
-      const data = JSON.parse(raw);
+      const data = await res.json();
       if (!res.ok) throw new Error(data.error?.message || `Claude ${res.status}`);
-      const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("\n").trim();
-      setAnalysis(text || "Aucune analyse générée.");
+      const text = (data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n").trim();
+
+      // Parser les sections
+      const parsed = text.split(/^## /m).filter(Boolean).map(s => {
+        const idx = s.indexOf("\n");
+        return { title: s.slice(0, idx).trim(), body: s.slice(idx+1).trim() };
+      });
+      setSections(parsed);
       setStatus("done");
     } catch(e) {
-      setAnalysis(`Erreur : ${e.message}`);
+      setSections([{ title: "Erreur", body: e.message }]);
       setStatus("error");
     }
   };
 
-  // Parse sections for pretty rendering
-  const sections = analysis ? analysis.split(/(?=## )/).filter(Boolean) : [];
-
-  const sectionColors = {
-    "ÉTAT": { bg: "#EFF6FF", border: "#BFDBFE", title: "#1D4ED8" },
-    "RECOMMANDATIONS — PAGES": { bg: "#F0FDF4", border: "#BBF7D0", title: "#15803D" },
-    "RECOMMANDATIONS — OPTIMISATION": { bg: "#FFFBEB", border: "#FDE68A", title: "#B45309" },
+  // Icônes par section
+  const SECTION_META = {
+    "ÉTAT DES LIEUX":                 { icon: "◎", color: "#1A3C2E",   border: "#1A3C2E18" },
+    "MAILLAGE INTERNE":               { icon: "⟶", color: "#1A3C2E",   border: "#1A3C2E11" },
+    "PAGES À CRÉER OU ADAPTER":       { icon: "✦", color: "#C97820",   border: "#C9782018" },
+    "URLS CONCURRENTES":              { icon: "↗", color: "#1A3C2E77", border: "#1A3C2E0D" },
   };
-
-  const getColor = (text) => {
-    const key = Object.keys(sectionColors).find(k => text.includes(k));
-    return sectionColors[key] || { bg: C.bg, border: C.border, title: C.text };
+  const getMeta = (title) => {
+    const key = Object.keys(SECTION_META).find(k => title.includes(k));
+    return SECTION_META[key] || { icon: "·", color: "#1A3C2E77", border: "#1A3C2E0D" };
   };
 
   if (!results.length) return null;
 
   return (
-    <div style={{ background: "#fff", border: "0.5px solid #1A3C2E0D", borderRadius: 14, padding: "18px 24px", marginBottom: 24 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+    <div style={{ marginBottom: 24 }}>
+      {/* ── Header ── */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: open && status === "done" ? 16 : 0 }}>
         <div>
-          <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>🔬 Analyse des présences Fan-out</div>
-          <div style={{ fontSize: 11, color: C.textLight }}>Forces, faiblesses et recommandations IA basées sur {results.length} réponses</div>
+          <div className="gt-label" style={{ marginBottom: 3 }}>Analyse GEO</div>
+          <div style={{ fontSize: 13, fontWeight: 400, color: "#1A3C2E", letterSpacing: "-0.005em" }}>
+            Recommandations actionnables — {results.length} réponses analysées
+          </div>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           {status === "done" && (
-            <button onClick={() => setOpen(o => !o)}
-              style={{ fontSize: 11, padding: "4px 10px", border: "0.5px solid #1A3C2E0D", borderRadius: 7, background: "#FAFAF8", cursor: "pointer", color: C.textMid }}>
-              {open ? "▲ Masquer" : "▼ Voir l'analyse"}
+            <button onClick={() => setOpen(o => !o)} className="gt-btn gt-btn--ghost" style={{ fontSize: 11 }}>
+              {open ? "Masquer" : "Voir l'analyse"}
             </button>
           )}
-          <button onClick={run} disabled={status === "loading" || !claudeKey}
-            title={!claudeKey ? "Clé Claude manquante — ajoutez-la dans ⚙️ Gestion des Providers (en haut de page)" : undefined}
-            style={{ fontSize: 12, fontWeight: 700, padding: "6px 14px", border: "none", borderRadius: 8, cursor: status === "loading" || !claudeKey ? "not-allowed" : "pointer",
-              background: !claudeKey ? C.bg : status === "loading" ? "#E5E7EB" : "#7C3AED",
-              color: !claudeKey ? C.textLight : status === "loading" ? C.textLight : "#fff" }}>
-            {status === "loading" ? "⏳ Analyse en cours…" : status === "done" ? "↺ Relancer" : "✨ Analyser"}
+          <button
+            onClick={run}
+            disabled={status === "loading" || !claudeKey}
+            className={`gt-btn ${status === "idle" ? "gt-btn--solid" : "gt-btn--ghost"}`}
+            title={!claudeKey ? "Clé Claude manquante" : undefined}
+            style={{ opacity: (!claudeKey || status === "loading") ? 0.4 : 1 }}>
+            {status === "loading" ? "Analyse…" : status === "done" ? "↺ Relancer" : "Analyser"}
           </button>
         </div>
       </div>
 
-      {!claudeKey && (
-        <div style={{ marginTop: 8, fontSize: 11, color: "#D97706", background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 7, padding: "6px 10px" }}>
-          ⚠️ Clé Claude requise — configurez-la dans le setup
-        </div>
-      )}
-
+      {/* ── Contenu ── */}
       {open && status === "done" && sections.length > 0 && (
-        <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 12 }}>
-          {sections.map((section, i) => {
-            const lines = section.trim().split("\n");
-            const title = lines[0].replace(/^## /, "");
-            const body = lines.slice(1).join("\n").trim();
-            const col = getColor(title);
+        <div style={{ display: "flex", flexDirection: "column", gap: 1, borderTop: "0.5px solid #1A3C2E0D", paddingTop: 16 }}>
+          {sections.map((s, i) => {
+            const meta = getMeta(s.title);
+            if (s.title === "Erreur") return (
+              <div key={i} style={{ fontSize: 12, color: "#C0352A", padding: "10px 0" }}>{s.body}</div>
+            );
             return (
-              <div key={i} style={{ background: col.bg, border: `1px solid ${col.border}`, borderRadius: 10, padding: "12px 16px" }}>
-                <div style={{ fontSize: 12, fontWeight: 800, color: col.title, marginBottom: 8 }}>{title}</div>
-                <div style={{ fontSize: 12, color: C.text, lineHeight: 1.7 }}>{renderMarkdown(body)}</div>
+              <div key={i} style={{
+                borderLeft: `2px solid ${meta.border}`,
+                paddingLeft: 16, paddingBottom: 16,
+                marginBottom: i < sections.length - 1 ? 4 : 0,
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                  <span style={{ fontSize: 12, color: meta.color, fontWeight: 500 }}>{meta.icon}</span>
+                  <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.10em", textTransform: "uppercase", color: meta.color }}>
+                    {s.title}
+                  </span>
+                </div>
+                <div style={{ fontSize: 12, color: "#1A3C2E", lineHeight: 1.75 }}>
+                  {renderMarkdown(s.body)}
+                </div>
               </div>
             );
           })}
         </div>
       )}
-
-      {open && status === "error" && (
-        <div style={{ marginTop: 12, fontSize: 12, color: "#DC2626", padding: "10px 14px", background: "#FEF2F2", borderRadius: 8 }}>{analysis}</div>
-      )}
     </div>
   );
 }
+
 
 // ── Questions sub-tab (v2) ────────────────────────────────────────
 
@@ -2708,15 +2697,40 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, setCa
   };
 
   const setCatSingle = async (qId, catId) => {
-    await sbSetQuestionCategory(qId, catId || null);
-    setQuestions(prev => prev.map(q => q.id === qId ? { ...q, category_id: catId || null } : q));
+    if (!catId) return;
+    // Ajouter aux tags existants (multi-cat)
+    setQuestions(prev => prev.map(q => {
+      if (q.id !== qId) return q;
+      const existing = Array.isArray(q.tags) ? q.tags : (q.category_id ? [q.category_id] : []);
+      const newTags = existing.includes(catId) ? existing : [...existing, catId];
+      sbSetQuestionCategory(qId, catId).catch(() => {}); // persist primary
+      sbSetKeywordTags(qId, newTags).catch(() => {}); // persist tags (réutilise la même API)
+      return { ...q, category_id: catId, tags: newTags };
+    }));
+  };
+
+  const removeCatFromQuestion = async (qId, catId) => {
+    setQuestions(prev => prev.map(q => {
+      if (q.id !== qId) return q;
+      const newTags = (Array.isArray(q.tags) ? q.tags : (q.category_id ? [q.category_id] : [])).filter(t => t !== catId);
+      const newPrimary = newTags[0] || null;
+      sbSetQuestionCategory(qId, newPrimary).catch(() => {});
+      sbSetKeywordTags(qId, newTags).catch(() => {});
+      return { ...q, category_id: newPrimary, tags: newTags };
+    }));
   };
 
   const applyBulkCat = async () => {
-    if (!selected.size) return;
+    if (!selected.size || !bulkCat) return; // Ne rien faire si pas de catégorie sélectionnée
     const ids = [...selected];
-    await sbBulkSetQuestionCategory(ids, bulkCat || null);
-    setQuestions(prev => prev.map(q => selected.has(q.id) ? { ...q, category_id: bulkCat || null } : q));
+    await sbBulkSetQuestionCategory(ids, bulkCat);
+    setQuestions(prev => prev.map(q => {
+      if (!selected.has(q.id)) return q;
+      // Multi-cat : ajouter la catégorie aux tags existants sans dupliquer
+      const existingTags = Array.isArray(q.tags) ? q.tags : (q.category_id ? [q.category_id] : []);
+      const newTags = existingTags.includes(bulkCat) ? existingTags : [...existingTags, bulkCat];
+      return { ...q, category_id: bulkCat, tags: newTags };
+    }));
     setSelected(new Set()); setBulkCat("");
   };
 
@@ -3188,7 +3202,16 @@ ${question}`;
                           {kwTag.search_volume >= 1000 ? (kwTag.search_volume / 1000).toFixed(1) + "k" : kwTag.search_volume} rech/mois
                         </span>
                       )}
-                      {cat && <span style={{ fontSize: 10, fontWeight: 500, color: cat.color, background: "transparent", border: `0.5px solid ${cat.color}44`, borderRadius: 20, padding: "2px 9px" }}>{cat.name}</span>}
+                      {/* Multi-catégories */}
+                  {(Array.isArray(q.tags) ? q.tags : (q.category_id ? [q.category_id] : [])).map(tagId => {
+                    const tagCat = categories.find(c => c.id === tagId);
+                    return tagCat ? (
+                      <span key={tagId} style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 10, fontWeight: 500, color: tagCat.color, background: "transparent", border: `0.5px solid ${tagCat.color}44`, borderRadius: 20, padding: "2px 9px" }}>
+                        {tagCat.name}
+                        <button onClick={e => { e.stopPropagation(); removeCatFromQuestion(q.id, tagId); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 9, color: tagCat.color, padding: 0, lineHeight: 1, opacity: 0.6 }}>×</button>
+                      </span>
+                    ) : null;
+                  })}
                       {q.is_manual && <span style={{ fontSize: 10, color: "#1A3C2E33", fontWeight: 400, fontStyle: "italic" }}>manuel</span>}
                       {hasBrand && <span style={{ fontSize: 10, color: "#1A7A4A", fontWeight: 500, letterSpacing: "0.01em" }}>✓ {brand_name}</span>}
                       {qResults.length > 0 && <span style={{ fontSize: 10, color: "#1A3C2E33" }}>{qResults.length} réponse{qResults.length > 1 ? "s" : ""}</span>}
@@ -3197,7 +3220,17 @@ ${question}`;
 
                   </div>
                   <div style={{ display: "flex", gap: 6, flexShrink: 0, alignItems: "center" }}>
-                    <CatSelect value={q.category_id} categories={categories} onChange={v => setCatSingle(q.id, v)} />
+                    <TagSelect
+                      values={Array.isArray(q.tags) ? q.tags : (q.category_id ? [q.category_id] : [])}
+                      categories={categories}
+                      onChange={tags => {
+                        const newPrimary = tags[0] || null;
+                        sbSetQuestionCategory(q.id, newPrimary).catch(() => {});
+                        sbSetKeywordTags(q.id, tags).catch(() => {});
+                        setQuestions(prev => prev.map(qq => qq.id === q.id ? { ...qq, category_id: newPrimary, tags } : qq));
+                      }}
+                      placeholder="Catégories…"
+                    />
                     <button onClick={() => setEditingQ(editingQ?.id === q.id ? null : { id: q.id, text: q.question })}
                       style={{ padding: "3px 8px", border: "0.5px solid #1A3C2E18", borderRadius: 20, background: "transparent", color: "#1A3C2E55", fontSize: 12, cursor: "pointer", fontWeight: 400 }}
                       title="Modifier">✎</button>
@@ -3333,7 +3366,45 @@ function UrlsTab({ projectId, categories, brand, allResults }) {
     setLoading(true);
     setError(false);
     sbGetUrlIndex(projectId)
-      .then(data => { setUrls(Array.isArray(data) ? data : []); setLoading(false); })
+      .then(data => {
+      if (!Array.isArray(data)) { setUrls([]); setLoading(false); return; }
+
+      // ── Normaliser et dédupliquer : regrouper www/non-www, http/https, slash final ──
+      const normalizeUrl = (url) => {
+        try {
+          const u = new URL(url);
+          // Normaliser : https, sans www, sans slash final
+          return `${u.pathname.replace(/\/+$/, "") || "/"}${u.search}`
+            .toLowerCase()
+            .replace(/^www\./, "");
+        } catch { return url.toLowerCase().trim(); }
+      };
+
+      const normalDomain = (url) => {
+        try { return new URL(url).hostname.toLowerCase().replace(/^www\./, ""); } catch { return ""; }
+      };
+
+      // Grouper par URL normalisée
+      const groups = {};
+      data.forEach(entry => {
+        const key = normalDomain(entry.url || "") + normalizeUrl(entry.url || "");
+        if (!groups[key]) {
+          groups[key] = { ...entry };
+        } else {
+          // Sommer les compteurs, garder l'URL la plus courte (sans www, avec https)
+          groups[key].count_as_source = (groups[key].count_as_source || 0) + (entry.count_as_source || 0);
+          groups[key].count_in_answer = (groups[key].count_in_answer || 0) + (entry.count_in_answer || 0);
+          // Préférer l'URL avec www si pas encore normalisée, sinon la plus courte
+          if ((entry.url || "").length < (groups[key].url || "").length) {
+            groups[key].url = entry.url;
+            groups[key].domain = entry.domain || normalDomain(entry.url || "");
+          }
+        }
+      });
+
+      setUrls(Object.values(groups));
+      setLoading(false);
+    })
       .catch(() => { setUrls([]); setLoading(false); setError(true); });
   }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -3611,10 +3682,13 @@ function UrlsTab({ projectId, categories, brand, allResults }) {
                       {crawling[u.id] ? "⏳" : u.crawl_status === "done" ? "🔄" : "🕷️"}
                     </button>
                     {u.crawl_status === "done" && (
-                      <button onClick={() => analyzePageContent(u)} disabled={!!analyzingPage[u.id]}
-                        title="Lire la page et identifier les particularités (structure, contenu GEO, opportunités)"
-                        style={{ padding: "3px 8px", border: "1px solid #7C3AED", borderRadius: 6, fontSize: 10, cursor: analyzingPage[u.id] ? "wait" : "pointer", background: "#F5F3FF", color: "#7C3AED", fontWeight: 600 }}>
-                        {analyzingPage[u.id] ? "⏳" : "✦ Analyser"}
+                      <button
+                        onClick={() => pageAnalysis[u.id] ? setPageAnalysis(prev => { const n = {...prev}; delete n[u.id]; return n; }) : analyzePageContent(u)}
+                        disabled={!!analyzingPage[u.id]}
+                        title="Analyser le contenu GEO de la page"
+                        className="gt-btn-icon"
+                        style={{ fontSize: 11, color: pageAnalysis[u.id] ? "#1A3C2E" : "#1A3C2E55" }}>
+                        {analyzingPage[u.id] ? "…" : pageAnalysis[u.id] ? "✦ ▲" : "✦"}
                       </button>
                     )}
                   </div>
@@ -3637,26 +3711,44 @@ function UrlsTab({ projectId, categories, brand, allResults }) {
                     </div>
                   </div>
                 )}
-              {/* GEO page analysis results */}
+              {/* Analyse GEO — accordéon au-dessus de la ligne URL */}
               {pageAnalysis[u.id] && (
-                <div style={{ borderTop: "1px solid #E9D5FF", background: "#F5F3FF", padding: "10px 14px" }}>
+                <div style={{ borderTop: "0.5px solid #1A3C2E08", padding: "12px 0 4px 0", marginBottom: 4 }}>
                   {pageAnalysis[u.id].error ? (
-                    <div style={{ fontSize: 11, color: "#DC2626" }}>Erreur : {pageAnalysis[u.id].error}</div>
+                    <div style={{ fontSize: 11, color: "#C0352A" }}>Erreur : {pageAnalysis[u.id].error}</div>
                   ) : (
-                    <>
-                      <div style={{ fontSize: 10, fontWeight: 700, color: "#7C3AED", marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.7 }}>✦ Analyse GEO</div>
-                      <div style={{ fontSize: 11, color: "#5B21B6", marginBottom: 8, lineHeight: 1.5 }}>{pageAnalysis[u.id].summary}</div>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                      {/* Résumé */}
+                      <div style={{ fontSize: 12, color: "#1A3C2E", lineHeight: 1.6 }}>
+                        {pageAnalysis[u.id].summary}
+                      </div>
+                      {/* Signaux + Opportunités */}
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
                         <div>
-                          <div style={{ fontSize: 10, fontWeight: 700, color: "#059669", marginBottom: 4 }}>✓ Signaux GEO</div>
-                          {(pageAnalysis[u.id].geo_signals || []).map((s, i) => <div key={i} style={{ fontSize: 11, color: "#065F46", marginBottom: 2 }}>• {s}</div>)}
+                          <div className="gt-label" style={{ marginBottom: 6, color: "#1A7A4A" }}>Signaux GEO</div>
+                          {(pageAnalysis[u.id].geo_signals || []).map((s, i) => (
+                            <div key={i} style={{ fontSize: 11, color: "#1A3C2E", marginBottom: 3, paddingLeft: 8, borderLeft: "2px solid #1A7A4A22" }}>
+                              {s}
+                            </div>
+                          ))}
                         </div>
                         <div>
-                          <div style={{ fontSize: 10, fontWeight: 700, color: "#D97706", marginBottom: 4 }}>→ Opportunités</div>
-                          {(pageAnalysis[u.id].opportunities || []).map((o, i) => <div key={i} style={{ fontSize: 11, color: "#92400E", marginBottom: 2 }}>• {o}</div>)}
+                          <div className="gt-label" style={{ marginBottom: 6, color: "#C97820" }}>Opportunités</div>
+                          {(pageAnalysis[u.id].opportunities || []).map((o, i) => (
+                            <div key={i} style={{ fontSize: 11, color: "#1A3C2E", marginBottom: 3, paddingLeft: 8, borderLeft: "2px solid #C9782022" }}>
+                              {o}
+                            </div>
+                          ))}
                         </div>
                       </div>
-                    </>
+                      {/* Score GEO */}
+                      {pageAnalysis[u.id].seo_score && (
+                        <div style={{ fontSize: 10, color: "#1A3C2E44" }}>
+                          Score GEO estimé : {pageAnalysis[u.id].seo_score}/10
+                          {pageAnalysis[u.id].content_type && ` · ${pageAnalysis[u.id].content_type}`}
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
               )}

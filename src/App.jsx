@@ -4,7 +4,7 @@ import { emptyDataMap, makeInitialProject, parseCSV, parseSemrushCSV } from "./l
 import { extractSF, extractGSC, extractGA, extractBing, extractSemrush, parseSemrush, filterByMode } from "./lib/parsers";
 import { buildUrlMaps, buildSfPageVectors, intraCorrFast, smIntraCorr } from "./lib/correlations";
 import { sbSaveProject, sbGetHistory, sbGetLatest, sbDownload, sbGetPageTypes, sbSaveGeoAxes, sbGetGeoResultsAll, sbGetUrlIndex } from "./lib/supabase";
-import { sbLoadAccessibleProjects } from "./lib/auth";
+
 import AnalyseTab from "./tabs/AnalyseTab";
 import ImportTab from "./tabs/ImportTab";
 import MatrixTab from "./tabs/MatrixTab";
@@ -18,30 +18,69 @@ import GeoAuditTab from "./tabs/GeoAuditTab";
 import HomeTab from "./tabs/HomeTab";
 import ManageTab from "./tabs/ManageTab";
 import ResetPasswordPage from "./components/ResetPasswordPage"; // ← AJOUTÉ
-import { getCurrentUser, authLogout } from "./lib/auth";
+import { sbLoadAccessibleProjects, getCurrentUser, getOrRefreshSession, authLogout, isSuperAdmin } from "./lib/auth";
 
-const NAV_TABS = [
-  { key: "geo",         label: "🔍 Fan-outs"         },
-  { key: "geo_audit",   label: "📋 Audit GEO"        },
-  { key: "pages",       label: "Vue par page"         },
-  { key: "sites",       label: "Vue par site"         },
+// Tabs disponibles pour TOUS les utilisateurs
+const NAV_TABS_USER = [
+  { key: "geo",       label: "🔍 Fan-outs"   },
+  { key: "geo_audit", label: "📋 Audit GEO"  },
 ];
 
-const BURGER_TABS = [
-  { key: "manage",      label: "👤 Compte & projets" },
-  { key: "analyse",     label: "✦ Analyse IA"        },
-  { key: "home",        label: "🏠 Accueil"          },
-  { key: "evolution",   label: "📅 Évolution"        },
-  { key: "matrix",      label: "Matrice"             },
-  { key: "semrush",     label: "📊 Semrush"          },
-  { key: "allprojects", label: "◈ Tous les projets"  },
-  { key: "import",      label: "⚙️ Setup avancé"     },
+const BURGER_TABS_USER = [
+  { key: "home",   label: "🏠 Accueil"          },
+  { key: "import", label: "⚙️ Setup avancé"     },
+  { key: "manage", label: "👤 Compte & projets" },
 ];
+
+// Tabs supplémentaires réservés au superadmin
+const NAV_TABS_SUPERADMIN = [
+  { key: "pages", label: "Vue par page" },
+  { key: "sites", label: "Vue par site" },
+];
+
+const BURGER_TABS_SUPERADMIN = [
+  { key: "analyse",     label: "✦ Analyse IA"       },
+  { key: "evolution",   label: "📅 Évolution"       },
+  { key: "matrix",      label: "Matrice"            },
+  { key: "semrush",     label: "📊 Semrush"         },
+  { key: "allprojects", label: "◈ Tous les projets" },
+];
+
+// Calcul dynamique selon le rôle
+function getNavTabs(isSuperAdmin) {
+  return isSuperAdmin
+    ? [...NAV_TABS_USER, ...NAV_TABS_SUPERADMIN]
+    : NAV_TABS_USER;
+}
+
+function getBurgerTabs(isSuperAdmin) {
+  return isSuperAdmin
+    ? [...BURGER_TABS_USER, ...BURGER_TABS_SUPERADMIN]
+    : BURGER_TABS_USER;
+}
+
+// Rétrocompat — garder NAV_TABS et BURGER_TABS pour les références existantes
+const NAV_TABS    = [...NAV_TABS_USER, ...NAV_TABS_SUPERADMIN];
+const BURGER_TABS = [...BURGER_TABS_USER, ...BURGER_TABS_SUPERADMIN];
+
+// Emails superadmin — lus depuis la variable d'env Vite
+const SUPERADMIN_EMAILS = (
+  process.env.REACT_APP_SUPERADMINS || ""
+).split(",").map(e => e.trim().toLowerCase()).filter(Boolean);
+
+function checkIsSuperAdmin(email) {
+  if (!email) return false;
+  return SUPERADMIN_EMAILS.includes(email.toLowerCase());
+}
 
 function NavBar({ tab, setTab, user, onLogout }) {
   const [burgerOpen, setBurgerOpen] = useState(false);
   const burgerRef = useRef(null);
-  const isBurgerTab = BURGER_TABS.some(t => t.key === tab);
+  // Navigation dynamique selon le rôle
+  const superAdmin = isSuperAdmin(user?.email);
+  const navTabs    = getNavTabs(superAdmin);
+  const burgerTabs = getBurgerTabs(superAdmin);
+  const isBurgerTab = burgerTabs.some(t => t.key === tab);
 
   useEffect(() => {
     if (!burgerOpen) return;
@@ -59,12 +98,12 @@ function NavBar({ tab, setTab, user, onLogout }) {
     }}>{t.label}</button>
   );
 
-  const burgerItems = BURGER_TABS.slice(0, 3);
-  const moreTabs    = BURGER_TABS.slice(3);
+  const burgerItems = burgerTabs.slice(0, 3);
+  const moreTabs    = burgerTabs.slice(3);
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-      {NAV_TABS.map(tabBtn)}
+      {navTabs.map(tabBtn)}
 
       <div ref={burgerRef} style={{ position: "relative" }}>
         <button onClick={() => setBurgerOpen(o => !o)} style={{
@@ -74,7 +113,7 @@ function NavBar({ tab, setTab, user, onLogout }) {
           transition: "all 0.15s", display: "flex", alignItems: "center", gap: 5,
         }}>
           <span style={{ fontSize: 15, lineHeight: 1 }}>☰</span>
-          {isBurgerTab && <span style={{ fontSize: 12 }}>{BURGER_TABS.find(t => t.key === tab)?.label}</span>}
+          {isBurgerTab && <span style={{ fontSize: 12 }}>{burgerTabs.find(t => t.key === tab)?.label}</span>}
         </button>
 
         {burgerOpen && (
@@ -304,10 +343,14 @@ export default function App() {
     (async () => {
       setDbLoading(true);
       try {
-        // Retry jusqu'à 3 fois — gère la race condition sessionStorage
-        let currentUser = getCurrentUser();
-        if (!currentUser) { await new Promise(r => setTimeout(r, 300)); currentUser = getCurrentUser(); }
-        if (!currentUser) { await new Promise(r => setTimeout(r, 500)); currentUser = getCurrentUser(); }
+        // Récupère l'utilisateur et rafraîchit le token si expiré
+        // (évite les projets vides au retour sur l'app après expiration du token)
+        let currentUser = await getOrRefreshSession();
+        if (!currentUser) {
+          // Race condition possible si sessionStorage pas encore dispo — retry 1 fois
+          await new Promise(r => setTimeout(r, 400));
+          currentUser = await getOrRefreshSession();
+        }
         if (!currentUser) { setDbLoading(false); return; }
 
         const savedProjects = await sbLoadAccessibleProjects(currentUser.email);
@@ -374,6 +417,47 @@ export default function App() {
     sbGetGeoResultsAll(currentProjectId).then(setGeoResults).catch(() => setGeoResults([]));
     sbGetUrlIndex(currentProjectId).then(setGeoUrlIndex).catch(() => setGeoUrlIndex([]));
   }, [currentProjectId, tab]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Refresh périodique du token (toutes les 50 min) ────────────
+  // Évite l'expiration du token pendant une session longue
+  useEffect(() => {
+    const REFRESH_INTERVAL = 50 * 60 * 1000; // 50 minutes
+    const interval = setInterval(async () => {
+      const user = await getOrRefreshSession();
+      if (!user && getCurrentUser()) {
+        // Session expirée et refresh impossible → déconnecter proprement
+        console.warn("[App] Session expirée — déconnexion automatique");
+        setUser(null);
+        clearSession();
+      }
+    }, REFRESH_INTERVAL);
+    return () => clearInterval(interval);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Refresh périodique du token (toutes les 50 min) ────────────
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      const user = await getOrRefreshSession();
+      if (!user && getCurrentUser()) {
+        console.warn('[App] Session expirée — déconnexion');
+        setUser(null); clearSession();
+      }
+    }, 50 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Refresh périodique du token (toutes les 50 min) ────────────
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      const user = await getOrRefreshSession();
+      if (!user && getCurrentUser()) {
+        console.warn("[App] Session expirée — déconnexion");
+        setUser(null);
+        clearSession();
+      }
+    }, 50 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Computed metrics ─────────────────────────────────────────────
   const baseMetrics = useMemo(() => sites.map(s => ({

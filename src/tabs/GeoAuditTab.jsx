@@ -320,7 +320,7 @@ Sois direct, concis, actionnable. Pas de généralités.`;
         <button
           onClick={handleCTA}
           disabled={status === "loading" || !claudeKey}
-          style={{ padding: "8px 18px", background: status === "loading" ? C.bg : "#7C3AED", color: status === "loading" ? C.textLight : "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: status === "loading" || !claudeKey ? "default" : "pointer", opacity: !claudeKey ? 0.5 : 1 }}
+          style={{ padding: "5px 14px", background: (status === "loading" || !claudeKey) ? "transparent" : "#1A3C2E", color: (status === "loading" || !claudeKey) ? "#1A3C2E44" : "#F0EBE0", border: "0.5px solid #1A3C2E22", borderRadius: 6, fontSize: 11, fontWeight: 500, cursor: (status === "loading" || !claudeKey) ? "default" : "pointer" }}
           title={!claudeKey ? "Clé Claude manquante dans ⚙️ Providers" : undefined}
         >
           {status === "loading" ? "⏳ Analyse…" : "✦ Analyser par catégorie"}
@@ -396,13 +396,13 @@ Sois direct, concis, actionnable. Pas de généralités.`;
       {/* Résultat analyse IA */}
       {status === "done" && analysis && (
         <div style={{ padding: "16px 20px" }}>
-          <button onClick={() => setOpen(o => !o)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "#7C3AED", fontWeight: 700, padding: 0, marginBottom: open ? 10 : 0 }}>
+          <button onClick={() => setOpen(o => !o)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "#1A3C2E55", fontWeight: 500, padding: 0, marginBottom: open ? 10 : 0 }}>
             {open ? "▲ Masquer l'analyse IA" : "▼ Voir l'analyse IA"}
           </button>
           {open && (
             <div style={{ fontSize: 12, color: C.text, lineHeight: 1.7 }}>
               {analysis.split("\n").map((line, i) => {
-                if (line.startsWith("## ")) return <div key={i} style={{ fontWeight: 700, fontSize: 13, color: "#7C3AED", marginTop: 14, marginBottom: 4 }}>{line.slice(3)}</div>;
+                if (line.startsWith("## ")) return <div key={i} style={{ fontWeight: 600, fontSize: 11, color: "#1A3C2E", marginTop: 12, marginBottom: 4, letterSpacing: "0.06em", textTransform: "uppercase" }}>{line.slice(3)}</div>;
                 if (line.startsWith("- ")) return <div key={i} style={{ paddingLeft: 14, marginBottom: 3 }}>• {line.slice(2)}</div>;
                 if (!line.trim()) return <div key={i} style={{ height: 6 }} />;
                 return <div key={i} style={{ marginBottom: 3 }}>{line}</div>;
@@ -418,17 +418,16 @@ Sois direct, concis, actionnable. Pas de généralités.`;
   );
 }
 
-function Section({ icon, title, sub, children, accent }) {
+function Section({ icon, title, sub, children }) {
   return (
-    <div style={{ background: C.white, border: `1px solid ${accent ? accent + "44" : C.border}`, borderRadius: 14, overflow: "hidden", marginBottom: 16 }}>
-      <div style={{ padding: "16px 24px", borderBottom: `1px solid ${C.border}`, background: accent ? accent + "08" : C.bg, display: "flex", alignItems: "center", gap: 10 }}>
-        <span style={{ fontSize: 18 }}>{icon}</span>
-        <div>
-          <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{title}</div>
-          {sub && <div style={{ fontSize: 11, color: C.textLight, marginTop: 1 }}>{sub}</div>}
+    <div style={{ background: "#fff", border: "0.5px solid #1A3C2E0D", borderRadius: 10, padding: "18px 20px", marginBottom: 12 }}>
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E55" }}>
+          {title}
         </div>
+        {sub && <div style={{ fontSize: 11, color: "#1A3C2E44", marginTop: 2 }}>{sub}</div>}
       </div>
-      <div style={{ padding: "16px 24px" }}>{children}</div>
+      {children}
     </div>
   );
 }
@@ -570,10 +569,10 @@ const entries = Object.entries(compStats)
 // ── Bandeau de score GEO ───────────────────────────────────────────
 function GeoScoreBanner({ audit, brand, site }) {
   const score = audit.presenceRate;
-  const level = score >= 70 ? { label: "Excellent", color: "#059669", bg: "#ECFDF5", bar: "#059669" }
-              : score >= 50 ? { label: "Bon", color: "#2563EB", bg: "#EFF6FF", bar: "#2563EB" }
-              : score >= 30 ? { label: "À améliorer", color: "#D97706", bg: "#FFFBEB", bar: "#D97706" }
-              : { label: "Critique", color: "#DC2626", bg: "#FEF2F2", bar: "#DC2626" };
+  const level = score >= 70 ? { label: "Excellent",  color: "#1A7A4A", bg: "#F0F7F3", bar: "#1A7A4A" }
+              : score >= 50 ? { label: "Bon",         color: "#1A3C2E", bg: "#EAF0EC", bar: "#1A3C2E" }
+              : score >= 30 ? { label: "À améliorer", color: "#C97820", bg: "#FDF5E6", bar: "#C97820" }
+              :               { label: "Critique",    color: "#C0352A", bg: "#FEF2F2", bar: "#C0352A" };
 
   return (
     <div style={{ background: level.bg, border: `1.5px solid ${level.color}33`, borderRadius: 16, padding: "20px 28px", marginBottom: 20, display: "flex", gap: 28, alignItems: "center", flexWrap: "wrap" }}>
@@ -599,17 +598,17 @@ function GeoScoreBanner({ audit, brand, site }) {
         {/* Barre proportion */}
         <div style={{ display: "flex", height: 6, borderRadius: 3, overflow: "hidden", background: "#E2E8F0", marginBottom: 4 }}>
           {audit.total > 0 && <>
-            <div style={{ width: `${(audit.withRanked||0) / audit.total * 100}%`, background: "#059669" }} title={`Classé : ${audit.withRanked||0}`} />
-            <div style={{ width: `${(audit.withSourceOnly||0) / audit.total * 100}%`, background: "#2563EB" }} title={`Source : ${audit.withSourceOnly||0}`} />
-            <div style={{ width: `${(audit.withMentionOnly||0) / audit.total * 100}%`, background: "#D97706" }} title={`Mention : ${audit.withMentionOnly||0}`} />
+            <div style={{ width: `${(audit.withRanked||0) / audit.total * 100}%`, background: "#059669" }} title={`Mention : ${audit.withRanked||0}`} />
+            <div style={{ width: `${(audit.withSourceOnly||0) / audit.total * 100}%`, background: "#2563EB" }} title={`Citation : ${audit.withSourceOnly||0}`} />
+            <div style={{ width: `${(audit.withMentionOnly||0) / audit.total * 100}%`, background: "#D97706" }} title={`Évocation : ${audit.withMentionOnly||0}`} />
           </>}
         </div>
         {[
-          { icon: "🏆", label: "Classé",  val: audit.withRanked||0,      color: "#059669", tip: "Position dans un top LLM" },
-          { icon: "🔗", label: "Source",  val: audit.withSourceOnly||0,  color: "#2563EB", tip: "URL citée en source" },
-          { icon: "💬", label: "Mention", val: audit.withMentionOnly||0, color: "#D97706", tip: "Présence textuelle anecdotique" },
-          { icon: "🏷",  label: "Pos. moy.", val: audit.avgPos ? `#${audit.avgPos}` : "—", color: C.text, tip: "Position moyenne dans les tops" },
-          { icon: "⚔️", label: "Concurrents", val: Object.keys(audit.compStats).length, color: C.amber, tip: "Concurrents détectés" },
+          { icon: "◎",  label: "Mention",    val: audit.withRanked||0,      color: "#1A7A4A", tip: "Dans un top LLM numéroté" },
+          { icon: "⟶", label: "Évocation",  val: audit.withMentionOnly||0, color: "#C97820", tip: "Corps du texte hors top" },
+          { icon: "↗",  label: "Citation",   val: audit.withSourceOnly||0,  color: "#1A3C2E", tip: "Domaine dans les sources" },
+          { icon: "·",  label: "Pos. moy.",  val: audit.avgPos ? `#${audit.avgPos}` : "—", color: "#1A3C2E77", tip: "Position moyenne dans les tops" },
+          { icon: "·",  label: "Concurrents",val: Object.keys(audit.compStats).length, color: "#1A3C2E77", tip: "Concurrents détectés" },
         ].map(k => (
           <div key={k.label} title={k.tip} style={{ display: "flex", justifyContent: "space-between", gap: 12, cursor: "default" }}>
             <span style={{ fontSize: 11, color: C.textLight }}>{k.icon} {k.label}</span>
@@ -843,7 +842,58 @@ function computeAudit(questions, results, urlIndex, brand, site, calendarEntries
     if (r.brand_mentioned) providerStats[pid].withBrand++;
   });
 
-  return { total, withBrand, withSources, withRanked, withSourceOnly, withMentionOnly, avgPos, presenceRate, trendDays, sortedUrls, brandUrls, urlDetails, competitorUrls, referenceUrls, topDomains, intentCount, typeCount, compStats, urlsToOptimize, urlsToRework, urlsToInspire, leads, questions: questions.length, providerStats, missingBrandQs, presentBrandQs, hasFavFilter, favCount };
+
+  // ── Top 5 concurrents depuis les mentions ─────────────────────
+  const top5Competitors = Object.entries(compStats)
+    .sort((a, b) => (b[1].mentions + (b[1].evocations||0)) - (a[1].mentions + (a[1].evocations||0)))
+    .slice(0, 5);
+
+  // ── Analyse par catégorie des questions ───────────────────────
+  const resultsByQ = {};
+  results.forEach(r => {
+    if (!resultsByQ[r.question_id]) resultsByQ[r.question_id] = [];
+    resultsByQ[r.question_id].push(r);
+  });
+  const byQuestionCategory = {};
+  questions.forEach(q => {
+    const catIds = Array.isArray(q.tags) && q.tags.length > 0
+      ? q.tags : (q.category_id ? [q.category_id] : ["__none__"]);
+    catIds.forEach(catId => {
+      if (!byQuestionCategory[catId]) byQuestionCategory[catId] = { total: 0, withBrand: 0, positions: [], qCount: 0 };
+      const qResults = resultsByQ[q.id] || [];
+      byQuestionCategory[catId].qCount++;
+      byQuestionCategory[catId].total += qResults.length;
+      qResults.forEach(r => {
+        if (r.brand_mentioned === true || r.brand_mentioned === 1) byQuestionCategory[catId].withBrand++;
+        const pos = r.brand_mention_position || r.brand_position;
+        if (pos) byQuestionCategory[catId].positions.push(pos);
+      });
+    });
+  });
+  Object.keys(byQuestionCategory).forEach(catId => {
+    const c = byQuestionCategory[catId];
+    c.presenceRate = c.total ? Math.round(c.withBrand / c.total * 100) : 0;
+    c.avgPos = c.positions.length ? (c.positions.reduce((a, b) => a + b, 0) / c.positions.length).toFixed(1) : null;
+  });
+
+  // ── URLs marque : 2 listes (propres + externes) ───────────────
+  const brandDomainClean = (brand?.brand_domain || "").toLowerCase().replace("www.", "");
+  const allBrandTerms = [brandName, ...brandAliases, brand?.brand_domain || ""].filter(Boolean).map(t => t.toLowerCase());
+  const brandOwnUrls = sortedUrls.filter(u =>
+    brandDomainClean && (u.url || "").toLowerCase().replace("www.", "").includes(brandDomainClean)
+  ).slice(0, 15);
+  const brandExternalUrls = sortedUrls.filter(u => {
+    if (!u.url) return false;
+    try {
+      const parsed = new URL(u.url);
+      const domain = parsed.hostname.replace("www.", "").toLowerCase();
+      if (brandDomainClean && domain.includes(brandDomainClean)) return false;
+      const slug = (parsed.pathname + parsed.search).toLowerCase();
+      return allBrandTerms.some(t => t.length > 2 && slug.includes(t.replace(/\s+/g, "-")));
+    } catch { return false; }
+  }).slice(0, 10);
+
+  return { total, withBrand, withSources, withRanked, withSourceOnly, withMentionOnly, avgPos, presenceRate, trendDays, sortedUrls, brandUrls, brandOwnUrls, brandExternalUrls, urlDetails, competitorUrls, referenceUrls, topDomains, intentCount, typeCount, compStats, top5Competitors, byQuestionCategory, urlsToOptimize, urlsToRework, urlsToInspire, leads, questions: questions.length, providerStats, missingBrandQs, presentBrandQs, hasFavFilter, favCount };
 }
 
 
@@ -955,7 +1005,7 @@ Sois concret et utilise les données.`;
   if (status === "idle") return (
     <div style={{ textAlign: "center", padding: "24px 0" }}>
       <div style={{ fontSize: 12, color: C.textLight, marginBottom: 12 }}>L'analyse IA utilise Claude pour interpréter vos données GEO.</div>
-      <button onClick={generate} style={{ padding: "10px 24px", background: "#7C3AED", color: "#fff", border: "none", borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>✦ Générer l'analyse IA</button>
+      <button onClick={generate} style={{ padding: "6px 16px", background: "#1A3C2E", color: "#F0EBE0", border: "0.5px solid #1A3C2E22", borderRadius: 6, fontSize: 11, fontWeight: 500, cursor: "pointer" }}>Générer l'analyse IA</button>
     </div>
   );
   if (status === "loading" && !analysis) return <div style={{ textAlign: "center", padding: 24, color: C.textLight, fontSize: 12 }}>✦ Génération en cours…</div>;
@@ -969,7 +1019,7 @@ Sois concret et utilise les données.`;
           return <div key={i} style={{ marginBottom: 4 }}>{renderBold(line)}</div>;
         })}
       </div>
-      {status === "done" && <button onClick={generate} style={{ marginTop: 12, padding: "6px 14px", border: `1px solid ${C.border}`, borderRadius: 8, background: C.white, fontSize: 11, cursor: "pointer", color: C.textMid }}>🔄 Regénérer</button>}
+      {status === "done" && <button onClick={generate} style={{ marginTop: 12, padding: "4px 12px", border: "0.5px solid #1A3C2E18", borderRadius: 6, background: "transparent", fontSize: 11, cursor: "pointer", color: "#1A3C2E55" }}>↺ Regénérer</button>}
       {status === "error" && <div style={{ color: "#DC2626", fontSize: 11, marginTop: 8 }}>Erreur — réessayez.</div>}
     </div>
   );
@@ -977,91 +1027,170 @@ Sois concret et utilise les données.`;
 
 function FanoutAnalysis({ questions, results, brand, claudeKey }) {
   const [status, setStatus] = useState("idle");
-  const [analysis, setAnalysis] = useState("");
+  const [sections, setSections] = useState([]);
   const [open, setOpen] = useState(false);
-  const brandName = brand?.brand_name || "";
+
+  const brandName   = brand?.brand_name   || "";
   const brandDomain = brand?.brand_domain || "";
   const brandAliases = brand?.brand_aliases || [];
 
   const run = async () => {
     if (!claudeKey || !results.length) return;
-    setStatus("loading"); setAnalysis(""); setOpen(true);
-    const total = results.length, withBrand = results.filter(r => r.brand_mentioned).length;
-    const urlCount = {};
-    results.forEach(r => (r.sources || []).forEach(rawUrl => {
-      const norm = rawUrl.trim().replace(/[?#].*$/, "").replace(/\/$/, "").replace(/^https?:\/\//i, "").replace(/^www\./i, "").toLowerCase();
-      if (norm) urlCount[norm] = (urlCount[norm] || 0) + 1;
-    }));
-    const topUrls = Object.entries(urlCount).sort((a,b)=>b[1]-a[1]).slice(0,15);
-    const allBrandTerms = [brandDomain, brandName, ...brandAliases].filter(Boolean).map(t => t.toLowerCase());
-    const brandUrls = topUrls.filter(([url]) => allBrandTerms.some(t => url.toLowerCase().includes(t)));
-    const competitorUrls = topUrls.filter(([url]) => !allBrandTerms.some(t => url.toLowerCase().includes(t)));
-    const compCount = {}; results.forEach(r => { const seen = new Set(); (r.competitors_mentioned||[]).forEach(c => { if(!seen.has(c.name)){seen.add(c.name);compCount[c.name]=(compCount[c.name]||0)+1;} }); });
-    const topComps = Object.entries(compCount).sort((a,b)=>b[1]-a[1]).slice(0,8);
+    setStatus("loading"); setSections([]); setOpen(true);
+
+    const total     = results.length;
+    const withBrand = results.filter(r => r.brand_mentioned === true || r.brand_mentioned === 1).length;
+    const withSrc   = results.filter(r => r.brand_in_sources).length;
+    const positions = results.filter(r => r.brand_position).map(r => r.brand_position);
+    const avgPos    = positions.length ? (positions.reduce((a,b)=>a+b,0)/positions.length).toFixed(1) : null;
+    const presence  = total ? Math.round(withBrand/total*100) : 0;
+
     const qMap = {}; questions.forEach(q => { qMap[q.id] = q.question; });
-    const missingQs = [...new Set(results.filter(r=>!r.brand_mentioned).map(r=>qMap[r.question_id]).filter(Boolean))].slice(0,10);
-    const presentQs = [...new Set(results.filter(r=>r.brand_mentioned).map(r=>qMap[r.question_id]).filter(Boolean))].slice(0,6);
-    const provStats = {}; results.forEach(r => { const pid=getProviderId(r.model); if(!provStats[pid])provStats[pid]={total:0,withBrand:0}; provStats[pid].total++; if(r.brand_mentioned)provStats[pid].withBrand++; });
+    const missing = [...new Set(results.filter(r=>!(r.brand_mentioned===true||r.brand_mentioned===1)).map(r=>qMap[r.question_id]).filter(Boolean))].slice(0,8);
+    const present = [...new Set(results.filter(r=>r.brand_mentioned===true||r.brand_mentioned===1).map(r=>qMap[r.question_id]).filter(Boolean))].slice(0,5);
 
-    const prompt = `Tu es un expert GEO.
-Présence de "${brandName}" (${brandDomain||"—"}) :
-- ${withBrand}/${total} (${total?Math.round(withBrand/total*100):0}%)
-- Par provider : ${Object.entries(provStats).map(([p,s])=>`${p} ${s.withBrand}/${s.total}`).join(" | ")}
-Questions présentes : ${presentQs.slice(0,4).join(" | ")||"Aucune"}
-Questions absentes : ${missingQs.slice(0,4).join(" | ")||"Aucune"}
-Concurrents : ${topComps.map(([n,c])=>`${n}:${c}×`).join(", ")||"Aucun"}
-URLs marque : ${brandUrls.slice(0,4).map(([u,c])=>`${u}(${c}×)`).join(", ")||"Aucune"}
-URLs concurrentes : ${competitorUrls.slice(0,4).map(([u,c])=>`${u}(${c}×)`).join(", ")||"Aucune"}
+    const compCount = {};
+    results.forEach(r => (r.competitors_mentioned||[]).forEach(c=>{ if(c.name) compCount[c.name]=(compCount[c.name]||0)+1; }));
+    const topComps = Object.entries(compCount).sort((a,b)=>b[1]-a[1]).slice(0,5);
 
-Format EXACT :
-## 🔍 ÉTAT DES LIEUX
-[4-6 points basés sur les chiffres]
-## 📈 RECOMMANDATIONS — PAGES CITÉES PAR LES IA
-[3-5 recommandations]
-## 🏠 RECOMMANDATIONS — PAGES MARQUE
-[3-5 recommandations pour ${brandDomain||"la marque"}]
-Commence directement par ## 🔍. Chiffres précis. Actionnable.`;
+    const urlCount = {};
+    results.forEach(r=>(r.sources||[]).forEach(url=>{ urlCount[url]=(urlCount[url]||0)+1; }));
+    const allTerms = [brandName,...brandAliases].filter(Boolean).map(t=>t.toLowerCase());
+    const brandUrls2 = Object.entries(urlCount).filter(([u])=>allTerms.some(t=>u.toLowerCase().includes(t))).sort((a,b)=>b[1]-a[1]).slice(0,8);
+    const competitorUrls2 = Object.entries(urlCount).filter(([u])=>!allTerms.some(t=>u.toLowerCase().includes(t))).sort((a,b)=>b[1]-a[1]).slice(0,10);
+
+    const provStats = {};
+    results.forEach(r=>{
+      const pid = (r.model||"").toLowerCase().includes("openai")||(r.model||"").toLowerCase().includes("gpt")?"OpenAI":(r.model||"").toLowerCase().includes("gemini")?"Gemini":(r.model||"").toLowerCase().includes("perplexity")||(r.model||"").toLowerCase().includes("sonar")?"Perplexity":(r.model||"").toLowerCase().includes("claude")?"Claude":"Autre";
+      if(!provStats[pid]) provStats[pid]={total:0,withBrand:0};
+      provStats[pid].total++;
+      if(r.brand_mentioned===true||r.brand_mentioned===1) provStats[pid].withBrand++;
+    });
+
+    const prompt = `Tu es un expert GEO (Generative Engine Optimization) senior. Analyse la présence de "${brandName}" (${brandDomain||"—"}) dans les LLMs et produis des recommandations précises et actionnables.
+
+DONNÉES DE PRÉSENCE :
+- Présence totale : ${withBrand}/${total} réponses (${presence}%)
+- Citée en source : ${withSrc} fois
+- Position moyenne : ${avgPos ? "#"+avgPos : "non mesurée"}
+
+PAR PROVIDER :
+${Object.entries(provStats).map(([p,s])=>`- ${p}: ${s.withBrand}/${s.total} (${Math.round(s.withBrand/s.total*100)}%)`).join("\n")}
+
+QUESTIONS AVEC PRÉSENCE (${present.length}) :
+${present.map((q,i)=>`${i+1}. ${q}`).join("\n")||"Aucune"}
+
+QUESTIONS SANS PRÉSENCE — PRIORITÉS (${missing.length}) :
+${missing.map((q,i)=>`${i+1}. ${q}`).join("\n")||"Aucune"}
+
+TOP CONCURRENTS CITÉS :
+${topComps.map(([n,c])=>`- ${n}: ${c}×`).join("\n")||"Aucun"}
+
+URLS MARQUE EN SOURCE :
+${brandUrls2.map(([u,c])=>`- ${u} (${c}×)`).join("\n")||"Aucune"}
+
+TOP URLS CONCURRENTES :
+${competitorUrls2.slice(0,8).map(([u,c])=>`- ${u} (${c}×)`).join("\n")||"Aucune"}
+
+---
+
+Produis exactement 4 sections dans ce format :
+
+## ÉTAT DES LIEUX
+[Diagnostic factuel en 4-5 points. Cite les chiffres exacts. Compare les providers.]
+
+## MAILLAGE INTERNE — PAGES À RELIER
+[2-4 recommandations de maillage interne sur ${brandDomain||"le site"} basées sur les thèmes des questions sans présence.]
+
+## PAGES À CRÉER OU ADAPTER
+[3-5 pages à créer/adapter. Pour chaque : H1 suggéré + angle éditorial + question cible.]
+
+## URLS CONCURRENTES — CE QUI FONCTIONNE
+[Pour 3-5 URLs concurrentes les plus citées : pourquoi les LLMs les citent et comment reproduire.]
+
+RÈGLES : Commence DIRECTEMENT par ## ÉTAT DES LIEUX. Recommandations concrètes avec H1 suggérés. Pas de généralités.`;
 
     try {
-      const res = await fetch("/api/claude-geo", { method: "POST", headers: { "Content-Type": "application/json", "X-Claude-Key": claudeKey },
-        body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 1200, messages: [{ role: "user", content: prompt }] }) });
+      const res = await fetch("/api/claude-geo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Claude-Key": claudeKey },
+        body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 1800, messages: [{ role: "user", content: prompt }] }),
+      });
       const raw = await res.text();
       if (raw.trimStart().startsWith("<")) throw new Error("Proxy claude-geo introuvable");
       const data = JSON.parse(raw);
       if (!res.ok) throw new Error(data.error?.message || `Claude ${res.status}`);
       const text = (data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n").trim();
-      setAnalysis(text || "Aucune analyse."); setStatus("done");
-    } catch(e) { setAnalysis(`Erreur : ${e.message}`); setStatus("error"); }
+      const parsed = text.split(/^## /m).filter(Boolean).map(s => {
+        const idx = s.indexOf("\n");
+        return { title: s.slice(0, idx).trim(), body: s.slice(idx+1).trim() };
+      });
+      setSections(parsed);
+      setStatus("done");
+    } catch(e) {
+      setSections([{ title: "Erreur", body: e.message }]);
+      setStatus("error");
+    }
   };
 
-  const sections = analysis ? analysis.split(/(?=## )/).filter(Boolean) : [];
-  const sectionColors = { "ÉTAT": { bg:"#EFF6FF", border:"#BFDBFE", title:"#1D4ED8" }, "PAGES CITÉES": { bg:"#F0FDF4", border:"#BBF7D0", title:"#15803D" }, "PAGES MARQUE": { bg:"#FFFBEB", border:"#FDE68A", title:"#B45309" } };
-  const getColor = (text) => { const key = Object.keys(sectionColors).find(k => text.toUpperCase().includes(k)); return sectionColors[key] || { bg: C.bg, border: C.border, title: C.text }; };
+  const SECTION_META = {
+    "ÉTAT DES LIEUX":    { icon: "◎", color: "#1A3C2E" },
+    "MAILLAGE INTERNE":  { icon: "⟶", color: "#1A3C2E" },
+    "PAGES À CRÉER":     { icon: "✦", color: "#C97820" },
+    "URLS CONCURRENTES": { icon: "↗", color: "#1A3C2E77" },
+  };
+  const getMeta = (title) => {
+    const key = Object.keys(SECTION_META).find(k => title.includes(k));
+    return SECTION_META[key] || { icon: "·", color: "#1A3C2E77" };
+  };
+
+  if (!results.length) return null;
 
   return (
-    <div>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: status === "done" && open ? 16 : 0 }}>
-        {!claudeKey && <span style={{ fontSize: 11, color: "#D97706", background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 6, padding: "4px 10px" }}>⚠️ Clé Claude requise</span>}
-        {claudeKey && status === "idle" && <button onClick={run} style={{ padding: "8px 18px", background: "#7C3AED", color: "#fff", border: "none", borderRadius: 9, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>✨ Lancer l'analyse Fan-out</button>}
-        {status === "loading" && <span style={{ fontSize: 12, color: C.textLight }}>⏳ Analyse en cours…</span>}
-        {status === "done" && (<>
-          <button onClick={() => setOpen(o => !o)} style={{ padding: "6px 14px", border: `1px solid ${C.border}`, borderRadius: 7, background: C.white, fontSize: 11, cursor: "pointer", color: C.textMid }}>{open ? "▲ Masquer" : "▼ Voir l'analyse"}</button>
-          <button onClick={run} style={{ padding: "6px 14px", border: "none", borderRadius: 7, background: "#7C3AED", color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>↺ Relancer</button>
-        </>)}
-        {status === "error" && <button onClick={run} style={{ padding: "6px 14px", background: "#DC2626", color: "#fff", border: "none", borderRadius: 7, fontSize: 11, cursor: "pointer" }}>↺ Réessayer</button>}
+    <div style={{ marginBottom: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: open && status === "done" ? 16 : 0 }}>
+        <div>
+          <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E55", marginBottom: 3 }}>Analyse GEO</div>
+          <div style={{ fontSize: 13, color: "#1A3C2E", letterSpacing: "-0.005em" }}>Recommandations actionnables · {results.length} réponses</div>
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {status === "done" && (
+            <button onClick={() => setOpen(o => !o)}
+              style={{ padding: "4px 12px", border: "0.5px solid #1A3C2E18", borderRadius: 6, background: "transparent", cursor: "pointer", fontSize: 11, color: "#1A3C2E77" }}>
+              {open ? "Masquer" : "Voir l'analyse"}
+            </button>
+          )}
+          <button onClick={run} disabled={status === "loading" || !claudeKey}
+            style={{ padding: "5px 14px", background: (!claudeKey || status === "loading") ? "transparent" : "#1A3C2E", color: (!claudeKey || status === "loading") ? "#1A3C2E44" : "#F0EBE0", border: "0.5px solid #1A3C2E22", borderRadius: 6, fontSize: 11, fontWeight: 500, cursor: (!claudeKey || status === "loading") ? "not-allowed" : "pointer" }}
+            title={!claudeKey ? "Clé Claude manquante" : undefined}>
+            {status === "loading" ? "Analyse…" : status === "done" ? "↺ Relancer" : "Analyser"}
+          </button>
+        </div>
       </div>
+
       {open && status === "done" && sections.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 8 }}>
-          {sections.map((section, i) => {
-            const lines = section.trim().split("\n"); const title = lines[0].replace(/^## /, ""); const body = lines.slice(1).join("\n").trim(); const col = getColor(title);
-            return <div key={i} style={{ background: col.bg, border: `1px solid ${col.border}`, borderRadius: 10, padding: "12px 16px" }}>
-              <div style={{ fontSize: 12, fontWeight: 800, color: col.title, marginBottom: 8 }}>{title}</div>
-              <div style={{ fontSize: 12, color: C.text, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{renderBold(body)}</div>
-            </div>;
+        <div style={{ display: "flex", flexDirection: "column", gap: 0, borderTop: "0.5px solid #1A3C2E0D", paddingTop: 16 }}>
+          {sections.map((s, i) => {
+            const meta = getMeta(s.title);
+            if (s.title === "Erreur") return <div key={i} style={{ fontSize: 12, color: "#C0352A", padding: "10px 0" }}>{s.body}</div>;
+            return (
+              <div key={i} style={{ borderLeft: "2px solid #1A3C2E0D", paddingLeft: 16, paddingBottom: 16, marginBottom: 4 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                  <span style={{ fontSize: 12, color: meta.color, fontWeight: 500 }}>{meta.icon}</span>
+                  <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.10em", textTransform: "uppercase", color: meta.color }}>{s.title}</span>
+                </div>
+                <div style={{ fontSize: 12, color: "#1A3C2E", lineHeight: 1.75 }}>
+                  {s.body.split("\n").map((line, j) => {
+                    if (!line.trim()) return <div key={j} style={{ height: 6 }} />;
+                    if (line.startsWith("- ") || line.startsWith("• ")) return <div key={j} style={{ paddingLeft: 12, marginBottom: 3 }}>· {renderBold(line.slice(2))}</div>;
+                    return <div key={j} style={{ marginBottom: 3 }}>{renderBold(line)}</div>;
+                  })}
+                </div>
+              </div>
+            );
           })}
         </div>
       )}
-      {open && status === "error" && <div style={{ marginTop: 8, fontSize: 12, color: "#DC2626", padding: "10px 14px", background: "#FEF2F2", borderRadius: 8 }}>{analysis}</div>}
     </div>
   );
 }
@@ -1542,7 +1671,7 @@ export default function GeoAuditTab({
           <div style={{ display: "flex", gap: 8 }}>
             <button onClick={refreshData} disabled={loading}
               title="Recharger les données depuis la base"
-              style={{ fontSize: 11, fontWeight: 700, color: "#2563EB", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 8, padding: "5px 12px", cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.4 : 1 }}>
+              style={{ fontSize: 11, fontWeight: 500, color: "#1A3C2E", background: "transparent", border: "0.5px solid #1A3C2E22", borderRadius: 6, padding: "5px 12px", cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.4 : 1 }}>
               {loading ? "⏳" : "↺"} Rafraîchir
             </button>
             <button onClick={() => setShowTour(true)} disabled={noData || loading}
@@ -1588,7 +1717,7 @@ export default function GeoAuditTab({
             </div>
             <span data-tour="audit-export"><button onClick={() => { setExporting(true); exportPDF(audit, brand, site, aiText); setTimeout(() => setExporting(false), 1000); }}
               disabled={noData || exporting}
-              style={{ padding: "8px 18px", background: noData ? C.bg : "#2563EB", color: noData ? C.textLight : "#fff", border: "none", borderRadius: 9, fontSize: 12, fontWeight: 700, cursor: noData ? "not-allowed" : "pointer" }}>
+              style={{ padding: "6px 16px", background: noData ? "transparent" : "#1A3C2E", color: noData ? "#1A3C2E44" : "#F0EBE0", border: "0.5px solid #1A3C2E22", borderRadius: 6, fontSize: 11, fontWeight: 500, cursor: noData ? "not-allowed" : "pointer" }}>
               {exporting ? "⏳ Export…" : "⬇ Export PDF"}
             </button></span>
           </div>
@@ -1621,16 +1750,16 @@ export default function GeoAuditTab({
                 {/* Barre de proportion */}
                 <div style={{ display: "flex", height: 8, borderRadius: 4, overflow: "hidden", background: "#E2E8F0", marginBottom: 12 }}>
                   {audit.total > 0 && <>
-                    <div style={{ width: `${(audit.withRanked||0) / audit.total * 100}%`, background: "#059669", transition: "width 0.3s" }} title={`Classé : ${audit.withRanked||0}`} />
-                    <div style={{ width: `${(audit.withSourceOnly||0) / audit.total * 100}%`, background: "#2563EB", transition: "width 0.3s" }} title={`Source : ${audit.withSourceOnly||0}`} />
-                    <div style={{ width: `${(audit.withMentionOnly||0) / audit.total * 100}%`, background: "#D97706", transition: "width 0.3s" }} title={`Mention : ${audit.withMentionOnly||0}`} />
+                    <div style={{ width: `${(audit.withRanked||0) / audit.total * 100}%`, background: "#059669", transition: "width 0.3s" }} title={`Mention : ${audit.withRanked||0}`} />
+                    <div style={{ width: `${(audit.withSourceOnly||0) / audit.total * 100}%`, background: "#2563EB", transition: "width 0.3s" }} title={`Citation : ${audit.withSourceOnly||0}`} />
+                    <div style={{ width: `${(audit.withMentionOnly||0) / audit.total * 100}%`, background: "#D97706", transition: "width 0.3s" }} title={`Évocation : ${audit.withMentionOnly||0}`} />
                   </>}
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
                   {[
-                    { icon: "🏆", label: "Classé",     count: audit.withRanked||0,      color: "#059669", bg: "#ECFDF5", border: "#A7F3D0", desc: "Position dans un top LLM" },
-                    { icon: "🔗", label: "Source",     count: audit.withSourceOnly||0,  color: "#2563EB", bg: "#DBEAFE", border: "#BFDBFE", desc: "URL citée en source" },
-                    { icon: "💬", label: "Mention",    count: audit.withMentionOnly||0, color: "#D97706", bg: "#FEF3C7", border: "#FDE68A", desc: "Présence textuelle" },
+                    { icon: "◎",  label: "Mention",   count: audit.withRanked||0,      color: "#1A7A4A", bg: "#F0F7F3", border: "#1A7A4A22", desc: "Top LLM numéroté" },
+                    { icon: "↗",  label: "Citation",  count: audit.withSourceOnly||0,  color: "#1A3C2E", bg: "#EAF0EC", border: "#1A3C2E22", desc: "Dans les sources" },
+                    { icon: "⟶", label: "Évocation", count: audit.withMentionOnly||0, color: "#C97820", bg: "#FDF5E6", border: "#C9782022", desc: "Corps du texte" },
                     { icon: "✗",  label: "Absent",     count: audit.total - (audit.withBrand||0), color: "#DC2626", bg: "#FEF2F2", border: "#FECACA", desc: "Non mentionné" },
                   ].map(t => (
                     <div key={t.label} style={{ background: t.bg, border: `1px solid ${t.border}`, borderRadius: 8, padding: "10px 12px" }}>
@@ -1778,7 +1907,7 @@ export default function GeoAuditTab({
                               setCompetitors(prev => [...prev, saved]);
                               setNewCompName("");
                             } catch(e2) { console.error(e2); }
-                          }} style={{ padding: "5px 12px", background: "#2563EB", color: "#fff", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer", marginTop: 8 }}>
+                          }} style={{ padding: "5px 12px", background: "#1A3C2E", color: "#F0EBE0", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 500, cursor: "pointer", marginTop: 8 }}>
                             + Ajouter
                           </button>
                         )}
@@ -2254,7 +2383,7 @@ export default function GeoAuditTab({
                 <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>Pistes prioritaires</div>
                 {audit.leads.map((l, i) => {
                   const borderColor = l.priority.includes("🔴") ? "#DC2626" : l.priority.includes("🟠") ? "#D97706" : l.priority.includes("🟡") ? "#CA8A04" : C.green;
-                  const bgColor     = l.priority.includes("🔴") ? "#FEF2F2"  : l.priority.includes("🟠") ? "#FFFBEB"  : l.priority.includes("🟡") ? "#FEFCE8"  : "#ECFDF5";
+                  const bgColor     = l.priority.includes("🔴") ? "#FEF2F2"  : l.priority.includes("🟠") ? "#FDF5E6"  : l.priority.includes("🟡") ? "#FEFCE8"  : "#EAF0EC";
                   return (
                     <div key={i} style={{ padding: "10px 14px", borderLeft: `3px solid ${borderColor}`, background: bgColor, borderRadius: "0 8px 8px 0", marginBottom: 8 }}>
                       <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 3 }}>{l.priority} — {l.label}</div>

@@ -253,3 +253,41 @@ export async function sbInviteMember(projectId, email, invitedBy, tempPassword) 
 
   return data; // { ok: true, accountCreated, email }
 }
+
+// ── Token expiry check ────────────────────────────────────────────
+function isTokenExpired(token) {
+  if (!token) return true;
+  try {
+    // Décoder le payload JWT (base64url) sans librairie
+    const payload = JSON.parse(atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+    // exp est en secondes Unix — marge de 60s pour anticiper l'expiration
+    return !payload.exp || (payload.exp - 60) < Math.floor(Date.now() / 1000);
+  } catch { return true; }
+}
+
+// Vérifie si la session stockée est valide, et tente un refresh si le token est expiré
+// Retourne le user si connecté, null sinon
+export async function getOrRefreshSession() {
+  const session = getStoredSession();
+  if (!session?.user) return null;
+
+  if (!isTokenExpired(session.access_token)) {
+    // Token encore valide
+    return session.user;
+  }
+
+  // Token expiré — tenter un refresh
+  if (!session.refresh_token) { clearSession(); return null; }
+
+  try {
+    const res = await fetch("/api/auth?action=refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token: session.refresh_token }),
+    });
+    if (!res.ok) { clearSession(); return null; }
+    const data = await res.json();
+    storeSession({ access_token: data.access_token, refresh_token: data.refresh_token, user: data.user });
+    return data.user;
+  } catch { clearSession(); return null; }
+}
