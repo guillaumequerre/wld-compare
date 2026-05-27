@@ -18,7 +18,7 @@ import GeoAuditTab from "./tabs/GeoAuditTab";
 import HomeTab from "./tabs/HomeTab";
 import ManageTab from "./tabs/ManageTab";
 import ResetPasswordPage from "./components/ResetPasswordPage"; // ← AJOUTÉ
-import { sbLoadAccessibleProjects, getCurrentUser, getOrRefreshSession, authLogout, isSuperAdmin } from "./lib/auth";
+import { sbLoadAccessibleProjects, getCurrentUser, getOrRefreshSession, authLogout, clearSession, isSuperAdmin } from "./lib/auth";
 
 // Tabs disponibles pour TOUS les utilisateurs
 const NAV_TABS_USER = [
