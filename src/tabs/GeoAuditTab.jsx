@@ -2,7 +2,7 @@ import { useState, useMemo, useCallback, useEffect } from "react";
 import TourGuide from "./TourGuide";
 import { sbGetBrand, sbGetQuestions, sbGetGeoResults, sbGetUrlIndex,
   sbSaveProject, sbDeleteProject, sbDownload,
-  sbGetCalendarEntriesBatch, sbGetKeywords, sbGetCategories, sbGetCompetitors, sbUpdateCompetitor } from "../lib/supabase";
+  sbGetCalendarEntriesBatch, sbGetKeywords, sbGetCategories, sbGetCompetitors } from "../lib/supabase";
 import UploadCard from "../components/UploadCard";
 import PageTypeClassifier from "../components/PageTypeClassifier";
 import { newProject } from "../lib/helpers";
@@ -11,12 +11,6 @@ import { C, SITE_PALETTE } from "../lib/constants";
 const ANTHROPIC_PROXY = "/api/anthropic";
 
 // Catégories concurrents — miroir de GeoTab
-const COMP_CAT_DEFS = {
-  direct:  { label: "Direct",    color: "#DC2626", bg: "#FEF2F2" },
-  geo:     { label: "GEO",       color: "#D97706", bg: "#FFFBEB" },
-  partner: { label: "Partenaire", color: "#059669", bg: "#ECFDF5" },
-  other:   { label: "Autre",     color: "#64748B", bg: "#F1F5F9" },
-};
 
 // Rend les **texte** en <strong> dans toute l'app
 function renderBold(text) {
@@ -433,154 +427,12 @@ function Section({ icon, title, sub, children }) {
 }
 
 // ── Scatter plot concurrents : citations (X) × position moy. (Y) ──
-function CompetitorScatter({ compStats, total, brandName, brandWithBrand, brandAvgPos, competitors = [] }) {
-  const W = 560, H = 300, PL = 44, PR = 16, PT = 16, PB = 36;
-  const plotW = W - PL - PR, plotH = H - PT - PB;
-
-  const COLORS = ["#DC2626","#D97706","#7C3AED","#2563EB","#0891B2","#059669","#9333EA","#EA580C"];
-
-  // Préparer les points concurrents — utilise la couleur de catégorie si dispo
-  // Construire un Set des noms actifs depuis la liste source (competitors)
-const activeNames = competitors.length > 0
-  ? new Set(competitors.filter(c => c.enabled !== false).map(c => c.name))
-  : null;
-
-const entries = Object.entries(compStats)
-  .filter(([name, s]) => {
-    if (activeNames) return activeNames.has(name);
-    return s.enabled !== false;
-  })
-  .map(([name, s], idx) => ({
-    name,
-    citations: s.mentions,
-    pct: Math.round(s.mentions / Math.max(total, 1) * 100),
-    avgPos: s.positions.length ? +(s.positions.reduce((a, b) => a + b, 0) / s.positions.length).toFixed(1) : null,
-    color: s.color || COLORS[idx % COLORS.length],
-    category: s.category || "other",
-  }));
-
-  // Ajouter la marque si données dispo
-  const brandEntry = brandName && brandWithBrand > 0 ? {
-    name: brandName, citations: brandWithBrand,
-    pct: Math.round(brandWithBrand / Math.max(total, 1) * 100),
-    avgPos: brandAvgPos ? +brandAvgPos : null,
-    isBrand: true,
-  } : null;
-  const allPoints = brandEntry ? [...entries, brandEntry] : entries;
-  const withPos = allPoints.filter(p => p.avgPos !== null);
-
-  if (!withPos.length) {
-    return <div style={{ fontSize: 11, color: "#94A3B8", fontStyle: "italic" }}>Données de position insuffisantes pour le graphique</div>;
-  }
-
-  const maxCit = Math.max(...withPos.map(p => p.citations), 1);
-  const maxPos = Math.max(...withPos.map(p => p.avgPos), 5);
-  const minPos = Math.min(...withPos.map(p => p.avgPos), 1);
-  const posRange = Math.max(maxPos - minPos + 1, 3);
-
-  const toX = (cit) => PL + (cit / maxCit) * plotW;
-  // Y inversé : position 1 en haut
-  const toY = (pos) => PT + ((pos - minPos) / posRange) * plotH;
-
-  // Quadrant labels
-  const midPos = (maxPos + minPos) / 2;
-
-  return (
-    <div>
-      <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: "block", background: "#FAFAFA", borderRadius: 10, border: "1px solid #E8E8ED" }}>
-        {/* Axes */}
-        <line x1={PL} x2={W - PR} y1={H - PB} y2={H - PB} stroke="#E2E8F0" strokeWidth={1} />
-        <line x1={PL} x2={PL} y1={PT} y2={H - PB} stroke="#E2E8F0" strokeWidth={1} />
-
-        {/* Quadrant background */}
-        <rect x={PL} y={PT} width={plotW / 2} height={plotH / 2} fill="#FEF2F2" opacity={0.5} />
-        <rect x={PL + plotW / 2} y={PT} width={plotW / 2} height={plotH / 2} fill="#FFFBEB" opacity={0.5} />
-        <rect x={PL} y={PT + plotH / 2} width={plotW / 2} height={plotH / 2} fill="#EFF6FF" opacity={0.5} />
-        <rect x={PL + plotW / 2} y={PT + plotH / 2} width={plotW / 2} height={plotH / 2} fill="#ECFDF5" opacity={0.5} />
-
-        {/* Quadrant dividers */}
-        <line x1={PL + plotW / 2} x2={PL + plotW / 2} y1={PT} y2={H - PB} stroke="#CBD5E1" strokeWidth={1} strokeDasharray="4,3" />
-        <line x1={PL} x2={W - PR} y1={PT + plotH / 2} y2={PT + plotH / 2} stroke="#CBD5E1" strokeWidth={1} strokeDasharray="4,3" />
-
-        {/* Quadrant labels — Y inversé : position 1 en HAUT = bien positionné */}
-        <text x={PL + 6} y={PT + 12} fontSize={8} fill="#2563EB" opacity={0.7}>Peu cités · bien positionnés</text>
-        <text x={PL + plotW / 2 + 6} y={PT + 12} fontSize={8} fill="#059669" opacity={0.7}>Très cités · bien positionnés</text>
-        <text x={PL + 6} y={PT + plotH / 2 + 12} fontSize={8} fill="#DC2626" opacity={0.7}>Peu cités · mal positionnés</text>
-        <text x={PL + plotW / 2 + 6} y={PT + plotH / 2 + 12} fontSize={8} fill="#D97706" opacity={0.7}>Très cités · mal positionnés</text>
-
-        {/* Ticks X (citations) */}
-        {[0, Math.round(maxCit / 2), maxCit].map(v => {
-          const x = toX(v);
-          return <g key={v}>
-            <line x1={x} x2={x} y1={H - PB} y2={H - PB + 4} stroke="#CBD5E1" strokeWidth={1} />
-            <text x={x} y={H - PB + 14} fontSize={8} fill="#94A3B8" textAnchor="middle">{v}</text>
-          </g>;
-        })}
-
-        {/* Ticks Y (position — inversé) */}
-        {[Math.ceil(minPos), Math.round(midPos), Math.floor(maxPos)].map(v => {
-          const y = toY(v);
-          return <g key={v}>
-            <line x1={PL - 4} x2={PL} y1={y} y2={y} stroke="#CBD5E1" strokeWidth={1} />
-            <text x={PL - 6} y={y + 3} fontSize={8} fill="#94A3B8" textAnchor="end">#{v}</text>
-          </g>;
-        })}
-
-        {/* Axis labels */}
-        <text x={PL + plotW / 2} y={H - 2} fontSize={9} fill="#64748B" textAnchor="middle">Citations dans les réponses LLM →</text>
-        <text x={10} y={PT + plotH / 2} fontSize={9} fill="#64748B" textAnchor="middle" transform={`rotate(-90, 10, ${PT + plotH / 2})`}>Position moy. ↓</text>
-
-        {/* Points */}
-        {withPos.map((p, i) => {
-          const x = toX(p.citations);
-          const y = toY(p.avgPos);
-          const color = p.isBrand ? "#059669" : (p.color || COLORS[i % COLORS.length]);
-          const r = 6 + Math.sqrt(p.citations) * 1.2;
-          return (
-            <g key={p.name}>
-              <circle cx={x} cy={y} r={r} fill={color} opacity={0.85} stroke="#fff" strokeWidth={1.5} />
-              <text x={x} y={y - r - 3} fontSize={9} fill={color} textAnchor="middle" fontWeight={p.isBrand ? "800" : "600"}>
-                {p.name.length > 12 ? p.name.slice(0, 11) + "…" : p.name}
-              </text>
-              <text x={x} y={y + 3} fontSize={8} fill="#fff" textAnchor="middle" fontWeight="700">{p.pct}%</text>
-            </g>
-          );
-        })}
-      </svg>
-
-      {/* Légende */}
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 8 }}>
-        {withPos.map((p, i) => {
-          const color = p.isBrand ? "#059669" : (p.color || COLORS[i % COLORS.length]);
-          return (
-            <div key={p.name} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11 }}>
-              <div style={{ width: 10, height: 10, borderRadius: "50%", background: color, flexShrink: 0 }} />
-              <span style={{ fontWeight: p.isBrand ? 700 : 400 }}>{p.name}</span>
-              <span style={{ color: "#94A3B8" }}>({p.citations} cit. · pos. {p.avgPos ?? "—"})</span>
-            </div>
-          );
-        })}
-      </div>
-      <div style={{ fontSize: 10, color: "#94A3B8", marginTop: 4 }}>Taille des bulles proportionnelle au nombre de citations · % = part des résultats</div>
-    </div>
-  );
-}
-
-// ── Bandeau de score GEO ───────────────────────────────────────────
 function GeoScoreBanner({ audit, brand, site }) {
   const score = audit.presenceRate;
   const level = score >= 70 ? { label: "Excellent",  color: "#1A7A4A", bar: "#1A7A4A" }
               : score >= 50 ? { label: "Bon",         color: "#1A3C2E", bar: "#1A3C2E" }
               : score >= 30 ? { label: "À améliorer", color: "#C97820", bar: "#C97820" }
               :               { label: "Critique",    color: "#C0352A", bar: "#C0352A" };
-  const kpis = [
-    { label: "Mention",     val: audit.withRanked||0,      color: "#1A7A4A", tip: "Dans un top LLM numéroté" },
-    { label: "Évocation",   val: audit.withMentionOnly||0, color: "#C97820", tip: "Corps du texte hors top" },
-    { label: "Citation",    val: audit.withSourceOnly||0,  color: "#1A3C2E", tip: "Dans les sources" },
-    { label: "Pos. moy.",   val: audit.avgPos ? `#${audit.avgPos}` : "—", color: "#1A3C2E", tip: "Position moyenne dans les tops" },
-    { label: "Questions",   val: audit.questions,          color: "#1A3C2E", tip: "Questions testées" },
-    { label: "Résultats",   val: audit.total,              color: "#1A3C2E", tip: "Réponses LLM collectées" },
-  ];
   return (
     <div style={{ background: "#fff", border: "0.5px solid #1A3C2E0D", borderRadius: 12, padding: "20px 24px", marginBottom: 16 }}>
       <div style={{ display: "flex", gap: 24, alignItems: "flex-start", flexWrap: "wrap" }}>
@@ -1200,7 +1052,7 @@ function CorrelationMatrix({ corrMatrix, metrics, sfData, bingData, gscData, res
     }
 
     return [];
-  }, [srcA, srcB, corrMatrix, metrics, bingData, gscData, results]);
+  }, [srcA, srcB, corrMatrix, metrics, bingData, results]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const srcADef = SOURCES.find(s=>s.key===srcA);
   const srcBDef = SOURCES.find(s=>s.key===srcB);
@@ -1996,11 +1848,7 @@ export default function GeoAuditTab({
   const [aiText, setAiText]             = useState("");
   const [exporting, setExporting]       = useState(false);
   const [showTour, setShowTour]         = useState(false);
-  const [compSort, setCompSort]         = useState({ col: "enabled", dir: "desc" });
-  const [compTableOpen, setCompTableOpen] = useState(false);
-  const [compSearch, setCompSearch]     = useState("");    // regex/texte pour filtrer concurrents
   const [sfCorrFilter, setSfCorrFilter] = useState("all"); // "all" | "gsc" | "bing" | "fanout"
-  const [newCompName, setNewCompName]   = useState("");    // ajout concurrent manuel
   const [brand, setBrand]               = useState(null);
   const [questions, setQuestions]       = useState([]);
   const [results, setResults]           = useState([]);
@@ -2047,7 +1895,7 @@ export default function GeoAuditTab({
   const siteUrls      = useMemo(() => urlIndex.filter(u => u.project_id === projectId), [urlIndex, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
   const audit         = useMemo(() => computeAudit(siteQuestions, siteResults, siteUrls, brand, site, calendarEntries, keywords, competitors), [siteQuestions, siteResults, siteUrls, brand, site, calendarEntries, keywords, competitors]); // eslint-disable-line react-hooks/exhaustive-deps
   const noData        = !siteResults.length;
-  const qLimit        = 10;
+
 
   // Démarrer le tour automatiquement si demandé (depuis HomeTab) — après loading et noData
   useEffect(() => {
