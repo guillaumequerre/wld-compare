@@ -2592,7 +2592,6 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, setCa
   const setFilterProviders  = (v) => { setFilterProvidersRaw(v);  persistFilters({ filterProviders: v }); };
   const [running, setRunning]       = useState({});
   const [providerErrors, setProviderErrors] = useState({}); // { "qId-pid": errorMsg }
-  const [providerErrors, setProviderErrors] = useState({}); // { "qId-pid": errorMsg }
   const [runAll, setRunAll]         = useState(false);
   const stopAllRef = useRef(false);
   // Refs so callbacks always read current values without stale closure issues
