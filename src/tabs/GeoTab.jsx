@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import "./geo-tab.css";
+import "./geo-responsive.css";
 import TourGuide from "./TourGuide";
 import PresenceCalendar from "../components/PresenceCalendar";
 import {
@@ -565,10 +566,9 @@ function ExportFanoutBtn({ questions, results, brandName, brandAliases = [], key
 
       {/* ── Popover ── */}
       {open && (
-        <div style={{
-          position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 300,
-          background: "#fff", border: "1px solid #E2E8F0", borderRadius: 12,
-          boxShadow: "0 8px 32px rgba(0,0,0,0.14)", padding: 16, minWidth: 290,
+        <div className="geo-export-popup" style={{
+          zIndex: 300, background: "#fff", border: "1px solid #E2E8F0",
+          borderRadius: 12, boxShadow: "0 8px 32px rgba(0,0,0,0.14)", padding: 16, minWidth: 290,
         }}>
 
           {/* ── Périmètre des questions ── */}
@@ -1185,7 +1185,7 @@ function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [] 
     <div style={{ marginBottom: 24 }}>
 
       {/* ── 3 couples Présence + Position ── */}
-      <div className="gt-kpi-grid" style={{ gridTemplateColumns: "repeat(3, 1fr)", marginBottom: 12 }}>
+      <div className="gt-kpi-grid geo-stats-kpi-grid" style={{ marginBottom: 12 }}>
 
         {/* Mention */}
         <div className="gt-kpi-card">
@@ -1252,7 +1252,7 @@ function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [] 
       </div>
 
       {/* ── Concurrents + Sites ── */}
-      <div className="gt-kpi-grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
+      <div className="gt-kpi-grid geo-stats-2col">
 
         {/* Concurrents */}
         <div className="gt-kpi-card">
@@ -1876,12 +1876,12 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
     <div>
       {/* ── Volume enrichment toolbar ── */}
       {keywords.length > 0 && (
-        <div style={{ background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 10, padding: "10px 14px", marginBottom: 12, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div className="geo-volume-toolbar" style={{ background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 10, padding: "10px 14px", marginBottom: 12 }}>
           <span style={{ fontSize: 11, fontWeight: 700, color: "#1D4ED8" }}>🔍 Volumes de recherche</span>
           <span style={{ fontSize: 11, color: "#3B82F6" }}>
             {keywords.filter(k => k.search_volume != null).length}/{keywords.length} enrichis
           </span>
-          <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+          <div className="geo-volume-toolbar-actions" style={{ gap: 6 }}>
             <input ref={fileVolRef} type="file" accept=".csv" style={{ display: "none" }} onChange={enrichFromCsv} />
             <button onClick={() => fileVolRef.current?.click()}
               style={{ fontSize: 11, fontWeight: 600, padding: "4px 10px", border: "1px solid #BFDBFE", borderRadius: 7, background: "#fff", color: "#2563EB", cursor: "pointer" }}>
@@ -3104,6 +3104,7 @@ ${question}`;
         <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
 
           {/* Providers — pills */}
+          <div className="geo-provider-pills">
           {PROVIDERS.map(p => {
             const active = filterProviders.includes(p.id);
             const hasKey = !!providerKeys[p.id]?.dec;
@@ -3118,6 +3119,7 @@ ${question}`;
             );
           })}
 
+          </div>
           {/* Divider */}
           <div style={{ width: "0.5px", height: 16, background: "#1A3C2E12", flexShrink: 0 }} />
 
@@ -3140,9 +3142,8 @@ ${question}`;
             </>
           )}
 
-          {/* Spacer */}
           <div style={{ flex: 1 }} />
-
+          <div className="geo-toolbar-actions">
           {/* Rafraîchir */}
           <button
             onClick={() => sbGetQuestions(projectId, site.id).then(setQuestions)}
@@ -3180,6 +3181,7 @@ ${question}`;
               )}
             </>
           )}
+          </div>
         </div>
       </div>
 
@@ -3937,7 +3939,7 @@ function AutomationTab({ projectId, site, user, providerKeys }) {
 
       {/* Status si schedule existe */}
       {schedule && (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 28 }}>
+        <div className="geo-auto-kpi" style={{ gap: 10, marginBottom: 28 }}>
           {[
             { label: "Prochain run", value: fmtDate(schedule.next_run) },
             { label: "Dernier run",  value: fmtDate(schedule.last_run) },
@@ -3954,7 +3956,7 @@ function AutomationTab({ projectId, site, user, providerKeys }) {
       {/* ── Fréquence ── */}
       <div style={{ marginBottom: 24 }}>
         <div className="gt-label" style={{ marginBottom: 12 }}>Fréquence</div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
+        <div className="geo-freq-grid" style={{ gap: 8 }}>
           {FREQUENCIES.map(f => {
             const active = frequency === f.key;
             return (
@@ -4589,7 +4591,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
         )}
 
         {/* Sous-nav */}
-        <div data-tour="subnav" style={{ display: "flex", gap: 4, marginBottom: 24, flexWrap: "wrap" }}>
+        <div data-tour="subnav" className="geo-subnav" style={{ marginBottom: 24 }}>
           {[
             { key: "keywords",    label: "Mots-clés" },
             { key: "questions",   label: "Questions" },

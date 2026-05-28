@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
+import "./geo-responsive.css";
 import TourGuide from "./TourGuide";
 import { sbGetBrand, sbGetQuestions, sbGetGeoResults, sbGetUrlIndex,
   sbSaveProject, sbDeleteProject, sbDownload,
@@ -435,7 +436,7 @@ function GeoScoreBanner({ audit, brand, site }) {
               :               { label: "Potentiel à exploiter",    color: "#C97820", bar: "#C97820" };
   return (
     <div style={{ background: "#fff", border: "0.5px solid #1A3C2E0D", borderRadius: 12, padding: "20px 24px", marginBottom: 16 }}>
-      <div style={{ display: "flex", gap: 24, alignItems: "flex-start", flexWrap: "wrap" }}>
+      <div className="audit-banner-inner">
         {/* Score */}
         <div style={{ minWidth: 100 }}>
           <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E44", marginBottom: 6 }}>Présence GEO</div>
@@ -450,7 +451,7 @@ function GeoScoreBanner({ audit, brand, site }) {
         </div>
 
         {/* Séparateur */}
-        <div style={{ width: 1, background: "#1A3C2E0C", alignSelf: "stretch", minHeight: 60 }} />
+        <div className="audit-banner-sep" />
 
         {/* Barre proportion M/É/C */}
         <div style={{ flex: "0 0 auto", minWidth: 140 }}>
@@ -477,12 +478,12 @@ function GeoScoreBanner({ audit, brand, site }) {
         </div>
 
         {/* Séparateur */}
-        <div style={{ width: 1, background: "#1A3C2E0C", alignSelf: "stretch", minHeight: 60 }} />
+        <div className="audit-banner-sep" />
 
         {/* KPIs contextuels */}
         <div style={{ flex: 1, minWidth: 180 }}>
           <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E44", marginBottom: 8 }}>Contexte</div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "8px 20px" }}>
+          <div className="audit-banner-context">
             {[
               { label: "Marque",                  val: brand?.brand_name || "—" },
               { label: "Site",                    val: site?.label || "—" },
@@ -1114,10 +1115,10 @@ function CorrelationMatrix({ corrMatrix, metrics, sfData, bingData, gscData, res
   return (
     <div>
       {/* Sélecteur 2 sources */}
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
+      <div className="audit-corr-sources">
         <div>
           <div style={{ fontSize: 10, color: "#1A3C2E44", marginBottom: 5, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase" }}>Source A</div>
-          <div style={{ display: "flex", gap: 4 }}>
+          <div className="audit-corr-source-btns">
             {SOURCES.map(s => (
               <button key={s.key} onClick={() => { setSrcA(s.key); if (s.key === srcB) setSrcB(srcA); }}
                 disabled={!s.available}
@@ -1167,7 +1168,7 @@ function CorrelationMatrix({ corrMatrix, metrics, sfData, bingData, gscData, res
             : `Importez ${!srcADef?.available ? srcADef?.label : srcBDef?.label} dans Setup pour activer cette corrélation.`}
         </div>
       ) : (
-        <div style={{ overflowX: "auto" }}>
+        <div className="audit-corr-table-wrap">
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
             <thead>
               <tr style={{ borderBottom: "0.5px solid #1A3C2E12" }}>
@@ -1325,7 +1326,7 @@ Commence DIRECTEMENT par ## POURQUOI LES LLM LES CITENT. Sois précis et actionn
 
       {/* URL + lancer */}
       {selected && (
-        <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 14 }}>
+        <div className="audit-comp-analyzer-input">
           <input
             type="url"
             value={url}
@@ -2001,7 +2002,7 @@ export default function GeoAuditTab({
         <TourGuide steps={AUDIT_TOUR_STEPS} onClose={() => setShowTour(false)} />
       )}
       {/* ── Header compact : titre + onglets + actions sur une ligne ── */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20, gap: 12 }}>
+      <div className="audit-header">
         {/* Gauche : titre + onglets */}
         <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
           <div style={{ fontSize: 16, fontWeight: 700, color: "#1A3C2E", letterSpacing: "-0.01em" }}>Audit GEO</div>
@@ -2082,7 +2083,7 @@ export default function GeoAuditTab({
 
               {/* Providers — ligne épurée */}
               {Object.keys(audit.providerStats).length > 0 && (
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+                <div className="audit-providers-row">
                   {Object.entries(audit.providerStats).map(([pid, s]) => {
                     const rate = pct(s.withBrand, s.total);
                     const color = rate >= 50 ? "#1A7A4A" : rate > 0 ? "#C97820" : "#1A3C2E33";
@@ -2098,13 +2099,13 @@ export default function GeoAuditTab({
               )}
 
               {/* Tendance 30 jours */}
-              <div style={{ marginBottom: 18 }}>
+              <div className="audit-trend-wrap" style={{ marginBottom: 18 }}>
                 <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E44", marginBottom: 8 }}>Tendance 30 jours</div>
                 <TrendChart trendDays={audit.trendDays} />
               </div>
 
               {/* Questions ◎ mention / ✗ favorites sans mention */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+              <div className="audit-questions-grid">
                 <div>
                   <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A7A4A", marginBottom: 8 }}>◎ Avec mention · {audit.presentBrandQs.length}</div>
                   {audit.presentBrandQs.length ? audit.presentBrandQs.map((q, i) => (
@@ -2162,8 +2163,8 @@ export default function GeoAuditTab({
                   ...top5.map(([name, s]) => ({ name, stats: s, isRef: false })),
                 ];
                 return (
-                  <div style={{ overflowX: "auto", marginBottom: 20 }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                  <div className="audit-comp-table-wrap">
+                    <table className="audit-comp-table">
                       <thead>
                         <tr style={{ borderBottom: "0.5px solid #1A3C2E12" }}>
                           <th style={{ padding: "7px 0", textAlign: "left", fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E44" }}>Marque</th>
@@ -2213,7 +2214,7 @@ export default function GeoAuditTab({
               {/* Top domaines */}
               <div style={{ marginBottom: 20 }}>
                 <div style={{ fontSize: 11, fontWeight: 500, color: "#1A3C2E44", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>Top domaines cités</div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 8 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 8 }}>
                   {Object.entries(audit.topDomains).sort((a,b)=>b[1]-a[1]).slice(0,10).map(([d, cnt], i) => {
                     const isComp  = audit.competitorUrls.some(u => u.domain === d);
                     const isBrand = audit.brandUrls.some(u => u.domain === d);
@@ -2240,7 +2241,8 @@ export default function GeoAuditTab({
                 {audit.brandUrls.length === 0 ? (
                   <div style={{ fontSize: 11, color: "#1A3C2E44", fontStyle: "italic" }}>Aucune URL de la marque détectée dans les sources</div>
                 ) : (
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                  <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 480 }}>
                     <thead>
                       <tr style={{ background: "#FAFAF8" }}>
                         {["URL", "Citations src", "Mentions rép.", "Questions liées", "Statut"].map(h => (
@@ -2278,6 +2280,7 @@ export default function GeoAuditTab({
                       })}
                     </tbody>
                   </table>
+                  </div>
                 )}
               </div>
             </Section>
