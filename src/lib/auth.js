@@ -1,305 +1,295 @@
-// netlify/edge-functions/auth-proxy.js
-// Handles Supabase Auth API calls (signup, login, logout, session, password reset)
+// lib/auth.js
+// Auth helpers — talk to /api/auth edge function
+// Session stored in sessionStorage (clears on tab close) + localStorage for remember-me
 
-const SUPABASE_URL        = Deno.env.get("SUPABASE_URL");
-const SUPABASE_ANON       = Deno.env.get("SUPABASE_ANON");
-const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_KEY"); // clé service_role (admin)
-const SUPERADMINS         = ["guillaume@deux.io"];
+const SUPERADMINS = ["guillaume@deux.io"];
 
-export default async function handler(req) {
-  if (req.method === "OPTIONS") {
-    return new Response(null, { status: 204, headers: cors() });
-  }
-
-  const url    = new URL(req.url);
-  const action = url.searchParams.get("action");
-
+export function getStoredSession() {
   try {
-    const body = req.method !== "GET" ? await req.json() : {};
+    const s = sessionStorage.getItem("correl_session") || localStorage.getItem("correl_session");
+    return s ? JSON.parse(s) : null;
+  } catch { return null; }
+}
 
-    // ── LOGIN ──────────────────────────────────────────────────────
-    if (action === "login") {
-      const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "apikey": SUPABASE_ANON },
-        body: JSON.stringify({ email: body.email, password: body.password }),
-      });
-      const data = await res.json();
-      if (!res.ok) return json({ error: data.error_description || data.msg || "Identifiants incorrects" }, 401);
-      return json({ access_token: data.access_token, refresh_token: data.refresh_token, user: data.user });
-    }
+function storeSession(session, remember = true) {
+  const s = JSON.stringify(session);
+  sessionStorage.setItem("correl_session", s);
+  if (remember) localStorage.setItem("correl_session", s);
+}
 
-    // ── SIGNUP ─────────────────────────────────────────────────────
-    if (action === "signup") {
-      if (!SUPABASE_SERVICE_KEY) {
-        return json({ error: "Configuration serveur manquante (SUPABASE_SERVICE_KEY)" }, 500);
-      }
+export function clearSession() {
+  sessionStorage.removeItem("correl_session");
+  localStorage.removeItem("correl_session");
+}
 
-      // 1. Créer le compte via Admin API (sans email de confirmation)
-      const createRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/users`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "apikey": SUPABASE_SERVICE_KEY,
-          "Authorization": `Bearer ${SUPABASE_SERVICE_KEY}`,
-        },
-        body: JSON.stringify({
-          email: body.email,
-          password: body.password,
-          email_confirm: true,
-        }),
-      });
-      const createData = await createRes.json();
+export function getToken() {
+  return getStoredSession()?.access_token || null;
+}
 
-      if (!createRes.ok) {
-        const msg = createData.message || createData.msg || createData.error_description || "Erreur lors de la création du compte";
-        const status = createRes.status === 422 ? 409 : 400;
-        return json({ error: msg }, status);
-      }
+export function getCurrentUser() {
+  return getStoredSession()?.user || null;
+}
 
-      // 2. Connecter immédiatement
-      const loginRes = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "apikey": SUPABASE_ANON },
-        body: JSON.stringify({ email: body.email, password: body.password }),
-      });
-      const loginData = await loginRes.json();
+export function isSuperAdmin(user) {
+  return user && SUPERADMINS.includes(user.email);
+}
 
-      if (!loginRes.ok) {
-        return json({ error: "Compte créé mais connexion automatique échouée. Connectez-vous manuellement.", user: createData }, 200);
-      }
+export async function authLogin(email, password, remember = true) {
+  const res = await fetch("/api/auth?action=login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "Identifiants incorrects");
+  storeSession({ access_token: data.access_token, refresh_token: data.refresh_token, user: data.user }, remember);
+  return data.user;
+}
 
-      return json({
-        access_token: loginData.access_token,
-        refresh_token: loginData.refresh_token,
-        user: loginData.user,
-      });
-    }
+export async function authSignup(email, password) {
+  const res = await fetch("/api/auth?action=signup", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  const data = await res.json();
 
-    // ── FORGOT PASSWORD ────────────────────────────────────────────
-    // Envoie un email de réinitialisation via l'API Supabase.
-    // L'email doit exister dans auth.users, sinon Supabase renvoie 200 quand même
-    // (pour ne pas divulguer l'existence du compte).
-    if (action === "forgot_password") {
-      if (!body.email) return json({ error: "Email requis" }, 400);
-
-      const redirectTo = body.redirect_url || `${url.origin}/reset-password`;
-
-      const res = await fetch(`${SUPABASE_URL}/auth/v1/recover`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "apikey": SUPABASE_ANON,
-        },
-        body: JSON.stringify({
-          email: body.email.toLowerCase().trim(),
-          gotrue_meta_security: {},
-        }),
-      });
-
-      // Supabase retourne toujours 200 (sécurité anti-enumeration)
-      // On retourne toujours un succès côté client
-      return json({ success: true, message: "Si ce compte existe, un email de réinitialisation a été envoyé." });
-    }
-
-    // ── RESET PASSWORD ─────────────────────────────────────────────
-    // Appelé depuis la page /reset-password avec le token de l'email.
-    // Le token est dans le hash de l'URL (#access_token=...) — le client
-    // l'extrait et l'envoie ici pour changer le mot de passe.
-    if (action === "reset_password") {
-      if (!body.access_token || !body.new_password) {
-        return json({ error: "Token et nouveau mot de passe requis" }, 400);
-      }
-      if (body.new_password.length < 8) {
-        return json({ error: "Le mot de passe doit faire au moins 8 caractères" }, 400);
-      }
-
-      const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          "apikey": SUPABASE_ANON,
-          "Authorization": `Bearer ${body.access_token}`,
-        },
-        body: JSON.stringify({ password: body.new_password }),
-      });
-      const data = await res.json();
-      if (!res.ok) return json({ error: data.message || data.error_description || "Erreur lors de la réinitialisation" }, 400);
-      return json({ success: true, user: data });
-    }
-
-    // ── REFRESH ────────────────────────────────────────────────────
-    if (action === "refresh") {
-      const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "apikey": SUPABASE_ANON },
-        body: JSON.stringify({ refresh_token: body.refresh_token }),
-      });
-      const data = await res.json();
-      if (!res.ok) return json({ error: "Session expirée" }, 401);
-      return json({ access_token: data.access_token, refresh_token: data.refresh_token, user: data.user });
-    }
-
-    // ── ME ─────────────────────────────────────────────────────────
-    if (action === "me") {
-      const token = (req.headers.get("Authorization") || "").replace("Bearer ", "");
-      if (!token) return json({ user: null });
-      const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
-        headers: { "apikey": SUPABASE_ANON, "Authorization": `Bearer ${token}` },
-      });
-      const data = await res.json();
-      if (!res.ok) return json({ user: null });
-      return json({ user: data, isSuperAdmin: SUPERADMINS.includes(data.email) });
-    }
-
-    // ── UPDATE NAME ────────────────────────────────────────────────
-    if (action === "update_name") {
-      const token = (req.headers.get("Authorization") || "").replace("Bearer ", "");
-      if (!token) return json({ error: "Non authentifié" }, 401);
-      const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          "apikey": SUPABASE_ANON,
-          "Authorization": `Bearer ${token}`,
-        },
-        body: JSON.stringify({ data: { display_name: body.display_name || "" } }),
-      });
-      const data = await res.json();
-      if (!res.ok) return json({ error: data.message || "Erreur mise à jour" }, 400);
-      return json({ user: data });
-    }
-
-    // ── INVITE MEMBER ───────────────────────────────────────────────
-    // Crée ou retrouve le compte + ajoute à project_members + envoie un email
-    if (action === "invite_member") {
-      const { projectId, email, invitedBy, role: memberRole, projectName } = body;
-      if (!email || !projectId) return json({ error: "email et projectId requis" }, 400);
-      if (!SUPABASE_SERVICE_KEY) return json({ error: "SUPABASE_SERVICE_KEY manquante" }, 500);
-
-      const emailClean  = email.toLowerCase().trim();
-      const roleClean   = memberRole || "member";
-      const projectLabel = projectName || "le projet";
-      const inviterEmail = invitedBy || "";
-
-      // ── Étape 1 : nouveau compte via Supabase Admin "invite" ────────────
-      // L'endpoint /invite crée le compte (si absent) ET envoie automatiquement
-      // un email Supabase "Vous avez été invité" avec un lien pour définir le mdp.
-      // Si le compte existe déjà → Supabase renvoie l'user existant + envoie quand même un lien magic.
-      let accountCreated = false;
-      let supabaseUserId = null;
-
-      const inviteRes = await fetch(`${SUPABASE_URL}/auth/v1/invite`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "apikey": SUPABASE_SERVICE_KEY,
-          "Authorization": `Bearer ${SUPABASE_SERVICE_KEY}`,
-        },
-        body: JSON.stringify({
-          email: emailClean,
-          data: {
-            invited_by:   inviterEmail,
-            project_name: projectLabel,
-          },
-        }),
-      });
-      const inviteData = await inviteRes.json();
-
-      if (inviteRes.ok) {
-        supabaseUserId = inviteData.id;
-        // Supabase renvoie confirmed_at = null → compte tout juste créé
-        accountCreated = !inviteData.confirmed_at || inviteData.confirmation_sent_at === inviteData.created_at;
-      } else {
-        // Fallback : si l'invite échoue (ex: compte déjà confirmé), on passe à la création manuelle
-        // pour au moins ajouter au projet même sans email
-        console.warn("[invite_member] /invite warn:", inviteData.msg || inviteData.error_description || JSON.stringify(inviteData));
-        accountCreated = false;
-      }
-
-      // ── Étape 2 : insérer dans project_members (bypass RLS via SERVICE_KEY) ──
-      const memberRes = await fetch(`${SUPABASE_URL}/rest/v1/project_members`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "apikey": SUPABASE_SERVICE_KEY,
-          "Authorization": `Bearer ${SUPABASE_SERVICE_KEY}`,
-          "Prefer": "return=representation,resolution=ignore-duplicates",
-        },
-        body: JSON.stringify({
-          project_id:  projectId,
-          user_email:  emailClean,
-          role:        roleClean,
-          invited_by:  inviterEmail,
-        }),
-      });
-
-      if (!memberRes.ok) {
-        const err = await memberRes.text().catch(() => "");
-        console.error("[invite_member] project_members insert failed:", memberRes.status, err.slice(0, 200));
-        return json({
-          error: accountCreated
-            ? "Compte créé mais erreur d'ajout au projet — vérifiez la table project_members"
-            : "Erreur d'ajout au projet",
-          detail: err.slice(0, 200),
-          status: memberRes.status,
-        }, 500);
-      }
-
-      // ── Étape 3 : pour les comptes existants, composer l'email de notification ──
-      // (Supabase envoie déjà un mail pour les nouveaux comptes via /invite)
-      // Pour les existants, on retourne le corps d'email pré-composé pour mailto:
-      let emailPayload = null;
-      if (!accountCreated) {
-        const appUrl = "https://correledash.netlify.app"; // URL de l'app
-        const roleLabel = roleClean === "reader" ? "Lecture seule" : "Membre";
-        emailPayload = {
-          to:      emailClean,
-          subject: `[CorrelDash] Accès ajouté — ${projectLabel}`,
-          body: `Bonjour,
-
-${inviterEmail || "Un administrateur"} vous a ajouté à "${projectLabel}" sur CorrelDash GEO par Sonate.
-
-Votre rôle : ${roleLabel}
-
-Vous pouvez accéder au projet en vous connectant à :
-${appUrl}
-
-Bonne analyse,
-${inviterEmail || "L'équipe CorrelDash"}`,
-        };
-      }
-
-      return json({
-        ok:            true,
-        accountCreated,           // true = nouveau compte, email "définir mdp" envoyé par Supabase
-        existed:       !accountCreated, // true = compte existant
-        email:         emailClean,
-        emailSent:     accountCreated,  // Supabase a envoyé l'email automatiquement
-        emailPayload,              // non-null si compte existant → frontend ouvre mailto:
-        role:          roleClean,
-      });
-    }
-
-        return json({ error: "Action inconnue" }, 400);
-  } catch (e) {
-    return json({ error: e.message }, 500);
+  if (!res.ok) {
+    if (res.status === 409) throw new Error("Un compte existe déjà avec cet email.");
+    throw new Error(data.error || "Erreur lors de la création du compte");
   }
+
+  if (data.access_token) {
+    storeSession({ access_token: data.access_token, refresh_token: data.refresh_token, user: data.user }, true);
+    return data.user;
+  }
+
+  return null;
 }
 
-function cors() {
-  return {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+// ── Mot de passe oublié ───────────────────────────────────────────
+// Envoie un email de réinitialisation. Retourne toujours true
+// (Supabase ne divulgue pas si le compte existe).
+export async function authForgotPassword(email) {
+  const res = await fetch("/api/auth?action=forgot_password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      email: email.toLowerCase().trim(),
+      redirect_url: `${window.location.origin}/reset-password`,
+    }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "Erreur lors de l'envoi de l'email");
+  return data;
+}
+
+// ── Réinitialisation du mot de passe ──────────────────────────────
+// Appelée depuis la page /reset-password.
+// Le token vient du hash de l'URL (#access_token=xxx&type=recovery).
+export async function authResetPassword(accessToken, newPassword) {
+  const res = await fetch("/api/auth?action=reset_password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ access_token: accessToken, new_password: newPassword }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "Erreur lors de la réinitialisation");
+  return data;
+}
+
+export async function authLogout() {
+  clearSession();
+}
+
+export async function authRefresh() {
+  const session = getStoredSession();
+  if (!session?.refresh_token) return null;
+  try {
+    const res = await fetch("/api/auth?action=refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token: session.refresh_token }),
+    });
+    if (!res.ok) { clearSession(); return null; }
+    const data = await res.json();
+    storeSession({ access_token: data.access_token, refresh_token: data.refresh_token, user: data.user });
+    return data.user;
+  } catch { clearSession(); return null; }
+}
+
+// ── Project access control ────────────────────────────────────────
+
+export async function sbGetProjectMembers(projectId) {
+  const token = getToken();
+  const headers = { "Content-Type": "application/json" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const res = await fetch(`/api/supabase/rest/v1/project_members?project_id=eq.${encodeURIComponent(projectId)}&select=*`, { headers });
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function sbAddProjectMember(projectId, email, invitedBy) {
+  const token = getToken(); // token de l'admin connecté — requis pour bypasser les RLS
+  const headers = {
+    "Content-Type": "application/json",
+    "Prefer": "return=representation,resolution=ignore-duplicates",
   };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  const res = await fetch(`/api/supabase/rest/v1/project_members`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      project_id:   projectId,
+      user_email:   email.toLowerCase().trim(),
+      role:         "member",
+      invited_by:   invitedBy,
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.text().catch(() => "");
+    console.error("[sbAddProjectMember] failed:", res.status, err.slice(0, 200));
+  }
+  return res.ok;
 }
 
-function json(data, status = 200) {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: { "Content-Type": "application/json", ...cors() },
+export async function sbRemoveProjectMember(projectId, email) {
+  const token = getToken();
+  const headers = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  const res = await fetch(
+    `/api/supabase/rest/v1/project_members?project_id=eq.${encodeURIComponent(projectId)}&user_email=eq.${encodeURIComponent(email)}`,
+    { method: "DELETE", headers }
+  );
+  return res.ok;
+}
+
+export async function sbSetProjectOwner(projectId, ownerEmail) {
+  await fetch(`/api/supabase/rest/v1/projects?id=eq.${encodeURIComponent(projectId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ owner_email: ownerEmail }),
   });
 }
 
-export const config = { path: "/api/auth" };
+export async function sbLoadAccessibleProjects(userEmail) {
+  const token = getToken();
+  if (!token || !userEmail) return [];
+
+  try {
+    const email = userEmail.toLowerCase();
+    const admin = isSuperAdmin({ email });
+    const authH = { "Authorization": `Bearer ${token}` };
+
+    if (admin) {
+      const res = await fetch(`/api/supabase/rest/v1/projects?select=*&order=updated_at.desc`, { headers: authH });
+      if (!res.ok) return [];
+      return (await res.json()).map(parseProject);
+    }
+
+    const [ownedRes, memberRes] = await Promise.all([
+      fetch(`/api/supabase/rest/v1/projects?owner_email=eq.${encodeURIComponent(email)}&select=*&order=updated_at.desc`, { headers: authH }),
+      fetch(`/api/supabase/rest/v1/project_members?user_email=eq.${encodeURIComponent(email)}&select=project_id`, { headers: authH }),
+    ]);
+    const owned = ownedRes.ok ? await ownedRes.json() : [];
+    const memberships = memberRes.ok ? await memberRes.json() : [];
+    const memberIds = memberships.map(m => m.project_id).filter(Boolean);
+
+    let memberProjects = [];
+    if (memberIds.length > 0) {
+      const ids = memberIds.map(id => `"${id}"`).join(",");
+      const res = await fetch(`/api/supabase/rest/v1/projects?id=in.(${ids})&select=*&order=updated_at.desc`, { headers: authH });
+      if (res.ok) memberProjects = await res.json();
+    }
+
+    const seen = new Set();
+    return [...owned, ...memberProjects]
+      .filter(p => { if (seen.has(p.id)) return false; seen.add(p.id); return true; })
+      .map(parseProject);
+  } catch(e) {
+    console.error("sbLoadAccessibleProjects error:", e);
+    return [];
+  }
+}
+
+function parseProject(r) {
+  return {
+    id: r.id, name: r.name,
+    sites: JSON.parse(r.sites_json || "[]"),
+    openai_key_enc: r.openai_key_enc || null,
+    geo_axes: JSON.parse(r.geo_axes_json || "null") || ["Meilleur / top / recommandé","Pistes et approches pour utiliser / bénéficier du mot-clé","Avis / fiable / fiabilité","Pour atteindre un objectif lié au mot-clé","Pour résoudre une problématique liée au mot-clé"],
+    gemini_key_enc: r.gemini_key_enc || null,
+    perplexity_key_enc: r.perplexity_key_enc || null,
+    claude_geo_key_enc: r.claude_geo_key_enc || null,
+    semrush_key_enc: r.semrush_key_enc || null,
+    owner_email: r.owner_email || null,
+    updated_at: r.updated_at || null,
+    settings_json: r.settings_json || null,
+  };
+}
+
+// ── Invite member — passe par auth-proxy avec SERVICE_KEY ────────
+// Utilise /api/auth?action=invite_member qui bypass les RLS avec la clé service
+export async function sbInviteMember(projectId, email, invitedBy, role = "member", projectName = "") {
+  const res = await fetch("/api/auth?action=invite_member", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      projectId,
+      email:       email.toLowerCase().trim(),
+      invitedBy:   invitedBy || "",
+      role:        role || "member",
+      projectName: projectName || "",
+    }),
+  });
+
+  const data = await res.json().catch(() => ({}));
+
+  if (!res.ok) {
+    throw new Error(data.error || `Erreur invitation: ${res.status}`);
+  }
+
+  // data : { ok, accountCreated, existed, email, emailSent, emailPayload, role }
+  return data;
+}
+
+// ── Token expiry check ────────────────────────────────────────────
+function isTokenExpired(token) {
+  if (!token) return true;
+  try {
+    // Décoder le payload JWT (base64url) sans librairie
+    const payload = JSON.parse(atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+    // exp est en secondes Unix — marge de 60s pour anticiper l'expiration
+    return !payload.exp || (payload.exp - 60) < Math.floor(Date.now() / 1000);
+  } catch { return true; }
+}
+
+// Vérifie si la session stockée est valide, et tente un refresh si le token est expiré
+// Retourne le user si connecté, null sinon
+export async function getOrRefreshSession() {
+  const session = getStoredSession();
+  if (!session?.user) return null;
+
+  if (!isTokenExpired(session.access_token)) {
+    // Token encore valide
+    return session.user;
+  }
+
+  // Token expiré — tenter un refresh
+  if (!session.refresh_token) { clearSession(); return null; }
+
+  try {
+    const res = await fetch("/api/auth?action=refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token: session.refresh_token }),
+    });
+    if (!res.ok) { clearSession(); return null; }
+    const data = await res.json();
+    storeSession({ access_token: data.access_token, refresh_token: data.refresh_token, user: data.user });
+    return data.user;
+  } catch { clearSession(); return null; }
+}
