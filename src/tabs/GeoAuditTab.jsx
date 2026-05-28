@@ -1370,11 +1370,9 @@ Commence DIRECTEMENT par ## POURQUOI LES LLM LES CITENT. Sois précis et actionn
       if (raw.trimStart().startsWith("<")) throw new Error("Proxy claude-geo introuvable");
       const data = JSON.parse(raw);
       if (!res.ok) throw new Error(data.error?.message || `Erreur ${res.status}`);
-      const text = (data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("
-").trim();
+      const text = (data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n").trim();
       const sections = text.split(/^## /m).filter(Boolean).map(s => {
-        const nl = s.indexOf("
-");
+        const nl = s.indexOf("\n");
         return { title: s.slice(0, nl).trim(), body: s.slice(nl+1).trim() };
       });
       setResult(sections);
