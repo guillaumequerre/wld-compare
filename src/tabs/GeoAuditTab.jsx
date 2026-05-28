@@ -1441,8 +1441,7 @@ Commence DIRECTEMENT par ## POURQUOI LES LLM LES CITENT. Sois précis et actionn
             <div key={i} style={{ borderLeft: `2px solid ${getSectionColor(s.title)}22`, paddingLeft: 12, marginBottom: 14 }}>
               <div style={{ fontSize: 9, fontWeight: 600, letterSpacing: "0.10em", textTransform: "uppercase", color: getSectionColor(s.title), marginBottom: 5 }}>{s.title}</div>
               <div style={{ fontSize: 12, color: "#1A3C2E", lineHeight: 1.7 }}>
-                {s.body.split("
-").map((line, j) => {
+                {s.body.split("\n").map((line, j) => {
                   if (!line.trim()) return <div key={j} style={{ height: 4 }} />;
                   if (line.startsWith("- ") || line.startsWith("• ")) return <div key={j} style={{ paddingLeft: 10, marginBottom: 2 }}>· {renderBold(line.slice(2))}</div>;
                   return <div key={j} style={{ marginBottom: 2 }}>{renderBold(line)}</div>;
