@@ -691,22 +691,33 @@ function computeAudit(questions, results, urlIndex, brand, site, calendarEntries
   calendarEntries.forEach(e => {
     const d = e.test_date || (e.created_at || "").slice(0, 10);
     if (!d) return;
-    if (!calByDate[d]) calByDate[d] = { tested: 0, present: 0 };
+    if (!calByDate[d]) calByDate[d] = { tested: 0, present: 0, mentions: 0, citations: 0, evocations: 0 };
     calByDate[d].tested++;
     if (e.brand_present === true || e.brand_present === 1) calByDate[d].present++;
+    // Ventilation M/É/C depuis les champs étendus si disponibles
+    if (e.brand_mention_position != null) calByDate[d].mentions++;
+    else if (e.brand_in_sources) calByDate[d].citations++;
+    else if (e.brand_present === true || e.brand_present === 1) calByDate[d].evocations++;
   });
 
-  // Source 2 : résultats en mémoire (complète les jours manquants / toujours frais)
-  // On utilise created_at pour grouper par jour
+  // Source 2 : résultats en mémoire (ventilés par type M/É/C)
   results.forEach(r => {
     const d = (r.created_at || "").slice(0, 10);
     if (!d) return;
-    // Utiliser les résultats en mémoire uniquement si le jour n'est pas couvert par calendarEntries
-    // (évite le double-comptage)
-    if (!calByDate[d]) {
-      calByDate[d] = { tested: 0, present: 0 };
-      calByDate[d].tested++;
-      if (r.brand_mentioned === true || r.brand_mentioned === 1) calByDate[d].present++;
+    if (!calByDate[d]) calByDate[d] = { tested: 0, present: 0, mentions: 0, citations: 0, evocations: 0 };
+    calByDate[d].tested++;
+    // Mention = dans un top LLM numéroté
+    if (r.brand_mention_position != null || (r.brand_position != null && r.brand_position > 0)) {
+      calByDate[d].mentions++;
+      calByDate[d].present++;
+    // Citation = dans les sources
+    } else if (r.brand_in_sources) {
+      calByDate[d].citations++;
+      calByDate[d].present++;
+    // Évocation = corps du texte hors top
+    } else if (r.brand_mentioned === true || r.brand_mentioned === 1) {
+      calByDate[d].evocations++;
+      calByDate[d].present++;
     }
   });
   const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -717,8 +728,11 @@ function computeAudit(questions, results, urlIndex, brand, site, calendarEntries
     const day = calByDate[key] || { tested: 0, present: 0 };
     trendDays.push({
       date: key,
-      tested: day.tested,
-      present: day.present,
+      tested:    day.tested,
+      present:   day.present,
+      mentions:  day.mentions  || 0,
+      citations: day.citations || 0,
+      evocations:day.evocations|| 0,
       rate: day.tested > 0 ? pct(day.present, day.tested) : null,
     });
   }
@@ -922,61 +936,87 @@ function computeAudit(questions, results, urlIndex, brand, site, calendarEntries
 
 
 function TrendChart({ trendDays }) {
-  const W = 600, H = 110, PAD = 36, plotW = W - PAD - 16, plotH = H - 24;
+  const W = 620, H = 130, PAD = 32, PADT = 12, plotW = W - PAD - 12, plotH = H - PADT - 22;
   const active = trendDays.filter(d => d.tested > 0);
-  if (!active.length) return <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>Aucun test effectué ces 30 derniers jours</div>;
-  // Ordonnée = citations brutes (present), max = max_du_jour * 1.5 (min 4 pour lisibilité)
-  const maxPresent = Math.max(...trendDays.map(d => d.present || 0));
-  const yMax = Math.max(Math.ceil(maxPresent * 1.5), 4);
-  const toY = (v) => H - 12 - (v / yMax) * plotH;
-  const pts = trendDays.map((d, i) => ({
-    x: PAD + (i / (trendDays.length - 1)) * plotW,
-    y: d.present !== null ? toY(d.present) : null,
-    ...d,
-  }));
-  const pathPts = pts.filter(p => p.y !== null && p.tested > 0);
-  const pathD = pathPts.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ");
-  // Graduations : 0, mi, max
+  if (!active.length) return (
+    <div style={{ fontSize: 11, color: "#1A3C2E44", fontStyle: "italic", padding: "20px 0" }}>
+      Aucun résultat enregistré ces 30 derniers jours.
+    </div>
+  );
+
+  // 3 séries — fallback sur present si mentions/citations/evocations non renseignés
+  const hasSplit = trendDays.some(d => (d.mentions || 0) + (d.citations || 0) + (d.evocations || 0) > 0);
+  const series = hasSplit ? [
+    { key: "mentions",   label: "Mention",   color: "#1A7A4A" },
+    { key: "citations",  label: "Citation",  color: "#1A3C2E" },
+    { key: "evocations", label: "Évocation", color: "#C97820" },
+  ] : [
+    { key: "present", label: "Présence", color: "#1A3C2E" },
+  ];
+
+  const yMax = Math.max(
+    ...trendDays.flatMap(d => series.map(s => d[s.key] || 0)),
+    4
+  );
+  const toX = (i) => PAD + (i / Math.max(trendDays.length - 1, 1)) * plotW;
+  const toY = (v) => PADT + plotH - (v / yMax) * plotH;
   const ticks = [0, Math.round(yMax / 2), yMax];
+
+  const makePath = (key) => {
+    const pts = trendDays.map((d, i) => ({ x: toX(i), y: toY(d[key] || 0), v: d[key] || 0, tested: d.tested }));
+    const active_pts = pts.filter(p => p.tested > 0);
+    if (active_pts.length < 2) return null;
+    return active_pts.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(" ");
+  };
+
   return (
-    <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: "block" }}>
-      {/* Grille */}
-      {ticks.map(v => {
-        const y = toY(v);
-        return <g key={v}>
-          <line x1={PAD} x2={W - 16} y1={y} y2={y} stroke={C.border} strokeWidth={0.5} strokeDasharray="3,3" />
-          <text x={PAD - 5} y={y + 3} fontSize={8} fill={C.textLight} textAnchor="end">{v}</text>
-        </g>;
-      })}
-      {/* Axe X */}
-      <line x1={PAD} x2={W - 16} y1={H - 12} y2={H - 12} stroke={C.border} strokeWidth={1} />
-      {/* Étiquettes dates début/milieu/fin */}
-      {[0, 14, 29].map(i => (
-        <text key={i} x={PAD + (i / 29) * plotW} y={H - 2} fontSize={7} fill={C.textLight} textAnchor="middle">
-          {trendDays[i]?.date?.slice(5)}
-        </text>
-      ))}
-      {/* Ligne de tendance */}
-      {pathPts.length > 1 && <path d={pathD} fill="none" stroke="#059669" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />}
-      {/* Zone sous la courbe */}
-      {pathPts.length > 1 && (
-        <path
-          d={`${pathD} L ${pathPts[pathPts.length-1].x} ${toY(0)} L ${pathPts[0].x} ${toY(0)} Z`}
-          fill="#05966918"
-        />
-      )}
-      {/* Points */}
-      {pts.map((p, i) => p.y !== null && p.tested > 0 && (
-        <g key={i}>
-          <circle cx={p.x} cy={p.y} r={3.5} fill={p.present > 0 ? "#059669" : C.border} stroke={C.white} strokeWidth={1} />
-          {p.present > 0 && (
-            <text x={p.x} y={p.y - 6} fontSize={7} fill="#059669" textAnchor="middle" fontWeight="700">{p.present}</text>
-          )}
-        </g>
-      ))}
-      {/* Label ordonnée */}
-      <text x={8} y={H / 2} fontSize={8} fill={C.textLight} textAnchor="middle" transform={`rotate(-90, 8, ${H/2})`}>Citations</text>
-    </svg>
+    <div>
+      {/* Légende */}
+      <div style={{ display: "flex", gap: 14, marginBottom: 8 }}>
+        {series.map(s => (
+          <div key={s.key} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10, color: "#1A3C2E55" }}>
+            <span style={{ width: 16, height: 2, background: s.color, display: "inline-block", borderRadius: 1 }} />
+            {s.label}
+          </div>
+        ))}
+      </div>
+      <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: "block", overflow: "visible" }}>
+        {/* Grille horizontale */}
+        {ticks.map(v => (
+          <g key={v}>
+            <line x1={PAD} x2={W - 12} y1={toY(v)} y2={toY(v)} stroke="#1A3C2E08" strokeWidth={1} />
+            <text x={PAD - 5} y={toY(v) + 3} fontSize={7} fill="#1A3C2E33" textAnchor="end">{v}</text>
+          </g>
+        ))}
+        {/* Axe X */}
+        <line x1={PAD} x2={W - 12} y1={toY(0)} y2={toY(0)} stroke="#1A3C2E12" strokeWidth={1} />
+        {/* Étiquettes dates */}
+        {[0, 7, 14, 21, 29].map(i => (
+          <text key={i} x={toX(i)} y={H - 4} fontSize={7} fill="#1A3C2E33" textAnchor="middle">
+            {trendDays[i]?.date?.slice(5)}
+          </text>
+        ))}
+        {/* Courbes */}
+        {series.map(s => {
+          const d = makePath(s.key);
+          return d ? <path key={s.key} d={d} fill="none" stroke={s.color} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" opacity={0.9} /> : null;
+        })}
+        {/* Points par date */}
+        {trendDays.map((day, i) => day.tested > 0 && (
+          <g key={i}>
+            {series.map(s => {
+              const val = day[s.key] || 0;
+              if (val === 0) return null;
+              return (
+                <g key={s.key}>
+                  <circle cx={toX(i)} cy={toY(val)} r={2.5} fill={s.color} opacity={0.85} />
+                </g>
+              );
+            })}
+          </g>
+        ))}
+      </svg>
+    </div>
   );
 }
 
@@ -1048,6 +1088,379 @@ Sois concret et utilise les données.`;
     </div>
   );
 }
+
+// ── Matrice de corrélation interactive ───────────────────────────
+// Calcule la corrélation de Pearson entre 2 vecteurs
+function pearson(xs, ys) {
+  const n = xs.length;
+  if (n < 3) return null;
+  const mx = xs.reduce((a,b)=>a+b,0)/n, my = ys.reduce((a,b)=>a+b,0)/n;
+  const num = xs.reduce((s,x,i)=>s+(x-mx)*(ys[i]-my),0);
+  const dx  = Math.sqrt(xs.reduce((s,x)=>s+(x-mx)**2,0));
+  const dy  = Math.sqrt(ys.reduce((s,y)=>s+(y-my)**2,0));
+  if (dx===0||dy===0) return null;
+  return parseFloat((num/(dx*dy)).toFixed(3));
+}
+
+function CorrelationMatrix({ corrMatrix, metrics, sfData, bingData, gscData, results, audit, sfCorrFilter, setSfCorrFilter }) {
+  // ── Définitions des sources disponibles ──────────────────────
+  const SOURCES = [
+    { key: "fanout",  label: "Fan-outs",      available: results.length > 0 },
+    { key: "sf",      label: "Screaming Frog", available: corrMatrix.length > 0 },
+    { key: "gsc",     label: "GSC",            available: metrics.some(m => m.gsc) },
+    { key: "bing",    label: "Bing",           available: Object.keys(bingData || {}).length > 0 },
+  ];
+
+  const [srcA, setSrcA] = React.useState("sf");
+  const [srcB, setSrcB] = React.useState("fanout");
+
+  // ── Calculer la matrice selon les 2 sources choisies ─────────
+  const matrix = React.useMemo(() => {
+    // KPIs Fan-outs par question
+    const geoKpis = {};
+    results.forEach(r => {
+      const qid = r.question_id;
+      if (!geoKpis[qid]) geoKpis[qid] = { total: 0, mention: 0, citation: 0, evocation: 0 };
+      geoKpis[qid].total++;
+      if (r.brand_mention_position != null || (r.brand_position != null && r.brand_position > 0)) geoKpis[qid].mention++;
+      else if (r.brand_in_sources) geoKpis[qid].citation++;
+      else if (r.brand_mentioned) geoKpis[qid].evocation++;
+    });
+    const geoVec = {
+      mention:   Object.values(geoKpis).map(g => g.total > 0 ? g.mention/g.total*100 : 0),
+      citation:  Object.values(geoKpis).map(g => g.total > 0 ? g.citation/g.total*100 : 0),
+      evocation: Object.values(geoKpis).map(g => g.total > 0 ? g.evocation/g.total*100 : 0),
+      presence:  Object.values(geoKpis).map(g => g.total > 0 ? (g.mention+g.citation+g.evocation)/g.total*100 : 0),
+    };
+
+    // SF : utiliser corrMatrix existant
+    if (srcA === "sf" && srcB === "fanout") {
+      const rows = [];
+      (corrMatrix || []).forEach(row => {
+        (row.corrs || []).forEach(c => {
+          if (c.value !== null && (
+            c.kpi.src === "geo" || c.kpi.src === "fanout" ||
+            (c.kpi.key && (c.kpi.key.toLowerCase().includes("geo") || c.kpi.key.toLowerCase().includes("mention")))
+          )) {
+            rows.push({ dimA: row.dim.label, dimB: c.kpi.label, r: c.value });
+          }
+        });
+      });
+      return rows.sort((a,b)=>Math.abs(b.r)-Math.abs(a.r)).slice(0,20);
+    }
+
+    if (srcA === "sf" && srcB === "gsc") {
+      const rows = [];
+      (corrMatrix || []).forEach(row => {
+        (row.corrs || []).forEach(c => {
+          if (c.value !== null && c.kpi.src === "gsc") {
+            rows.push({ dimA: row.dim.label, dimB: c.kpi.label, r: c.value });
+          }
+        });
+      });
+      return rows.sort((a,b)=>Math.abs(b.r)-Math.abs(a.r)).slice(0,20);
+    }
+
+    if (srcA === "sf" && srcB === "bing") {
+      const rows = [];
+      (corrMatrix || []).forEach(row => {
+        (row.corrs || []).forEach(c => {
+          if (c.value !== null && c.kpi.src === "bing") {
+            rows.push({ dimA: row.dim.label, dimB: c.kpi.label, r: c.value });
+          }
+        });
+      });
+      return rows.sort((a,b)=>Math.abs(b.r)-Math.abs(a.r)).slice(0,20);
+    }
+
+    // Bing × Fan-outs : corrélation entre métriques Bing et taux GEO
+    if ((srcA === "bing" || srcB === "bing") && (srcA === "fanout" || srcB === "fanout")) {
+      const bingMetrics = Object.entries(bingData || {});
+      if (!bingMetrics.length || !geoVec.presence.length) return [];
+      return [
+        { dimA: "Présence Bing", dimB: "Présence GEO %", r: pearson(bingMetrics.map(b=>b[1]||0).slice(0,geoVec.presence.length), geoVec.presence) },
+        { dimA: "Présence Bing", dimB: "Mentions %",     r: pearson(bingMetrics.map(b=>b[1]||0).slice(0,geoVec.mention.length), geoVec.mention) },
+      ].filter(x => x.r !== null);
+    }
+
+    // GSC × Fan-outs
+    if ((srcA === "gsc" || srcB === "gsc") && (srcA === "fanout" || srcB === "fanout")) {
+      const gscRows = (metrics || []).filter(m => m.gsc);
+      if (!gscRows.length) return [];
+      const rows = [];
+      ["clicks","impressions","ctr","position"].forEach(k => {
+        const vec = gscRows.map(m => m.gsc[k] || 0);
+        ["presence","mention","citation"].forEach(gk => {
+          const gvec = geoVec[gk].slice(0, vec.length);
+          const r = pearson(vec, gvec);
+          if (r !== null) rows.push({ dimA: `GSC ${k}`, dimB: `GEO ${gk} %`, r });
+        });
+      });
+      return rows.sort((a,b)=>Math.abs(b.r)-Math.abs(a.r)).slice(0,20);
+    }
+
+    return [];
+  }, [srcA, srcB, corrMatrix, metrics, bingData, gscData, results]);
+
+  const srcADef = SOURCES.find(s=>s.key===srcA);
+  const srcBDef = SOURCES.find(s=>s.key===srcB);
+
+  return (
+    <div>
+      {/* Sélecteur 2 sources */}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
+        <div>
+          <div style={{ fontSize: 10, color: "#1A3C2E44", marginBottom: 5, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase" }}>Source A</div>
+          <div style={{ display: "flex", gap: 4 }}>
+            {SOURCES.map(s => (
+              <button key={s.key} onClick={() => { setSrcA(s.key); if (s.key === srcB) setSrcB(srcA); }}
+                disabled={!s.available}
+                style={{ padding: "4px 12px", borderRadius: 6, fontSize: 11, cursor: s.available ? "pointer" : "not-allowed",
+                  border: "0.5px solid " + (srcA===s.key ? "#1A3C2E" : "#1A3C2E22"),
+                  background: srcA===s.key ? "#1A3C2E" : "transparent",
+                  color: srcA===s.key ? "#F0EBE0" : s.available ? "#1A3C2E77" : "#1A3C2E22",
+                  fontWeight: srcA===s.key ? 500 : 400,
+                }}>
+                {s.label}{!s.available ? " ·" : ""}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div style={{ fontSize: 18, color: "#1A3C2E22", fontWeight: 300 }}>×</div>
+        <div>
+          <div style={{ fontSize: 10, color: "#1A3C2E44", marginBottom: 5, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase" }}>Source B</div>
+          <div style={{ display: "flex", gap: 4 }}>
+            {SOURCES.filter(s => s.key !== srcA).map(s => (
+              <button key={s.key} onClick={() => setSrcB(s.key)}
+                disabled={!s.available}
+                style={{ padding: "4px 12px", borderRadius: 6, fontSize: 11, cursor: s.available ? "pointer" : "not-allowed",
+                  border: "0.5px solid " + (srcB===s.key ? "#1A7A4A" : "#1A3C2E22"),
+                  background: srcB===s.key ? "#1A7A4A" : "transparent",
+                  color: srcB===s.key ? "#F0EBE0" : s.available ? "#1A3C2E77" : "#1A3C2E22",
+                  fontWeight: srcB===s.key ? 500 : 400,
+                }}>
+                {s.label}{!s.available ? " ·" : ""}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Légende */}
+      <div style={{ display: "flex", gap: 16, marginBottom: 14, fontSize: 10, color: "#1A3C2E44" }}>
+        <span><span style={{ fontWeight: 600, color: "#1A7A4A" }}>▲ ≥ 0.4</span> Corrélation forte positive</span>
+        <span><span style={{ fontWeight: 600, color: "#C0352A" }}>▼ ≤ -0.4</span> Corrélation forte négative</span>
+        <span><span style={{ color: "#1A3C2E33" }}>±0.1–0.4</span> Corrélation faible</span>
+      </div>
+
+      {/* Matrice */}
+      {matrix.length === 0 ? (
+        <div style={{ fontSize: 11, color: "#1A3C2E44", fontStyle: "italic", padding: "12px 0" }}>
+          {srcADef?.available && srcBDef?.available
+            ? `Pas de données de corrélation disponibles entre ${srcADef.label} et ${srcBDef.label}.`
+            : `Importez ${!srcADef?.available ? srcADef?.label : srcBDef?.label} dans Setup pour activer cette corrélation.`}
+        </div>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead>
+              <tr style={{ borderBottom: "0.5px solid #1A3C2E12" }}>
+                <th style={{ padding: "7px 0", textAlign: "left", fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E44" }}>{srcADef?.label}</th>
+                <th style={{ padding: "7px 12px", textAlign: "left", fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A7A4A" }}>{srcBDef?.label}</th>
+                <th style={{ padding: "7px 12px", textAlign: "center", fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E44" }}>Corrélation r</th>
+                <th style={{ padding: "7px 12px", textAlign: "left", fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E44" }}>Intensité</th>
+              </tr>
+            </thead>
+            <tbody>
+              {matrix.map((row, i) => {
+                const r = row.r;
+                const pos = r > 0;
+                const abs = Math.abs(r);
+                const strong = abs >= 0.4;
+                const barW = Math.round(abs * 100);
+                const color = strong ? (pos ? "#1A7A4A" : "#C0352A") : (pos ? "#1A7A4A88" : "#C0352A88");
+                return (
+                  <tr key={i} style={{ borderBottom: "0.5px solid #1A3C2E06" }}>
+                    <td style={{ padding: "7px 0", color: "#1A3C2E", fontSize: 11 }}>{row.dimA}</td>
+                    <td style={{ padding: "7px 12px", color: "#1A3C2E77", fontSize: 11 }}>{row.dimB}</td>
+                    <td style={{ padding: "7px 12px", textAlign: "center" }}>
+                      <span style={{ fontSize: 12, fontWeight: strong ? 700 : 500, color }}>
+                        {pos ? "▲" : "▼"} {r > 0 ? "+" : ""}{r.toFixed(2)}
+                      </span>
+                    </td>
+                    <td style={{ padding: "7px 12px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <div style={{ width: 60, height: 4, background: "#1A3C2E08", borderRadius: 2, overflow: "hidden" }}>
+                          <div style={{ width: `${barW}%`, height: "100%", background: color, borderRadius: 2 }} />
+                        </div>
+                        <span style={{ fontSize: 9, color: "#1A3C2E44" }}>
+                          {abs >= 0.7 ? "Très forte" : abs >= 0.4 ? "Forte" : abs >= 0.2 ? "Modérée" : "Faible"}
+                        </span>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ── Analyseur de pages concurrentes ──────────────────────────
+function CompetitorPageAnalyzer({ competitors, audit, claudeKey }) {
+  const [selected, setSelected] = useState(null);  // nom du concurrent sélectionné
+  const [url, setUrl] = useState("");
+  const [status, setStatus] = useState("idle"); // "idle" | "loading" | "done" | "error"
+  const [result, setResult] = useState(null);
+
+  // Pré-remplir l'URL quand on sélectionne un concurrent
+  const handleSelect = (name) => {
+    setSelected(name);
+    setResult(null);
+    setStatus("idle");
+    // Chercher le domaine dans les URL sources du concurrent
+    const comp = competitors.find(c => c.name === name);
+    const guessDomain = comp?.domain || comp?.website ||
+      Object.entries(audit.compStats[name]?.urls || {})
+        .sort((a,b) => b[1]-a[1])[0]?.[0] || "";
+    setUrl(guessDomain ? `https://${guessDomain.replace(/^https?:\/\//, "")}` : "");
+  };
+
+  const analyze = async () => {
+    if (!url || !claudeKey || !selected) return;
+    setStatus("loading"); setResult(null);
+    const compStats = audit.compStats[selected] || {};
+    const prompt = `Tu es expert GEO (Generative Engine Optimization). Analyse cette page concurrente et produis un rapport structuré.
+
+CONCURRENT : ${selected}
+URL analysée : ${url}
+Données de présence LLM :
+- Mentions (tops LLM) : ${compStats.mentions || 0}
+- Évocations (corps texte) : ${compStats.evocations || 0}
+- Citations (sources) : ${compStats.citations || 0}
+- Position moy. : ${compStats.positions?.length ? (compStats.positions.reduce((a,b)=>a+b,0)/compStats.positions.length).toFixed(1) : "—"}
+
+En imaginant que tu analyses la page ${url}, produis exactement 4 sections :
+
+## POURQUOI LES LLM LES CITENT
+[2-3 raisons concrètes basées sur leur présence mesurée : autorité, structure, format des contenus]
+
+## FORCES DE LEUR CONTENU GEO
+[3-4 points forts que tu inféres de leurs performances LLM : exhaustivité, format, données, maillage]
+
+## LACUNES ET ANGLES À EXPLOITER
+[3-4 angles non couverts ou faiblement couverts qu'Altaroc pourrait exploiter pour dépasser ce concurrent]
+
+## ACTIONS PRIORITAIRES
+[3 actions concrètes avec format : "Créer/Optimiser/Publier [X] pour [objectif GEO]"]
+
+Commence DIRECTEMENT par ## POURQUOI LES LLM LES CITENT. Sois précis et actionnable.`;
+
+    try {
+      const res = await fetch("/api/claude-geo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Claude-Key": claudeKey },
+        body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 1000, messages: [{ role: "user", content: prompt }] }),
+      });
+      const raw = await res.text();
+      if (raw.trimStart().startsWith("<")) throw new Error("Proxy claude-geo introuvable");
+      const data = JSON.parse(raw);
+      if (!res.ok) throw new Error(data.error?.message || `Erreur ${res.status}`);
+      const text = (data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("
+").trim();
+      const sections = text.split(/^## /m).filter(Boolean).map(s => {
+        const nl = s.indexOf("
+");
+        return { title: s.slice(0, nl).trim(), body: s.slice(nl+1).trim() };
+      });
+      setResult(sections);
+      setStatus("done");
+    } catch(e) {
+      setResult([{ title: "Erreur", body: e.message }]);
+      setStatus("error");
+    }
+  };
+
+  const compNames = Object.keys(audit.compStats || {}).filter(k => (audit.compStats[k].mentions||0) + (audit.compStats[k].evocations||0) > 0).slice(0, 10);
+  if (!compNames.length) return (
+    <div style={{ fontSize: 11, color: "#1A3C2E44", fontStyle: "italic", paddingTop: 8 }}>
+      Interrogez des questions pour détecter des concurrents.
+    </div>
+  );
+
+  const SECTION_COLORS = {
+    "POURQUOI LES LLM LES CITENT": "#1A3C2E",
+    "FORCES DE LEUR CONTENU GEO":  "#1A7A4A",
+    "LACUNES ET ANGLES":            "#C97820",
+    "ACTIONS PRIORITAIRES":         "#1A3C2E",
+  };
+  const getSectionColor = (title) => {
+    const key = Object.keys(SECTION_COLORS).find(k => title.includes(k));
+    return SECTION_COLORS[key] || "#1A3C2E77";
+  };
+
+  return (
+    <div style={{ paddingTop: 16, borderTop: "0.5px solid #1A3C2E0C", marginTop: 4 }}>
+      <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E44", marginBottom: 10 }}>Analyser un concurrent</div>
+
+      {/* Sélecteur concurrent */}
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+        {compNames.map(name => (
+          <button key={name} onClick={() => handleSelect(name)} style={{
+            padding: "4px 11px", borderRadius: 6, fontSize: 11, cursor: "pointer", border: "0.5px solid #1A3C2E22",
+            background: selected === name ? "#1A3C2E" : "transparent",
+            color: selected === name ? "#F0EBE0" : "#1A3C2E77",
+            fontWeight: selected === name ? 500 : 400,
+          }}>{name}</button>
+        ))}
+      </div>
+
+      {/* URL + lancer */}
+      {selected && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 14 }}>
+          <input
+            type="url"
+            value={url}
+            onChange={e => setUrl(e.target.value)}
+            placeholder={`https://${selected.toLowerCase().replace(/\s+/g,"-")}.com`}
+            style={{ flex: 1, fontSize: 11, padding: "5px 10px", border: "0.5px solid #1A3C2E18", borderRadius: 6, outline: "none", color: "#1A3C2E", background: "#fff" }}
+          />
+          <button onClick={analyze} disabled={!url || !claudeKey || status === "loading"}
+            style={{ padding: "5px 14px", background: (!url||!claudeKey||status==="loading") ? "transparent" : "#1A3C2E", color: (!url||!claudeKey||status==="loading") ? "#1A3C2E44" : "#F0EBE0", border: "0.5px solid #1A3C2E22", borderRadius: 6, fontSize: 11, fontWeight: 500, cursor: (!url||!claudeKey||status==="loading") ? "not-allowed" : "pointer" }}>
+            {status === "loading" ? "Analyse…" : "Analyser"}
+          </button>
+        </div>
+      )}
+
+      {/* Résultats */}
+      {status === "done" && result && (
+        <div style={{ borderTop: "0.5px solid #1A3C2E0C", paddingTop: 14 }}>
+          {result.map((s, i) => (
+            <div key={i} style={{ borderLeft: `2px solid ${getSectionColor(s.title)}22`, paddingLeft: 12, marginBottom: 14 }}>
+              <div style={{ fontSize: 9, fontWeight: 600, letterSpacing: "0.10em", textTransform: "uppercase", color: getSectionColor(s.title), marginBottom: 5 }}>{s.title}</div>
+              <div style={{ fontSize: 12, color: "#1A3C2E", lineHeight: 1.7 }}>
+                {s.body.split("
+").map((line, j) => {
+                  if (!line.trim()) return <div key={j} style={{ height: 4 }} />;
+                  if (line.startsWith("- ") || line.startsWith("• ")) return <div key={j} style={{ paddingLeft: 10, marginBottom: 2 }}>· {renderBold(line.slice(2))}</div>;
+                  return <div key={j} style={{ marginBottom: 2 }}>{renderBold(line)}</div>;
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {status === "error" && result && (
+        <div style={{ fontSize: 11, color: "#C0352A", paddingTop: 8 }}>{result[0]?.body}</div>
+      )}
+    </div>
+  );
+}
+
 
 function FanoutAnalysis({ questions, results, brand, claudeKey }) {
   const [status, setStatus] = useState("idle");
@@ -1637,7 +2050,7 @@ export default function GeoAuditTab({
   const siteUrls      = useMemo(() => urlIndex.filter(u => u.project_id === projectId), [urlIndex, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
   const audit         = useMemo(() => computeAudit(siteQuestions, siteResults, siteUrls, brand, site, calendarEntries, keywords, competitors), [siteQuestions, siteResults, siteUrls, brand, site, calendarEntries, keywords, competitors]); // eslint-disable-line react-hooks/exhaustive-deps
   const noData        = !siteResults.length;
-  const qLimit        = 25;
+  const qLimit        = 10;
 
   // Démarrer le tour automatiquement si demandé (depuis HomeTab) — après loading et noData
   useEffect(() => {
@@ -1688,31 +2101,31 @@ export default function GeoAuditTab({
       {showTour && (
         <TourGuide steps={AUDIT_TOUR_STEPS} onClose={() => setShowTour(false)} />
       )}
-      {/* ── Header + onglets principaux ── */}
-      <div style={{ marginBottom: 24 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
-          <div style={{ fontSize: 20, fontWeight: 800, color: "#1A3C2E" }}>📋 Audit GEO</div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={refreshData} disabled={loading}
-              title="Recharger les données depuis la base"
-              style={{ fontSize: 11, fontWeight: 500, color: "#1A3C2E", background: "transparent", border: "0.5px solid #1A3C2E22", borderRadius: 6, padding: "5px 12px", cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.4 : 1 }}>
-              {loading ? "⏳" : "↺"} Rafraîchir
-            </button>
-            <button onClick={() => setShowTour(true)} disabled={noData || loading}
-              style={{ fontSize: 11, fontWeight: 700, color: "#1A3C2E", background: "#EAF0EC", border: "1px solid #B2CCBC", borderRadius: 8, padding: "5px 12px", cursor: noData || loading ? "not-allowed" : "pointer", opacity: noData || loading ? 0.4 : 1 }}>
-              🎓 Guide
-            </button>
+      {/* ── Header compact : titre + onglets + actions sur une ligne ── */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20, gap: 12 }}>
+        {/* Gauche : titre + onglets */}
+        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          <div style={{ fontSize: 16, fontWeight: 700, color: "#1A3C2E", letterSpacing: "-0.01em" }}>Audit GEO</div>
+          <div style={{ display: "inline-flex", gap: 1, background: "#1A3C2E0C", borderRadius: 7, padding: "2px" }}>
+            {[{ key: "setup", label: "Setup" }, { key: "audit", label: "Génération" }].map(t => (
+              <button key={t.key} onClick={() => setMainTab(t.key)} style={{
+                padding: "4px 14px", borderRadius: 5, fontSize: 12, fontWeight: 500, border: "none", cursor: "pointer", transition: "all 0.12s",
+                background: mainTab === t.key ? "#1A3C2E" : "transparent",
+                color: mainTab === t.key ? "#F0EBE0" : "#1A3C2E55",
+              }}>{t.label}</button>
+            ))}
           </div>
         </div>
-        <div style={{ display: "inline-flex", gap: 2, background: "#F0EBE033", borderRadius: 20, padding: 3 }}>
-          {[{ key: "setup", label: "⚙️ Setup" }, { key: "audit", label: "📋 Génération Audit GEO" }].map(t => (
-            <button key={t.key} onClick={() => setMainTab(t.key)} style={{
-              padding: "6px 16px", borderRadius: 10, fontSize: 12, fontWeight: 700, border: "none", cursor: "pointer", transition: "all 0.15s",
-              background: mainTab === t.key ? "#fff" : "transparent",
-              color: mainTab === t.key ? "#1A3C2E" : "#1A3C2E55",
-              boxShadow: mainTab === t.key ? "0 1px 4px rgba(0,0,0,0.1)" : "none",
-            }}>{t.label}</button>
-          ))}
+        {/* Droite : actions */}
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <button onClick={refreshData} disabled={loading}
+            style={{ fontSize: 11, color: "#1A3C2E55", background: "transparent", border: "0.5px solid #1A3C2E18", borderRadius: 6, padding: "4px 10px", cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.4 : 1 }}>
+            {loading ? "⏳" : "↺"}
+          </button>
+          <button onClick={() => setShowTour(true)} disabled={noData || loading}
+            style={{ fontSize: 11, color: "#1A3C2E55", background: "transparent", border: "0.5px solid #1A3C2E18", borderRadius: 6, padding: "4px 10px", cursor: noData || loading ? "not-allowed" : "pointer", opacity: noData || loading ? 0.4 : 1 }}>
+            Guide
+          </button>
         </div>
       </div>
 
@@ -1732,17 +2145,17 @@ export default function GeoAuditTab({
       {/* ── Génération Audit GEO ── */}
       {mainTab === "audit" && (
         <div>
-          {/* Sélecteur de site + Export */}
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {/* Sélecteur de site + Export — barre fine */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, gap: 8 }}>
+            <div style={{ display: "flex", gap: 6 }}>
               {(Array.isArray(sites) ? sites : []).length > 1 && (Array.isArray(sites) ? sites : []).map(s => (
-                <button key={s.id} onClick={() => setSelectedSite(s.id)} style={{ padding: "5px 12px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer", border: `2px solid ${s.color}`, background: selectedSite === s.id ? s.color : "transparent", color: selectedSite === s.id ? "#fff" : s.color }}>{s.label}</button>
+                <button key={s.id} onClick={() => setSelectedSite(s.id)} style={{ padding: "3px 10px", borderRadius: 5, fontSize: 11, fontWeight: 500, cursor: "pointer", border: `1px solid ${s.color}33`, background: selectedSite === s.id ? s.color : "transparent", color: selectedSite === s.id ? "#fff" : s.color }}>{s.label}</button>
               ))}
             </div>
             <span data-tour="audit-export"><button onClick={() => { setExporting(true); exportPDF(audit, brand, site, aiText); setTimeout(() => setExporting(false), 1000); }}
               disabled={noData || exporting}
-              style={{ padding: "6px 16px", background: noData ? "transparent" : "#1A3C2E", color: noData ? "#1A3C2E44" : "#F0EBE0", border: "0.5px solid #1A3C2E22", borderRadius: 6, fontSize: 11, fontWeight: 500, cursor: noData ? "not-allowed" : "pointer" }}>
-              {exporting ? "⏳ Export…" : "⬇ Export PDF"}
+              style={{ padding: "4px 12px", background: noData ? "transparent" : "#1A3C2E", color: noData ? "#1A3C2E44" : "#F0EBE0", border: "0.5px solid #1A3C2E22", borderRadius: 5, fontSize: 11, fontWeight: 500, cursor: noData ? "not-allowed" : "pointer" }}>
+              {exporting ? "…" : "⬇ PDF"}
             </button></span>
           </div>
 
@@ -1839,187 +2252,59 @@ export default function GeoAuditTab({
                 BLOC 3 — ANALYSE CONCURRENTIELLE
                 Concurrents + intentions + types de réponses
             ══════════════════════════════════════════════════════ */}
-            <div data-tour="audit-competitors" style={{ display: "contents" }}><Section title="Paysage concurrentiel" sub="Concurrents détectés dans les réponses LLM">
+            <div data-tour="audit-competitors" style={{ display: "contents" }}><Section title="Paysage concurrentiel" sub="Concurrents détectés dans les réponses LLM — analysez leurs pages">
 
-              {/* Cartographie concurrentielle — au-dessus du tableau */}
-              {Object.keys(audit.compStats).filter(k => audit.compStats[k].enabled !== false).length > 0 && (
-                <div style={{ marginBottom: 20 }}>
-                <CompetitorScatter compStats={audit.compStats} total={audit.total} brandName={brand?.brand_name} brandWithBrand={audit.withBrand} brandAvgPos={audit.avgPos} competitors={competitors} />                </div>
-              )}
-
-              {/* Table concurrents — collapsible avec header sticky */}
-              {Object.keys(audit.compStats).length > 0 ? (
-                <div style={{ marginBottom: 20 }}>
-                  {/* Header collapsible + recherche + ajout */}
-                  <div style={{ border: "0.5px solid #1A3C2E0D", borderRadius: compTableOpen ? "8px 8px 0 0" : 8, background: "#FAFAF8" }}>
-                    <button
-                      onClick={() => setCompTableOpen(o => !o)}
-                      style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "8px 12px", background: "transparent", border: "none", cursor: "pointer", fontSize: 11, fontWeight: 500, color: "#1A3C2E77", userSelect: "none" }}>
-                      <span style={{ transform: compTableOpen ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.2s", display: "inline-block" }}>▼</span>
-                      <span style={{ textTransform: "uppercase", letterSpacing: 0.7 }}>Détail des concurrents ({Object.keys(audit.compStats).length})</span>
-                    </button>
-                    {compTableOpen && (
-                      <div style={{ padding: "0 12px 10px", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", borderTop: `1px solid ${C.borderLight}` }}>
-                        {/* Recherche regex */}
-                        <input
-                          value={compSearch}
-                          onChange={e => setCompSearch(e.target.value)}
-                          placeholder="🔍 Filtrer (texte ou regex)…"
-                          style={{ flex: "1 1 160px", padding: "5px 10px", border: "0.5px solid #1A3C2E0D", borderRadius: 6, fontSize: 11, marginTop: 8 }}
-                        />
-                        {/* Ajout concurrent non identifié */}
-                        <input
-                          value={newCompName}
-                          onChange={e => setNewCompName(e.target.value)}
-                          placeholder="+ Ajouter concurrent…"
-                          style={{ flex: "1 1 160px", padding: "5px 10px", border: `1px solid #BFDBFE`, borderRadius: 6, fontSize: 11, marginTop: 8 }}
-                          onKeyDown={async e => {
-                            if (e.key === "Enter" && newCompName.trim()) {
-                              try {
-                                const { sbSaveCompetitor } = await import("../lib/supabase");
-                                const site2 = (Array.isArray(sites) ? sites : []).find(s => s.id === selectedSite) || sites?.[0];
-                                const saved = await sbSaveCompetitor({ project_id: projectId, site_id: site2?.id, name: newCompName.trim(), category: "other", color: "#1A3C2E77", enabled: true });
-                                setCompetitors(prev => [...prev, saved]);
-                                setNewCompName("");
-                              } catch(e2) { console.error(e2); }
-                            }
-                          }}
-                        />
-                        {newCompName.trim() && (
-                          <button onClick={async () => {
-                            try {
-                              const { sbSaveCompetitor } = await import("../lib/supabase");
-                              const site2 = (Array.isArray(sites) ? sites : []).find(s => s.id === selectedSite) || sites?.[0];
-                              const saved = await sbSaveCompetitor({ project_id: projectId, site_id: site2?.id, name: newCompName.trim(), category: "other", color: "#1A3C2E77", enabled: true });
-                              setCompetitors(prev => [...prev, saved]);
-                              setNewCompName("");
-                            } catch(e2) { console.error(e2); }
-                          }} style={{ padding: "5px 12px", background: "#1A3C2E", color: "#F0EBE0", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 500, cursor: "pointer", marginTop: 8 }}>
-                            + Ajouter
-                          </button>
-                        )}
-                      </div>
-                    )}
+              {/* Tableau M/É/C top 5 concurrents */}
+              {(() => {
+                const brandName = brand?.brand_name || "Marque";
+                const top5 = audit.top5Competitors?.length ? audit.top5Competitors : audit.top5Fallback || [];
+                const allRows = [
+                  { name: brandName, stats: { mentions: audit.withRanked||0, evocations: audit.withMentionOnly||0, citations: audit.withSourceOnly||0, positions: [] }, isRef: true },
+                  ...top5.map(([name, s]) => ({ name, stats: s, isRef: false })),
+                ];
+                return (
+                  <div style={{ overflowX: "auto", marginBottom: 20 }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                      <thead>
+                        <tr style={{ borderBottom: "0.5px solid #1A3C2E12" }}>
+                          <th style={{ padding: "7px 0", textAlign: "left", fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E44" }}>Marque</th>
+                          <th style={{ padding: "7px 10px", textAlign: "center", fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A7A4A" }}>◎ Mention</th>
+                          <th style={{ padding: "7px 10px", textAlign: "center", fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#C97820" }}>⟶ Évocation</th>
+                          <th style={{ padding: "7px 10px", textAlign: "center", fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E77" }}>↗ Citation</th>
+                          <th style={{ padding: "7px 10px", textAlign: "center", fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E44" }}>Pos.</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {allRows.map((row, i) => {
+                          const s = row.stats;
+                          const pos = (s.positions || []);
+                          const avgPos = pos.length ? (pos.reduce((a, b) => a + b, 0) / pos.length).toFixed(1) : null;
+                          return (
+                            <tr key={i} style={{ borderBottom: "0.5px solid #1A3C2E06", background: row.isRef ? "#F0EBE018" : "transparent" }}>
+                              <td style={{ padding: "8px 0" }}>
+                                <span style={{ fontSize: 12, fontWeight: row.isRef ? 600 : 400, color: "#1A3C2E" }}>{row.name}</span>
+                                {row.isRef && <span style={{ marginLeft: 6, fontSize: 8, background: "#1A3C2E", color: "#F0EBE0", borderRadius: 3, padding: "1px 5px", letterSpacing: "0.06em" }}>REF</span>}
+                              </td>
+                              <td style={{ padding: "8px 10px", textAlign: "center", fontSize: 14, fontWeight: 600, color: (s.mentions||0) > 0 ? "#1A7A4A" : "#1A3C2E18" }}>{s.mentions || 0}</td>
+                              <td style={{ padding: "8px 10px", textAlign: "center", fontSize: 14, fontWeight: 600, color: (s.evocations||0) > 0 ? "#C97820" : "#1A3C2E18" }}>{s.evocations || 0}</td>
+                              <td style={{ padding: "8px 10px", textAlign: "center", fontSize: 14, fontWeight: 600, color: (s.citations||0) > 0 ? "#1A3C2E77" : "#1A3C2E18" }}>{s.citations || 0}</td>
+                              <td style={{ padding: "8px 10px", textAlign: "center", fontSize: 12, color: "#1A3C2E44" }}>{avgPos ? `#${avgPos}` : "—"}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
                   </div>
-                  {compTableOpen && (() => {
-                    // Appliquer le filtre regex sur les entrées
-                    let searchRe = null;
-                    try { searchRe = compSearch.trim() ? new RegExp(compSearch.trim(), "i") : null; } catch {}
-                    const filteredStats = Object.entries(audit.compStats).filter(([name]) =>
-                      !searchRe || searchRe.test(name)
-                    );
-                    return (
-                    <div style={{ border: "0.5px solid #1A3C2E0D", borderTop: "none", borderRadius: "0 0 8px 8px", overflow: "auto", maxHeight: 420 }}>
-                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                        <thead style={{ position: "sticky", top: 0, zIndex: 1, background: "#FAFAF8" }}>
-                          <tr>
-                            {[
-                              { key: "name",    label: "Concurrent" },
-                              { key: "cat",     label: "Catégorie" },
-                              { key: "enabled", label: "Actif" },
-                              { key: "mentions",label: "Mentions" },
-                              { key: "pct",     label: "% résultats" },
-                              { key: "pos",     label: "Position moy." },
-                            ].map(h => (
-                              <th key={h.key} onClick={() => setCompSort(s => ({ col: h.key, dir: s.col === h.key && s.dir === "desc" ? "asc" : "desc" }))}
-                                style={{ padding: "8px 12px", textAlign: "left", fontWeight: 600, fontSize: 11, color: compSort.col === h.key ? C.text : C.textLight, textTransform: "uppercase", borderBottom: `1px solid ${C.border}`, cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }}>
-                                {h.label} {compSort.col === h.key ? (compSort.dir === "desc" ? "↓" : "↑") : ""}
-                              </th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>{filteredStats
-                          .filter(([, s]) => s.category !== "other" || s.mentions > 0)
-                          .sort((a, b) => {
-                            const [na, sa] = a; const [nb, sb] = b;
-                            const avgPosA = sa.positions.length ? sa.positions.reduce((x,y)=>x+y,0)/sa.positions.length : 999;
-                            const avgPosB = sb.positions.length ? sb.positions.reduce((x,y)=>x+y,0)/sb.positions.length : 999;
-                            const mul = compSort.dir === "desc" ? -1 : 1;
-                            if (compSort.col === "name")    return mul * na.localeCompare(nb);
-                            if (compSort.col === "cat")     return mul * (sa.category||"other").localeCompare(sb.category||"other");
-                            if (compSort.col === "enabled") return mul * ((sa.enabled===false?0:1) - (sb.enabled===false?0:1));
-                            if (compSort.col === "mentions")return mul * (sa.mentions - sb.mentions);
-                            if (compSort.col === "pct")     return mul * (sa.mentions - sb.mentions);
-                            if (compSort.col === "pos")     return mul * (avgPosA - avgPosB);
-                            return 0;
-                          })
-                          .map(([name, stats]) => {
-                            const catKey = stats.category || "other";
-                            const cat = COMP_CAT_DEFS[catKey] || COMP_CAT_DEFS.other;
-                            const avgPos = stats.positions.length
-                              ? (stats.positions.reduce((a, b) => a + b, 0) / stats.positions.length).toFixed(1)
-                              : null;
-                            const enabled = stats.enabled !== false;
-                            return (
-                              <tr key={name} style={{ borderBottom: `1px solid ${C.borderLight}`, opacity: enabled ? 1 : 0.45 }}>
-                                <td style={{ padding: "8px 12px", fontWeight: 600 }}>
-                                  {stats.color && <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: stats.color, marginRight: 7, verticalAlign: "middle" }} />}
-                                  {name}
-                                </td>
-                                <td style={{ padding: "8px 12px" }}>
-                                  {catKey !== "other" ? (
-                                    <span style={{ fontSize: 10, fontWeight: 700, color: cat.color, background: cat.bg, borderRadius: 5, padding: "2px 7px" }}>{cat.label}</span>
-                                  ) : (
-                                    <span style={{ fontSize: 10, color: "#1A3C2E44" }}>—</span>
-                                  )}
-                                </td>
-                                <td style={{ padding: "8px 12px" }}>
-                                  <button
-                                    onClick={async () => {
-                                      const newEnabled = !enabled;
-                                      const comp = competitors.find(c => c.name === name);
-                                      if (comp) {
-                                        try { await sbUpdateCompetitor(comp.id, { enabled: newEnabled }); } catch {}
-                                      }
-                                      setCompetitors(prev => prev.map(c => c.name === name ? { ...c, enabled: newEnabled } : c));
-                                    }}
-                                    style={{ width: 36, height: 20, borderRadius: 10, border: "none", cursor: "pointer", background: enabled ? "#1A7A4A" : "#1A3C2E18", position: "relative", transition: "background 0.2s" }}
-                                    title={enabled ? "Désactiver ce concurrent" : "Activer ce concurrent"}
-                                  >
-                                    <span style={{ position: "absolute", top: 2, left: enabled ? 18 : 2, width: 16, height: 16, borderRadius: "50%", background: "#fff", transition: "left 0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.2)" }} />
-                                  </button>
-                                </td>
-                                <td style={{ padding: "8px 12px" }}>{stats.mentions}</td>
-                                <td style={{ padding: "8px 12px", color: "#D97706" }}>{pct(stats.mentions, audit.total)}%</td>
-                                <td style={{ padding: "8px 12px", fontWeight: avgPos ? 600 : 400, color: avgPos ? C.text : C.textLight }}>
-                                  {avgPos ? `#${avgPos}` : "—"}
-                                </td>
-                              </tr>
-                            );
-                          })
-                        }</tbody>
-                      </table>
-                    </div>
-                    );
-                  })()}
-                </div>
-              ) : (
-                <div style={{ fontSize: 11, color: "#1A3C2E44", fontStyle: "italic", marginBottom: 16 }}>Aucun concurrent détecté dans les réponses LLM</div>
-              )}
+                );
+              })()}
 
-              {/* Répartition intention + types réponses */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
-                <div>
-                  <div style={{ fontSize: 11, fontWeight: 500, color: "#1A3C2E44", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>Répartition par intention</div>
-                  {Object.entries(audit.intentCount).sort((a,b)=>b[1]-a[1]).map(([k,v]) => (
-                    <div key={k} style={{ marginBottom: 10 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, fontSize: 12 }}><span style={{ fontWeight: 600 }}>{k}</span><span style={{ color: "#1A3C2E44" }}>{v} ({pct(v, audit.total)}%)</span></div>
-                      <div style={{ height: 6, background: "#FAFAF8", borderRadius: 3, overflow: "hidden" }}><div style={{ height: "100%", width: `${pct(v, audit.total)}%`, background: "#1A3C2E", borderRadius: 3 }} /></div>
-                    </div>
-                  ))}
-                </div>
-                <div>
-                  <div style={{ fontSize: 11, fontWeight: 500, color: "#1A3C2E44", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>Types de réponses LLM</div>
-                  {Object.entries(audit.typeCount).sort((a,b)=>b[1]-a[1]).slice(0,6).map(([k,v]) => (
-                    <div key={k} style={{ marginBottom: 10 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, fontSize: 12 }}><span style={{ fontWeight: 600 }}>{k}</span><span style={{ color: "#1A3C2E44" }}>{v} ({pct(v, audit.total)}%)</span></div>
-                      <div style={{ height: 6, background: "#FAFAF8", borderRadius: 3, overflow: "hidden" }}><div style={{ height: "100%", width: `${pct(v, audit.total)}%`, background: "#1A3C2E", borderRadius: 3 }} /></div>
-                    </div>
-                  ))}
-                </div>
-              </div>
+              {/* Analyseur de pages concurrentes */}
+              <CompetitorPageAnalyzer
+                competitors={competitors}
+                audit={audit}
+                claudeKey={claudeKey}
+              />
             </Section>
-
             </div>{/* ══════════════════════════════════════════════════════
                 BLOC 4 — ANALYSE DES SOURCES & URLS
                 Top domaines + URLs marque catégorisées
@@ -2099,268 +2384,22 @@ export default function GeoAuditTab({
             </Section>
 
             {/* ══════════════════════════════════════════════════════
-                BLOC 5 — CROISEMENTS DATA × GEO
-                SF technique / Bing AI / GSC SEO
+                 BLOC 5 — MATRICE DE CORRÉLATION INTERACTIVE
+                 Croisement 2 sources parmi SF / GSC / Bing / Fan-outs
             ══════════════════════════════════════════════════════ */}
-            {(() => {
-              const hasGSC     = metrics.some(m => m.gsc);
-              const hasBing    = metrics.some(m => m.bing);
-              const hasCorr    = corrMatrix.length > 0 && corrMatrix.some(r => r.corrs.some(c => c.value !== null));
-              const geoPct     = audit.presenceRate;
-              const avgPos2    = audit.avgPos;
-              const total2     = audit.total;
-
-              const gscClicks  = metrics.reduce((s, m) => s + (m.gsc?.clicks || 0), 0);
-              const gscPos     = metrics.filter(m => m.gsc?.position).map(m => m.gsc.position);
-              const gscAvgPos  = gscPos.length ? (gscPos.reduce((a,b)=>a+b,0)/gscPos.length).toFixed(1) : null;
-
-              const CrossCard = ({ icon, title, sub, children }) => (
-                <div style={{ background: "#fff", border: "0.5px solid #1A3C2E0D", borderRadius: 10, overflow: "hidden", marginBottom: 16 }}>
-                  <div style={{ padding: "14px 20px", borderBottom: `1px solid ${C.border}`, background: "#FAFAF8", display: "flex", alignItems: "center", gap: 10 }}>
-                    <span style={{ fontSize: 18 }}>{icon}</span>
-                    <div>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: "#1A3C2E" }}>{title}</div>
-                      {sub && <div style={{ fontSize: 11, color: "#1A3C2E44", marginTop: 1 }}>{sub}</div>}
-                    </div>
-                  </div>
-                  <div style={{ padding: "16px 20px" }}>{children}</div>
-                </div>
-              );
-
-              const Signal = ({ label, value, note, color = C.text }) => (
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", padding: "7px 0", borderBottom: `1px solid ${C.borderLight}` }}>
-                  <span style={{ fontSize: 12, color: "#1A3C2E77" }}>{label}</span>
-                  <div style={{ textAlign: "right" }}>
-                    <span style={{ fontSize: 14, fontWeight: 700, color }}>{value}</span>
-                    {note && <div style={{ fontSize: 10, color: "#1A3C2E44" }}>{note}</div>}
-                  </div>
-                </div>
-              );
-
-
-              return (
-                <Section icon="📊" title="Croisements data × présence GEO" sub="Bing AI, SEO et corrélations Screaming Frog" accent={C.teal}>
-
-                  {/* B5 — Bing AI × Fan-outs — URLs marque uniquement */}
-                  <CrossCard icon="🤖" title="Bing AI × Fan-outs" sub="URLs de la marque — top citations Bing vs top citations LLM">
-                    {(() => {
-                      const siteId = site?.id;
-                      const bingRows = (bingData[siteId] || []);
-                      // Construire map url → citations Bing
-                      const bingByUrl = {};
-                      bingRows.forEach(r => {
-                        const url = (r["url"] || r["adresse"] || r["address"] || "").trim().toLowerCase();
-                        if (!url) return;
-                        const cits = Number(r["citations"] || r["mentions"] || r["appearancecount"] || 0);
-                        if (!bingByUrl[url]) bingByUrl[url] = { url, citations: 0 };
-                        bingByUrl[url].citations += cits;
-                      });
-                      // Filtrer UNIQUEMENT les URLs de la marque
-                      const brandTerms = [brand?.brand_name, ...(brand?.brand_aliases || []), brand?.brand_domain]
-                        .filter(Boolean).map(t => t.toLowerCase().replace(/\s+/g, ""));
-                      const isBrandUrl = (url) => brandTerms.some(t => t && url.toLowerCase().includes(t));
-
-                      const bingBrandUrls = Object.values(bingByUrl)
-                        .filter(b => isBrandUrl(b.url))
-                        .sort((a, b) => b.citations - a.citations)
-                        .slice(0, 10);
-
-                      const fanoutBrandUrls = urlIndex
-                        .filter(u => u.project_id === projectId && isBrandUrl(u.url || ""))
-                        .sort((a, b) => (b.count_as_source + b.count_in_answer) - (a.count_as_source + a.count_in_answer))
-                        .slice(0, 10);
-
-                      const alignScore = bingBrandUrls.length > 0 && fanoutBrandUrls.length > 0 ? (() => {
-                        const bingSet = new Set(bingBrandUrls.map(b => b.url));
-                        const both = fanoutBrandUrls.filter(f => bingSet.has((f.url || "").toLowerCase())).length;
-                        return Math.round((both / Math.max(bingBrandUrls.length, fanoutBrandUrls.length)) * 100);
-                      })() : null;
-                      const scoreColor = alignScore === null ? C.textLight : alignScore >= 60 ? "#1A7A4A" : alignScore >= 30 ? "#D97706" : "#DC2626";
-
-                      return (
-                        <div>
-                          {/* KPIs */}
-                          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 20 }}>
-                            {[
-                              { label: "URLs marque sur Bing", value: bingBrandUrls.length, color: "#1A3C2E" },
-                              { label: "URLs marque sur LLMs", value: fanoutBrandUrls.length, color: "#1A3C2E" },
-                              { label: "Alignement", value: alignScore !== null ? `${alignScore}%` : "—", color: scoreColor },
-                            ].map(k => (
-                              <div key={k.label} style={{ background: "#FAFAF8", borderRadius: 10, padding: "12px 14px", border: "0.5px solid #1A3C2E0D" }}>
-                                <div style={{ fontSize: 10, color: "#1A3C2E44", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 4 }}>{k.label}</div>
-                                <div style={{ fontSize: 20, fontWeight: 800, color: k.color }}>{k.value}</div>
-                              </div>
-                            ))}
-                          </div>
-
-                          {!hasBing ? (
-                            <div style={{ background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 10, padding: "12px 16px", fontSize: 12, color: "#92400E" }}>
-                              Importez un export Bing Webmaster Tools dans ⚙️ Setup pour débloquer cette analyse.
-                            </div>
-                          ) : (
-                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
-                              {/* Colonne Bing */}
-                              <div>
-                                <div style={{ fontSize: 11, fontWeight: 700, color: "#1A3C2E", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>
-                                  🤖 Top URLs marque — Bing
-                                </div>
-                                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
-                                  <thead><tr style={{ background: "#FAFAF8" }}>
-                                    <th style={{ padding: "5px 8px", textAlign: "left", fontWeight: 600, color: "#1A3C2E44", fontSize: 10, borderBottom: `1px solid ${C.border}` }}>URL</th>
-                                    <th style={{ padding: "5px 8px", textAlign: "right", fontWeight: 600, color: "#1A3C2E44", fontSize: 10, borderBottom: `1px solid ${C.border}` }}>Cit. Bing</th>
-                                  </tr></thead>
-                                  <tbody>
-                                    {bingBrandUrls.length === 0
-                                      ? <tr><td colSpan={2} style={{ padding: "8px", color: "#1A3C2E44", fontStyle: "italic" }}>Aucune URL marque dans Bing</td></tr>
-                                      : bingBrandUrls.map((u, i) => (
-                                        <tr key={i} style={{ borderBottom: `1px solid ${C.borderLight}` }}>
-                                          <td style={{ padding: "5px 8px", wordBreak: "break-all", color: "#1A3C2E" }}>{u.url.replace(/^https?:\/\/[^/]+/, "") || "/"}</td>
-                                          <td style={{ padding: "5px 8px", textAlign: "right", fontWeight: 700 }}>{u.citations}</td>
-                                        </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              </div>
-                              {/* Colonne Fan-outs */}
-                              <div>
-                                <div style={{ fontSize: 11, fontWeight: 700, color: "#1A3C2E", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>
-                                  🔗 Top URLs marque — Fan-outs LLM
-                                </div>
-                                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
-                                  <thead><tr style={{ background: "#FAFAF8" }}>
-                                    <th style={{ padding: "5px 8px", textAlign: "left", fontWeight: 600, color: "#1A3C2E44", fontSize: 10, borderBottom: `1px solid ${C.border}` }}>URL</th>
-                                    <th style={{ padding: "5px 8px", textAlign: "right", fontWeight: 600, color: "#1A3C2E44", fontSize: 10, borderBottom: `1px solid ${C.border}` }}>Src</th>
-                                    <th style={{ padding: "5px 8px", textAlign: "right", fontWeight: 600, color: "#1A3C2E44", fontSize: 10, borderBottom: `1px solid ${C.border}` }}>Rép</th>
-                                  </tr></thead>
-                                  <tbody>
-                                    {fanoutBrandUrls.length === 0
-                                      ? <tr><td colSpan={3} style={{ padding: "8px", color: "#1A3C2E44", fontStyle: "italic" }}>Aucune URL marque dans les fan-outs</td></tr>
-                                      : fanoutBrandUrls.map((u, i) => (
-                                        <tr key={i} style={{ borderBottom: `1px solid ${C.borderLight}` }}>
-                                          <td style={{ padding: "5px 8px", wordBreak: "break-all", color: "#1A3C2E" }}>{(u.url || "").replace(/^https?:\/\/[^/]+/, "") || "/"}</td>
-                                          <td style={{ padding: "5px 8px", textAlign: "right", fontWeight: 700, color: "#1A7A4A" }}>{u.count_as_source}</td>
-                                          <td style={{ padding: "5px 8px", textAlign: "right", fontWeight: 700 }}>{u.count_in_answer}</td>
-                                        </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })()}
-                  </CrossCard>
-
-                  {/* GSC × GEO */}
-                  <CrossCard icon="🔍" title="GSC × Fan-outs"
-                    sub="Corrélation entre vos performances SEO organiques et votre visibilité dans les Fan-outs LLM">
-                    <div style={{ display: "grid", gridTemplateColumns: hasGSC ? "1fr 1fr" : "1fr", gap: 20 }}>
-                      <div>
-                        <div style={{ fontSize: 11, fontWeight: 500, color: "#1A3C2E44", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>État actuel</div>
-                        {hasGSC ? (<>
-                          <Signal label="Clics GSC totaux" value={gscClicks >= 1000 ? (gscClicks/1000).toFixed(1)+"k" : String(gscClicks)} color="#1A3C2E" />
-                          <Signal label="Position moy. GSC" value={gscAvgPos || "—"} note="toutes pages" color="#1A3C2E" />
-                          <Signal label="Présence GEO" value={`${geoPct}%`} note={`${audit.withBrand}/${total2} fan-outs`} color={geoPct >= 50 ? "#1A7A4A" : "#DC2626"} />
-                          {avgPos2 && <Signal label="Position moy. fan-out" value={avgPos2} note="dans les listes LLM" color="#1A3C2E" />}
-                        </>) : <div style={{ fontSize: 11, color: "#1A3C2E44", fontStyle: "italic" }}>Importez un export GSC dans ⚙️ Setup</div>}
-                      </div>
-                      <div>
-                        <div style={{ fontSize: 11, fontWeight: 500, color: "#1A3C2E44", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>Interprétation</div>
-                        {hasGSC ? (
-                          <div style={{ fontSize: 12, color: "#1A3C2E77", lineHeight: 1.7 }}>
-                            {gscAvgPos && parseFloat(gscAvgPos) <= 10 && geoPct < 30
-                              ? "Paradoxe SEO/GEO : bonne position organique mais faible présence GEO. Restructurez le contenu pour répondre directement aux questions de recommandation."
-                              : gscAvgPos && parseFloat(gscAvgPos) <= 10 && geoPct >= 50
-                              ? "Corrélation positive SEO/GEO : la forte autorité SEO se traduit en présence GEO."
-                              : "Améliorer le SEO on-page renforcera la visibilité GEO via l'autorité accrue."}
-                          </div>
-                        ) : <div style={{ fontSize: 11, color: "#1A3C2E44", fontStyle: "italic" }}>—</div>}
-                      </div>
-                    </div>
-                  </CrossCard>
-
-                  {/* B7 — Corrélations Screaming Frog — avec dropdown filtre */}
-                  {hasCorr && (
-                    <CrossCard icon="🕷️" title="Corrélations Screaming Frog" sub="Choisissez le croisement à observer">
-                      {(() => {
-                        const fanoutCorrs = corrMatrix.flatMap(row =>
-                          row.corrs.filter(c => c.kpi.src === "bing" && c.value !== null)
-                            .map(c => ({ dim: row.dim.label, kpi: c.kpi.label, src: "fanout", value: c.value }))
-                        );
-                        const gscCorrsAll = corrMatrix.flatMap(row =>
-                          row.corrs.filter(c => c.kpi.src === "gsc" && c.value !== null)
-                            .map(c => ({ dim: row.dim.label, kpi: c.kpi.label, src: "gsc", value: c.value }))
-                        );
-                        const bingCorrs = corrMatrix.flatMap(row =>
-                          row.corrs.filter(c => c.kpi.key === "geoMentions" && c.value !== null)
-                            .map(c => ({ dim: row.dim.label, kpi: c.kpi.label, src: "bing", value: c.value }))
-                        );
-                        const SRC_LABELS = {
-                          gsc:    { label: "SF × GSC",      color: "#1A3C2E" },
-                          bing:   { label: "SF × Bing AI",  color: "#1A3C2E" },
-                          fanout: { label: "SF × Fan-outs", color: "#1A7A4A" },
-                        };
-                        const allCorrs = (sfCorrFilter === "gsc" ? gscCorrsAll : sfCorrFilter === "bing" ? bingCorrs : sfCorrFilter === "fanout" ? fanoutCorrs : [...fanoutCorrs, ...gscCorrsAll, ...bingCorrs])
-                          .sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
-                          .slice(0, 15);
-
-                        return (
-                          <div>
-                            <div style={{ marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
-                              <span style={{ fontSize: 11, color: "#1A3C2E44", fontWeight: 600 }}>Croisement :</span>
-                              <select value={sfCorrFilter} onChange={e => setSfCorrFilter(e.target.value)}
-                                style={{ fontSize: 12, padding: "5px 10px", border: "0.5px solid #1A3C2E0D", borderRadius: 7, background: "#fff", cursor: "pointer", fontWeight: 600 }}>
-                                <option value="all">Tous les croisements</option>
-                                <option value="gsc">SF × GSC</option>
-                                <option value="bing">SF × Bing AI</option>
-                                <option value="fanout">SF × Fan-outs</option>
-                              </select>
-                            </div>
-                            {allCorrs.length === 0 ? (
-                              <div style={{ fontSize: 11, color: "#1A3C2E44", fontStyle: "italic" }}>
-                                Importez un CSV Screaming Frog et interrogez plus de questions pour calculer les corrélations.
-                              </div>
-                            ) : (
-                          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                            <thead>
-                              <tr style={{ background: "#FAFAF8" }}>
-                                {["Dimension SF", "KPI", "Type", "Corrélation"].map(h => (
-                                  <th key={h} style={{ padding: "7px 12px", textAlign: "left", fontWeight: 600, fontSize: 10, color: "#1A3C2E44", textTransform: "uppercase", letterSpacing: 0.5, borderBottom: `1px solid ${C.border}` }}>{h}</th>
-                                ))}
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {allCorrs.map((c, i) => {
-                                const pos = c.value > 0;
-                                const strong = Math.abs(c.value) >= 0.4;
-                                const srcDef = SRC_LABELS[c.src] || { label: c.src, color: "#1A3C2E77" };
-                                return (
-                                  <tr key={i} style={{ borderBottom: `1px solid ${C.borderLight}` }}>
-                                    <td style={{ padding: "7px 12px", color: "#1A3C2E" }}>{c.dim}</td>
-                                    <td style={{ padding: "7px 12px", color: "#1A3C2E77" }}>{c.kpi}</td>
-                                    <td style={{ padding: "7px 12px" }}>
-                                      <span style={{ fontSize: 10, fontWeight: 700, color: srcDef.color, background: srcDef.color + "15", borderRadius: 4, padding: "1px 6px" }}>{srcDef.label}</span>
-                                    </td>
-                                    <td style={{ padding: "7px 12px" }}>
-                                      <span style={{ fontSize: 12, fontWeight: strong ? 700 : 500, color: pos ? "#1A7A4A" : "#DC2626", background: pos ? "#F0F7F3" : "#FEF2F2", borderRadius: 5, padding: "2px 10px" }}>
-                                        {pos ? "▲" : "▼"} r={c.value.toFixed(2)}
-                                      </span>
-                                    </td>
-                                  </tr>
-                                );
-                              })}
-                            </tbody>
-                          </table>
-                            )}
-                          </div>
-                        );
-                      })()}
-                    </CrossCard>
-                  )}
-                </Section>
-              );
-            })()}
+            <Section title="Matrice de corrélation" sub="Croisez 2 sources de données pour identifier les corrélations avec votre présence GEO">
+              <CorrelationMatrix
+                corrMatrix={corrMatrix}
+                metrics={metrics}
+                sfData={sfData}
+                bingData={bingData}
+                gscData={gscData}
+                results={siteResults}
+                audit={audit}
+                sfCorrFilter={sfCorrFilter}
+                setSfCorrFilter={setSfCorrFilter}
+              />
+            </Section>
 
             {/* ══════════════════════════════════════════════════════
                 BLOC 6 — PLAN D'ACTION
