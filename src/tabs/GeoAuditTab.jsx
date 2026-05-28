@@ -819,7 +819,7 @@ function computeAudit(questions, results, urlIndex, brand, site, calendarEntries
 
 
 function TrendChart({ trendDays }) {
-  const W = 620, H = 130, PAD = 32, PADT = 12, plotW = W - PAD - 12, plotH = H - PADT - 22;
+  const W = 620, H = 140, PAD = 32, PADT = 12, plotW = W - PAD - 12, plotH = H - PADT - 28;
   const active = trendDays.filter(d => d.tested > 0);
   if (!active.length) return (
     <div style={{ fontSize: 11, color: "#1A3C2E44", fontStyle: "italic", padding: "20px 0" }}>
@@ -827,77 +827,131 @@ function TrendChart({ trendDays }) {
     </div>
   );
 
-  // 3 séries — fallback sur present si mentions/citations/evocations non renseignés
-  const hasSplit = trendDays.some(d => (d.mentions || 0) + (d.citations || 0) + (d.evocations || 0) > 0);
-  const series = hasSplit ? [
+  // ── Normaliser les données ─────────────────────────────────────
+  // Si les données ventilées (M/É/C) ne sont pas encore en base,
+  // on estime à partir de withRanked/withMentionOnly/withSourceOnly du jour
+  // OU on utilise present comme proxy pour les 3 courbes si rien d'autre.
+  const normalized = trendDays.map(d => {
+    const tot = d.mentions + d.citations + d.evocations;
+    if (tot > 0 || d.tested === 0) return d; // données ventilées disponibles
+    // Pas encore de ventilation → estimer depuis present
+    // (tous les présents comptent comme "évocations" au sens large)
+    return {
+      ...d,
+      mentions:   0,
+      citations:  0,
+      evocations: d.present || 0,
+    };
+  });
+
+  // Toujours afficher les 3 séries — les données sont normalisées ci-dessus
+  const SERIES = [
     { key: "mentions",   label: "Mention",   color: "#1A7A4A" },
-    { key: "citations",  label: "Citation",  color: "#1A3C2E" },
     { key: "evocations", label: "Évocation", color: "#C97820" },
-  ] : [
-    { key: "present", label: "Présence", color: "#1A3C2E" },
+    { key: "citations",  label: "Citation",  color: "#1A3C2E" },
   ];
 
   const yMax = Math.max(
-    ...trendDays.flatMap(d => series.map(s => d[s.key] || 0)),
-    4
+    ...normalized.flatMap(d => SERIES.map(s => d[s.key] || 0)),
+    ...normalized.map(d => d.tested || 0),
+    2
   );
-  const toX = (i) => PAD + (i / Math.max(trendDays.length - 1, 1)) * plotW;
+  const toX = (i) => PAD + (i / Math.max(normalized.length - 1, 1)) * plotW;
   const toY = (v) => PADT + plotH - (v / yMax) * plotH;
-  const ticks = [0, Math.round(yMax / 2), yMax];
+  const ticks = yMax <= 4
+    ? [0, 1, 2, yMax].filter((v, i, a) => a.indexOf(v) === i)
+    : [0, Math.round(yMax / 2), yMax];
 
+  // Courbe tracée uniquement sur les jours avec au moins 1 résultat
   const makePath = (key) => {
-    const pts = trendDays.map((d, i) => ({ x: toX(i), y: toY(d[key] || 0), v: d[key] || 0, tested: d.tested }));
-    const active_pts = pts.filter(p => p.tested > 0);
-    if (active_pts.length < 2) return null;
-    return active_pts.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(" ");
+    const pts = normalized
+      .map((d, i) => ({ x: toX(i), y: toY(d[key] || 0), v: d[key] || 0, tested: d.tested }))
+      .filter(p => p.tested > 0);
+    if (pts.length < 1) return null;
+    if (pts.length === 1) return `M ${pts[0].x.toFixed(1)} ${pts[0].y.toFixed(1)}`; // point isolé
+    return pts.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(" ");
+  };
+
+  // Courbe de volume total (tested) — grisée en fond
+  const makeTestedPath = () => {
+    const pts = normalized
+      .map((d, i) => ({ x: toX(i), y: toY(d.tested || 0), tested: d.tested }))
+      .filter(p => p.tested > 0);
+    if (pts.length < 2) return null;
+    return pts.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(" ");
   };
 
   return (
     <div>
       {/* Légende */}
-      <div style={{ display: "flex", gap: 14, marginBottom: 8 }}>
-        {series.map(s => (
+      <div style={{ display: "flex", gap: 16, marginBottom: 8, flexWrap: "wrap" }}>
+        {SERIES.map(s => (
           <div key={s.key} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10, color: "#1A3C2E55" }}>
             <span style={{ width: 16, height: 2, background: s.color, display: "inline-block", borderRadius: 1 }} />
             {s.label}
           </div>
         ))}
+        <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10, color: "#1A3C2E33" }}>
+          <span style={{ width: 16, height: 1.5, background: "#1A3C2E22", display: "inline-block", borderRadius: 1, borderTop: "1px dashed #1A3C2E33" }} />
+          Interrogations
+        </div>
       </div>
+
       <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: "block", overflow: "visible" }}>
-        {/* Grille horizontale */}
+        {/* Grille */}
         {ticks.map(v => (
           <g key={v}>
-            <line x1={PAD} x2={W - 12} y1={toY(v)} y2={toY(v)} stroke="#1A3C2E08" strokeWidth={1} />
-            <text x={PAD - 5} y={toY(v) + 3} fontSize={7} fill="#1A3C2E33" textAnchor="end">{v}</text>
+            <line x1={PAD} x2={W - 12} y1={toY(v)} y2={toY(v)} stroke="#1A3C2E06" strokeWidth={1} />
+            <text x={PAD - 5} y={toY(v) + 3} fontSize={7} fill="#1A3C2E28" textAnchor="end">{v}</text>
           </g>
         ))}
         {/* Axe X */}
-        <line x1={PAD} x2={W - 12} y1={toY(0)} y2={toY(0)} stroke="#1A3C2E12" strokeWidth={1} />
+        <line x1={PAD} x2={W - 12} y1={toY(0)} y2={toY(0)} stroke="#1A3C2E10" strokeWidth={1} />
         {/* Étiquettes dates */}
         {[0, 7, 14, 21, 29].map(i => (
-          <text key={i} x={toX(i)} y={H - 4} fontSize={7} fill="#1A3C2E33" textAnchor="middle">
-            {trendDays[i]?.date?.slice(5)}
+          <text key={i} x={toX(i)} y={H - 6} fontSize={7} fill="#1A3C2E33" textAnchor="middle">
+            {normalized[i]?.date?.slice(5)}
           </text>
         ))}
-        {/* Courbes */}
-        {series.map(s => {
+
+        {/* Courbe interrogations totales (fond) */}
+        {(() => { const d = makeTestedPath(); return d ? <path d={d} fill="none" stroke="#1A3C2E18" strokeWidth={1} strokeDasharray="3,2" /> : null; })()}
+
+        {/* Courbes M/É/C */}
+        {SERIES.map(s => {
           const d = makePath(s.key);
-          return d ? <path key={s.key} d={d} fill="none" stroke={s.color} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" opacity={0.9} /> : null;
+          return d ? <path key={s.key} d={d} fill="none" stroke={s.color} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" opacity={0.9} /> : null;
         })}
-        {/* Points par date */}
-        {trendDays.map((day, i) => day.tested > 0 && (
-          <g key={i}>
-            {series.map(s => {
-              const val = day[s.key] || 0;
-              if (val === 0) return null;
-              return (
-                <g key={s.key}>
-                  <circle cx={toX(i)} cy={toY(val)} r={2.5} fill={s.color} opacity={0.85} />
-                </g>
-              );
-            })}
-          </g>
-        ))}
+
+        {/* Points par date — 3 points distincts par jour actif */}
+        {normalized.map((day, i) => {
+          if (!day.tested) return null;
+          return (
+            <g key={i}>
+              {SERIES.map((s, si) => {
+                const val = day[s.key] || 0;
+                // Toujours afficher le point sur l'axe si val=0 (marque l'absence)
+                const cy = toY(val);
+                const isZero = val === 0;
+                return (
+                  <g key={s.key}>
+                    {/* Tooltip simple — title SVG */}
+                    <title>{s.label} : {val} · {day.date}</title>
+                    <circle
+                      cx={toX(i)}
+                      cy={cy}
+                      r={isZero ? 1.5 : 3}
+                      fill={isZero ? "#1A3C2E18" : s.color}
+                      stroke={isZero ? "none" : "#fff"}
+                      strokeWidth={isZero ? 0 : 1}
+                      opacity={isZero ? 0.4 : 0.9}
+                    />
+                  </g>
+                );
+              })}
+            </g>
+          );
+        })}
       </svg>
     </div>
   );
@@ -1360,6 +1414,89 @@ Commence DIRECTEMENT par ## POURQUOI LES LLM LES CITENT. Sois précis et actionn
       )}
       {status === "error" && result && (
         <div style={{ fontSize: 11, color: "#C0352A", paddingTop: 8 }}>{result[0]?.body}</div>
+      )}
+    </div>
+  );
+}
+
+
+// ── AuditHintPanel — hint GEO par question dans l'Audit ──────────
+// Reprend le même fonctionnement que HintPanelQuestion dans GeoTab
+function AuditHintPanel({ question, claudeKey, brandName }) {
+  const [status, setStatus] = useState("idle"); // idle | loading | done | error
+  const [hint, setHint]     = useState("");
+  const [open, setOpen]     = useState(false);
+
+  const run = async () => {
+    if (!claudeKey || status === "loading") return;
+    setStatus("loading"); setOpen(false);
+
+    const prompt = `Tu es un expert GEO (Generative Engine Optimization). La marque "${brandName}" n'apparaît pas dans les réponses LLM à la question suivante :
+
+"${question}"
+
+Produis une recommandation GEO courte et directement actionnable (5-7 lignes max) :
+- Identifie pourquoi la marque est absente
+- Suggère 2-3 actions concrètes (type de contenu, format, structure) pour y apparaître
+- Commence directement par la recommandation, sans intro
+
+Sois précis et cite des formats concrets (liste, FAQ, comparatif, données chiffrées, etc.).`;
+
+    try {
+      const res = await fetch("/api/claude-geo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Claude-Key": claudeKey },
+        body: JSON.stringify({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 500,
+          messages: [{ role: "user", content: prompt }],
+        }),
+      });
+      const raw = await res.text();
+      const data = JSON.parse(raw);
+      if (!res.ok) throw new Error(data.error?.message || `Claude ${res.status}`);
+      const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("\n").trim();
+      setHint(text || "Aucune recommandation générée.");
+      setStatus("done");
+      setOpen(true);
+    } catch(e) {
+      setHint(`Erreur : ${e.message}`);
+      setStatus("error");
+      setOpen(true);
+    }
+  };
+
+  return (
+    <div style={{ borderTop: "0.5px solid #1A3C2E06", marginTop: 4, paddingTop: 4 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        {hint ? (
+          <button onClick={() => setOpen(o => !o)}
+            style={{ fontSize: 10, color: "#C97820", background: "none", border: "none", cursor: "pointer", padding: 0, display: "flex", alignItems: "center", gap: 4, letterSpacing: "0.02em" }}>
+            <span>💡</span>
+            <span>{open ? "▲ Masquer le hint" : "▼ Voir le hint"}</span>
+          </button>
+        ) : (
+          <button onClick={run} disabled={!claudeKey || status === "loading"}
+            style={{ fontSize: 10, color: claudeKey ? "#C97820" : "#1A3C2E33", background: "none", border: "none", cursor: claudeKey ? "pointer" : "not-allowed", padding: 0, display: "flex", alignItems: "center", gap: 4, letterSpacing: "0.02em", opacity: status === "loading" ? 0.6 : 1 }}
+            title={!claudeKey ? "Clé Claude manquante" : undefined}>
+            <span>💡</span>
+            <span>{status === "loading" ? "Génération…" : "Générer un hint GEO"}</span>
+          </button>
+        )}
+        {hint && (
+          <button onClick={run} disabled={status === "loading"}
+            style={{ fontSize: 9, color: "#1A3C2E33", background: "none", border: "none", cursor: "pointer", padding: 0 }}
+            title="Regénérer">↺</button>
+        )}
+      </div>
+      {open && hint && (
+        <div style={{ marginTop: 6, padding: "8px 10px", background: "#FFFBEB", border: "0.5px solid #C9782022", borderRadius: 6, fontSize: 11, lineHeight: 1.7, color: status === "error" ? "#C0352A" : "#92400E" }}>
+          {status === "error" ? hint : hint.split("\n").map((line, i) => {
+            if (!line.trim()) return <div key={i} style={{ height: 4 }} />;
+            if (line.startsWith("- ") || line.startsWith("• ")) return <div key={i} style={{ paddingLeft: 10, marginBottom: 2 }}>· {line.slice(2)}</div>;
+            return <div key={i} style={{ marginBottom: 2 }}>{line}</div>;
+          })}
+        </div>
       )}
     </div>
   );
@@ -2120,11 +2257,18 @@ export default function GeoAuditTab({
                 <div>
                   <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#C0352A", marginBottom: 8 }}>Questions sans mentions · {audit.missingBrandQs.length}</div>
                   {audit.missingBrandQs.length ? audit.missingBrandQs.map((q, i) => (
-                    <div key={i} style={{ fontSize: 12, padding: "5px 0", borderBottom: "0.5px solid #1A3C2E08", display: "flex", gap: 6, alignItems: "baseline" }}>
-                      <span style={{ color: "#C0352A", flexShrink: 0, fontSize: 10 }}>✗</span>
-                      {q.isFav && <span style={{ flexShrink: 0, fontSize: 10, color: "#C97820" }}>★</span>}
-                      <span style={{ flex: 1, color: "#1A3C2E", lineHeight: 1.5 }}>{q.question}</span>
-                      {q.volume > 0 && <span style={{ fontSize: 10, color: "#1A3C2E33", flexShrink: 0 }}>{q.volume >= 1000 ? (q.volume/1000).toFixed(1)+"k" : q.volume}</span>}
+                    <div key={i} style={{ padding: "5px 0", borderBottom: "0.5px solid #1A3C2E08" }}>
+                      <div style={{ fontSize: 12, display: "flex", gap: 6, alignItems: "baseline" }}>
+                        <span style={{ color: "#C0352A", flexShrink: 0, fontSize: 10 }}>✗</span>
+                        {q.isFav && <span style={{ flexShrink: 0, fontSize: 10, color: "#C97820" }}>★</span>}
+                        <span style={{ flex: 1, color: "#1A3C2E", lineHeight: 1.5 }}>{q.question}</span>
+                        {q.volume > 0 && <span style={{ fontSize: 10, color: "#1A3C2E33", flexShrink: 0 }}>{q.volume >= 1000 ? (q.volume/1000).toFixed(1)+"k" : q.volume}</span>}
+                      </div>
+                      <AuditHintPanel
+                        question={q.question}
+                        claudeKey={claudeKey}
+                        brandName={brand?.brand_name || ""}
+                      />
                     </div>
                   )) : <div style={{ fontSize: 11, color: "#1A3C2E33", fontStyle: "italic" }}>Toutes les questions ont une mention !</div>}
                 </div>
