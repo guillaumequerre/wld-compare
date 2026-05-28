@@ -2790,8 +2790,13 @@ ${question}`;
 
       // Add to calendar (optimistic + persist)
       setNewCalEntries(prev => ({ ...prev, [`${q.id}|${provider.id}`]: { provider_id: provider.id, brand_present: brandMentioned } }));
+      // Déterminer le type de présence pour le calendrier
+      const presTypeForCal = record.brand_mention_position != null ? "mention"
+        : record.brand_in_sources ? "citation"
+        : brandMentioned ? "evocation"
+        : null;
       // Persist to DB (best effort)
-      sbAddCalendarEntry(q.id, provider.id, brandMentioned).catch(() => {});
+      sbAddCalendarEntry(q.id, provider.id, brandMentioned, presTypeForCal).catch(() => {});
 
       // Update cached answers on question
       const cachePatch = { has_result: true, last_answer: parsed.answer, last_model: record.model, last_date: now };

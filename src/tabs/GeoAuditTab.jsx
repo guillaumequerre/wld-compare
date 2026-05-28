@@ -429,16 +429,16 @@ function Section({ icon, title, sub, children }) {
 // ── Scatter plot concurrents : citations (X) × position moy. (Y) ──
 function GeoScoreBanner({ audit, brand, site }) {
   const score = audit.presenceRate;
-  const level = score >= 70 ? { label: "Excellent",  color: "#1A7A4A", bar: "#1A7A4A" }
-              : score >= 50 ? { label: "Bon",         color: "#1A3C2E", bar: "#1A3C2E" }
-              : score >= 30 ? { label: "À améliorer", color: "#C97820", bar: "#C97820" }
-              :               { label: "Critique",    color: "#C0352A", bar: "#C0352A" };
+  const level = score >= 70 ? { label: "Excellente",            color: "#1A7A4A", bar: "#1A7A4A" }
+              : score >= 50 ? { label: "Bonne présence",           color: "#1A3C2E", bar: "#1A3C2E" }
+              : score >= 30 ? { label: "Potentiel à développer",   color: "#C97820", bar: "#C97820" }
+              :               { label: "Potentiel à exploiter",    color: "#C97820", bar: "#C97820" };
   return (
     <div style={{ background: "#fff", border: "0.5px solid #1A3C2E0D", borderRadius: 12, padding: "20px 24px", marginBottom: 16 }}>
       <div style={{ display: "flex", gap: 24, alignItems: "flex-start", flexWrap: "wrap" }}>
         {/* Score */}
         <div style={{ minWidth: 100 }}>
-          <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E44", marginBottom: 6 }}>Score GEO</div>
+          <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E44", marginBottom: 6 }}>Présence GEO</div>
           <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
             <span style={{ fontSize: 44, fontWeight: 700, color: level.color, lineHeight: 1, letterSpacing: "-0.02em" }}>{score}</span>
             <span style={{ fontSize: 18, color: level.color, fontWeight: 500 }}>%</span>
@@ -482,13 +482,20 @@ function GeoScoreBanner({ audit, brand, site }) {
         {/* KPIs contextuels */}
         <div style={{ flex: 1, minWidth: 180 }}>
           <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E44", marginBottom: 8 }}>Contexte</div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 16px" }}>
-            <div><span style={{ fontSize: 11, color: "#1A3C2E44" }}>Marque</span><div style={{ fontSize: 12, fontWeight: 600, color: "#1A3C2E" }}>{brand?.brand_name || "—"}</div></div>
-            <div><span style={{ fontSize: 11, color: "#1A3C2E44" }}>Site</span><div style={{ fontSize: 12, fontWeight: 600, color: "#1A3C2E" }}>{site?.label || "—"}</div></div>
-            <div><span style={{ fontSize: 11, color: "#1A3C2E44" }}>Questions</span><div style={{ fontSize: 12, fontWeight: 600, color: "#1A3C2E" }}>{audit.questions}</div></div>
-            <div><span style={{ fontSize: 11, color: "#1A3C2E44" }}>Résultats</span><div style={{ fontSize: 12, fontWeight: 600, color: "#1A3C2E" }}>{audit.total}</div></div>
-            <div><span style={{ fontSize: 11, color: "#1A3C2E44" }}>Pos. moy.</span><div style={{ fontSize: 12, fontWeight: 600, color: "#1A3C2E" }}>{audit.avgPos ? `#${audit.avgPos}` : "—"}</div></div>
-            <div><span style={{ fontSize: 11, color: "#1A3C2E44" }}>Concurrents</span><div style={{ fontSize: 12, fontWeight: 600, color: "#1A3C2E" }}>{Object.keys(audit.compStats).length}</div></div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "8px 20px" }}>
+            {[
+              { label: "Marque",                  val: brand?.brand_name || "—" },
+              { label: "Site",                    val: site?.label || "—" },
+              { label: "Questions",               val: audit.questions },
+              { label: "Résultats",               val: audit.total },
+              { label: "Pos. moy.",               val: audit.avgPos ? `#${audit.avgPos}` : "—" },
+              { label: "Concurrents renseignés",  val: Object.keys(audit.compStats).length },
+            ].map(k => (
+              <div key={k.label} style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
+                <span style={{ fontSize: 10, color: "#1A3C2E44" }}>{k.label}</span>
+                <span style={{ fontSize: 12, fontWeight: 600, color: "#1A3C2E" }}>{k.val}</span>
+              </div>
+            ))}
           </div>
         </div>
       </div>
@@ -552,24 +559,37 @@ function computeAudit(questions, results, urlIndex, brand, site, calendarEntries
     else if (e.brand_present === true || e.brand_present === 1) calByDate[d].evocations++;
   });
 
-  // Source 2 : résultats en mémoire (ventilés par type M/É/C)
+  // Source 2 : résultats en mémoire — TOUJOURS ventiler M/É/C
+  // On crée l'entrée si elle n'existe pas (nouveaux jours sans calendarEntries)
+  // ET on enrichit les entrées existantes avec la ventilation précise
+  const calByDateFromResults = {};
   results.forEach(r => {
     const d = (r.created_at || "").slice(0, 10);
     if (!d) return;
-    if (!calByDate[d]) calByDate[d] = { tested: 0, present: 0, mentions: 0, citations: 0, evocations: 0 };
-    calByDate[d].tested++;
-    // Mention = dans un top LLM numéroté
+    if (!calByDateFromResults[d]) calByDateFromResults[d] = { tested: 0, present: 0, mentions: 0, citations: 0, evocations: 0 };
+    calByDateFromResults[d].tested++;
     if (r.brand_mention_position != null || (r.brand_position != null && r.brand_position > 0)) {
-      calByDate[d].mentions++;
-      calByDate[d].present++;
-    // Citation = dans les sources
+      calByDateFromResults[d].mentions++;
+      calByDateFromResults[d].present++;
     } else if (r.brand_in_sources) {
-      calByDate[d].citations++;
-      calByDate[d].present++;
-    // Évocation = corps du texte hors top
+      calByDateFromResults[d].citations++;
+      calByDateFromResults[d].present++;
     } else if (r.brand_mentioned === true || r.brand_mentioned === 1) {
-      calByDate[d].evocations++;
-      calByDate[d].present++;
+      calByDateFromResults[d].evocations++;
+      calByDateFromResults[d].present++;
+    }
+  });
+  // Fusionner : calendarEntries a priorité pour tested/present (historique précis)
+  // mais les results fournissent toujours la ventilation M/É/C
+  Object.entries(calByDateFromResults).forEach(([d, rv]) => {
+    if (!calByDate[d]) {
+      // Jour non couvert par calendarEntries → utiliser les results directement
+      calByDate[d] = rv;
+    } else {
+      // Enrichir la ventilation M/É/C sans toucher tested/present (déjà calculés)
+      calByDate[d].mentions  = rv.mentions;
+      calByDate[d].citations = rv.citations;
+      calByDate[d].evocations= rv.evocations;
     }
   });
   const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -695,19 +715,30 @@ function computeAudit(questions, results, urlIndex, brand, site, calendarEntries
   });
 
   const hasResult = (q) => results.some(r => r.question_id === q.id);
-  const hasBrand  = (q) => results.some(r => r.question_id === q.id && (r.brand_mentioned === true || r.brand_mentioned === 1));
+  const hasBrand    = (q) => results.some(r => r.question_id === q.id && (r.brand_mentioned === true || r.brand_mentioned === 1));
+  // hasMention : présence dans un top numéroté — même logique que getPresType("ranked")
+  const hasMention  = (q) => results.some(r => r.question_id === q.id && (
+    r.brand_mention_position != null ||
+    (r.brand_position != null && r.brand_position > 0 && (r.brand_mentioned === true || r.brand_mentioned === 1))
+  ));
 
-  // Prendre max 25 questions avec résultats, puis compléter avec sans résultats
   const withResults = sortedQuestions.filter(hasResult);
   const withoutRes  = sortedQuestions.filter(q => !hasResult(q));
-  const top25 = [...withResults, ...withoutRes].slice(0, 25);
 
-  const presentBrandQs = top25
-    .filter(hasBrand)
+  // presentBrandQs : questions avec MENTION (top LLM) — max 10
+  const presentBrandQs = withResults
+    .filter(hasMention)
+    .slice(0, 10)
     .map(q => ({ question: q.question, isFav: !!q.is_favorite, volume: kwVolMap[q.keyword_id] || 0 }));
-  const missingBrandQs = top25
-    .filter(q => !hasBrand(q))
-    .map(q => ({ question: q.question, isFav: !!q.is_favorite, volume: kwVolMap[q.keyword_id] || 0 }));
+
+  // missingBrandQs : "Questions sans mentions" — favoris d'abord, puis par volume — max 10
+  const missingBrandQs = [
+    ...withResults.filter(q => q.is_favorite && !hasMention(q)),
+    ...withResults.filter(q => !q.is_favorite && !hasMention(q))
+      .sort((a, b) => (kwVolMap[b.keyword_id] || 0) - (kwVolMap[a.keyword_id] || 0)),
+    ...withoutRes.filter(q => q.is_favorite),
+  ].slice(0, 10)
+   .map(q => ({ question: q.question, isFav: !!q.is_favorite, volume: kwVolMap[q.keyword_id] || 0 }));
 
   const hasFavFilter = questions.some(q => q.is_favorite);
   const favCount = questions.filter(q => q.is_favorite).length;
@@ -886,16 +917,40 @@ function AIAnalysis({ audit, brand, site, questions, onTextReady }) {
       competitors: Object.entries(audit.compStats).sort((a,b)=>b[1].mentions-a[1].mentions).slice(0,5).map(([k,v])=>`${k}(${v.mentions}x)`).join(", "),
       urlsToOptimize: audit.urlsToOptimize.slice(0,5).map(u => u.norm || u.url).join(", "),
     };
-    const prompt = `Tu es un expert GEO. Génère un audit GEO actionnable pour ${summary.site} / "${summary.brand}".
-Données : ${JSON.stringify(summary, null, 2)}
+    const prompt = `Tu es un expert senior en SEO et GEO (Generative Engine Optimization). Tu maîtrises les études publiées par Moz, Ahrefs, Search Engine Land, Google, Bing, et les travaux académiques sur les LLMs. Produis un audit GEO expert et rigoureusement sourcé pour ${summary.site} / "${summary.brand}".
 
-Sections (titres ## markdown) :
-## 1. Synthèse exécutive (score GEO /10)
-## 2. Analyse de la visibilité
-## 3. Analyse concurrentielle
-## 4. Plan d'action priorisé (10 actions)
-## 5. KPIs à suivre (cibles 3 et 6 mois)
-Sois concret et utilise les données.`;
+DONNÉES D'ANALYSE :
+${JSON.stringify(summary, null, 2)}
+
+CONSIGNES STRICTES :
+- Chaque recommandation concrète DOIT se terminer par [En savoir plus](URL) avec une vraie source reconnue (2022-2025)
+- Sources autorisées : moz.com, ahrefs.com, searchengineland.com, developers.google.com, bing.com/webmasters, perplexity.ai/blog, etudes HubSpot, Nielsen, Semrush
+- Citer le % ou chiffre exact de l'étude quand disponible
+- Être précis sur les délais et résultats attendus
+
+Sections OBLIGATOIRES (titres ## markdown) :
+
+## 1. Synthèse exécutive
+Présence GEO actuelle : ${summary.presenceRate}%. Diagnostic en 3 phrases. Ce qui fonctionne et ce qui bloque.
+
+## 2. Analyse de la visibilité LLM
+Analyse par provider avec taux de présence. Pourquoi ces providers citent ou ne citent pas la marque. Analyse des ${summary.withRanked} mentions vs ${summary.withMentionOnly} évocations vs ${summary.withSourceOnly} citations.
+
+## 3. Analyse concurrentielle GEO
+Positionnement réel vs concurrents cités. Ce qu'ils font pour être davantage mentionnés. 2-3 actions spécifiques de différenciation.
+
+## 4. Plan d'action priorisé — 10 actions
+Format strict pour chaque action :
+**[HAUTE/MOYENNE/BASE] Titre de l'action**
+Pourquoi : donnée précise justifiant l'action.
+Comment : 2-3 étapes concrètes.
+Résultat attendu : métrique chiffrée et délai.
+[En savoir plus](URL_SOURCE)
+
+## 5. KPIs à suivre
+Cibles à 3 mois et 6 mois basées sur le score actuel de ${summary.presenceRate}%. Métriques GEO spécifiques (taux mention, position moyenne, couverture providers).
+
+Commence DIRECTEMENT par ## 1. Synthèse exécutive.`;
 
     try {
       // Le proxy /api/anthropic rassemble le stream SSE côté serveur
@@ -1659,7 +1714,7 @@ function exportPDF(audit, brand, site, aiText) {
   <div class="score-circle">
     <div class="score-pct" style="color:${scoreColor}">${audit.presenceRate}%</div>
     <div class="score-label" style="color:${scoreColor}">${scoreLabel}</div>
-    <div class="score-sub">Score GEO</div>
+    <div class="score-sub">Présence GEO</div>
   </div>
   <div class="score-bar-wrap">
     <div class="score-track"><div class="score-fill" style="width:${audit.presenceRate}%;background:${scoreColor}"></div></div>
@@ -1907,7 +1962,7 @@ export default function GeoAuditTab({
       target: "audit-score",
       icon: "📊",
       title: "Score de présence GEO",
-      desc: "Le score GEO mesure le % de réponses LLM où votre marque est citée. En dessous, les KPIs clés : total de tests, présence en sources, position moyenne.",
+      desc: "Le présence GEO mesure le % de réponses LLM où votre marque est citée. En dessous, les KPIs clés : total de tests, présence en sources, position moyenne.",
       tip: "Visez un score > 60% pour une bonne visibilité GEO.",
       position: "bottom",
       onActivate: () => setMainTab("audit"),
@@ -2016,7 +2071,7 @@ export default function GeoAuditTab({
 
             {/* ══════════════════════════════════════════════════════
                 BLOC 1 — SYNTHÈSE EXÉCUTIVE
-                Score GEO + KPIs clés en un coup d'œil
+                Présence GEO + KPIs clés en un coup d'œil
             ══════════════════════════════════════════════════════ */}
             <div data-tour="audit-score"><GeoScoreBanner audit={audit} brand={brand} site={site} /></div>
 
@@ -2052,7 +2107,7 @@ export default function GeoAuditTab({
               {/* Questions ◎ mention / ✗ favorites sans mention */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
                 <div>
-                  <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A7A4A", marginBottom: 8 }}>◎ Questions avec mention · {audit.presentBrandQs.length}</div>
+                  <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A7A4A", marginBottom: 8 }}>◎ Avec mention · {audit.presentBrandQs.length}</div>
                   {audit.presentBrandQs.length ? audit.presentBrandQs.map((q, i) => (
                     <div key={i} style={{ fontSize: 12, padding: "5px 0", borderBottom: "0.5px solid #1A3C2E08", display: "flex", gap: 6, alignItems: "baseline" }}>
                       <span style={{ color: "#1A7A4A", flexShrink: 0, fontSize: 10 }}>◎</span>
@@ -2063,15 +2118,15 @@ export default function GeoAuditTab({
                   )) : <div style={{ fontSize: 11, color: "#1A3C2E33", fontStyle: "italic" }}>Aucune mention dans un top LLM</div>}
                 </div>
                 <div>
-                  <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#C0352A", marginBottom: 8 }}>✗ Favorites sans mention · {audit.missingBrandQs.length}</div>
+                  <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#C0352A", marginBottom: 8 }}>Questions sans mentions · {audit.missingBrandQs.length}</div>
                   {audit.missingBrandQs.length ? audit.missingBrandQs.map((q, i) => (
                     <div key={i} style={{ fontSize: 12, padding: "5px 0", borderBottom: "0.5px solid #1A3C2E08", display: "flex", gap: 6, alignItems: "baseline" }}>
                       <span style={{ color: "#C0352A", flexShrink: 0, fontSize: 10 }}>✗</span>
-                      <span style={{ flexShrink: 0, fontSize: 10, color: "#C97820" }}>★</span>
+                      {q.isFav && <span style={{ flexShrink: 0, fontSize: 10, color: "#C97820" }}>★</span>}
                       <span style={{ flex: 1, color: "#1A3C2E", lineHeight: 1.5 }}>{q.question}</span>
                       {q.volume > 0 && <span style={{ fontSize: 10, color: "#1A3C2E33", flexShrink: 0 }}>{q.volume >= 1000 ? (q.volume/1000).toFixed(1)+"k" : q.volume}</span>}
                     </div>
-                  )) : <div style={{ fontSize: 11, color: "#1A3C2E33", fontStyle: "italic" }}>Toutes les favorites ont une mention !</div>}
+                  )) : <div style={{ fontSize: 11, color: "#1A3C2E33", fontStyle: "italic" }}>Toutes les questions ont une mention !</div>}
                 </div>
               </div>
 

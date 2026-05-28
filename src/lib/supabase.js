@@ -667,7 +667,8 @@ export async function sbGetPresenceHistoryBatch(project_id, site_id) {
 // Table : geo_calendar_dates
 // Columns: id, question_id, provider_id, brand_present, test_date, created_at
 
-export async function sbAddCalendarEntry(question_id, provider_id, brand_present) {
+export async function sbAddCalendarEntry(question_id, provider_id, brand_present, presType) {
+  // presType: "mention" | "citation" | "evocation" | null
   try {
     const res = await fetch(`${PROXY}/rest/v1/geo_calendar_dates`, {
       method: "POST",
@@ -676,6 +677,9 @@ export async function sbAddCalendarEntry(question_id, provider_id, brand_present
         question_id,
         provider_id,
         brand_present: brand_present === true || brand_present === 1,
+        brand_mention:   presType === "mention"   ? 1 : 0,
+        brand_citation:  presType === "citation"  ? 1 : 0,
+        brand_evocation: presType === "evocation" ? 1 : 0,
         test_date: new Date().toISOString().slice(0, 10),
       }),
     });
