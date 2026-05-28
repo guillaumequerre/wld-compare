@@ -569,52 +569,76 @@ const entries = Object.entries(compStats)
 // ── Bandeau de score GEO ───────────────────────────────────────────
 function GeoScoreBanner({ audit, brand, site }) {
   const score = audit.presenceRate;
-  const level = score >= 70 ? { label: "Excellent",  color: "#1A7A4A", bg: "#F0F7F3", bar: "#1A7A4A" }
-              : score >= 50 ? { label: "Bon",         color: "#1A3C2E", bg: "#EAF0EC", bar: "#1A3C2E" }
-              : score >= 30 ? { label: "À améliorer", color: "#C97820", bg: "#FDF5E6", bar: "#C97820" }
-              :               { label: "Critique",    color: "#C0352A", bg: "#FEF2F2", bar: "#C0352A" };
-
+  const level = score >= 70 ? { label: "Excellent",  color: "#1A7A4A", bar: "#1A7A4A" }
+              : score >= 50 ? { label: "Bon",         color: "#1A3C2E", bar: "#1A3C2E" }
+              : score >= 30 ? { label: "À améliorer", color: "#C97820", bar: "#C97820" }
+              :               { label: "Critique",    color: "#C0352A", bar: "#C0352A" };
+  const kpis = [
+    { label: "Mention",     val: audit.withRanked||0,      color: "#1A7A4A", tip: "Dans un top LLM numéroté" },
+    { label: "Évocation",   val: audit.withMentionOnly||0, color: "#C97820", tip: "Corps du texte hors top" },
+    { label: "Citation",    val: audit.withSourceOnly||0,  color: "#1A3C2E", tip: "Dans les sources" },
+    { label: "Pos. moy.",   val: audit.avgPos ? `#${audit.avgPos}` : "—", color: "#1A3C2E", tip: "Position moyenne dans les tops" },
+    { label: "Questions",   val: audit.questions,          color: "#1A3C2E", tip: "Questions testées" },
+    { label: "Résultats",   val: audit.total,              color: "#1A3C2E", tip: "Réponses LLM collectées" },
+  ];
   return (
-    <div style={{ background: level.bg, border: `1.5px solid ${level.color}33`, borderRadius: 16, padding: "20px 28px", marginBottom: 20, display: "flex", gap: 28, alignItems: "center", flexWrap: "wrap" }}>
-      {/* Score visuel */}
-      <div style={{ textAlign: "center", minWidth: 90 }}>
-        <div style={{ fontSize: 48, fontWeight: 900, color: level.color, lineHeight: 1 }}>{score}%</div>
-        <div style={{ fontSize: 12, fontWeight: 700, color: level.color, marginTop: 4 }}>Score GEO</div>
-      </div>
-      {/* Barre de progression */}
-      <div style={{ flex: 1, minWidth: 180 }}>
-        <div style={{ height: 10, background: "#E2E8F0", borderRadius: 5, overflow: "hidden", marginBottom: 10 }}>
-          <div style={{ height: "100%", width: `${score}%`, background: level.bar, borderRadius: 5, transition: "width 0.4s" }} />
-        </div>
-        <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
-          <div><span style={{ fontSize: 11, color: C.textLight }}>Marque</span> <strong style={{ fontSize: 13, color: C.text }}>{brand?.brand_name || "—"}</strong></div>
-          <div><span style={{ fontSize: 11, color: C.textLight }}>Site</span> <strong style={{ fontSize: 13, color: C.text }}>{site?.label || "—"}</strong></div>
-          <div><span style={{ fontSize: 11, color: C.textLight }}>Questions testées</span> <strong style={{ fontSize: 13, color: C.text }}>{audit.questions}</strong></div>
-          <div><span style={{ fontSize: 11, color: C.textLight }}>Résultats</span> <strong style={{ fontSize: 13, color: C.text }}>{audit.total}</strong></div>
-        </div>
-      </div>
-      {/* Breakdown 3 types de présence */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 200 }}>
-        {/* Barre proportion */}
-        <div style={{ display: "flex", height: 6, borderRadius: 3, overflow: "hidden", background: "#E2E8F0", marginBottom: 4 }}>
-          {audit.total > 0 && <>
-            <div style={{ width: `${(audit.withRanked||0) / audit.total * 100}%`, background: "#059669" }} title={`Mention : ${audit.withRanked||0}`} />
-            <div style={{ width: `${(audit.withSourceOnly||0) / audit.total * 100}%`, background: "#2563EB" }} title={`Citation : ${audit.withSourceOnly||0}`} />
-            <div style={{ width: `${(audit.withMentionOnly||0) / audit.total * 100}%`, background: "#D97706" }} title={`Évocation : ${audit.withMentionOnly||0}`} />
-          </>}
-        </div>
-        {[
-          { icon: "◎",  label: "Mention",    val: audit.withRanked||0,      color: "#1A7A4A", tip: "Dans un top LLM numéroté" },
-          { icon: "⟶", label: "Évocation",  val: audit.withMentionOnly||0, color: "#C97820", tip: "Corps du texte hors top" },
-          { icon: "↗",  label: "Citation",   val: audit.withSourceOnly||0,  color: "#1A3C2E", tip: "Domaine dans les sources" },
-          { icon: "·",  label: "Pos. moy.",  val: audit.avgPos ? `#${audit.avgPos}` : "—", color: "#1A3C2E77", tip: "Position moyenne dans les tops" },
-          { icon: "·",  label: "Concurrents",val: Object.keys(audit.compStats).length, color: "#1A3C2E77", tip: "Concurrents détectés" },
-        ].map(k => (
-          <div key={k.label} title={k.tip} style={{ display: "flex", justifyContent: "space-between", gap: 12, cursor: "default" }}>
-            <span style={{ fontSize: 11, color: C.textLight }}>{k.icon} {k.label}</span>
-            <span style={{ fontSize: 12, fontWeight: 700, color: k.color }}>{k.val}</span>
+    <div style={{ background: "#fff", border: "0.5px solid #1A3C2E0D", borderRadius: 12, padding: "20px 24px", marginBottom: 16 }}>
+      <div style={{ display: "flex", gap: 24, alignItems: "flex-start", flexWrap: "wrap" }}>
+        {/* Score */}
+        <div style={{ minWidth: 100 }}>
+          <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E44", marginBottom: 6 }}>Score GEO</div>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+            <span style={{ fontSize: 44, fontWeight: 700, color: level.color, lineHeight: 1, letterSpacing: "-0.02em" }}>{score}</span>
+            <span style={{ fontSize: 18, color: level.color, fontWeight: 500 }}>%</span>
           </div>
-        ))}
+          <div style={{ marginTop: 8, height: 3, background: "#1A3C2E0C", borderRadius: 2, overflow: "hidden" }}>
+            <div style={{ height: "100%", width: `${score}%`, background: level.bar, borderRadius: 2, transition: "width 0.5s" }} />
+          </div>
+          <div style={{ marginTop: 5, fontSize: 11, color: level.color, fontWeight: 500 }}>{level.label}</div>
+        </div>
+
+        {/* Séparateur */}
+        <div style={{ width: 1, background: "#1A3C2E0C", alignSelf: "stretch", minHeight: 60 }} />
+
+        {/* Barre proportion M/É/C */}
+        <div style={{ flex: "0 0 auto", minWidth: 140 }}>
+          <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E44", marginBottom: 8 }}>Répartition</div>
+          <div style={{ display: "flex", height: 4, borderRadius: 2, overflow: "hidden", background: "#1A3C2E0C", marginBottom: 10 }}>
+            {audit.total > 0 && <>
+              <div style={{ width: `${(audit.withRanked||0)/audit.total*100}%`, background: "#1A7A4A" }} />
+              <div style={{ width: `${(audit.withMentionOnly||0)/audit.total*100}%`, background: "#C97820" }} />
+              <div style={{ width: `${(audit.withSourceOnly||0)/audit.total*100}%`, background: "#1A3C2E55" }} />
+            </>}
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            {[
+              { sym: "◎", label: "Mention",   val: audit.withRanked||0,      color: "#1A7A4A" },
+              { sym: "⟶", label: "Évocation", val: audit.withMentionOnly||0, color: "#C97820" },
+              { sym: "↗",  label: "Citation",  val: audit.withSourceOnly||0,  color: "#1A3C2E77" },
+            ].map(k => (
+              <div key={k.label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 11, color: "#1A3C2E55" }}><span style={{ color: k.color }}>{k.sym}</span> {k.label}</span>
+                <span style={{ fontSize: 12, fontWeight: 600, color: k.color }}>{k.val}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Séparateur */}
+        <div style={{ width: 1, background: "#1A3C2E0C", alignSelf: "stretch", minHeight: 60 }} />
+
+        {/* KPIs contextuels */}
+        <div style={{ flex: 1, minWidth: 180 }}>
+          <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E44", marginBottom: 8 }}>Contexte</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 16px" }}>
+            <div><span style={{ fontSize: 11, color: "#1A3C2E44" }}>Marque</span><div style={{ fontSize: 12, fontWeight: 600, color: "#1A3C2E" }}>{brand?.brand_name || "—"}</div></div>
+            <div><span style={{ fontSize: 11, color: "#1A3C2E44" }}>Site</span><div style={{ fontSize: 12, fontWeight: 600, color: "#1A3C2E" }}>{site?.label || "—"}</div></div>
+            <div><span style={{ fontSize: 11, color: "#1A3C2E44" }}>Questions</span><div style={{ fontSize: 12, fontWeight: 600, color: "#1A3C2E" }}>{audit.questions}</div></div>
+            <div><span style={{ fontSize: 11, color: "#1A3C2E44" }}>Résultats</span><div style={{ fontSize: 12, fontWeight: 600, color: "#1A3C2E" }}>{audit.total}</div></div>
+            <div><span style={{ fontSize: 11, color: "#1A3C2E44" }}>Pos. moy.</span><div style={{ fontSize: 12, fontWeight: 600, color: "#1A3C2E" }}>{audit.avgPos ? `#${audit.avgPos}` : "—"}</div></div>
+            <div><span style={{ fontSize: 11, color: "#1A3C2E44" }}>Concurrents</span><div style={{ fontSize: 12, fontWeight: 600, color: "#1A3C2E" }}>{Object.keys(audit.compStats).length}</div></div>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -1667,7 +1691,7 @@ export default function GeoAuditTab({
       {/* ── Header + onglets principaux ── */}
       <div style={{ marginBottom: 24 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
-          <div style={{ fontSize: 20, fontWeight: 800, color: C.text }}>📋 Audit GEO</div>
+          <div style={{ fontSize: 20, fontWeight: 800, color: "#1A3C2E" }}>📋 Audit GEO</div>
           <div style={{ display: "flex", gap: 8 }}>
             <button onClick={refreshData} disabled={loading}
               title="Recharger les données depuis la base"
@@ -1680,12 +1704,12 @@ export default function GeoAuditTab({
             </button>
           </div>
         </div>
-        <div style={{ display: "inline-flex", gap: 2, background: "#F1F5F9", borderRadius: 20, padding: 3 }}>
+        <div style={{ display: "inline-flex", gap: 2, background: "#F0EBE033", borderRadius: 20, padding: 3 }}>
           {[{ key: "setup", label: "⚙️ Setup" }, { key: "audit", label: "📋 Génération Audit GEO" }].map(t => (
             <button key={t.key} onClick={() => setMainTab(t.key)} style={{
-              padding: "6px 16px", borderRadius: 16, fontSize: 12, fontWeight: 700, border: "none", cursor: "pointer", transition: "all 0.15s",
+              padding: "6px 16px", borderRadius: 10, fontSize: 12, fontWeight: 700, border: "none", cursor: "pointer", transition: "all 0.15s",
               background: mainTab === t.key ? "#fff" : "transparent",
-              color: mainTab === t.key ? "#1A3C2E" : "#94A3B8",
+              color: mainTab === t.key ? "#1A3C2E" : "#1A3C2E55",
               boxShadow: mainTab === t.key ? "0 1px 4px rgba(0,0,0,0.1)" : "none",
             }}>{t.label}</button>
           ))}
@@ -1723,11 +1747,11 @@ export default function GeoAuditTab({
           </div>
 
           {loading ? (
-            <div style={{ textAlign: "center", padding: 60, color: C.textLight, fontSize: 12 }}>Chargement des données…</div>
+            <div style={{ textAlign: "center", padding: 60, color: "#1A3C2E44", fontSize: 12 }}>Chargement des données…</div>
           ) : noData ? (
-            <div style={{ textAlign: "center", padding: 60, color: C.textLight }}>
+            <div style={{ textAlign: "center", padding: 60, color: "#1A3C2E44" }}>
               <div style={{ fontSize: 32, marginBottom: 12 }}>📊</div>
-              <div style={{ fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 6 }}>Aucun résultat disponible</div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: "#1A3C2E", marginBottom: 6 }}>Aucun résultat disponible</div>
               <div style={{ fontSize: 12 }}>Interrogez des questions dans l'onglet Fan-outs pour générer des données d'audit</div>
             </div>
           ) : (<>
@@ -1742,96 +1766,59 @@ export default function GeoAuditTab({
                 BLOC 2 — VISIBILITÉ MARQUE
                 Présence par provider + tendance 30j + questions
             ══════════════════════════════════════════════════════ */}
-            <div data-tour="audit-visibility" style={{ display: "contents" }}><Section icon="📡" title="Visibilité marque" sub="Présence dans les réponses LLM par provider et dans le temps" accent={C.blue}>
+            <div data-tour="audit-visibility" style={{ display: "contents" }}><Section title="Visibilité marque" sub="Présence dans les réponses LLM par provider et dans le temps">
 
-              {/* Breakdown 3 types de présence */}
-              <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px", marginBottom: 20 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>Répartition par type de présence</div>
-                {/* Barre de proportion */}
-                <div style={{ display: "flex", height: 8, borderRadius: 4, overflow: "hidden", background: "#E2E8F0", marginBottom: 12 }}>
-                  {audit.total > 0 && <>
-                    <div style={{ width: `${(audit.withRanked||0) / audit.total * 100}%`, background: "#059669", transition: "width 0.3s" }} title={`Mention : ${audit.withRanked||0}`} />
-                    <div style={{ width: `${(audit.withSourceOnly||0) / audit.total * 100}%`, background: "#2563EB", transition: "width 0.3s" }} title={`Citation : ${audit.withSourceOnly||0}`} />
-                    <div style={{ width: `${(audit.withMentionOnly||0) / audit.total * 100}%`, background: "#D97706", transition: "width 0.3s" }} title={`Évocation : ${audit.withMentionOnly||0}`} />
-                  </>}
-                </div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
-                  {[
-                    { icon: "◎",  label: "Mention",   count: audit.withRanked||0,      color: "#1A7A4A", bg: "#F0F7F3", border: "#1A7A4A22", desc: "Top LLM numéroté" },
-                    { icon: "↗",  label: "Citation",  count: audit.withSourceOnly||0,  color: "#1A3C2E", bg: "#EAF0EC", border: "#1A3C2E22", desc: "Dans les sources" },
-                    { icon: "⟶", label: "Évocation", count: audit.withMentionOnly||0, color: "#C97820", bg: "#FDF5E6", border: "#C9782022", desc: "Corps du texte" },
-                    { icon: "✗",  label: "Absent",     count: audit.total - (audit.withBrand||0), color: "#DC2626", bg: "#FEF2F2", border: "#FECACA", desc: "Non mentionné" },
-                  ].map(t => (
-                    <div key={t.label} style={{ background: t.bg, border: `1px solid ${t.border}`, borderRadius: 8, padding: "10px 12px" }}>
-                      <div style={{ fontSize: 10, fontWeight: 700, color: t.color, marginBottom: 2 }}>{t.icon} {t.label}</div>
-                      <div style={{ fontSize: 22, fontWeight: 800, color: t.color, lineHeight: 1 }}>{t.count}</div>
-                      <div style={{ fontSize: 9, color: C.textLight, marginTop: 2 }}>{t.desc}</div>
-                      <div style={{ fontSize: 9, color: t.color, marginTop: 2, fontWeight: 600 }}>{audit.total > 0 ? Math.round(t.count / audit.total * 100) : 0}%</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Présence par provider */}
-              <div style={{ marginBottom: 20 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>Par provider LLM</div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 10 }}>
+              {/* Providers — ligne épurée */}
+              {Object.keys(audit.providerStats).length > 0 && (
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
                   {Object.entries(audit.providerStats).map(([pid, s]) => {
-                    const rate = pct(s.withBrand, s.total); const color = rate >= 50 ? "#059669" : rate > 0 ? "#D97706" : "#DC2626";
-                    return <div key={pid} style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 16px" }}>
-                      <div style={{ fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 6 }}>{pid}</div>
-                      <div style={{ fontSize: 22, fontWeight: 800, color }}>{rate}%</div>
-                      <div style={{ fontSize: 11, color: C.textLight }}>{s.withBrand}/{s.total}</div>
-                      <div style={{ marginTop: 6, height: 4, background: C.border, borderRadius: 2, overflow: "hidden" }}>
-                        <div style={{ height: "100%", width: `${rate}%`, background: color, borderRadius: 2 }} />
+                    const rate = pct(s.withBrand, s.total);
+                    const color = rate >= 50 ? "#1A7A4A" : rate > 0 ? "#C97820" : "#1A3C2E33";
+                    return (
+                      <div key={pid} style={{ padding: "7px 14px", border: "0.5px solid #1A3C2E12", borderRadius: 8, background: "#fff", minWidth: 90 }}>
+                        <div style={{ fontSize: 9, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E44", marginBottom: 3 }}>{pid}</div>
+                        <div style={{ fontSize: 18, fontWeight: 700, color, lineHeight: 1, letterSpacing: "-0.01em" }}>{rate}<span style={{ fontSize: 11, fontWeight: 400 }}>%</span></div>
+                        <div style={{ fontSize: 10, color: "#1A3C2E33", marginTop: 1 }}>{s.withBrand}/{s.total}</div>
                       </div>
-                    </div>;
+                    );
                   })}
                 </div>
-              </div>
+              )}
 
               {/* Tendance 30 jours */}
-              <div style={{ marginBottom: 20 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>Tendance — 30 derniers jours</div>
+              <div style={{ marginBottom: 18 }}>
+                <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E44", marginBottom: 8 }}>Tendance 30 jours</div>
                 <TrendChart trendDays={audit.trendDays} />
               </div>
 
-              {/* Questions ✓ / ✗ */}
+              {/* Questions ◎ mention / ✗ favorites sans mention */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
                 <div>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: "#059669", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 4 }}>✓ Questions avec présence</div>
-                  <div style={{ fontSize: 10, color: C.textLight, marginBottom: 8, fontStyle: "italic" }}>
-                    Favoris en premier · max 25 · triées par volume
-                  </div>
-                  {audit.presentBrandQs.length ? audit.presentBrandQs.slice(0, qLimit).map((q, i) => (
-                    <div key={i} style={{ fontSize: 12, padding: "6px 0", borderBottom: `1px solid ${C.borderLight}`, display: "flex", gap: 8, alignItems: "flex-start" }}>
-                      <span style={{ color: "#059669", fontWeight: 700, flexShrink: 0 }}>✓</span>
-                      {q.isFav && <span style={{ flexShrink: 0, fontSize: 11 }} title="Question favorite">⭐</span>}
-                      <span style={{ flex: 1 }}>{q.question}</span>
-                      {q.volume > 0 && <span style={{ fontSize: 10, color: "#2563EB", background: "#EFF6FF", borderRadius: 4, padding: "1px 5px", flexShrink: 0, fontWeight: 600 }}>🔍 {q.volume >= 1000 ? (q.volume/1000).toFixed(1)+"k" : q.volume}</span>}
+                  <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A7A4A", marginBottom: 8 }}>◎ Questions avec mention · {audit.presentBrandQs.length}</div>
+                  {audit.presentBrandQs.length ? audit.presentBrandQs.map((q, i) => (
+                    <div key={i} style={{ fontSize: 12, padding: "5px 0", borderBottom: "0.5px solid #1A3C2E08", display: "flex", gap: 6, alignItems: "baseline" }}>
+                      <span style={{ color: "#1A7A4A", flexShrink: 0, fontSize: 10 }}>◎</span>
+                      {q.isFav && <span style={{ flexShrink: 0, fontSize: 10, color: "#C97820" }}>★</span>}
+                      <span style={{ flex: 1, color: "#1A3C2E", lineHeight: 1.5 }}>{q.question}</span>
+                      {q.volume > 0 && <span style={{ fontSize: 10, color: "#1A3C2E33", flexShrink: 0 }}>{q.volume >= 1000 ? (q.volume/1000).toFixed(1)+"k" : q.volume}</span>}
                     </div>
-                  )) : <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>Aucune présence</div>}
+                  )) : <div style={{ fontSize: 11, color: "#1A3C2E33", fontStyle: "italic" }}>Aucune mention dans un top LLM</div>}
                 </div>
                 <div>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: "#DC2626", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 4 }}>✗ Questions sans présence</div>
-                  <div style={{ fontSize: 10, color: C.textLight, marginBottom: 8, fontStyle: "italic" }}>
-                    Favoris en premier · max 25 · triées par volume
-                  </div>
-                  {audit.missingBrandQs.length ? audit.missingBrandQs.slice(0, qLimit).map((q, i) => (
-                    <div key={i} style={{ fontSize: 12, padding: "6px 0", borderBottom: `1px solid ${C.borderLight}`, display: "flex", gap: 8, alignItems: "flex-start" }}>
-                      <span style={{ color: "#DC2626", fontWeight: 700, flexShrink: 0 }}>✗</span>
-                      {q.isFav && <span style={{ flexShrink: 0, fontSize: 11 }} title="Question favorite">⭐</span>}
-                      <span style={{ flex: 1 }}>{q.question}</span>
-                      {q.volume > 0 && <span style={{ fontSize: 10, color: "#2563EB", background: "#EFF6FF", borderRadius: 4, padding: "1px 5px", flexShrink: 0, fontWeight: 600 }}>🔍 {q.volume >= 1000 ? (q.volume/1000).toFixed(1)+"k" : q.volume}</span>}
+                  <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#C0352A", marginBottom: 8 }}>✗ Favorites sans mention · {audit.missingBrandQs.length}</div>
+                  {audit.missingBrandQs.length ? audit.missingBrandQs.map((q, i) => (
+                    <div key={i} style={{ fontSize: 12, padding: "5px 0", borderBottom: "0.5px solid #1A3C2E08", display: "flex", gap: 6, alignItems: "baseline" }}>
+                      <span style={{ color: "#C0352A", flexShrink: 0, fontSize: 10 }}>✗</span>
+                      <span style={{ flexShrink: 0, fontSize: 10, color: "#C97820" }}>★</span>
+                      <span style={{ flex: 1, color: "#1A3C2E", lineHeight: 1.5 }}>{q.question}</span>
+                      {q.volume > 0 && <span style={{ fontSize: 10, color: "#1A3C2E33", flexShrink: 0 }}>{q.volume >= 1000 ? (q.volume/1000).toFixed(1)+"k" : q.volume}</span>}
                     </div>
-                  )) : <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>Toutes les questions ont une présence !</div>}
+                  )) : <div style={{ fontSize: 11, color: "#1A3C2E33", fontStyle: "italic" }}>Toutes les favorites ont une mention !</div>}
                 </div>
               </div>
 
-              {/* Analyse Fan-out — en bas de Visibilité marque */}
-              <div style={{ marginTop: 16, borderTop: `1px solid ${C.border}`, paddingTop: 16 }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 4 }}>✨ Analyse Fan-out</div>
-                <div style={{ fontSize: 11, color: C.textLight, marginBottom: 12 }}>Recommandations basées sur vos données de présence et sources</div>
+              {/* Analyse Fan-out */}
+              <div style={{ marginTop: 18, paddingTop: 16, borderTop: "0.5px solid #1A3C2E0C" }}>
                 <FanoutAnalysis questions={siteQuestions} results={siteResults} brand={brand} claudeKey={claudeKey} />
               </div>
             </Section>
@@ -1852,7 +1839,7 @@ export default function GeoAuditTab({
                 BLOC 3 — ANALYSE CONCURRENTIELLE
                 Concurrents + intentions + types de réponses
             ══════════════════════════════════════════════════════ */}
-            <div data-tour="audit-competitors" style={{ display: "contents" }}><Section icon="⚔️" title="Paysage concurrentiel" sub="Concurrents détectés dans les réponses LLM" accent={C.amber}>
+            <div data-tour="audit-competitors" style={{ display: "contents" }}><Section title="Paysage concurrentiel" sub="Concurrents détectés dans les réponses LLM">
 
               {/* Cartographie concurrentielle — au-dessus du tableau */}
               {Object.keys(audit.compStats).filter(k => audit.compStats[k].enabled !== false).length > 0 && (
@@ -1864,10 +1851,10 @@ export default function GeoAuditTab({
               {Object.keys(audit.compStats).length > 0 ? (
                 <div style={{ marginBottom: 20 }}>
                   {/* Header collapsible + recherche + ajout */}
-                  <div style={{ border: `1px solid ${C.border}`, borderRadius: compTableOpen ? "8px 8px 0 0" : 8, background: C.bg }}>
+                  <div style={{ border: "0.5px solid #1A3C2E0D", borderRadius: compTableOpen ? "8px 8px 0 0" : 8, background: "#FAFAF8" }}>
                     <button
                       onClick={() => setCompTableOpen(o => !o)}
-                      style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "8px 12px", background: "transparent", border: "none", cursor: "pointer", fontSize: 11, fontWeight: 700, color: C.textMid, userSelect: "none" }}>
+                      style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "8px 12px", background: "transparent", border: "none", cursor: "pointer", fontSize: 11, fontWeight: 500, color: "#1A3C2E77", userSelect: "none" }}>
                       <span style={{ transform: compTableOpen ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.2s", display: "inline-block" }}>▼</span>
                       <span style={{ textTransform: "uppercase", letterSpacing: 0.7 }}>Détail des concurrents ({Object.keys(audit.compStats).length})</span>
                     </button>
@@ -1878,7 +1865,7 @@ export default function GeoAuditTab({
                           value={compSearch}
                           onChange={e => setCompSearch(e.target.value)}
                           placeholder="🔍 Filtrer (texte ou regex)…"
-                          style={{ flex: "1 1 160px", padding: "5px 10px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11, marginTop: 8 }}
+                          style={{ flex: "1 1 160px", padding: "5px 10px", border: "0.5px solid #1A3C2E0D", borderRadius: 6, fontSize: 11, marginTop: 8 }}
                         />
                         {/* Ajout concurrent non identifié */}
                         <input
@@ -1891,7 +1878,7 @@ export default function GeoAuditTab({
                               try {
                                 const { sbSaveCompetitor } = await import("../lib/supabase");
                                 const site2 = (Array.isArray(sites) ? sites : []).find(s => s.id === selectedSite) || sites?.[0];
-                                const saved = await sbSaveCompetitor({ project_id: projectId, site_id: site2?.id, name: newCompName.trim(), category: "other", color: "#64748B", enabled: true });
+                                const saved = await sbSaveCompetitor({ project_id: projectId, site_id: site2?.id, name: newCompName.trim(), category: "other", color: "#1A3C2E77", enabled: true });
                                 setCompetitors(prev => [...prev, saved]);
                                 setNewCompName("");
                               } catch(e2) { console.error(e2); }
@@ -1903,7 +1890,7 @@ export default function GeoAuditTab({
                             try {
                               const { sbSaveCompetitor } = await import("../lib/supabase");
                               const site2 = (Array.isArray(sites) ? sites : []).find(s => s.id === selectedSite) || sites?.[0];
-                              const saved = await sbSaveCompetitor({ project_id: projectId, site_id: site2?.id, name: newCompName.trim(), category: "other", color: "#64748B", enabled: true });
+                              const saved = await sbSaveCompetitor({ project_id: projectId, site_id: site2?.id, name: newCompName.trim(), category: "other", color: "#1A3C2E77", enabled: true });
                               setCompetitors(prev => [...prev, saved]);
                               setNewCompName("");
                             } catch(e2) { console.error(e2); }
@@ -1922,9 +1909,9 @@ export default function GeoAuditTab({
                       !searchRe || searchRe.test(name)
                     );
                     return (
-                    <div style={{ border: `1px solid ${C.border}`, borderTop: "none", borderRadius: "0 0 8px 8px", overflow: "auto", maxHeight: 420 }}>
+                    <div style={{ border: "0.5px solid #1A3C2E0D", borderTop: "none", borderRadius: "0 0 8px 8px", overflow: "auto", maxHeight: 420 }}>
                       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                        <thead style={{ position: "sticky", top: 0, zIndex: 1, background: C.bg }}>
+                        <thead style={{ position: "sticky", top: 0, zIndex: 1, background: "#FAFAF8" }}>
                           <tr>
                             {[
                               { key: "name",    label: "Concurrent" },
@@ -1973,7 +1960,7 @@ export default function GeoAuditTab({
                                   {catKey !== "other" ? (
                                     <span style={{ fontSize: 10, fontWeight: 700, color: cat.color, background: cat.bg, borderRadius: 5, padding: "2px 7px" }}>{cat.label}</span>
                                   ) : (
-                                    <span style={{ fontSize: 10, color: C.textLight }}>—</span>
+                                    <span style={{ fontSize: 10, color: "#1A3C2E44" }}>—</span>
                                   )}
                                 </td>
                                 <td style={{ padding: "8px 12px" }}>
@@ -1986,7 +1973,7 @@ export default function GeoAuditTab({
                                       }
                                       setCompetitors(prev => prev.map(c => c.name === name ? { ...c, enabled: newEnabled } : c));
                                     }}
-                                    style={{ width: 36, height: 20, borderRadius: 10, border: "none", cursor: "pointer", background: enabled ? "#059669" : "#CBD5E1", position: "relative", transition: "background 0.2s" }}
+                                    style={{ width: 36, height: 20, borderRadius: 10, border: "none", cursor: "pointer", background: enabled ? "#1A7A4A" : "#1A3C2E18", position: "relative", transition: "background 0.2s" }}
                                     title={enabled ? "Désactiver ce concurrent" : "Activer ce concurrent"}
                                   >
                                     <span style={{ position: "absolute", top: 2, left: enabled ? 18 : 2, width: 16, height: 16, borderRadius: "50%", background: "#fff", transition: "left 0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.2)" }} />
@@ -2007,26 +1994,26 @@ export default function GeoAuditTab({
                   })()}
                 </div>
               ) : (
-                <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic", marginBottom: 16 }}>Aucun concurrent détecté dans les réponses LLM</div>
+                <div style={{ fontSize: 11, color: "#1A3C2E44", fontStyle: "italic", marginBottom: 16 }}>Aucun concurrent détecté dans les réponses LLM</div>
               )}
 
               {/* Répartition intention + types réponses */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
                 <div>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>Répartition par intention</div>
+                  <div style={{ fontSize: 11, fontWeight: 500, color: "#1A3C2E44", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>Répartition par intention</div>
                   {Object.entries(audit.intentCount).sort((a,b)=>b[1]-a[1]).map(([k,v]) => (
                     <div key={k} style={{ marginBottom: 10 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, fontSize: 12 }}><span style={{ fontWeight: 600 }}>{k}</span><span style={{ color: C.textLight }}>{v} ({pct(v, audit.total)}%)</span></div>
-                      <div style={{ height: 6, background: C.bg, borderRadius: 3, overflow: "hidden" }}><div style={{ height: "100%", width: `${pct(v, audit.total)}%`, background: "#7C3AED", borderRadius: 3 }} /></div>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, fontSize: 12 }}><span style={{ fontWeight: 600 }}>{k}</span><span style={{ color: "#1A3C2E44" }}>{v} ({pct(v, audit.total)}%)</span></div>
+                      <div style={{ height: 6, background: "#FAFAF8", borderRadius: 3, overflow: "hidden" }}><div style={{ height: "100%", width: `${pct(v, audit.total)}%`, background: "#1A3C2E", borderRadius: 3 }} /></div>
                     </div>
                   ))}
                 </div>
                 <div>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>Types de réponses LLM</div>
+                  <div style={{ fontSize: 11, fontWeight: 500, color: "#1A3C2E44", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>Types de réponses LLM</div>
                   {Object.entries(audit.typeCount).sort((a,b)=>b[1]-a[1]).slice(0,6).map(([k,v]) => (
                     <div key={k} style={{ marginBottom: 10 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, fontSize: 12 }}><span style={{ fontWeight: 600 }}>{k}</span><span style={{ color: C.textLight }}>{v} ({pct(v, audit.total)}%)</span></div>
-                      <div style={{ height: 6, background: C.bg, borderRadius: 3, overflow: "hidden" }}><div style={{ height: "100%", width: `${pct(v, audit.total)}%`, background: "#2563EB", borderRadius: 3 }} /></div>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, fontSize: 12 }}><span style={{ fontWeight: 600 }}>{k}</span><span style={{ color: "#1A3C2E44" }}>{v} ({pct(v, audit.total)}%)</span></div>
+                      <div style={{ height: 6, background: "#FAFAF8", borderRadius: 3, overflow: "hidden" }}><div style={{ height: "100%", width: `${pct(v, audit.total)}%`, background: "#1A3C2E", borderRadius: 3 }} /></div>
                     </div>
                   ))}
                 </div>
@@ -2037,37 +2024,43 @@ export default function GeoAuditTab({
                 BLOC 4 — ANALYSE DES SOURCES & URLS
                 Top domaines + URLs marque catégorisées
             ══════════════════════════════════════════════════════ */}
-            <Section icon="🔗" title="Sources & URLs" sub="URLs de la marque citées dans les réponses LLM" accent={C.purple}>
+            <Section title="Sources & URLs" sub="URLs de la marque citées dans les réponses LLM">
 
               {/* Top domaines */}
               <div style={{ marginBottom: 20 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>Top domaines cités</div>
+                <div style={{ fontSize: 11, fontWeight: 500, color: "#1A3C2E44", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>Top domaines cités</div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 8 }}>
                   {Object.entries(audit.topDomains).sort((a,b)=>b[1]-a[1]).slice(0,10).map(([d, cnt], i) => {
-                    const isComp = audit.competitorUrls.some(u => u.domain === d); const isBrand = audit.brandUrls.some(u => u.domain === d);
-                    return <div key={d} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", background: C.bg, borderRadius: 8, border: `1px solid ${isBrand ? "#05966633" : isComp ? "#DC262633" : C.border}` }}>
-                      <div><span style={{ fontSize: 13, fontWeight: 800, color: C.textLight, marginRight: 8 }}>#{i+1}</span>
-                        <span style={{ fontSize: 12, color: isBrand ? "#059669" : isComp ? "#DC2626" : C.text, fontWeight: 600 }}>{d}</span>
-                        {isBrand && <span style={{ fontSize: 9, marginLeft: 4, background: "#ECFDF5", color: "#059669", borderRadius: 4, padding: "1px 5px" }}>marque</span>}
-                        {isComp && <span style={{ fontSize: 9, marginLeft: 4, background: "#FEF2F2", color: "#DC2626", borderRadius: 4, padding: "1px 5px" }}>concurrent</span>}
+                    const isComp  = audit.competitorUrls.some(u => u.domain === d);
+                    const isBrand = audit.brandUrls.some(u => u.domain === d);
+                    const dotColor = isBrand ? "#1A7A4A" : isComp ? "#C0352A" : "#1A3C2E33";
+                    return (
+                      <div key={d} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "5px 0", borderBottom: "0.5px solid #1A3C2E08" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <span style={{ fontSize: 9, color: "#1A3C2E33", fontVariantNumeric: "tabular-nums", minWidth: 16 }}>#{i+1}</span>
+                          <span style={{ width: 5, height: 5, borderRadius: "50%", background: dotColor, flexShrink: 0 }} />
+                          <span style={{ fontSize: 12, color: "#1A3C2E", fontWeight: isBrand ? 600 : 400 }}>{d}</span>
+                          {isBrand && <span style={{ fontSize: 9, color: "#1A7A4A", letterSpacing: "0.04em" }}>marque</span>}
+                          {isComp  && <span style={{ fontSize: 9, color: "#C0352A", letterSpacing: "0.04em" }}>concurrent</span>}
+                        </div>
+                        <span style={{ fontSize: 11, color: "#1A3C2E55", fontVariantNumeric: "tabular-nums" }}>{cnt}×</span>
                       </div>
-                      <span style={{ fontSize: 12, fontWeight: 700 }}>{cnt}×</span>
-                    </div>;
+                    );
                   })}
                 </div>
               </div>
 
               {/* Tableau URLs marque */}
               <div>
-                <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>URLs de la marque citées</div>
+                <div style={{ fontSize: 11, fontWeight: 500, color: "#1A3C2E44", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>URLs de la marque citées</div>
                 {audit.brandUrls.length === 0 ? (
-                  <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>Aucune URL de la marque détectée dans les sources</div>
+                  <div style={{ fontSize: 11, color: "#1A3C2E44", fontStyle: "italic" }}>Aucune URL de la marque détectée dans les sources</div>
                 ) : (
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                     <thead>
-                      <tr style={{ background: C.bg }}>
+                      <tr style={{ background: "#FAFAF8" }}>
                         {["URL", "Citations src", "Mentions rép.", "Questions liées", "Statut"].map(h => (
-                          <th key={h} style={{ padding: "8px 12px", textAlign: "left", fontWeight: 600, fontSize: 10, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.5, borderBottom: `1px solid ${C.border}` }}>{h}</th>
+                          <th key={h} style={{ padding: "8px 12px", textAlign: "left", fontWeight: 600, fontSize: 10, color: "#1A3C2E44", textTransform: "uppercase", letterSpacing: 0.5, borderBottom: `1px solid ${C.border}` }}>{h}</th>
                         ))}
                       </tr>
                     </thead>
@@ -2077,19 +2070,19 @@ export default function GeoAuditTab({
                         const rep = u.count_in_answer || 0;
                         const detail = (audit.urlDetails || []).find(d => d.norm === u.norm);
                         const qCount = detail?.linkedQs?.length || 0;
-                        const status = src >= 3 ? { label: "✓ Performante", color: "#059669", bg: "#ECFDF5" }
+                        const status = src >= 3 ? { label: "✓ Performante", color: "#1A7A4A", bg: "#F0F7F3" }
                                      : rep > 0 && src === 0 ? { label: "⚠ À sourcer", color: "#DC2626", bg: "#FEF2F2" }
                                      : src > 0 ? { label: "↑ À booster", color: "#D97706", bg: "#FFFBEB" }
-                                     : { label: "— Peu citée", color: C.textLight, bg: C.bg };
+                                     : { label: "— Peu citée", color: "#1A3C2E44", bg: C.bg };
                         // Afficher la version normalisée (sans https, www, slash final)
                         const displayUrl = u.norm || u.url.replace(/^https?:\/\//, "");
                         return (
                           <tr key={i} style={{ borderBottom: `1px solid ${C.borderLight}` }}>
                             <td style={{ padding: "8px 12px", maxWidth: 260, wordBreak: "break-all" }}>
-                              <a href={u.url} target="_blank" rel="noreferrer" style={{ color: "#2563EB", fontSize: 11, textDecoration: "none" }}>{displayUrl}</a>
+                              <a href={u.url} target="_blank" rel="noreferrer" style={{ color: "#1A3C2E", fontSize: 11, textDecoration: "none" }}>{displayUrl}</a>
                             </td>
-                            <td style={{ padding: "8px 12px", textAlign: "center", fontWeight: 700, color: src > 0 ? "#059669" : C.textLight }}>{src}</td>
-                            <td style={{ padding: "8px 12px", textAlign: "center", fontWeight: 700, color: rep > 0 ? "#2563EB" : C.textLight }}>{rep}</td>
+                            <td style={{ padding: "8px 12px", textAlign: "center", fontWeight: 700, color: src > 0 ? "#1A7A4A" : C.textLight }}>{src}</td>
+                            <td style={{ padding: "8px 12px", textAlign: "center", fontWeight: 700, color: rep > 0 ? "#1A3C2E" : C.textLight }}>{rep}</td>
                             <td style={{ padding: "8px 12px", textAlign: "center", color: qCount > 0 ? C.text : C.textLight }}>
                               {qCount > 0 ? `${qCount} question${qCount > 1 ? "s" : ""}` : "—"}
                             </td>
@@ -2122,12 +2115,12 @@ export default function GeoAuditTab({
               const gscAvgPos  = gscPos.length ? (gscPos.reduce((a,b)=>a+b,0)/gscPos.length).toFixed(1) : null;
 
               const CrossCard = ({ icon, title, sub, children }) => (
-                <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden", marginBottom: 16 }}>
-                  <div style={{ padding: "14px 20px", borderBottom: `1px solid ${C.border}`, background: C.bg, display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ background: "#fff", border: "0.5px solid #1A3C2E0D", borderRadius: 10, overflow: "hidden", marginBottom: 16 }}>
+                  <div style={{ padding: "14px 20px", borderBottom: `1px solid ${C.border}`, background: "#FAFAF8", display: "flex", alignItems: "center", gap: 10 }}>
                     <span style={{ fontSize: 18 }}>{icon}</span>
                     <div>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{title}</div>
-                      {sub && <div style={{ fontSize: 11, color: C.textLight, marginTop: 1 }}>{sub}</div>}
+                      <div style={{ fontSize: 13, fontWeight: 700, color: "#1A3C2E" }}>{title}</div>
+                      {sub && <div style={{ fontSize: 11, color: "#1A3C2E44", marginTop: 1 }}>{sub}</div>}
                     </div>
                   </div>
                   <div style={{ padding: "16px 20px" }}>{children}</div>
@@ -2136,10 +2129,10 @@ export default function GeoAuditTab({
 
               const Signal = ({ label, value, note, color = C.text }) => (
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", padding: "7px 0", borderBottom: `1px solid ${C.borderLight}` }}>
-                  <span style={{ fontSize: 12, color: C.textMid }}>{label}</span>
+                  <span style={{ fontSize: 12, color: "#1A3C2E77" }}>{label}</span>
                   <div style={{ textAlign: "right" }}>
                     <span style={{ fontSize: 14, fontWeight: 700, color }}>{value}</span>
-                    {note && <div style={{ fontSize: 10, color: C.textLight }}>{note}</div>}
+                    {note && <div style={{ fontSize: 10, color: "#1A3C2E44" }}>{note}</div>}
                   </div>
                 </div>
               );
@@ -2182,19 +2175,19 @@ export default function GeoAuditTab({
                         const both = fanoutBrandUrls.filter(f => bingSet.has((f.url || "").toLowerCase())).length;
                         return Math.round((both / Math.max(bingBrandUrls.length, fanoutBrandUrls.length)) * 100);
                       })() : null;
-                      const scoreColor = alignScore === null ? C.textLight : alignScore >= 60 ? "#059669" : alignScore >= 30 ? "#D97706" : "#DC2626";
+                      const scoreColor = alignScore === null ? C.textLight : alignScore >= 60 ? "#1A7A4A" : alignScore >= 30 ? "#D97706" : "#DC2626";
 
                       return (
                         <div>
                           {/* KPIs */}
                           <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 20 }}>
                             {[
-                              { label: "URLs marque sur Bing", value: bingBrandUrls.length, color: "#7C3AED" },
-                              { label: "URLs marque sur LLMs", value: fanoutBrandUrls.length, color: "#2563EB" },
+                              { label: "URLs marque sur Bing", value: bingBrandUrls.length, color: "#1A3C2E" },
+                              { label: "URLs marque sur LLMs", value: fanoutBrandUrls.length, color: "#1A3C2E" },
                               { label: "Alignement", value: alignScore !== null ? `${alignScore}%` : "—", color: scoreColor },
                             ].map(k => (
-                              <div key={k.label} style={{ background: C.bg, borderRadius: 10, padding: "12px 14px", border: `1px solid ${C.border}` }}>
-                                <div style={{ fontSize: 10, color: C.textLight, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 4 }}>{k.label}</div>
+                              <div key={k.label} style={{ background: "#FAFAF8", borderRadius: 10, padding: "12px 14px", border: "0.5px solid #1A3C2E0D" }}>
+                                <div style={{ fontSize: 10, color: "#1A3C2E44", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 4 }}>{k.label}</div>
                                 <div style={{ fontSize: 20, fontWeight: 800, color: k.color }}>{k.value}</div>
                               </div>
                             ))}
@@ -2208,20 +2201,20 @@ export default function GeoAuditTab({
                             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
                               {/* Colonne Bing */}
                               <div>
-                                <div style={{ fontSize: 11, fontWeight: 700, color: "#7C3AED", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>
+                                <div style={{ fontSize: 11, fontWeight: 700, color: "#1A3C2E", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>
                                   🤖 Top URLs marque — Bing
                                 </div>
                                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
-                                  <thead><tr style={{ background: C.bg }}>
-                                    <th style={{ padding: "5px 8px", textAlign: "left", fontWeight: 600, color: C.textLight, fontSize: 10, borderBottom: `1px solid ${C.border}` }}>URL</th>
-                                    <th style={{ padding: "5px 8px", textAlign: "right", fontWeight: 600, color: C.textLight, fontSize: 10, borderBottom: `1px solid ${C.border}` }}>Cit. Bing</th>
+                                  <thead><tr style={{ background: "#FAFAF8" }}>
+                                    <th style={{ padding: "5px 8px", textAlign: "left", fontWeight: 600, color: "#1A3C2E44", fontSize: 10, borderBottom: `1px solid ${C.border}` }}>URL</th>
+                                    <th style={{ padding: "5px 8px", textAlign: "right", fontWeight: 600, color: "#1A3C2E44", fontSize: 10, borderBottom: `1px solid ${C.border}` }}>Cit. Bing</th>
                                   </tr></thead>
                                   <tbody>
                                     {bingBrandUrls.length === 0
-                                      ? <tr><td colSpan={2} style={{ padding: "8px", color: C.textLight, fontStyle: "italic" }}>Aucune URL marque dans Bing</td></tr>
+                                      ? <tr><td colSpan={2} style={{ padding: "8px", color: "#1A3C2E44", fontStyle: "italic" }}>Aucune URL marque dans Bing</td></tr>
                                       : bingBrandUrls.map((u, i) => (
                                         <tr key={i} style={{ borderBottom: `1px solid ${C.borderLight}` }}>
-                                          <td style={{ padding: "5px 8px", wordBreak: "break-all", color: "#7C3AED" }}>{u.url.replace(/^https?:\/\/[^/]+/, "") || "/"}</td>
+                                          <td style={{ padding: "5px 8px", wordBreak: "break-all", color: "#1A3C2E" }}>{u.url.replace(/^https?:\/\/[^/]+/, "") || "/"}</td>
                                           <td style={{ padding: "5px 8px", textAlign: "right", fontWeight: 700 }}>{u.citations}</td>
                                         </tr>
                                     ))}
@@ -2230,22 +2223,22 @@ export default function GeoAuditTab({
                               </div>
                               {/* Colonne Fan-outs */}
                               <div>
-                                <div style={{ fontSize: 11, fontWeight: 700, color: "#2563EB", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>
+                                <div style={{ fontSize: 11, fontWeight: 700, color: "#1A3C2E", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8 }}>
                                   🔗 Top URLs marque — Fan-outs LLM
                                 </div>
                                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
-                                  <thead><tr style={{ background: C.bg }}>
-                                    <th style={{ padding: "5px 8px", textAlign: "left", fontWeight: 600, color: C.textLight, fontSize: 10, borderBottom: `1px solid ${C.border}` }}>URL</th>
-                                    <th style={{ padding: "5px 8px", textAlign: "right", fontWeight: 600, color: C.textLight, fontSize: 10, borderBottom: `1px solid ${C.border}` }}>Src</th>
-                                    <th style={{ padding: "5px 8px", textAlign: "right", fontWeight: 600, color: C.textLight, fontSize: 10, borderBottom: `1px solid ${C.border}` }}>Rép</th>
+                                  <thead><tr style={{ background: "#FAFAF8" }}>
+                                    <th style={{ padding: "5px 8px", textAlign: "left", fontWeight: 600, color: "#1A3C2E44", fontSize: 10, borderBottom: `1px solid ${C.border}` }}>URL</th>
+                                    <th style={{ padding: "5px 8px", textAlign: "right", fontWeight: 600, color: "#1A3C2E44", fontSize: 10, borderBottom: `1px solid ${C.border}` }}>Src</th>
+                                    <th style={{ padding: "5px 8px", textAlign: "right", fontWeight: 600, color: "#1A3C2E44", fontSize: 10, borderBottom: `1px solid ${C.border}` }}>Rép</th>
                                   </tr></thead>
                                   <tbody>
                                     {fanoutBrandUrls.length === 0
-                                      ? <tr><td colSpan={3} style={{ padding: "8px", color: C.textLight, fontStyle: "italic" }}>Aucune URL marque dans les fan-outs</td></tr>
+                                      ? <tr><td colSpan={3} style={{ padding: "8px", color: "#1A3C2E44", fontStyle: "italic" }}>Aucune URL marque dans les fan-outs</td></tr>
                                       : fanoutBrandUrls.map((u, i) => (
                                         <tr key={i} style={{ borderBottom: `1px solid ${C.borderLight}` }}>
-                                          <td style={{ padding: "5px 8px", wordBreak: "break-all", color: "#2563EB" }}>{(u.url || "").replace(/^https?:\/\/[^/]+/, "") || "/"}</td>
-                                          <td style={{ padding: "5px 8px", textAlign: "right", fontWeight: 700, color: "#059669" }}>{u.count_as_source}</td>
+                                          <td style={{ padding: "5px 8px", wordBreak: "break-all", color: "#1A3C2E" }}>{(u.url || "").replace(/^https?:\/\/[^/]+/, "") || "/"}</td>
+                                          <td style={{ padding: "5px 8px", textAlign: "right", fontWeight: 700, color: "#1A7A4A" }}>{u.count_as_source}</td>
                                           <td style={{ padding: "5px 8px", textAlign: "right", fontWeight: 700 }}>{u.count_in_answer}</td>
                                         </tr>
                                     ))}
@@ -2264,25 +2257,25 @@ export default function GeoAuditTab({
                     sub="Corrélation entre vos performances SEO organiques et votre visibilité dans les Fan-outs LLM">
                     <div style={{ display: "grid", gridTemplateColumns: hasGSC ? "1fr 1fr" : "1fr", gap: 20 }}>
                       <div>
-                        <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>État actuel</div>
+                        <div style={{ fontSize: 11, fontWeight: 500, color: "#1A3C2E44", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>État actuel</div>
                         {hasGSC ? (<>
-                          <Signal label="Clics GSC totaux" value={gscClicks >= 1000 ? (gscClicks/1000).toFixed(1)+"k" : String(gscClicks)} color="#2563EB" />
-                          <Signal label="Position moy. GSC" value={gscAvgPos || "—"} note="toutes pages" color="#2563EB" />
-                          <Signal label="Présence GEO" value={`${geoPct}%`} note={`${audit.withBrand}/${total2} fan-outs`} color={geoPct >= 50 ? "#059669" : "#DC2626"} />
-                          {avgPos2 && <Signal label="Position moy. fan-out" value={avgPos2} note="dans les listes LLM" color="#7C3AED" />}
-                        </>) : <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>Importez un export GSC dans ⚙️ Setup</div>}
+                          <Signal label="Clics GSC totaux" value={gscClicks >= 1000 ? (gscClicks/1000).toFixed(1)+"k" : String(gscClicks)} color="#1A3C2E" />
+                          <Signal label="Position moy. GSC" value={gscAvgPos || "—"} note="toutes pages" color="#1A3C2E" />
+                          <Signal label="Présence GEO" value={`${geoPct}%`} note={`${audit.withBrand}/${total2} fan-outs`} color={geoPct >= 50 ? "#1A7A4A" : "#DC2626"} />
+                          {avgPos2 && <Signal label="Position moy. fan-out" value={avgPos2} note="dans les listes LLM" color="#1A3C2E" />}
+                        </>) : <div style={{ fontSize: 11, color: "#1A3C2E44", fontStyle: "italic" }}>Importez un export GSC dans ⚙️ Setup</div>}
                       </div>
                       <div>
-                        <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>Interprétation</div>
+                        <div style={{ fontSize: 11, fontWeight: 500, color: "#1A3C2E44", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>Interprétation</div>
                         {hasGSC ? (
-                          <div style={{ fontSize: 12, color: C.textMid, lineHeight: 1.7 }}>
+                          <div style={{ fontSize: 12, color: "#1A3C2E77", lineHeight: 1.7 }}>
                             {gscAvgPos && parseFloat(gscAvgPos) <= 10 && geoPct < 30
                               ? "Paradoxe SEO/GEO : bonne position organique mais faible présence GEO. Restructurez le contenu pour répondre directement aux questions de recommandation."
                               : gscAvgPos && parseFloat(gscAvgPos) <= 10 && geoPct >= 50
                               ? "Corrélation positive SEO/GEO : la forte autorité SEO se traduit en présence GEO."
                               : "Améliorer le SEO on-page renforcera la visibilité GEO via l'autorité accrue."}
                           </div>
-                        ) : <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>—</div>}
+                        ) : <div style={{ fontSize: 11, color: "#1A3C2E44", fontStyle: "italic" }}>—</div>}
                       </div>
                     </div>
                   </CrossCard>
@@ -2304,9 +2297,9 @@ export default function GeoAuditTab({
                             .map(c => ({ dim: row.dim.label, kpi: c.kpi.label, src: "bing", value: c.value }))
                         );
                         const SRC_LABELS = {
-                          gsc:    { label: "SF × GSC",      color: "#2563EB" },
-                          bing:   { label: "SF × Bing AI",  color: "#7C3AED" },
-                          fanout: { label: "SF × Fan-outs", color: "#059669" },
+                          gsc:    { label: "SF × GSC",      color: "#1A3C2E" },
+                          bing:   { label: "SF × Bing AI",  color: "#1A3C2E" },
+                          fanout: { label: "SF × Fan-outs", color: "#1A7A4A" },
                         };
                         const allCorrs = (sfCorrFilter === "gsc" ? gscCorrsAll : sfCorrFilter === "bing" ? bingCorrs : sfCorrFilter === "fanout" ? fanoutCorrs : [...fanoutCorrs, ...gscCorrsAll, ...bingCorrs])
                           .sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
@@ -2315,9 +2308,9 @@ export default function GeoAuditTab({
                         return (
                           <div>
                             <div style={{ marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
-                              <span style={{ fontSize: 11, color: C.textLight, fontWeight: 600 }}>Croisement :</span>
+                              <span style={{ fontSize: 11, color: "#1A3C2E44", fontWeight: 600 }}>Croisement :</span>
                               <select value={sfCorrFilter} onChange={e => setSfCorrFilter(e.target.value)}
-                                style={{ fontSize: 12, padding: "5px 10px", border: `1px solid ${C.border}`, borderRadius: 7, background: C.white, cursor: "pointer", fontWeight: 600 }}>
+                                style={{ fontSize: 12, padding: "5px 10px", border: "0.5px solid #1A3C2E0D", borderRadius: 7, background: "#fff", cursor: "pointer", fontWeight: 600 }}>
                                 <option value="all">Tous les croisements</option>
                                 <option value="gsc">SF × GSC</option>
                                 <option value="bing">SF × Bing AI</option>
@@ -2325,15 +2318,15 @@ export default function GeoAuditTab({
                               </select>
                             </div>
                             {allCorrs.length === 0 ? (
-                              <div style={{ fontSize: 11, color: C.textLight, fontStyle: "italic" }}>
+                              <div style={{ fontSize: 11, color: "#1A3C2E44", fontStyle: "italic" }}>
                                 Importez un CSV Screaming Frog et interrogez plus de questions pour calculer les corrélations.
                               </div>
                             ) : (
                           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                             <thead>
-                              <tr style={{ background: C.bg }}>
+                              <tr style={{ background: "#FAFAF8" }}>
                                 {["Dimension SF", "KPI", "Type", "Corrélation"].map(h => (
-                                  <th key={h} style={{ padding: "7px 12px", textAlign: "left", fontWeight: 600, fontSize: 10, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.5, borderBottom: `1px solid ${C.border}` }}>{h}</th>
+                                  <th key={h} style={{ padding: "7px 12px", textAlign: "left", fontWeight: 600, fontSize: 10, color: "#1A3C2E44", textTransform: "uppercase", letterSpacing: 0.5, borderBottom: `1px solid ${C.border}` }}>{h}</th>
                                 ))}
                               </tr>
                             </thead>
@@ -2341,16 +2334,16 @@ export default function GeoAuditTab({
                               {allCorrs.map((c, i) => {
                                 const pos = c.value > 0;
                                 const strong = Math.abs(c.value) >= 0.4;
-                                const srcDef = SRC_LABELS[c.src] || { label: c.src, color: C.textMid };
+                                const srcDef = SRC_LABELS[c.src] || { label: c.src, color: "#1A3C2E77" };
                                 return (
                                   <tr key={i} style={{ borderBottom: `1px solid ${C.borderLight}` }}>
-                                    <td style={{ padding: "7px 12px", color: C.text }}>{c.dim}</td>
-                                    <td style={{ padding: "7px 12px", color: C.textMid }}>{c.kpi}</td>
+                                    <td style={{ padding: "7px 12px", color: "#1A3C2E" }}>{c.dim}</td>
+                                    <td style={{ padding: "7px 12px", color: "#1A3C2E77" }}>{c.kpi}</td>
                                     <td style={{ padding: "7px 12px" }}>
                                       <span style={{ fontSize: 10, fontWeight: 700, color: srcDef.color, background: srcDef.color + "15", borderRadius: 4, padding: "1px 6px" }}>{srcDef.label}</span>
                                     </td>
                                     <td style={{ padding: "7px 12px" }}>
-                                      <span style={{ fontSize: 12, fontWeight: strong ? 700 : 500, color: pos ? "#059669" : "#DC2626", background: pos ? "#ECFDF5" : "#FEF2F2", borderRadius: 5, padding: "2px 10px" }}>
+                                      <span style={{ fontSize: 12, fontWeight: strong ? 700 : 500, color: pos ? "#1A7A4A" : "#DC2626", background: pos ? "#F0F7F3" : "#FEF2F2", borderRadius: 5, padding: "2px 10px" }}>
                                         {pos ? "▲" : "▼"} r={c.value.toFixed(2)}
                                       </span>
                                     </td>
@@ -2376,27 +2369,24 @@ export default function GeoAuditTab({
             {/* ══════════════════════════════════════════════════════
                 BLOC 6 — PLAN D'ACTION
             ══════════════════════════════════════════════════════ */}
-            <Section icon="🎯" title="Plan d'action" sub="Recommandations data, analyses IA et graphique concurrentiel" accent={C.green}>
+            <Section title="Plan d'action" sub="Recommandations prioritaires et analyse IA">
 
-              {/* B8 — Pistes prioritaires globales avec renderBold */}
-              <div style={{ marginBottom: 24 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>Pistes prioritaires</div>
+              {/* Pistes prioritaires — style épuré */}
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E44", marginBottom: 10 }}>Pistes prioritaires</div>
                 {audit.leads.map((l, i) => {
-                  const borderColor = l.priority.includes("🔴") ? "#DC2626" : l.priority.includes("🟠") ? "#D97706" : l.priority.includes("🟡") ? "#CA8A04" : C.green;
-                  const bgColor     = l.priority.includes("🔴") ? "#FEF2F2"  : l.priority.includes("🟠") ? "#FDF5E6"  : l.priority.includes("🟡") ? "#FEFCE8"  : "#EAF0EC";
+                  const accentColor = l.priority.includes("🔴") ? "#C0352A" : l.priority.includes("🟠") ? "#C97820" : l.priority.includes("🟡") ? "#C97820" : "#1A7A4A";
                   return (
-                    <div key={i} style={{ padding: "10px 14px", borderLeft: `3px solid ${borderColor}`, background: bgColor, borderRadius: "0 8px 8px 0", marginBottom: 8 }}>
-                      <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 3 }}>{l.priority} — {l.label}</div>
-                      <div style={{ fontSize: 12, color: C.textMid, lineHeight: 1.6 }}>{renderBold(l.action)}</div>
+                    <div key={i} style={{ paddingLeft: 12, borderLeft: `2px solid ${accentColor}22`, marginBottom: 10 }}>
+                      <div style={{ fontSize: 10, fontWeight: 600, color: accentColor, marginBottom: 2, letterSpacing: "0.04em" }}>{l.label}</div>
+                      <div style={{ fontSize: 12, color: "#1A3C2E", lineHeight: 1.65 }}>{renderBold(l.action)}</div>
                     </div>
                   );
                 })}
               </div>
 
-              {/* B9 — Analyse IA détaillée */}
-              <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 12, padding: "16px 20px" }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 4 }}>✦ Analyse IA détaillée</div>
-                <div style={{ fontSize: 11, color: C.textLight, marginBottom: 12 }}>Interprétation contextuelle complète générée par Claude</div>
+              {/* Analyse IA */}
+              <div style={{ paddingTop: 16, borderTop: "0.5px solid #1A3C2E0C" }}>
                 <AIAnalysis audit={audit} brand={brand} site={site} questions={siteQuestions} onTextReady={setAiText} />
               </div>
             </Section>
