@@ -1111,11 +1111,11 @@ function CorrelationMatrix({ corrMatrix, metrics, sfData, bingData, gscData, res
     { key: "bing",    label: "Bing",           available: Object.keys(bingData || {}).length > 0 },
   ];
 
-  const [srcA, setSrcA] = React.useState("sf");
-  const [srcB, setSrcB] = React.useState("fanout");
+  const [srcA, setSrcA] = useState("sf");
+  const [srcB, setSrcB] = useState("fanout");
 
   // ── Calculer la matrice selon les 2 sources choisies ─────────
-  const matrix = React.useMemo(() => {
+  const matrix = useMemo(() => {
     // KPIs Fan-outs par question
     const geoKpis = {};
     results.forEach(r => {
