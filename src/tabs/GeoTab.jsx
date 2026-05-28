@@ -2992,15 +2992,15 @@ ${question}`;
   return (
     <div>
       {/* ── GEO Analysis ── */}
-      <GeoAnalysis
+      <div data-tour="geo-analysis"><GeoAnalysis
         questions={questions}
         results={results}
         brand={brand}
         claudeKey={providerKeysRef.current["claude"]?.dec || ""}
-      />
+      /></div>
 
       {/* ── Stats header (filtered) ── */}
-      <StatsHeader questions={filtered} results={filteredResults} brandName={brand_name} qualifiedCompetitors={competitors.filter(c => c.enabled !== false)} />
+      <div data-tour="stats-header"><StatsHeader questions={filtered} results={filteredResults} brandName={brand_name} qualifiedCompetitors={competitors.filter(c => c.enabled !== false)} /></div>
 
       {/* ══════════════════════════════════════════════════════
            ZONE AJOUT + FILTRES + ACTIONS
@@ -3103,7 +3103,7 @@ ${question}`;
         <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
 
           {/* Providers — pills */}
-          <div className="geo-provider-pills">
+          <div className="geo-provider-pills" data-tour="provider-pills">
           {PROVIDERS.map(p => {
             const active = filterProviders.includes(p.id);
             const hasKey = !!providerKeys[p.id]?.dec;
@@ -3153,7 +3153,7 @@ ${question}`;
           </button>
 
           {/* Export */}
-          <ExportFanoutBtn
+          <span data-tour="export-btn"><ExportFanoutBtn
             questions={filtered}
             results={results}
             brandName={brand?.brand_name || ""}
@@ -3164,11 +3164,13 @@ ${question}`;
             latestResultByQ={latestResultByQ}
             lostByQ={lostByQ}
           />
+          </span>
 
           {/* Lancer tout */}
           {!isReadOnly && (
             <>
               <button
+                data-tour="run-all"
                 onClick={runAllQuestions}
                 disabled={runAll || toRunCount === 0}
                 className={`gt-btn ${toRunCount > 0 ? "gt-btn--solid" : "gt-btn--ghost"}`}
@@ -4441,27 +4443,66 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
 
   const GEO_TOUR_STEPS = [
     {
-      target: "subnav", icon: "🧭", title: "Navigation Fan-outs",
-      desc: "5 onglets structurent l'analyse : Mots-clés, Questions, Concurrents, Automatisation et Sources.",
-      tip: "Commencez par les Mots-clés.", position: "bottom",
+      target: "subnav",
+      icon: "🧭",
+      title: "Navigation Fan-outs",
+      desc: "5 onglets pour piloter votre analyse GEO : Mots-clés → génération des questions, Questions → interrogation des LLMs, Concurrents → qualification, Automatisation → planifier les runs, Sources → URLs citées.",
+      tip: "Démarrez toujours par ajouter vos mots-clés cibles.",
+      position: "bottom",
       onActivate: () => { setMainTab("analyse"); setSubTab("keywords"); },
     },
     {
-      target: "keywords-section", icon: "🔑", title: "Mots-clés",
-      desc: "Saisissez vos requêtes cibles (une par ligne) ou importez un CSV. Générez les questions avec OpenAI.",
-      tip: "Commencez par 5–10 mots-clés stratégiques.", position: "bottom",
+      target: "keywords-section",
+      icon: "🔑",
+      title: "Mots-clés",
+      desc: "Saisissez vos requêtes cibles (une par ligne) puis cliquez 'Générer toutes les questions'. L'IA crée automatiquement plusieurs questions par axe (meilleur, pistes, avis, objectif…). Import CSV possible.",
+      tip: "5-10 mots-clés suffisent pour commencer. Ajoutez des volumes via Semrush.",
+      position: "bottom",
       onActivate: () => { setMainTab("analyse"); setSubTab("keywords"); },
     },
     {
-      target: "stats-header", icon: "📊", title: "Tableau de bord de présence",
-      desc: "% de présence marque, position moyenne, concurrents détectés. Se met à jour après chaque interrogation.",
-      tip: "Filtrez par provider pour analyser les tendances.", position: "bottom",
+      target: "stats-header",
+      icon: "📊",
+      title: "Tableau de bord de présence",
+      desc: "3 métriques clés : Mention (dans un top numéroté LLM), Évocation (dans le corps du texte) et Citation (dans les sources). Se met à jour en temps réel après chaque interrogation.",
+      tip: "Filtrez par provider pour comparer OpenAI, Gemini, Perplexity et Claude.",
+      position: "bottom",
       onActivate: () => { setMainTab("analyse"); setSubTab("questions"); },
     },
     {
-      target: "run-all", icon: "▶", title: "Lancer les interrogations",
-      desc: "Interroge uniquement les questions sans réponse aujourd'hui. ↺ force le rechargement total.",
-      tip: "L'historique est consultable dans l'Audit GEO.", position: "top",
+      target: "provider-pills",
+      icon: "🤖",
+      title: "Filtres providers",
+      desc: "Activez ou désactivez chaque provider pour filtrer l'affichage. Les pills sans clé configurée sont grisées. Configurez vos clés dans l'onglet 'Configuration'.",
+      tip: "Perplexity et Gemini ont un accès web en temps réel — utile pour les requêtes récentes.",
+      position: "bottom",
+      onActivate: () => { setMainTab("analyse"); setSubTab("questions"); },
+    },
+    {
+      target: "run-all",
+      icon: "▶",
+      title: "Lancer les interrogations",
+      desc: "Lance toutes les questions non encore interrogées aujourd'hui. Le bouton ▶ individuel force le rechargement pour une question. Un 💡 Hint GEO peut être généré pour chaque question sans présence.",
+      tip: "Les résultats sont sauvegardés automatiquement dans Supabase — consultez l'Audit GEO pour l'historique.",
+      position: "top",
+      onActivate: () => { setMainTab("analyse"); setSubTab("questions"); },
+    },
+    {
+      target: "export-btn",
+      icon: "📤",
+      title: "Export CSV / PDF",
+      desc: "Exportez les questions avec présence marque, les favoris ou toutes les questions. Filtrez par provider. Le PDF génère un rapport mis en page avec chiffres clés, concurrents et hints GEO.",
+      tip: "Générez les 💡 Hints avant le PDF pour un rapport plus actionnable.",
+      position: "top",
+      onActivate: () => { setMainTab("analyse"); setSubTab("questions"); },
+    },
+    {
+      target: "geo-analysis",
+      icon: "✦",
+      title: "Analyse GEO par IA",
+      desc: "Claude analyse vos données de présence et produit 4 sections actionnables : État des lieux, Maillage interne à créer, Pages à adapter, URLs concurrentes à surveiller.",
+      tip: "Relancez l'analyse après chaque série d'interrogations pour des recommandations à jour.",
+      position: "bottom",
       onActivate: () => { setMainTab("analyse"); setSubTab("questions"); },
     },
   ];
