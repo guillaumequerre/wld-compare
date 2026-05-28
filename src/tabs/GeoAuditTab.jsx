@@ -715,7 +715,6 @@ function computeAudit(questions, results, urlIndex, brand, site, calendarEntries
   });
 
   const hasResult = (q) => results.some(r => r.question_id === q.id);
-  const hasBrand    = (q) => results.some(r => r.question_id === q.id && (r.brand_mentioned === true || r.brand_mentioned === 1));
   // hasMention : présence dans un top numéroté — même logique que getPresType("ranked")
   const hasMention  = (q) => results.some(r => r.question_id === q.id && (
     r.brand_mention_position != null ||

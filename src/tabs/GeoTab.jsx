@@ -732,7 +732,8 @@ function getProviderId(model) {
 
 async function callProvider(provider, apiKey, prompt) {
   if (provider.id === "openai") {
-    const res = await fetch("/api/openai", {
+    // Tentative 1 : Responses API avec web_search (Tier 1+)
+    const resA = await fetch("/api/openai", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Openai-Key": apiKey, "X-Openai-Endpoint": "responses" },
       body: JSON.stringify({
@@ -740,14 +741,37 @@ async function callProvider(provider, apiKey, prompt) {
         input: prompt,
         tools: [{ type: "web_search_preview", search_context_size: "high" }],
         max_output_tokens: 8000,
-        // No JSON schema — free text response so web search annotations contain real URLs
+      }),
+    });
+    const rawA = await resA.text();
+    // Si proxy manquant ou réponse HTML → fallback direct
+    if (!rawA.trimStart().startsWith("<") && resA.ok) {
+      try {
+        const dataA = JSON.parse(rawA);
+        return parseOpenAIResponse(dataA, "responses");
+      } catch {}
+    }
+    // Tentative 2 : fallback Chat Completions (Tier 0, toujours disponible)
+    const errStatusA = resA.status;
+    const res = await fetch("/api/openai", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Openai-Key": apiKey, "X-Openai-Endpoint": "completions" },
+      body: JSON.stringify({
+        model: provider.model,
+        messages: [{ role: "system", content: "Tu es un expert en recommandation d'entreprises et prestataires. Réponds directement et factuellement." }, { role: "user", content: prompt }],
+        temperature: 0.7,
+        max_tokens: 2000,
       }),
     });
     const raw = await res.text();
-    if (raw.trimStart().startsWith("<")) throw new Error("Proxy /api/openai introuvable");
+    if (raw.trimStart().startsWith("<")) throw new Error(`Proxy /api/openai introuvable (responses: ${errStatusA})`);
     const data = JSON.parse(raw);
-    if (!res.ok) throw new Error(data.error?.message || `OpenAI ${res.status}`);
-    return parseOpenAIResponse(data, "responses");
+    if (!res.ok) {
+      const msg = data?.error?.message || `OpenAI ${res.status}`;
+      const hint = res.status === 429 ? " — quota dépassé, vérifiez votre plan" : res.status === 401 ? " — clé invalide" : "";
+      throw new Error(msg + hint);
+    }
+    return parseOpenAIResponse(data, "completions");
   }
 
   if (provider.id === "gemini") {
@@ -2180,7 +2204,7 @@ function HintPanelQuestion({ questionId, question, sources, brandName, brandAlia
 
 // ── ProviderRow — calendar + info + accordion + run button ────────
 
-function ProviderRow({ provider, results, brandName, brandAliases, brandDomain = "", hasKey, isRunning, onRun, questionId, newCalEntry = null, question = "", claudeKey = "", projectId = null, siteId = null, savedHint = "", brandTerms = [], competitorMap = {}, lastCalDate = null, isReadOnly = false }) {
+function ProviderRow({ provider, results, brandName, brandAliases, brandDomain = "", hasKey, isRunning, onRun, questionId, newCalEntry = null, question = "", claudeKey = "", projectId = null, siteId = null, savedHint = "", brandTerms = [], competitorMap = {}, lastCalDate = null, isReadOnly = false, errorMsg = null }) {
   const [open, setOpen] = useState(false);
   const p = provider;
 
@@ -2253,6 +2277,12 @@ function ProviderRow({ provider, results, brandName, brandAliases, brandDomain =
           <span className="gt-mono">{(result.input_tokens||0)+(result.output_tokens||0)} tok</span>
         )}
 
+        {/* Message d'erreur provider */}
+        {errorMsg && (
+          <span style={{ fontSize: 10, color: "#C0352A", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={errorMsg}>
+            ⚠ {errorMsg.slice(0, 60)}{errorMsg.length > 60 ? "…" : ""}
+          </span>
+        )}
         {/* Bouton run */}
         {hasKey && !isReadOnly && (
           <button
@@ -2561,6 +2591,8 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, setCa
   const setFilterSearch     = (v) => { setFilterSearchRaw(v);     persistFilters({ filterSearch: v }); };
   const setFilterProviders  = (v) => { setFilterProvidersRaw(v);  persistFilters({ filterProviders: v }); };
   const [running, setRunning]       = useState({});
+  const [providerErrors, setProviderErrors] = useState({}); // { "qId-pid": errorMsg }
+  const [providerErrors, setProviderErrors] = useState({}); // { "qId-pid": errorMsg }
   const [runAll, setRunAll]         = useState(false);
   const stopAllRef = useRef(false);
   // Refs so callbacks always read current values without stale closure issues
@@ -2805,7 +2837,13 @@ ${question}`;
       setQuestions(prev => prev.map(qq => qq.id === q.id ? { ...qq, ...cachePatch } : qq));
       // Notify parent for global stats (non-blocking)
       onResultSaved?.();
-    } catch(e) { console.error(`runProvider ${provider.id} error:`, e); }
+    } catch(e) {
+      console.error(`runProvider ${provider.id} error:`, e);
+      // Afficher l'erreur dans l'UI (badge rouge sur la ligne provider)
+      setProviderErrors(prev => ({ ...prev, [`${q.id}-${provider.id}`]: e.message }));
+      // Auto-clear après 30s
+      setTimeout(() => setProviderErrors(prev => { const n = {...prev}; delete n[`${q.id}-${provider.id}`]; return n; }), 30000);
+    }
     setRunning(r => ({ ...r, [`${q.id}-${provider.id}`]: false }));
   }, [brand, projectId, site?.id, providerKeys, onResultSaved]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -3225,7 +3263,13 @@ ${question}`;
                       style={{ padding: "3px 8px", border: "0.5px solid #1A3C2E18", borderRadius: 20, background: "transparent", color: "#1A3C2E55", fontSize: 12, cursor: "pointer", fontWeight: 400 }}
                       title="Modifier">✎</button>
                     <button
-                      onClick={() => { const toRun = getProvidersToRun(q, true); if (!toRun.length) return; toRun.forEach(p => runProvider(q, p)); }}
+                      onClick={() => {
+                        const toRun = getProvidersToRun(q, true);
+                        if (!toRun.length) return;
+                        // Clear erreurs avant retry
+                        toRun.forEach(p => setProviderErrors(prev => { const n={...prev}; delete n[`${q.id}-${p.id}`]; return n; }));
+                        toRun.forEach(p => runProvider(q, p));
+                      }}
                       disabled={isRunning}
                       title="Lancer tous les providers"
                       style={{ padding: "4px 16px", border: "0.5px solid #1A3C2E33", borderRadius: 20, background: "transparent", color: "#1A3C2E", fontSize: 11, fontWeight: 500, cursor: isRunning ? "wait" : "pointer", opacity: isRunning ? 0.35 : 1, letterSpacing: "0.02em", transition: "opacity 0.2s" }}>
@@ -3260,6 +3304,7 @@ ${question}`;
                         siteId={site?.id}
                         savedHint={hintsMap[q.id]?.text || ""}
                         savedHintDate={hintsMap[q.id]?.date || null}
+                        errorMsg={providerErrors[`${q.id}-${p.id}`] || null}
                       />
                     );
                   })}
