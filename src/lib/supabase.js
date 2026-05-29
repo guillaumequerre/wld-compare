@@ -1,12 +1,76 @@
 const PROXY = "/api/supabase";
 
-function authHeaders(extra = {}) {
+// ── Lecture du token stocké ───────────────────────────────────────
+function _getStoredToken() {
   try {
     const s = sessionStorage.getItem("correl_session") || localStorage.getItem("correl_session");
-    const token = s ? JSON.parse(s).access_token : null;
-    if (token) return { "Authorization": `Bearer ${token}`, ...extra };
-  } catch {}
+    const sess = s ? JSON.parse(s) : null;
+    return { token: sess?.access_token || null, refreshToken: sess?.refresh_token || null, sess };
+  } catch { return { token: null, refreshToken: null, sess: null }; }
+}
+
+// ── Rafraîchir le token si expiré ────────────────────────────────
+async function _refreshToken() {
+  const { refreshToken } = _getStoredToken();
+  if (!refreshToken) return null;
+  try {
+    const res = await fetch("/api/auth?action=refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    });
+    if (!res.ok) {
+      // Refresh échoué → effacer la session
+      sessionStorage.removeItem("correl_session");
+      localStorage.removeItem("correl_session");
+      return null;
+    }
+    const data = await res.json();
+    const newSess = {
+      access_token:  data.access_token,
+      refresh_token: data.refresh_token,
+      user:          data.user,
+    };
+    // Stocker la nouvelle session
+    try {
+      const stored = sessionStorage.getItem("correl_session") || localStorage.getItem("correl_session");
+      const old = stored ? JSON.parse(stored) : {};
+      const merged = { ...old, ...newSess };
+      sessionStorage.setItem("correl_session", JSON.stringify(merged));
+      localStorage.setItem("correl_session", JSON.stringify(merged));
+    } catch {}
+    return data.access_token;
+  } catch { return null; }
+}
+
+// ── authHeaders (synchrone, compatibilité ascendante) ────────────
+function authHeaders(extra = {}) {
+  const { token } = _getStoredToken();
+  if (token) return { "Authorization": `Bearer ${token}`, ...extra };
   return extra;
+}
+
+// ── fetchSupabase : fetch avec retry automatique sur 401 ──────────
+async function fetchSupabase(url, options = {}) {
+  let { token } = _getStoredToken();
+  const makeHeaders = (t) => {
+    const base = { ...(options.headers || {}) };
+    if (t) base["Authorization"] = `Bearer ${t}`;
+    return base;
+  };
+  // Tentative 1
+  let res = await fetch(url, { ...options, headers: makeHeaders(token) });
+  if (res.status !== 401) return res;
+  // 401 → tenter un refresh
+  const newToken = await _refreshToken();
+  if (!newToken) {
+    // Pas de refresh possible → déclencher un rechargement pour forcer la reconnexion
+    window.dispatchEvent(new CustomEvent("supabase:session-expired"));
+    return res; // retourner le 401 original
+  }
+  // Tentative 2 avec le nouveau token
+  res = await fetch(url, { ...options, headers: makeHeaders(newToken) });
+  return res;
 }
 
 
@@ -41,7 +105,7 @@ export async function sbUpload(path, csvText) {
 
 export async function sbInsertImport({ project_id, site_id, source, filename, storage_path, row_count }) {
   // UPSERT: 1 row max per (project_id, site_id, source) — replaces previous
-  const res = await fetch(`${PROXY}/rest/v1/imports`, {
+  const res = await fetchSupabase(`${PROXY}/rest/v1/imports`, {
     method: "POST",
     headers: {
       ...authHeaders(),
@@ -55,7 +119,7 @@ export async function sbInsertImport({ project_id, site_id, source, filename, st
     const body = await res.text().catch(() => "");
     // 409 = contrainte unique non configurée en DB → fallback ignore-duplicates
     if (res.status === 409) {
-      const res2 = await fetch(`${PROXY}/rest/v1/imports`, {
+      const res2 = await fetchSupabase(`${PROXY}/rest/v1/imports`, {
         method: "POST",
         headers: {
           ...authHeaders(),
@@ -75,12 +139,12 @@ export async function sbInsertImport({ project_id, site_id, source, filename, st
 }
 
 export async function sbDeleteImport(id) {
-  const res = await fetch(`${PROXY}/rest/v1/imports?id=eq.${id}`, { method: "DELETE", headers: authHeaders() });
+  const res = await fetchSupabase(`${PROXY}/rest/v1/imports?id=eq.${id}`, { method: "DELETE", headers: authHeaders() });
   if (!res.ok) throw new Error(`Delete import failed: ${res.status}`);
 }
 
 export async function sbDeleteFile(storage_path) {
-  const res = await fetch(`${PROXY}/storage/v1/object/csv-imports/${storage_path}`, { method: "DELETE", headers: authHeaders() });
+  const res = await fetchSupabase(`${PROXY}/storage/v1/object/csv-imports/${storage_path}`, { method: "DELETE", headers: authHeaders() });
   if (!res.ok) throw new Error(`Delete file failed: ${res.status}`);
 }
 
@@ -119,7 +183,7 @@ export async function sbDownload(storage_path) {
 }
 
 export async function sbSaveProject(project) {
-  const res = await fetch(`${PROXY}/rest/v1/projects`, {
+  const res = await fetchSupabase(`${PROXY}/rest/v1/projects`, {
     method: "POST",
     headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
     body: JSON.stringify({ id: project.id, name: project.name, owner_email: project.owner_email || null,
@@ -142,12 +206,12 @@ export async function sbLoadProjects() {
 }
 
 export async function sbDeleteProject(projectId) {
-  await fetch(`${PROXY}/rest/v1/projects?id=eq.${encodeURIComponent(projectId)}`, { method: "DELETE", headers: authHeaders() });
+  await fetchSupabase(`${PROXY}/rest/v1/projects?id=eq.${encodeURIComponent(projectId)}`, { method: "DELETE", headers: authHeaders() });
 }
 
 // ── ANALYSES ─────────────────────────────────────────────────────
 export async function sbSaveAnalysis({ id, project_id, content }) {
-  const res = await fetch(`${PROXY}/rest/v1/analyses`, {
+  const res = await fetchSupabase(`${PROXY}/rest/v1/analyses`, {
     method: "POST",
     headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
     body: JSON.stringify({ id, project_id, content }),
@@ -166,7 +230,7 @@ export async function sbGetLatestAnalysis(project_id) {
 // ── RECOMMENDATIONS ───────────────────────────────────────────────
 export async function sbSaveRecommendations(recs) {
   if (!recs.length) return;
-  const res = await fetch(`${PROXY}/rest/v1/recommendations`, {
+  const res = await fetchSupabase(`${PROXY}/rest/v1/recommendations`, {
     method: "POST",
     headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
     body: JSON.stringify(recs),
@@ -182,7 +246,7 @@ export async function sbGetRecommendations(project_id) {
 }
 
 export async function sbUpdateRecommendation(id, patch) {
-  const res = await fetch(`${PROXY}/rest/v1/recommendations?id=eq.${encodeURIComponent(id)}`, {
+  const res = await fetchSupabase(`${PROXY}/rest/v1/recommendations?id=eq.${encodeURIComponent(id)}`, {
     method: "PATCH",
     headers: { ...authHeaders(), "Content-Type": "application/json" },
     body: JSON.stringify(patch),
@@ -193,7 +257,7 @@ export async function sbUpdateRecommendation(id, patch) {
 // ── PAGE TYPES ───────────────────────────────────────────────────
 export async function sbSavePageTypes(rows) {
   if (!rows.length) return;
-  const res = await fetch(`${PROXY}/rest/v1/page_types`, {
+  const res = await fetchSupabase(`${PROXY}/rest/v1/page_types`, {
     method: "POST",
     headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates" },
     body: JSON.stringify(rows),
@@ -213,7 +277,7 @@ export async function sbGetPageTypes(project_id, site_id) {
 
 export async function sbDeletePageTypes(project_id, site_id) {
   const params = new URLSearchParams({ project_id: `eq.${project_id}`, site_id: `eq.${site_id}` });
-  const res = await fetch(`${PROXY}/rest/v1/page_types?${params}`, {
+  const res = await fetchSupabase(`${PROXY}/rest/v1/page_types?${params}`, {
     method: "DELETE",
     headers: { ...authHeaders(), "Content-Type": "application/json" },
   });
@@ -222,7 +286,7 @@ export async function sbDeletePageTypes(project_id, site_id) {
 
 // ── SNAPSHOTS ─────────────────────────────────────────────────────
 export async function sbSaveSnapshot(snap) {
-  const res = await fetch(`${PROXY}/rest/v1/snapshots`, {
+  const res = await fetchSupabase(`${PROXY}/rest/v1/snapshots`, {
     method: "POST",
     headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
     body: JSON.stringify(snap),
@@ -239,7 +303,7 @@ export async function sbGetSnapshots(project_id, site_id) {
 }
 
 export async function sbDeleteSnapshot(id) {
-  const res = await fetch(`${PROXY}/rest/v1/snapshots?id=eq.${encodeURIComponent(id)}`, {
+  const res = await fetchSupabase(`${PROXY}/rest/v1/snapshots?id=eq.${encodeURIComponent(id)}`, {
     method: "DELETE",
     headers: { ...authHeaders(), "Content-Type": "application/json" },
   });
@@ -248,7 +312,7 @@ export async function sbDeleteSnapshot(id) {
 
 // ── MILESTONES ────────────────────────────────────────────────────
 export async function sbSaveMilestone(m) {
-  const res = await fetch(`${PROXY}/rest/v1/milestones`, {
+  const res = await fetchSupabase(`${PROXY}/rest/v1/milestones`, {
     method: "POST",
     headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "return=representation" },
     body: JSON.stringify(m),
@@ -272,7 +336,7 @@ export async function sbDeleteMilestone(id) {
 }
 
 export async function sbUpdateMilestone(id, patch) {
-  const res = await fetch(`${PROXY}/rest/v1/milestones?id=eq.${encodeURIComponent(id)}`, {
+  const res = await fetchSupabase(`${PROXY}/rest/v1/milestones?id=eq.${encodeURIComponent(id)}`, {
     method: "PATCH",
     headers: { ...authHeaders(), "Content-Type": "application/json" },
     body: JSON.stringify(patch),
@@ -283,7 +347,7 @@ export async function sbUpdateMilestone(id, patch) {
 // ── GEO — BRAND SETTINGS ─────────────────────────────────────────
 
 export async function sbSaveBrand({ project_id, site_id, brand_name, brand_domain, brand_aliases, competitors, context }) {
-  const res = await fetch(`${PROXY}/rest/v1/site_brand`, {
+  const res = await fetchSupabase(`${PROXY}/rest/v1/site_brand`, {
     method: "POST",
     headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
     body: JSON.stringify({ project_id, site_id, brand_name, brand_domain, brand_aliases, competitors, context, updated_at: new Date().toISOString() }),
@@ -302,7 +366,7 @@ export async function sbGetBrand(project_id, site_id) {
 // ── GEO — OPENAI KEY (encrypted) on project ──────────────────────
 
 export async function sbSaveGeoAxes(project_id, axes) {
-  const res = await fetch(`${PROXY}/rest/v1/projects?id=eq.${encodeURIComponent(project_id)}`, {
+  const res = await fetchSupabase(`${PROXY}/rest/v1/projects?id=eq.${encodeURIComponent(project_id)}`, {
     method: "PATCH",
     headers: { ...authHeaders(), "Content-Type": "application/json" },
     body: JSON.stringify({ geo_axes_json: JSON.stringify(axes) }),
@@ -317,7 +381,7 @@ export async function sbSaveKeywords(rows) {
   // Filtre les lignes vides ou invalides
   const valid = rows.filter(r => r.keyword?.trim());
   if (!valid.length) return [];
-  const res = await fetch(`${PROXY}/rest/v1/geo_keywords`, {
+  const res = await fetchSupabase(`${PROXY}/rest/v1/geo_keywords`, {
     method: "POST",
     headers: {
       ...authHeaders(),
@@ -352,7 +416,7 @@ export async function sbUpdateKeywordStatus(id, status) {
 }
 
 export async function sbUpdateKeywordVolume(id, volume, source = "semrush_api") {
-  const res = await fetch(`${PROXY}/rest/v1/geo_keywords?id=eq.${encodeURIComponent(id)}`, {
+  const res = await fetchSupabase(`${PROXY}/rest/v1/geo_keywords?id=eq.${encodeURIComponent(id)}`, {
     method: "PATCH",
     headers: { ...authHeaders(), "Content-Type": "application/json" },
     body: JSON.stringify({ search_volume: volume, volume_source: source, volume_updated_at: new Date().toISOString() }),
@@ -371,7 +435,7 @@ export async function sbSaveQuestions(rows) {
   // Filtre les questions vides
   const valid = rows.filter(r => r.question?.trim());
   if (!valid.length) return [];
-  const res = await fetch(`${PROXY}/rest/v1/geo_questions`, {
+  const res = await fetchSupabase(`${PROXY}/rest/v1/geo_questions`, {
     method: "POST",
     headers: {
       ...authHeaders(),
@@ -385,7 +449,7 @@ export async function sbSaveQuestions(rows) {
     // 409 = contrainte unique — les questions existent déjà, récupérer depuis la base
     if (res.status === 409) {
       const pid = valid[0].project_id; const sid = valid[0].site_id;
-      const res2 = await fetch(`${PROXY}/rest/v1/geo_questions?project_id=eq.${encodeURIComponent(pid)}&site_id=eq.${encodeURIComponent(sid)}&select=*&order=created_at.asc`, { headers: authHeaders() });
+      const res2 = await fetchSupabase(`${PROXY}/rest/v1/geo_questions?project_id=eq.${encodeURIComponent(pid)}&site_id=eq.${encodeURIComponent(sid)}&select=*&order=created_at.asc`, { headers: authHeaders() });
       return res2.ok ? res2.json() : [];
     }
     throw new Error(`Save questions failed: ${res.status} — ${errText.slice(0, 200)}`);
@@ -397,7 +461,7 @@ export async function sbSaveQuestions(rows) {
     const sid = rows[0].site_id;
     const texts = rows.map(r => r.question);
     const qs = encodeURIComponent("(" + texts.map(t => `"${t.replace(/"/g, '\\"')}"`).join(",") + ")");
-    const res2 = await fetch(`${PROXY}/rest/v1/geo_questions?project_id=eq.${encodeURIComponent(pid)}&site_id=eq.${encodeURIComponent(sid)}&question=in.${qs}&select=*`);
+    const res2 = await fetchSupabase(`${PROXY}/rest/v1/geo_questions?project_id=eq.${encodeURIComponent(pid)}&site_id=eq.${encodeURIComponent(sid)}&question=in.${qs}&select=*`);
     if (res2.ok) return res2.json();
   }
   return saved;
@@ -411,7 +475,7 @@ export async function sbGetQuestions(project_id, site_id) {
 
 export async function sbUpdateQuestion(id, patch) {
   if (!id || id.startsWith("tmp-")) return false; // skip optimistic/temp IDs
-  const res = await fetch(`${PROXY}/rest/v1/geo_questions?id=eq.${encodeURIComponent(id)}`, {
+  const res = await fetchSupabase(`${PROXY}/rest/v1/geo_questions?id=eq.${encodeURIComponent(id)}`, {
     method: "PATCH",
     headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "return=representation" },
     body: JSON.stringify(patch),
@@ -452,7 +516,7 @@ export async function sbSaveGeoResult(result) {
     created_at:           result.created_at    || new Date().toISOString(),
   };
 
-  const res = await fetch(`${PROXY}/rest/v1/geo_results`, {
+  const res = await fetchSupabase(`${PROXY}/rest/v1/geo_results`, {
     method: "POST",
     headers: {
       ...authHeaders(),
@@ -503,13 +567,13 @@ export async function sbGetResultsForQuestion(question_id) {
 // ── GEO v2 — CATEGORIES ──────────────────────────────────────────
 
 export async function sbGetCategories(project_id) {
-  const res = await fetch(`${PROXY}/rest/v1/geo_categories?project_id=eq.${encodeURIComponent(project_id)}&order=name.asc`, { headers: authHeaders() });
+  const res = await fetchSupabase(`${PROXY}/rest/v1/geo_categories?project_id=eq.${encodeURIComponent(project_id)}&order=name.asc`, { headers: authHeaders() });
   if (!res.ok) return [];
   return res.json();
 }
 
 export async function sbSaveCategory({ project_id, name, color }) {
-  const res = await fetch(`${PROXY}/rest/v1/geo_categories`, {
+  const res = await fetchSupabase(`${PROXY}/rest/v1/geo_categories`, {
     method: "POST",
     headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
     body: JSON.stringify({ project_id, name, color }),
@@ -520,7 +584,7 @@ export async function sbSaveCategory({ project_id, name, color }) {
 }
 
 export async function sbDeleteCategory(id) {
-  await fetch(`${PROXY}/rest/v1/geo_categories?id=eq.${encodeURIComponent(id)}`, { method: "DELETE", headers: authHeaders() });
+  await fetchSupabase(`${PROXY}/rest/v1/geo_categories?id=eq.${encodeURIComponent(id)}`, { method: "DELETE", headers: authHeaders() });
 }
 
 export async function sbSetKeywordCategory(id, category_id) {
@@ -540,7 +604,7 @@ export async function sbSetQuestionCategory(id, category_id) {
 }
 
 export async function sbSetKeywordTags(id, tags) {
-  const res = await fetch(`${PROXY}/rest/v1/geo_keywords?id=eq.${encodeURIComponent(id)}`, {
+  const res = await fetchSupabase(`${PROXY}/rest/v1/geo_keywords?id=eq.${encodeURIComponent(id)}`, {
     method: "PATCH",
     headers: { ...authHeaders(), "Content-Type": "application/json" },
     body: JSON.stringify({ tags: tags || [] }),
@@ -562,7 +626,7 @@ export async function sbBulkSetKeywordTags(ids, tags) {
 export async function sbBulkSetKeywordCategory(ids, category_id) {
   // Supabase REST: PATCH with in() filter
   const filter = ids.map(id => encodeURIComponent(id)).join(",");
-  await fetch(`${PROXY}/rest/v1/geo_keywords?id=in.(${filter})`, {
+  await fetchSupabase(`${PROXY}/rest/v1/geo_keywords?id=in.(${filter})`, {
     method: "PATCH",
     headers: { ...authHeaders(), "Content-Type": "application/json" },
     body: JSON.stringify({ category_id }),
@@ -571,7 +635,7 @@ export async function sbBulkSetKeywordCategory(ids, category_id) {
 
 export async function sbBulkSetQuestionCategory(ids, category_id) {
   const filter = ids.map(id => encodeURIComponent(id)).join(",");
-  await fetch(`${PROXY}/rest/v1/geo_questions?id=in.(${filter})`, {
+  await fetchSupabase(`${PROXY}/rest/v1/geo_questions?id=in.(${filter})`, {
     method: "PATCH",
     headers: { ...authHeaders(), "Content-Type": "application/json" },
     body: JSON.stringify({ category_id }),
@@ -581,13 +645,13 @@ export async function sbBulkSetQuestionCategory(ids, category_id) {
 // ── GEO v2 — URL INDEX ───────────────────────────────────────────
 
 export async function sbGetUrlIndex(project_id) {
-  const res = await fetch(`${PROXY}/rest/v1/geo_url_index?project_id=eq.${encodeURIComponent(project_id)}&order=count_as_source.desc`, { headers: authHeaders() });
+  const res = await fetchSupabase(`${PROXY}/rest/v1/geo_url_index?project_id=eq.${encodeURIComponent(project_id)}&order=count_as_source.desc`, { headers: authHeaders() });
   if (!res.ok) return [];
   return res.json();
 }
 
 export async function sbUpsertUrl({ project_id, url, domain, count_as_source = 0, count_in_answer = 0 }) {
-  const res = await fetch(`${PROXY}/rest/v1/geo_url_index`, {
+  const res = await fetchSupabase(`${PROXY}/rest/v1/geo_url_index`, {
     method: "POST",
     headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
     body: JSON.stringify({ project_id, url, domain, count_as_source, count_in_answer, updated_at: new Date().toISOString() }),
@@ -621,7 +685,7 @@ export async function sbUpdateUrlMeta(id, patch) {
 }
 
 export async function sbSaveUrlQuestion({ url_id, question_id, result_id, as_source, in_answer }) {
-  await fetch(`${PROXY}/rest/v1/geo_url_question`, {
+  await fetchSupabase(`${PROXY}/rest/v1/geo_url_question`, {
     method: "POST",
     headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates" },
     body: JSON.stringify({ url_id, question_id, result_id, as_source, in_answer }),
@@ -670,7 +734,7 @@ export async function sbGetPresenceHistoryBatch(project_id, site_id) {
 export async function sbAddCalendarEntry(question_id, provider_id, brand_present, presType) {
   // presType: "mention" | "citation" | "evocation" | null
   try {
-    const res = await fetch(`${PROXY}/rest/v1/geo_calendar_dates`, {
+    const res = await fetchSupabase(`${PROXY}/rest/v1/geo_calendar_dates`, {
       method: "POST",
       headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "return=representation" },
       body: JSON.stringify({
@@ -745,7 +809,7 @@ export async function sbGetCalendarEntriesBatch(project_id, site_id) {
 // ── GEO HINTS ────────────────────────────────────────────────────
 
 export async function sbSaveHint(question_id, site_id, project_id, hint_text) {
-  const res = await fetch(`${PROXY}/rest/v1/geo_hints`, {
+  const res = await fetchSupabase(`${PROXY}/rest/v1/geo_hints`, {
     method: "POST",
     headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
     body: JSON.stringify({ question_id, site_id, project_id, hint_text, updated_at: new Date().toISOString() }),
@@ -813,7 +877,7 @@ export async function sbSaveSchedule({ project_id, site_id, owner_email, frequen
     next_run: nextRun.toISOString(),
   };
 
-  const res = await fetch(`${PROXY}/rest/v1/geo_schedules`, {
+  const res = await fetchSupabase(`${PROXY}/rest/v1/geo_schedules`, {
     method: "POST",
     headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
     body: JSON.stringify(payload),
@@ -835,7 +899,7 @@ export async function sbUpdateSchedule(id, patch) {
 }
 
 export async function sbDeleteSchedule(id) {
-  const res = await fetch(`${PROXY}/rest/v1/geo_schedules?id=eq.${encodeURIComponent(id)}`, {
+  const res = await fetchSupabase(`${PROXY}/rest/v1/geo_schedules?id=eq.${encodeURIComponent(id)}`, {
     method: "DELETE",
     headers: authHeaders(),
   });
@@ -872,7 +936,7 @@ export async function sbGetCompetitors(project_id, site_id) {
 }
 
 export async function sbSaveCompetitor({ project_id, site_id, name, domain = "", category = "other", color = "#64748B", enabled = true }) {
-  const res = await fetch(`${PROXY}/rest/v1/geo_competitors`, {
+  const res = await fetchSupabase(`${PROXY}/rest/v1/geo_competitors`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json", "Prefer": "return=representation,resolution=merge-duplicates" }),
     body: JSON.stringify({ project_id, site_id, name, domain, category, color, enabled }),

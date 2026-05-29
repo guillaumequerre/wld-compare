@@ -2561,6 +2561,8 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, setCa
   const [csvImporting, setCsvImporting] = useState(false);
   const csvInputRef = useRef(null);
   const [editingQ, setEditingQ]     = useState(null); // { id, text } — question being edited
+  const [editingKw, setEditingKw]       = useState(null);
+  const [kwInput, setKwInput]           = useState("");
   const [hintsMap, setHintsMap]     = useState({}); // { questionId: hint_text }
   // Filters — persisted per project+site in localStorage
   const filtersKey = `geo_filters_${projectId}_${site?.id}`;
@@ -2724,6 +2726,36 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, setCa
     await sbDeleteQuestion(qId);
     setQuestions(prev => prev.filter(q => q.id !== qId));
     setSelected(prev => { const n = new Set(prev); n.delete(qId); return n; });
+  };
+
+  // ── Assigner ou créer un mot-clé pour une question ─────────────
+  const assignKeyword = async (q, kwName) => {
+    const trimmed = kwName.trim();
+    if (!trimmed) {
+      await sbUpdateQuestion(q.id, { keyword_id: null }).catch(() => {});
+      setQuestions(prev => prev.map(qq => qq.id === q.id ? { ...qq, keyword_id: null } : qq));
+      setEditingKw(null); setKwInput("");
+      return;
+    }
+    const existing = keywords.find(k => k.keyword.toLowerCase() === trimmed.toLowerCase());
+    let kwId;
+    if (existing) {
+      kwId = existing.id;
+    } else {
+      const saved = await sbSaveKeywords([{
+        project_id: projectId, site_id: site.id,
+        keyword: trimmed, status: "done_q",
+      }]).catch(() => []);
+      if (!saved?.length) return;
+      kwId = saved[0].id;
+      setKeywords(prev => [{ ...saved[0], question_count: 1 }, ...prev]);
+    }
+    await sbUpdateQuestion(q.id, { keyword_id: kwId }).catch(() => {});
+    setQuestions(prev => prev.map(qq => qq.id === q.id ? { ...qq, keyword_id: kwId } : qq));
+    if (existing) {
+      setKeywords(prev => prev.map(k => k.id === kwId ? { ...k, question_count: (k.question_count || 0) + 1 } : k));
+    }
+    setEditingKw(null); setKwInput("");
   };
 
   const removeCatFromQuestion = async (qId, catId) => {
@@ -3226,11 +3258,47 @@ ${question}`;
                       <div className="gt-item-text">{q.question}</div>
                     )}
                     <div style={{ display: "flex", gap: 5, marginTop: 4, flexWrap: "wrap", alignItems: "center" }}>
-                      {kwTag && <span style={{ fontSize: 10, color: C.textLight, background: "#FAFAF8", border: "0.5px solid #1A3C2E0D", borderRadius: 10, padding: "1px 7px" }}>🔑 {kwTag.keyword}</span>}
-                      {kwTag?.search_volume > 0 && (
-                        <span style={{ fontSize: 10, color: "#1A3C2E44", fontWeight: 400 }}
-                          title="Volume de recherche mensuel">
-                          {kwTag.search_volume >= 1000 ? (kwTag.search_volume / 1000).toFixed(1) + "k" : kwTag.search_volume} rech/mois
+                      {/* ── Mot-clé : affichage + édition inline ── */}
+                      {editingKw === q.id ? (
+                        /* Mode édition : input autocomplete sur les keywords existants */
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                          <input
+                            autoFocus
+                            list={`kw-list-${q.id}`}
+                            value={kwInput}
+                            onChange={e => setKwInput(e.target.value)}
+                            onKeyDown={e => {
+                              if (e.key === "Enter") assignKeyword(q, kwInput);
+                              if (e.key === "Escape") { setEditingKw(null); setKwInput(""); }
+                            }}
+                            placeholder="Mot-clé…"
+                            style={{ fontSize: 10, padding: "2px 7px", border: "0.5px solid #1A3C2E33", borderRadius: 8, outline: "none", width: 120, color: "#1A3C2E" }}
+                          />
+                          <datalist id={`kw-list-${q.id}`}>
+                            {keywords.map(k => <option key={k.id} value={k.keyword} />)}
+                          </datalist>
+                          <button onClick={() => assignKeyword(q, kwInput)}
+                            style={{ fontSize: 10, padding: "2px 6px", background: "#1A3C2E", color: "#F0EBE0", border: "none", borderRadius: 5, cursor: "pointer" }}>✓</button>
+                          {kwTag && (
+                            <button onClick={() => assignKeyword(q, "")}
+                              title="Retirer le mot-clé"
+                              style={{ fontSize: 10, padding: "2px 5px", background: "none", border: "0.5px solid #C0352A22", borderRadius: 5, color: "#C0352A55", cursor: "pointer" }}>✕</button>
+                          )}
+                          <button onClick={() => { setEditingKw(null); setKwInput(""); }}
+                            style={{ fontSize: 10, color: "#1A3C2E33", background: "none", border: "none", cursor: "pointer" }}>annuler</button>
+                        </span>
+                      ) : (
+                        /* Mode affichage : badge cliquable */
+                        <span
+                          onClick={() => { setEditingKw(q.id); setKwInput(kwTag?.keyword || ""); }}
+                          title="Cliquer pour assigner un mot-clé"
+                          style={{ fontSize: 10, color: kwTag ? "#1A3C2E77" : "#1A3C2E33", background: kwTag ? "#FAFAF8" : "transparent", border: `0.5px solid ${kwTag ? "#1A3C2E0D" : "#1A3C2E11"}`, borderRadius: 10, padding: "1px 7px", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 3 }}>
+                          🔑 {kwTag ? kwTag.keyword : <em style={{ fontStyle: "italic" }}>ajouter un mot-clé</em>}
+                          {kwTag?.search_volume > 0 && (
+                            <span style={{ color: "#1A3C2E33", marginLeft: 3 }}>
+                              {kwTag.search_volume >= 1000 ? (kwTag.search_volume / 1000).toFixed(1) + "k" : kwTag.search_volume}
+                            </span>
+                          )}
                         </span>
                       )}
                       {/* Multi-catégories */}

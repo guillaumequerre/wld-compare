@@ -192,6 +192,17 @@ export default function App() {
   );
 
   const currentProjectIdRef = useRef(currentProjectId);
+  // ── Listener : session expirée (401 non récupérable) ──
+  useEffect(() => {
+    const onExpired = () => {
+      authLogout().catch(() => {});
+      clearSession();
+      setUser(null);
+    };
+    window.addEventListener("supabase:session-expired", onExpired);
+    return () => window.removeEventListener("supabase:session-expired", onExpired);
+  }, []);
+
   useEffect(() => { currentProjectIdRef.current = currentProjectId; }, [currentProjectId]);
 
   const updateProject = useCallback(
