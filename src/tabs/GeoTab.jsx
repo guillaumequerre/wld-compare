@@ -17,6 +17,7 @@ import {
   sbAddCalendarEntry, sbGetCalendarEntriesBatch,
   sbDownload, sbSaveProject, sbDeleteProject,
   sbGetCompetitors, sbSaveCompetitor, sbUpdateCompetitor, sbDeleteCompetitor,
+  sbSaveGeoAnalysis, sbGetGeoAnalyses,
 } from "../lib/supabase";
 import { ProviderConfigPanel, BrandConfigPanel } from "../components/GeoConfig";
 import UploadCard from "../components/UploadCard";
@@ -2343,14 +2344,32 @@ function ProviderRow({ provider, results, brandName, brandAliases, brandDomain =
 
 // ── GeoAnalysis — AI analysis of fan-out presence ─────────────────
 
-function GeoAnalysis({ questions, results, brand, claudeKey }) {
+function GeoAnalysis({ questions, results, brand, claudeKey, projectId = null, siteId = null }) {
   const [status, setStatus] = useState("idle");
   const [sections, setSections] = useState([]);
   const [open, setOpen] = useState(false);
+  const [savedDate, setSavedDate] = useState(null); // date de la dernière analyse persistée
 
   const brandName   = brand?.brand_name   || "";
   const brandDomain = brand?.brand_domain || "";
   const brandAliases = brand?.brand_aliases || [];
+
+  // Charger la dernière analyse "fanout" persistée au montage
+  useEffect(() => {
+    if (!projectId || !siteId) return;
+    let cancelled = false;
+    sbGetGeoAnalyses(projectId, siteId, "fanout").then(rows => {
+      if (cancelled || !rows?.length) return;
+      const latest = rows[0];
+      const c = latest.content;
+      if (c?.sections?.length) {
+        setSections(c.sections);
+        setStatus("done");
+        setSavedDate(latest.created_at);
+      }
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [projectId, siteId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const run = async () => {
     if (!claudeKey || !results.length) return;
@@ -2456,6 +2475,12 @@ RÈGLES :
       });
       setSections(parsed);
       setStatus("done");
+      const now = new Date().toISOString();
+      setSavedDate(now);
+      // Persister en BDD (best-effort)
+      if (projectId && siteId) {
+        sbSaveGeoAnalysis({ project_id: projectId, site_id: siteId, kind: "fanout", content: { sections: parsed, generated_at: now } }).catch(() => {});
+      }
     } catch(e) {
       setSections([{ title: "Erreur", body: e.message }]);
       setStatus("error");
@@ -2485,6 +2510,11 @@ RÈGLES :
           <div style={{ fontSize: 13, fontWeight: 400, color: "#1A3C2E", letterSpacing: "-0.005em" }}>
             Recommandations actionnables — {results.length} réponses analysées
           </div>
+          {savedDate && (
+            <div style={{ fontSize: 10, color: "#1A3C2E55", marginTop: 2 }}>
+              Dernière analyse : {new Date(savedDate).toLocaleString("fr-FR", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
+            </div>
+          )}
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           {status === "done" && (
@@ -2529,6 +2559,421 @@ RÈGLES :
               </div>
             );
           })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ── NextStepsAnalysis — "Et maintenant ?" ────────────────────────
+// Analyse multi-niveaux produisant des recommandations actionnables :
+//  1. Analyse des requêtes marque (ton + synthèse + recos)
+//  2. Synthèse par catégorie de questions
+//  3a. Tableau roadmap ICE (Impact/Confidence/Ease) — export CSV
+//  3b. Tableau favoris catégorisés (défendre/surveiller/conquête/conquérir) — export CSV
+//  4. Rappel "générer un hint" par question
+//  5. Comparaison avec la version précédente (si existante)
+// Persistée en BDD (kind="roadmap"), datée.
+function NextStepsAnalysis({ questions, results, brand, categories = [], claudeKey, projectId = null, siteId = null }) {
+  const [status, setStatus]   = useState("idle");
+  const [data, setData]       = useState(null);   // { brandAnalysis, categoryAnalysis, roadmap[], comparison }
+  const [open, setOpen]       = useState(false);
+  const [savedDate, setSavedDate] = useState(null);
+  const [prevData, setPrevData]   = useState(null); // analyse précédente pour comparaison
+
+  const brandName    = brand?.brand_name || "";
+  const brandDomain  = brand?.brand_domain || "";
+  const brandAliases = Array.isArray(brand?.brand_aliases) ? brand.brand_aliases : [];
+
+  // ── Charger la dernière analyse roadmap persistée ──
+  useEffect(() => {
+    if (!projectId || !siteId) return;
+    let cancelled = false;
+    sbGetGeoAnalyses(projectId, siteId, "roadmap").then(rows => {
+      if (cancelled || !rows?.length) return;
+      const latest = rows[0];
+      if (latest.content) {
+        setData(latest.content);
+        setStatus("done");
+        setSavedDate(latest.created_at);
+      }
+      // Garder l'avant-dernière pour comparaison future
+      if (rows.length > 1) setPrevData(rows[1].content);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [projectId, siteId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Helpers de classification des questions ──
+  const resultsByQ = useMemo(() => {
+    const m = {};
+    results.forEach(r => { if (!m[r.question_id]) m[r.question_id] = []; m[r.question_id].push(r); });
+    return m;
+  }, [results]);
+
+  const isBrandQuestion = (q) => {
+    const terms = [brandName, ...brandAliases].filter(Boolean).map(t => t.toLowerCase().trim());
+    const txt = (q.question || "").toLowerCase();
+    return terms.some(t => t.length >= 2 && txt.includes(t));
+  };
+
+  // Position de la marque sur une question (meilleur résultat)
+  const brandPosOf = (qId) => {
+    const rs = resultsByQ[qId] || [];
+    const positions = rs.map(r => r.brand_mention_position || r.brand_position).filter(p => p != null && p > 0);
+    return positions.length ? Math.min(...positions) : null;
+  };
+  const isMentioned = (qId) => (resultsByQ[qId] || []).some(r => r.brand_mentioned === true || r.brand_mentioned === 1);
+
+  const run = async () => {
+    if (!claudeKey || !results.length) return;
+    setStatus("loading"); setOpen(true);
+
+    // Sauver l'analyse courante comme "précédente" avant d'en générer une nouvelle
+    const previousForComparison = data;
+
+    // ── Préparer les données ──
+    const qMap = {};
+    questions.forEach(q => { qMap[q.id] = q; });
+
+    // Questions marque
+    const brandQs = questions.filter(isBrandQuestion);
+    const brandQsData = brandQs.map(q => {
+      const rs = resultsByQ[q.id] || [];
+      const answers = rs.map(r => (r.answer || "").slice(0, 400)).join(" | ");
+      return { question: q.question, mentioned: isMentioned(q.id), pos: brandPosOf(q.id), excerpt: answers.slice(0, 600) };
+    });
+
+    // Catégories de questions (via tags)
+    const catMap = {};
+    categories.forEach(c => { catMap[c.id] = c.name; });
+    const byCat = {};
+    questions.forEach(q => {
+      const tags = Array.isArray(q.tags) ? q.tags : (q.category_id ? [q.category_id] : []);
+      const cats = tags.length ? tags : ["__none__"];
+      cats.forEach(cid => {
+        const name = catMap[cid] || "Sans catégorie";
+        if (!byCat[name]) byCat[name] = { total: 0, mentioned: 0 };
+        byCat[name].total++;
+        if (isMentioned(q.id)) byCat[name].mentioned++;
+      });
+    });
+
+    // Favoris catégorisés
+    const favs = questions.filter(q => q.is_favorite);
+    const favClassified = favs.map(q => {
+      const pos = brandPosOf(q.id);
+      const ment = isMentioned(q.id);
+      const kw = q.keyword_id;
+      let bucket;
+      if (ment && pos != null && pos <= 3) bucket = "defend";        // À défendre (lead)
+      else if (ment && pos != null && pos >= 4 && pos <= 10) bucket = "watch"; // À surveiller (top 4-10)
+      else if (!ment && kw) bucket = "conquest_priority";            // Conquête prioritaire (non positionné, potentiel marchand = a un mot-clé)
+      else bucket = "conquer";                                        // À conquérir (non positionné, non catégorisé)
+      return { question: q.question, pos, mentioned: ment, bucket };
+    });
+
+    const total      = results.length;
+    const withBrand  = results.filter(r => r.brand_mentioned === true || r.brand_mentioned === 1).length;
+    const presence   = total ? Math.round(withBrand / total * 100) : 0;
+
+    // ── Prompt Claude — JSON structuré ──
+    const prompt = `Tu es un expert GEO (Generative Engine Optimization) senior. Tu produis un plan d'action stratégique pour "${brandName}" (${brandDomain}).
+
+DONNÉES GLOBALES :
+- Présence marque : ${withBrand}/${total} réponses (${presence}%)
+
+QUESTIONS MARQUE (${brandQsData.length}) :
+${brandQsData.slice(0, 12).map((q, i) => `${i+1}. "${q.question}" — ${q.mentioned ? "mentionnée" + (q.pos ? ` #${q.pos}` : "") : "absente"}`).join("\n") || "Aucune question marque"}
+
+SYNTHÈSE PAR CATÉGORIE :
+${Object.entries(byCat).map(([cat, s]) => `- ${cat} : ${s.mentioned}/${s.total} questions avec mention (${Math.round(s.mentioned/s.total*100)}%)`).join("\n") || "Aucune catégorie"}
+${previousForComparison ? `\nANALYSE PRÉCÉDENTE (pour comparaison) :\n${JSON.stringify(previousForComparison).slice(0, 1500)}` : ""}
+
+---
+
+Réponds UNIQUEMENT avec un objet JSON valide (sans markdown, sans backticks) de cette forme exacte :
+{
+  "brandAnalysis": "Analyse du ton et synthèse des réponses sur les questions marque (3-4 phrases). Puis 2-3 recommandations actionnables concrètes pour améliorer le GEO sur ces requêtes marque. Si aucune question marque, indique-le brièvement.",
+  "categoryAnalysis": [
+    { "category": "nom catégorie", "synthesis": "synthèse 1-2 phrases", "recommendation": "reco actionnable précise" }
+  ],
+  "roadmap": [
+    { "action": "action concrète et précise", "category": "catégorie concernée ou 'Marque'", "impact": 8, "confidence": 7, "ease": 5 }
+  ],
+  ${previousForComparison ? `"comparison": { "better": "ce qui a mieux fonctionné", "worse": "ce qui a moins bien fonctionné", "done": "ce qui semble avoir été fait", "missing": "ce qui semble avoir manqué", "reinforce": "ce qui est à renforcer" }` : `"comparison": null`}
+}
+
+RÈGLES :
+- roadmap : 6 à 10 actions, triées par priorité décroissante. impact/confidence/ease sont des entiers de 1 à 10.
+- Pour les actions liées aux questions marque, mets "category": "Marque".
+- categoryAnalysis : une entrée par catégorie réelle ci-dessus (max 8).
+- Recommandations spécifiques (noms de pages, formats, H1) — jamais génériques.
+- Réponds en français.`;
+
+    try {
+      const res = await fetch("/api/claude-geo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Claude-Key": claudeKey },
+        body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 2600, messages: [{ role: "user", content: prompt }] }),
+      });
+      const respData = await res.json();
+      if (!res.ok) throw new Error(respData.error?.message || `Claude ${res.status}`);
+      const text = (respData.content || []).filter(b => b.type === "text").map(b => b.text).join("\n").trim();
+
+      // Parser le JSON (retirer un éventuel wrapping ```json)
+      const cleaned = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();
+      let parsed;
+      try { parsed = JSON.parse(cleaned); }
+      catch {
+        // tentative d'extraction du premier objet JSON
+        const s = cleaned.indexOf("{"); const e = cleaned.lastIndexOf("}");
+        parsed = JSON.parse(cleaned.slice(s, e + 1));
+      }
+
+      // Ajouter le tableau favoris (calculé localement, pas via Claude)
+      parsed.favorites = favClassified;
+      parsed.generated_at = new Date().toISOString();
+
+      setData(parsed);
+      setPrevData(previousForComparison);
+      setStatus("done");
+      setSavedDate(parsed.generated_at);
+
+      // Persister
+      if (projectId && siteId) {
+        sbSaveGeoAnalysis({ project_id: projectId, site_id: siteId, kind: "roadmap", content: parsed }).catch(() => {});
+      }
+    } catch(e) {
+      setData({ error: e.message });
+      setStatus("error");
+    }
+  };
+
+  // ── Export CSV roadmap ──
+  const exportRoadmapCSV = () => {
+    if (!data?.roadmap?.length) return;
+    const header = ["Action", "Catégorie", "Impact", "Confidence", "Ease", "Score ICE"];
+    const rows = [header, ...data.roadmap.map(r => {
+      const ice = ((r.impact || 0) + (r.confidence || 0) + (r.ease || 0));
+      return [r.action, r.category || "", r.impact, r.confidence, r.ease, ice];
+    })];
+    downloadText(toCSV(rows), `roadmap_geo_${new Date().toISOString().slice(0,10)}.csv`);
+  };
+
+  // ── Export CSV favoris ──
+  const BUCKET_LABELS = {
+    defend:             "À défendre",
+    watch:              "À surveiller",
+    conquest_priority:  "Conquête prioritaire",
+    conquer:            "À conquérir",
+  };
+  const exportFavoritesCSV = () => {
+    if (!data?.favorites?.length) return;
+    const header = ["Question", "Catégorie", "Position marque", "Mentionnée"];
+    const order = ["defend", "watch", "conquest_priority", "conquer"];
+    const sorted = [...data.favorites].sort((a, b) => order.indexOf(a.bucket) - order.indexOf(b.bucket));
+    const rows = [header, ...sorted.map(f => [
+      f.question, BUCKET_LABELS[f.bucket] || f.bucket, f.pos != null ? `#${f.pos}` : "—", f.mentioned ? "Oui" : "Non",
+    ])];
+    downloadText(toCSV(rows), `favoris_geo_${new Date().toISOString().slice(0,10)}.csv`);
+  };
+
+  if (!results.length) return null;
+
+  const iceColor = (score) => score >= 24 ? "#1A7A4A" : score >= 18 ? "#C97820" : "#1A3C2E77";
+  const BUCKET_META = {
+    defend:            { label: "À défendre",          color: "#1A7A4A", desc: "La marque lead (#1-3)" },
+    watch:             { label: "À surveiller",         color: "#C97820", desc: "Top 4-10" },
+    conquest_priority: { label: "Conquête prioritaire", color: "#E8541A", desc: "Non positionnée, fort potentiel" },
+    conquer:           { label: "À conquérir",          color: "#1A3C2E77", desc: "Non positionnée" },
+  };
+
+  return (
+    <div style={{ marginBottom: 24 }}>
+      {/* ── Header ── */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: open && status === "done" ? 16 : 0 }}>
+        <div>
+          <div className="gt-label" style={{ marginBottom: 3 }}>Et maintenant ?</div>
+          <div style={{ fontSize: 13, fontWeight: 400, color: "#1A3C2E", letterSpacing: "-0.005em" }}>
+            Plan d'action priorisé — roadmap ICE & favoris catégorisés
+          </div>
+          {savedDate && (
+            <div style={{ fontSize: 10, color: "#1A3C2E55", marginTop: 2 }}>
+              Dernière génération : {new Date(savedDate).toLocaleString("fr-FR", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
+            </div>
+          )}
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {status === "done" && (
+            <button onClick={() => setOpen(o => !o)} className="gt-btn gt-btn--ghost" style={{ fontSize: 11 }}>
+              {open ? "Masquer" : "Voir le plan"}
+            </button>
+          )}
+          <button
+            onClick={run}
+            disabled={status === "loading" || !claudeKey}
+            className={`gt-btn ${status === "idle" ? "gt-btn--solid" : "gt-btn--ghost"}`}
+            title={!claudeKey ? "Clé Claude manquante" : undefined}
+            style={{ opacity: (!claudeKey || status === "loading") ? 0.4 : 1 }}>
+            {status === "loading" ? "Génération…" : status === "done" ? "↺ Régénérer" : "Et maintenant ?"}
+          </button>
+        </div>
+      </div>
+
+      {/* ── Contenu ── */}
+      {open && status === "done" && data && !data.error && (
+        <div style={{ borderTop: "0.5px solid #1A3C2E0D", paddingTop: 16, display: "flex", flexDirection: "column", gap: 24 }}>
+
+          {/* 1. Analyse requêtes marque */}
+          {data.brandAnalysis && (
+            <div style={{ borderLeft: "2px solid #1A3C2E18", paddingLeft: 16 }}>
+              <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E", marginBottom: 8 }}>
+                ◎ Requêtes marque
+              </div>
+              <div style={{ fontSize: 12, color: "#1A3C2E", lineHeight: 1.75 }}>
+                {renderMarkdown(data.brandAnalysis)}
+              </div>
+            </div>
+          )}
+
+          {/* 2. Synthèse par catégorie */}
+          {Array.isArray(data.categoryAnalysis) && data.categoryAnalysis.length > 0 && (
+            <div style={{ borderLeft: "2px solid #C9782018", paddingLeft: 16 }}>
+              <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.10em", textTransform: "uppercase", color: "#C97820", marginBottom: 10 }}>
+                ⟶ Synthèse par catégorie
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {data.categoryAnalysis.map((c, i) => (
+                  <div key={i} style={{ paddingBottom: 10, borderBottom: i < data.categoryAnalysis.length - 1 ? "0.5px solid #1A3C2E08" : "none" }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: "#1A3C2E", marginBottom: 2 }}>{c.category}</div>
+                    <div style={{ fontSize: 11, color: "#1A3C2E99", lineHeight: 1.6, marginBottom: 4 }}>{c.synthesis}</div>
+                    <div style={{ fontSize: 11, color: "#1A7A4A", lineHeight: 1.6 }}>→ {c.recommendation}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* 3a. Tableau roadmap ICE */}
+          {Array.isArray(data.roadmap) && data.roadmap.length > 0 && (
+            <div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E" }}>
+                  ✦ Roadmap priorisée (ICE)
+                </div>
+                <button onClick={exportRoadmapCSV} className="gt-btn gt-btn--ghost" style={{ fontSize: 10, padding: "3px 10px" }}>
+                  ↓ Export CSV
+                </button>
+              </div>
+              <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, minWidth: 540 }}>
+                  <thead>
+                    <tr style={{ borderBottom: "1px solid #1A3C2E22" }}>
+                      <th style={{ textAlign: "left", padding: "6px 8px", fontWeight: 600, color: "#1A3C2E77", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em" }}>Action</th>
+                      <th style={{ textAlign: "left", padding: "6px 8px", fontWeight: 600, color: "#1A3C2E77", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em" }}>Catégorie</th>
+                      <th style={{ textAlign: "center", padding: "6px 8px", fontWeight: 600, color: "#1A3C2E77", fontSize: 10 }} title="Impact">I</th>
+                      <th style={{ textAlign: "center", padding: "6px 8px", fontWeight: 600, color: "#1A3C2E77", fontSize: 10 }} title="Confidence">C</th>
+                      <th style={{ textAlign: "center", padding: "6px 8px", fontWeight: 600, color: "#1A3C2E77", fontSize: 10 }} title="Ease">E</th>
+                      <th style={{ textAlign: "center", padding: "6px 8px", fontWeight: 600, color: "#1A3C2E77", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em" }}>Score</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[...data.roadmap].sort((a, b) => ((b.impact||0)+(b.confidence||0)+(b.ease||0)) - ((a.impact||0)+(a.confidence||0)+(a.ease||0))).map((r, i) => {
+                      const ice = (r.impact || 0) + (r.confidence || 0) + (r.ease || 0);
+                      const isBrand = (r.category || "").toLowerCase() === "marque";
+                      return (
+                        <tr key={i} style={{ borderBottom: "0.5px solid #1A3C2E0D" }}>
+                          <td style={{ padding: "8px", color: "#1A3C2E", lineHeight: 1.4 }}>{r.action}</td>
+                          <td style={{ padding: "8px" }}>
+                            <span style={{ fontSize: 10, fontWeight: 600, color: isBrand ? "#1A3C2E" : "#1A3C2E77", background: isBrand ? "#1A3C2E11" : "transparent", border: `0.5px solid ${isBrand ? "#1A3C2E33" : "#1A3C2E11"}`, borderRadius: 10, padding: "1px 8px", whiteSpace: "nowrap" }}>
+                              {r.category || "—"}
+                            </span>
+                          </td>
+                          <td style={{ padding: "8px", textAlign: "center", color: "#1A3C2E99", fontVariantNumeric: "tabular-nums" }}>{r.impact}</td>
+                          <td style={{ padding: "8px", textAlign: "center", color: "#1A3C2E99", fontVariantNumeric: "tabular-nums" }}>{r.confidence}</td>
+                          <td style={{ padding: "8px", textAlign: "center", color: "#1A3C2E99", fontVariantNumeric: "tabular-nums" }}>{r.ease}</td>
+                          <td style={{ padding: "8px", textAlign: "center", fontWeight: 700, color: iceColor(ice), fontVariantNumeric: "tabular-nums" }}>{ice}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* 3b. Tableau favoris catégorisés */}
+          {Array.isArray(data.favorites) && data.favorites.length > 0 && (
+            <div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E" }}>
+                  ★ Favoris catégorisés
+                </div>
+                <button onClick={exportFavoritesCSV} className="gt-btn gt-btn--ghost" style={{ fontSize: 10, padding: "3px 10px" }}>
+                  ↓ Export CSV
+                </button>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                {["defend", "watch", "conquest_priority", "conquer"].map(bucket => {
+                  const items = data.favorites.filter(f => f.bucket === bucket);
+                  if (!items.length) return null;
+                  const meta = BUCKET_META[bucket];
+                  return (
+                    <div key={bucket}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                        <span style={{ width: 8, height: 8, borderRadius: "50%", background: meta.color, flexShrink: 0 }} />
+                        <span style={{ fontSize: 11, fontWeight: 600, color: meta.color }}>{meta.label}</span>
+                        <span style={{ fontSize: 10, color: "#1A3C2E44" }}>{meta.desc} · {items.length}</span>
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 3, paddingLeft: 16 }}>
+                        {items.map((f, i) => (
+                          <div key={i} style={{ fontSize: 11, color: "#1A3C2E", display: "flex", gap: 8, alignItems: "baseline" }}>
+                            <span style={{ flex: 1, lineHeight: 1.5 }}>{f.question}</span>
+                            {f.pos != null && <span style={{ fontSize: 10, color: meta.color, fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>#{f.pos}</span>}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* 5. Comparaison avec version précédente */}
+          {data.comparison && (
+            <div style={{ borderLeft: "2px solid #1A3C2E18", paddingLeft: 16 }}>
+              <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E", marginBottom: 10 }}>
+                ↔ Comparaison avec la version précédente
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {[
+                  { k: "better",    label: "Ce qui a mieux fonctionné",  color: "#1A7A4A" },
+                  { k: "worse",     label: "Ce qui a moins bien fonctionné", color: "#C0352A" },
+                  { k: "done",      label: "Ce qui semble avoir été fait", color: "#1A3C2E" },
+                  { k: "missing",   label: "Ce qui semble avoir manqué",  color: "#C97820" },
+                  { k: "reinforce", label: "Ce qui est à renforcer",      color: "#E8541A" },
+                ].filter(row => data.comparison[row.k]).map(row => (
+                  <div key={row.k}>
+                    <div style={{ fontSize: 10, fontWeight: 600, color: row.color, marginBottom: 2 }}>{row.label}</div>
+                    <div style={{ fontSize: 11, color: "#1A3C2E99", lineHeight: 1.6 }}>{data.comparison[row.k]}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* 4. Rappel hint */}
+          <div style={{ fontSize: 11, color: "#1A3C2E77", fontStyle: "italic", background: "#FFFBEB", border: "0.5px solid #C9782022", borderRadius: 6, padding: "10px 12px" }}>
+            💡 Pour des recommandations plus précises sur une question donnée, cliquez sur « Générer un hint » sous chaque question.
+          </div>
+        </div>
+      )}
+
+      {open && status === "error" && data?.error && (
+        <div style={{ fontSize: 12, color: "#C0352A", padding: "10px 0", borderTop: "0.5px solid #1A3C2E0D", marginTop: 8 }}>
+          Erreur : {data.error}
         </div>
       )}
     </div>
@@ -2629,6 +3074,60 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, setCa
       console.log("[GeoTab] calendarEntries chargées:", (Array.isArray(calEntries) ? calEntries : []).length, "entrées — vertes:", (Array.isArray(calEntries) ? calEntries : []).filter(e => e.brand_present === true || e.brand_present === 1).length);
     }).catch(e => console.warn("[QuestionsTab] load error:", e));
   }, [projectId, site?.id, refreshTrigger]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Auto-tag "Marque" : questions contenant le nom de marque ──────
+  // Crée la catégorie "Marque" si absente puis tague les questions dont
+  // le texte contient le nom de marque ou un alias.
+  useEffect(() => {
+    if (!projectId || !site?.id) return;
+    if (!questions.length) return;
+    const brandName = (brand?.brand_name || "").trim();
+    const aliases   = Array.isArray(brand?.brand_aliases) ? brand.brand_aliases : [];
+    const terms = [brandName, ...aliases].filter(Boolean).map(t => t.toLowerCase().trim()).filter(t => t.length >= 2);
+    if (!terms.length) return;
+
+    let cancelled = false;
+    (async () => {
+      // 1. Trouver ou créer la catégorie "Marque"
+      let marqueCat = categories.find(c => (c.name || "").toLowerCase() === "marque");
+      if (!marqueCat) {
+        try {
+          marqueCat = await sbSaveCategory({ project_id: projectId, name: "Marque", color: "#1A3C2E" });
+          if (cancelled || !marqueCat?.id) return;
+          setCategories(prev => prev.some(c => c.id === marqueCat.id) ? prev : [...prev, marqueCat]);
+        } catch { return; }
+      }
+      const marqueCatId = marqueCat.id;
+
+      // 2. Détecter les questions à taguer (texte contient un terme marque)
+      const toTag = questions.filter(q => {
+        const txt = (q.question || "").toLowerCase();
+        const hasBrandInText = terms.some(t => txt.includes(t));
+        if (!hasBrandInText) return false;
+        const existingTags = Array.isArray(q.tags) ? q.tags : (q.category_id ? [q.category_id] : []);
+        return !existingTags.includes(marqueCatId); // pas déjà tagué
+      });
+      if (!toTag.length || cancelled) return;
+
+      // 3. Appliquer le tag (ajout à la liste existante, sans écraser)
+      for (const q of toTag) {
+        const existingTags = Array.isArray(q.tags) ? q.tags : (q.category_id ? [q.category_id] : []);
+        const newTags = [...new Set([...existingTags, marqueCatId])];
+        sbSetKeywordTags(q.id, newTags).catch(() => {});
+        if (!q.category_id) sbSetQuestionCategory(q.id, marqueCatId).catch(() => {});
+      }
+      if (cancelled) return;
+      const tagIds = new Set(toTag.map(q => q.id));
+      setQuestions(prev => prev.map(q => {
+        if (!tagIds.has(q.id)) return q;
+        const existingTags = Array.isArray(q.tags) ? q.tags : (q.category_id ? [q.category_id] : []);
+        const newTags = [...new Set([...existingTags, marqueCatId])];
+        return { ...q, tags: newTags, category_id: q.category_id || marqueCatId };
+      }));
+    })();
+
+    return () => { cancelled = true; };
+  }, [questions, categories, brand, projectId, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const resultsByQ = useMemo(() => {
     const m = {};
@@ -3029,7 +3528,20 @@ ${question}`;
         results={results}
         brand={brand}
         claudeKey={providerKeysRef.current["claude"]?.dec || ""}
+        projectId={projectId}
+        siteId={site?.id}
       /></div>
+
+      {/* ── Et maintenant ? — plan d'action priorisé ── */}
+      <NextStepsAnalysis
+        questions={questions}
+        results={results}
+        brand={brand}
+        categories={categories}
+        claudeKey={providerKeysRef.current["claude"]?.dec || ""}
+        projectId={projectId}
+        siteId={site?.id}
+      />
 
       {/* ── Stats header (filtered) ── */}
       <div data-tour="stats-header"><StatsHeader questions={filtered} results={filteredResults} brandName={brand_name} qualifiedCompetitors={competitors.filter(c => c.enabled !== false)} /></div>

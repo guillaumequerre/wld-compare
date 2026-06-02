@@ -473,13 +473,71 @@ export async function sbGetQuestions(project_id, site_id) {
   return res.json();
 }
 
+// ── GEO Analyses (Fan-out & Roadmap "Et maintenant ?") ───────────
+// Table geo_analyses : { id, project_id, site_id, kind, content (jsonb), created_at }
+// kind = "fanout" (bouton Analyser) | "roadmap" (bouton Et maintenant ?)
+export async function sbSaveGeoAnalysis({ project_id, site_id, kind, content }) {
+  const row = {
+    project_id, site_id, kind,
+    content: typeof content === "string" ? content : JSON.stringify(content),
+    created_at: new Date().toISOString(),
+  };
+  const res = await fetchSupabase(`${PROXY}/rest/v1/geo_analyses`, {
+    method: "POST",
+    headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "return=representation" },
+    body: JSON.stringify(row),
+  });
+  if (!res.ok) {
+    const err = await res.text().catch(() => "");
+    console.error("[sbSaveGeoAnalysis] failed:", res.status, err.slice(0, 200));
+    throw new Error(`Save geo analysis failed: ${res.status}`);
+  }
+  const rows = await res.json();
+  return Array.isArray(rows) ? rows[0] : rows;
+}
+
+// Récupère les analyses GEO d'un site, plus récentes en premier
+export async function sbGetGeoAnalyses(project_id, site_id, kind = null) {
+  let url = `${PROXY}/rest/v1/geo_analyses?project_id=eq.${encodeURIComponent(project_id)}&site_id=eq.${encodeURIComponent(site_id)}&order=created_at.desc&limit=20`;
+  if (kind) url += `&kind=eq.${encodeURIComponent(kind)}`;
+  const res = await fetch(url, { headers: authHeaders() });
+  if (!res.ok) return [];
+  const rows = await res.json();
+  // Parser le content JSON si stocké en string
+  return (Array.isArray(rows) ? rows : []).map(r => {
+    let parsed = r.content;
+    try { if (typeof r.content === "string") parsed = JSON.parse(r.content); } catch {}
+    return { ...r, content: parsed };
+  });
+}
+
 export async function sbUpdateQuestion(id, patch) {
   if (!id || id.startsWith("tmp-")) return false; // skip optimistic/temp IDs
-  const res = await fetchSupabase(`${PROXY}/rest/v1/geo_questions?id=eq.${encodeURIComponent(id)}`, {
+  const doPatch = async (body) => fetchSupabase(`${PROXY}/rest/v1/geo_questions?id=eq.${encodeURIComponent(id)}`, {
     method: "PATCH",
     headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "return=representation" },
-    body: JSON.stringify(patch),
+    body: JSON.stringify(body),
   });
+
+  let res = await doPatch(patch);
+
+  // Si une colonne du cache n'existe pas (has_result, last_answer, last_date…),
+  // PostgREST renvoie 400/PGRST204 → on retire les colonnes "optionnelles"
+  // et on ré-essaie avec le sous-ensemble sûr (question, keyword_id, category_id,
+  // is_favorite, tags) pour ne pas perdre la mise à jour critique.
+  if (!res.ok) {
+    const errPeek = await res.clone().text().catch(() => "");
+    if (res.status === 400 || /column|PGRST204|schema/i.test(errPeek)) {
+      const SAFE = ["question", "keyword_id", "category_id", "is_favorite", "tags"];
+      const safePatch = {};
+      for (const k of SAFE) if (k in patch) safePatch[k] = patch[k];
+      if (Object.keys(safePatch).length > 0) {
+        console.warn("[sbUpdateQuestion] retry colonnes sûres:", Object.keys(safePatch).join(","));
+        res = await doPatch(safePatch);
+      }
+    }
+  }
+
   if (!res.ok) {
     console.error("sbUpdateQuestion failed:", res.status, id, patch);
     return false;
@@ -494,10 +552,8 @@ export async function sbDeleteQuestion(id) {
 // ── GEO — RESULTS ────────────────────────────────────────────────
 
 export async function sbSaveGeoResult(result) {
-  // Derive provider_id from model label for upsert deduplication
-  // Only include provider_id if column exists (optional)
-  // Explicitly pick only columns that exist in geo_results table
-  const row = {
+  // Colonnes de base garanties d'exister dans geo_results
+  const baseRow = {
     question_id:          result.question_id,
     project_id:           result.project_id,
     site_id:              result.site_id,
@@ -515,18 +571,46 @@ export async function sbSaveGeoResult(result) {
     output_tokens:        result.output_tokens ?? null,
     created_at:           result.created_at    || new Date().toISOString(),
   };
+  // Colonnes de présence détaillées — ajoutées seulement si présentes
+  // (peuvent ne pas exister en base sur d'anciens schémas)
+  const detailCols = {};
+  if (result.brand_mention_position   !== undefined) detailCols.brand_mention_position   = result.brand_mention_position   ?? null;
+  if (result.brand_evocation_position !== undefined) detailCols.brand_evocation_position = result.brand_evocation_position ?? null;
+  if (result.brand_citation_position  !== undefined) detailCols.brand_citation_position  = result.brand_citation_position  ?? null;
 
-  const res = await fetchSupabase(`${PROXY}/rest/v1/geo_results`, {
+  // ── Helper POST : insert simple, sans on-conflict fragile ──
+  // On déduplique manuellement : DELETE le résultat du jour pour ce
+  // couple (question_id, model) puis INSERT le nouveau. Ainsi pas de
+  // dépendance à une contrainte unique côté Postgres.
+  const today = (result.created_at || new Date().toISOString()).slice(0, 10);
+  // Supprimer un éventuel résultat existant du même jour pour ce question+model
+  await fetchSupabase(
+    `${PROXY}/rest/v1/geo_results?question_id=eq.${encodeURIComponent(result.question_id)}&model=eq.${encodeURIComponent(result.model)}&created_at=gte.${today}T00:00:00&created_at=lte.${today}T23:59:59`,
+    { method: "DELETE", headers: { ...authHeaders(), "Prefer": "return=minimal" } }
+  ).catch(() => {}); // best-effort — si ça échoue on insère quand même
+
+  // Tentative 1 : insert avec colonnes détaillées
+  const doInsert = async (row) => fetchSupabase(`${PROXY}/rest/v1/geo_results`, {
     method: "POST",
     headers: {
       ...authHeaders(),
       "Content-Type": "application/json",
-      // UPSERT: replace existing result for same question+model
-      "Prefer": "return=representation,resolution=merge-duplicates",
-      "on-conflict": "question_id,model",
+      "Prefer": "return=representation",
     },
     body: JSON.stringify(row),
   });
+
+  let res = await doInsert({ ...baseRow, ...detailCols });
+
+  // Si échec à cause d'une colonne inconnue (400/PGRST204) → retry sans les colonnes détaillées
+  if (!res.ok && Object.keys(detailCols).length > 0) {
+    const errPeek = await res.clone().text().catch(() => "");
+    if (res.status === 400 || /column|PGRST204|schema/i.test(errPeek)) {
+      console.warn("[sbSaveGeoResult] retry sans colonnes détaillées:", errPeek.slice(0, 120));
+      res = await doInsert(baseRow);
+    }
+  }
+
   if (!res.ok) {
     const errBody = await res.text().catch(() => "");
     console.error("[sbSaveGeoResult] failed:", res.status, errBody);
