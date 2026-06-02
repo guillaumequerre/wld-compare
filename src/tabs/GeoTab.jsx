@@ -2598,8 +2598,6 @@ function NextStepsAnalysis({ questions, results, brand, categories = [], claudeK
         setStatus("done");
         setSavedDate(latest.created_at);
       }
-      // Garder l'avant-dernière pour comparaison future
-      if (rows.length > 1) setPrevData(rows[1].content);
     }).catch(() => {});
     return () => { cancelled = true; };
   }, [projectId, siteId]); // eslint-disable-line react-hooks/exhaustive-deps
