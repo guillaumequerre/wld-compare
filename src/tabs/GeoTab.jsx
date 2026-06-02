@@ -2580,7 +2580,7 @@ function NextStepsAnalysis({ questions, results, brand, categories = [], claudeK
   const [data, setData]       = useState(null);   // { brandAnalysis, categoryAnalysis, roadmap[], comparison }
   const [open, setOpen]       = useState(false);
   const [savedDate, setSavedDate] = useState(null);
-  const [prevData, setPrevData]   = useState(null); // analyse précédente pour comparaison
+  // prevData : l'analyse précédente est lue depuis data avant reset (pas de state séparé)
 
   const brandName    = brand?.brand_name || "";
   const brandDomain  = brand?.brand_domain || "";
@@ -2736,7 +2736,6 @@ RÈGLES :
       parsed.generated_at = new Date().toISOString();
 
       setData(parsed);
-      setPrevData(previousForComparison);
       setStatus("done");
       setSavedDate(parsed.generated_at);
 
