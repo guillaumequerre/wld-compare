@@ -3213,7 +3213,16 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, setCa
     }
   };
 
+  const MAX_FAVORITES = 50;
   const toggleFav = async (qId, cur) => {
+    // Blocage : pas plus de 50 favoris (limite d'interrogation automatique)
+    if (!cur) {
+      const favCount = questions.filter(q => q.is_favorite).length;
+      if (favCount >= MAX_FAVORITES) {
+        alert(`Maximum ${MAX_FAVORITES} questions favorites. Retirez-en une avant d'en ajouter une nouvelle.`);
+        return;
+      }
+    }
     await sbUpdateQuestion(qId, { is_favorite: !cur });
     setQuestions(prev => prev.map(q => q.id === qId ? { ...q, is_favorite: !cur } : q));
   };
@@ -4514,6 +4523,14 @@ function AutomationTab({ projectId, site, user, providerKeys }) {
       {error && (
         <div style={{ background: "#FEF2F2", border: "0.5px solid #C0352A22", borderRadius: 6, padding: "10px 14px", fontSize: 12, color: "#C0352A", marginBottom: 16 }}>{error}</div>
       )}
+
+      {/* ── Info : seules les questions favorites sont interrogées ── */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 14px", marginBottom: 20, background: "#F0FDF4", border: "0.5px solid #1A7A4A33", borderRadius: 8, fontSize: 12 }}>
+        <span style={{ fontSize: 14, flexShrink: 0 }}>⭐</span>
+        <span style={{ color: "#1A7A4A", lineHeight: 1.5 }}>
+          Seules les <strong>questions favorites</strong> sont interrogées automatiquement, avec les providers sélectionnés ci-dessous. Les appels sont enregistrés en base et apparaissent dans l'onglet Questions à votre prochaine connexion.
+        </span>
+      </div>
 
       {/* Status si schedule existe */}
       {schedule && (

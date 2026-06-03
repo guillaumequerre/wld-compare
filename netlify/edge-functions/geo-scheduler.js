@@ -275,8 +275,17 @@ async function processSchedule(schedule, project, brand) {
 
         const now = new Date().toISOString();
 
-        // ── Sauvegarder dans geo_results ──────────────────────────
+        // ── Détection marque (3 types) ────────────────────────────
         const detected = detectBrand(answer, sources, brandName, brandAliases);
+        const brandMentioned = detected.brandMentioned;
+
+        // Type de présence pour le calendrier (mirror runProvider front)
+        const presTypeForCal = detected.mention?.position != null ? "mention"
+          : detected.brandInSources ? "citation"
+          : brandMentioned ? "evocation"
+          : null;
+
+        // ── 1. Sauvegarder dans geo_results ───────────────────────
         const record = {
           question_id:              q.id,
           project_id:               schedule.project_id,
@@ -285,7 +294,7 @@ async function processSchedule(schedule, project, brand) {
           answer,
           sources,
           source_types:             [],
-          brand_mentioned:          detected.brandMentioned,
+          brand_mentioned:          brandMentioned,
           brand_in_sources:         detected.brandInSources,
           brand_position:           detected.brandPosition,
           brand_mention_position:   detected.mention?.position   || null,
@@ -297,24 +306,53 @@ async function processSchedule(schedule, project, brand) {
           created_at:               now,
         };
 
-        await sbPost("geo_results", record);
-
-        // FIX BUG 4 : insérer dans geo_presence_calendar pour le calendrier 30j
+        // Dédoublonnage : supprimer un éventuel résultat auto du même jour
+        // pour ce couple (question, provider) puis insérer le nouveau.
+        const today = now.slice(0, 10);
         try {
-          await sbPost("geo_presence_calendar", {
-            question_id:   q.id,
-            provider_id:   providerId,
-            brand_present: brandMentioned,
-            test_date:     now.slice(0, 10),
-            created_at:    now,
+          await fetch(
+            `${SUPABASE_URL}/rest/v1/geo_results?question_id=eq.${encodeURIComponent(q.id)}&model=eq.${encodeURIComponent(record.model)}&created_at=gte.${today}T00:00:00&created_at=lte.${today}T23:59:59`,
+            { method: "DELETE", headers: { ...sbWriteHeaders(), "Prefer": "return=minimal" } }
+          );
+        } catch {}
+
+        // Insert avec fallback : si une colonne brand_*_position manque, retry sans
+        try {
+          await sbPost("geo_results", record);
+        } catch(insErr) {
+          if (/column|PGRST204|schema|400/i.test(insErr.message)) {
+            const { brand_mention_position, brand_evocation_position, brand_citation_position, ...base } = record;
+            await sbPost("geo_results", base);
+          } else {
+            throw insErr;
+          }
+        }
+
+        // ── 2. Insérer dans geo_calendar_dates (même table que le front) ──
+        // Schéma identique à sbAddCalendarEntry : brand_present + brand_mention/citation/evocation + test_date
+        try {
+          await sbPost("geo_calendar_dates", {
+            question_id:     q.id,
+            provider_id:     providerId,
+            brand_present:   brandMentioned === true,
+            brand_mention:   presTypeForCal === "mention"   ? 1 : 0,
+            brand_citation:  presTypeForCal === "citation"  ? 1 : 0,
+            brand_evocation: presTypeForCal === "evocation" ? 1 : 0,
+            test_date:       today,
           });
         } catch(calErr) {
-          // Non bloquant — la table peut ne pas exister encore
           console.warn(`[scheduler] calendar insert failed: ${calErr.message}`);
         }
 
+        // ── 3. Mettre à jour le cache de la question (last_date, has_result) ──
+        try {
+          const cachePatch = { has_result: true, last_answer: answer, last_model: record.model, last_date: now };
+          if (brandMentioned) Object.assign(cachePatch, { best_answer: answer, best_model: record.model, best_date: now });
+          await sbPatch(`geo_questions?id=eq.${encodeURIComponent(q.id)}`, cachePatch);
+        } catch {}
+
         savedCount++;
-        console.log(`[scheduler] ✓ q=${q.id} provider=${providerId} brand=${brandMentioned}`);
+        console.log(`[scheduler] ✓ q=${q.id} provider=${providerId} brand=${brandMentioned} pres=${presTypeForCal}`);
 
         // Délai anti-rate-limit
         await new Promise(r => setTimeout(r, 400));
