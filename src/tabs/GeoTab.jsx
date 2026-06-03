@@ -4622,7 +4622,7 @@ function AutomationTab({ projectId, site, user, providerKeys }) {
         <div style={{ marginTop: 24, paddingTop: 20, borderTop: "0.5px solid #1A3C2E08" }}>
           <div className="gt-label" style={{ marginBottom: 8 }}>Test manuel</div>
           <div className="gt-caption" style={{ marginBottom: 12 }}>
-            Déclenche immédiatement l'automatisation pour vérifier le fonctionnement.
+            Déclenche immédiatement l'interrogation des favoris en arrière-plan (jusqu'à 15 min). Les résultats apparaissent dans l'onglet Questions une fois terminé.
           </div>
           <button onClick={trigger} disabled={triggering}
             className="gt-btn"
@@ -4630,8 +4630,10 @@ function AutomationTab({ projectId, site, user, providerKeys }) {
             {triggering ? "En cours…" : "▶ Lancer maintenant"}
           </button>
           {triggerResult && (
-            <div style={{ marginTop: 10, fontSize: 11, color: "#1A7A4A", padding: "8px 12px", background: "transparent", border: "0.5px solid #1A7A4A22", borderRadius: 6 }}>
-              ✓ {triggerResult.processed || 0} schedule(s) — {triggerResult.results?.[0]?.questions_processed || 0} question(s) traitée(s)
+            <div style={{ marginTop: 10, fontSize: 11, color: "#1A7A4A", padding: "8px 12px", background: "transparent", border: "0.5px solid #1A7A4A22", borderRadius: 6, lineHeight: 1.5 }}>
+              {triggerResult.dispatched
+                ? "✓ Interrogation lancée en arrière-plan. Les questions favorites sont en cours d'interrogation — les résultats apparaîtront dans l'onglet Questions dans quelques minutes (rechargez la page pour les voir)."
+                : `✓ ${triggerResult.processed || 0} schedule(s) — ${triggerResult.results?.[0]?.questions_processed || 0} question(s) traitée(s)`}
             </div>
           )}
         </div>

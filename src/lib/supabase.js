@@ -991,7 +991,8 @@ export async function sbDeleteSchedule(id) {
 }
 
 export async function sbTriggerScheduler() {
-  // FIX : envoyer force:true pour ignorer next_run (trigger manuel)
+  // Le scheduler est désormais asynchrone : l'edge dispatch vers une
+  // background function (15 min de timeout) et renvoie 202 immédiatement.
   const secret = process.env.REACT_APP_SCHEDULER_SECRET;
   const res = await fetch("/api/geo-scheduler", {
     method: "POST",
@@ -1001,11 +1002,13 @@ export async function sbTriggerScheduler() {
     },
     body: JSON.stringify({ force: true }),
   });
-  if (!res.ok) {
+  // 202 = accepté et lancé en arrière-plan (pas d'erreur)
+  if (!res.ok && res.status !== 202) {
     const body = await res.text().catch(() => "");
     throw new Error(`Trigger failed: ${res.status} — ${body.slice(0, 120)}`);
   }
-  return res.json();
+  const data = await res.json().catch(() => ({}));
+  return { ...data, dispatched: true };
 }
 
 // ── Competitors (geo_competitors) ────────────────────────────────
