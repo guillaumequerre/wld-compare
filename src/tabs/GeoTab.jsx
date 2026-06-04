@@ -3776,7 +3776,7 @@ ${question}`;
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {filtered.map(q => {
+          {filtered.map((q, idx) => {
             const qResults = resultsByQ[q.id] || [];
             const hasBrand = qResults.some(r => r.brand_mentioned === true || r.brand_mentioned === 1);
             const isRunning = running[q.id];
@@ -3789,6 +3789,7 @@ ${question}`;
               borderRadius: 0,
             }}>
                 <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+                  <span style={{ flexShrink: 0, marginTop: 1, minWidth: 22, textAlign: "right", fontSize: 11, fontWeight: 600, color: "#1A3C2E33", fontVariantNumeric: "tabular-nums", userSelect: "none" }}>{idx + 1}</span>
                   <input type="checkbox" checked={isSel} onChange={() => { setSelected(prev => { const n = new Set(prev); n.has(q.id) ? n.delete(q.id) : n.add(q.id); return n; }); }} style={{ cursor: "pointer", flexShrink: 0, marginTop: 2 }} />
                   <button onClick={() => toggleFav(q.id, q.is_favorite)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, flexShrink: 0, opacity: q.is_favorite ? 0.9 : 0.2, transition: "opacity 0.2s" }}>⭐</button>
                   <div style={{ flex: 1, minWidth: 0 }}>
