@@ -442,8 +442,94 @@ function Section({ icon, title, sub, children }) {
 }
 
 // ── Scatter plot concurrents : citations (X) × position moy. (Y) ──
-function GeoScoreBanner({ audit, brand, site }) {
+// ── FavoritesPerformance — met en avant les questions favorites ──
+// 4 buckets : À défendre (#1-3) / À surveiller (#4-10) / Conquête prioritaire / À conquérir
+function FavoritesPerformance({ questions, results }) {
+  const data = useMemo(() => {
+    const favs = questions.filter(q => q.is_favorite);
+    if (!favs.length) return null;
+    const byQ = {};
+    results.forEach(r => { (byQ[r.question_id] = byQ[r.question_id] || []).push(r); });
+    const posOf = (qId) => {
+      const rs = byQ[qId] || [];
+      const ps = rs.map(r => r.brand_mention_position || r.brand_position).filter(p => p != null && p > 0);
+      return ps.length ? Math.min(...ps) : null;
+    };
+    const mentioned = (qId) => (byQ[qId] || []).some(r => r.brand_mentioned === true || r.brand_mentioned === 1);
+    const buckets = { defend: [], watch: [], conquest_priority: [], conquer: [] };
+    favs.forEach(q => {
+      const pos = posOf(q.id), ment = mentioned(q.id);
+      let b;
+      if (ment && pos != null && pos <= 3) b = "defend";
+      else if (ment && pos != null && pos >= 4 && pos <= 10) b = "watch";
+      else if (!ment && q.keyword_id) b = "conquest_priority";
+      else b = "conquer";
+      buckets[b].push({ question: q.question, pos });
+    });
+    return { buckets, total: favs.length };
+  }, [questions, results]);
+
+  if (!data) return (
+    <div style={{ fontSize: 12, color: "#1A3C2E44", fontStyle: "italic", padding: "8px 0" }}>
+      Aucune question favorite. Marquez vos questions stratégiques (★) dans l'onglet Fan-outs pour les suivre ici.
+    </div>
+  );
+
+  const META = {
+    defend:            { label: "À défendre",          color: "#1A7A4A", desc: "La marque lead (#1-3)" },
+    watch:             { label: "À surveiller",         color: "#C97820", desc: "Top 4-10" },
+    conquest_priority: { label: "Conquête prioritaire", color: "#E8541A", desc: "Non positionnée · fort potentiel" },
+    conquer:           { label: "À conquérir",          color: "#1A3C2E77", desc: "Non positionnée" },
+  };
+  const order = ["defend", "watch", "conquest_priority", "conquer"];
+
+  return (
+    <div>
+      {/* Barre de répartition */}
+      <div style={{ display: "flex", height: 6, borderRadius: 3, overflow: "hidden", background: "#1A3C2E0C", marginBottom: 14 }}>
+        {order.map(b => {
+          const n = data.buckets[b].length;
+          if (!n) return null;
+          return <div key={b} style={{ width: `${n / data.total * 100}%`, background: META[b].color }} title={`${META[b].label} : ${n}`} />;
+        })}
+      </div>
+
+      {/* Grille des 4 buckets */}
+      <div className="audit-questions-grid">
+        {order.map(b => {
+          const items = data.buckets[b];
+          const meta = META[b];
+          return (
+            <div key={b} style={{ border: "0.5px solid #1A3C2E0D", borderRadius: 10, padding: "12px 14px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 8 }}>
+                <span style={{ width: 8, height: 8, borderRadius: "50%", background: meta.color, flexShrink: 0 }} />
+                <span style={{ fontSize: 12, fontWeight: 600, color: meta.color }}>{meta.label}</span>
+                <span style={{ fontSize: 16, fontWeight: 700, color: meta.color, marginLeft: "auto" }}>{items.length}</span>
+              </div>
+              <div style={{ fontSize: 10, color: "#1A3C2E44", marginBottom: 8 }}>{meta.desc}</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 3, maxHeight: 130, overflowY: "auto" }}>
+                {items.slice(0, 8).map((it, i) => (
+                  <div key={i} style={{ fontSize: 11, color: "#1A3C2E", lineHeight: 1.4, display: "flex", gap: 6, alignItems: "baseline" }}>
+                    <span style={{ flex: 1 }}>{it.question}</span>
+                    {it.pos != null && <span style={{ fontSize: 10, color: meta.color, flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>#{it.pos}</span>}
+                  </div>
+                ))}
+                {items.length > 8 && <div style={{ fontSize: 10, color: "#1A3C2E33" }}>+ {items.length - 8} autres</div>}
+                {!items.length && <div style={{ fontSize: 10, color: "#1A3C2E22", fontStyle: "italic" }}>—</div>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+
+function GeoScoreBanner({ audit, auditFav = null, brand, site }) {
   const score = audit.presenceRate;
+  const favScore = auditFav ? auditFav.presenceRate : null;
+  const favDelta = favScore != null ? favScore - score : null;
   const level = score >= 70 ? { label: "Excellente",            color: "#1A7A4A", bar: "#1A7A4A" }
               : score >= 50 ? { label: "Bonne présence",           color: "#1A3C2E", bar: "#1A3C2E" }
               : score >= 30 ? { label: "Potentiel à développer",   color: "#C97820", bar: "#C97820" }
@@ -462,6 +548,24 @@ function GeoScoreBanner({ audit, brand, site }) {
             <div style={{ height: "100%", width: `${score}%`, background: level.bar, borderRadius: 2, transition: "width 0.5s" }} />
           </div>
           <div style={{ marginTop: 5, fontSize: 11, color: level.color, fontWeight: 500 }}>{level.label}</div>
+          {/* Score favoris en parallèle */}
+          {favScore != null && (
+            <div style={{ marginTop: 12, paddingTop: 10, borderTop: "0.5px solid #1A3C2E0C" }}>
+              <div style={{ fontSize: 9, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#C9782099", marginBottom: 3, display: "flex", alignItems: "center", gap: 4 }}>
+                <span style={{ color: "#C97820" }}>★</span> Favoris
+              </div>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
+                <span style={{ fontSize: 26, fontWeight: 700, color: "#C97820", lineHeight: 1, letterSpacing: "-0.02em" }}>{favScore}</span>
+                <span style={{ fontSize: 13, color: "#C97820", fontWeight: 500 }}>%</span>
+                {favDelta != null && favDelta !== 0 && (
+                  <span style={{ fontSize: 11, fontWeight: 600, color: favDelta > 0 ? "#1A7A4A" : "#C0352A", marginLeft: 2 }}>
+                    {favDelta > 0 ? "▲ +" : "▼ "}{favDelta} pts
+                  </span>
+                )}
+              </div>
+              <div style={{ fontSize: 10, color: "#1A3C2E44", marginTop: 3 }}>{auditFav.withBrand}/{auditFav.total} réponses favorites</div>
+            </div>
+          )}
         </div>
 
         {/* Séparateur */}
@@ -841,7 +945,7 @@ function computeAudit(questions, results, urlIndex, brand, site, calendarEntries
     } catch { return false; }
   }).slice(0, 10);
 
-  return { total, withBrand, withSources, withRanked, withSourceOnly, withMentionOnly, avgPos, avgMentionPos, avgEvocationPos, avgCitationPos, mentionCount, evocationCount, citationCount, presenceRate, trendDays, sortedUrls, brandUrls, brandOwnUrls, brandExternalUrls, urlDetails, competitorUrls, referenceUrls, topDomains, intentCount, typeCount, compStats, top5Competitors, byQuestionCategory, urlsToOptimize, urlsToRework, urlsToInspire, leads, questions: questions.length, providerStats, missingBrandQs, presentBrandQs, hasFavFilter, favCount };
+  return { total, withBrand, withSources, withRanked, withSourceOnly, withMentionOnly, avgPos, avgMentionPos, avgEvocationPos, avgCitationPos, mentionCount, evocationCount, citationCount, presenceRate, trendDays, sortedUrls, brandUrls, brandOwnUrls, brandExternalUrls, urlDetails, competitorUrls, referenceUrls, topDomains, intentCount, typeCount, compStats, top5Competitors, byQuestionCategory, urlsToOptimize, urlsToRework, urlsToInspire, leads, questions: questions.length, providerStats, missingBrandQs, presentBrandQs, hasFavFilter, favCount, _rawResults: results };
 }
 
 
@@ -1016,6 +1120,15 @@ function AIAnalysis({ audit, brand, site, questions, onTextReady, projectId = nu
       topIntents: Object.entries(audit.intentCount).sort((a,b)=>b[1]-a[1]).slice(0,3).map(([k,v])=>`${k}(${v})`).join(", "),
       competitors: Object.entries(audit.compStats).sort((a,b)=>b[1].mentions-a[1].mentions).slice(0,5).map(([k,v])=>`${k}(${v.mentions}x)`).join(", "),
       urlsToOptimize: audit.urlsToOptimize.slice(0,5).map(u => u.norm || u.url).join(", "),
+      favorites: (() => {
+        const favs = (questions || []).filter(q => q.is_favorite);
+        if (!favs.length) return "aucune";
+        const byQ = {};
+        (audit._rawResults || []).forEach(r => { (byQ[r.question_id] = byQ[r.question_id] || []).push(r); });
+        const ment = (qId) => (byQ[qId] || []).some(r => r.brand_mentioned);
+        const presentFav = favs.filter(q => ment(q.id)).length;
+        return `${favs.length} questions favorites (périmètre stratégique prioritaire), dont ${presentFav} avec présence marque`;
+      })(),
     };
     const prompt = `Tu es un expert senior en SEO et GEO (Generative Engine Optimization). Tu maîtrises les études publiées par Moz, Ahrefs, Search Engine Land, Google, Bing, et les travaux académiques sur les LLMs. Produis un audit GEO expert et rigoureusement sourcé pour ${summary.site} / "${summary.brand}".
 
@@ -1023,6 +1136,7 @@ DONNÉES D'ANALYSE :
 ${JSON.stringify(summary, null, 2)}
 
 CONSIGNES STRICTES :
+- PRIORISE les recommandations qui concernent les questions favorites (périmètre stratégique du client, voir champ "favorites")
 - Chaque recommandation concrète DOIT se terminer par [En savoir plus](URL) avec une vraie source reconnue (2022-2025)
 - Sources autorisées : moz.com, ahrefs.com, searchengineland.com, developers.google.com, bing.com/webmasters, perplexity.ai/blog, etudes HubSpot, Nielsen, Semrush
 - Citer le % ou chiffre exact de l'étude quand disponible
@@ -1655,6 +1769,10 @@ ${present.map((q,i)=>`${i+1}. ${q}`).join("\n")||"Aucune"}
 
 QUESTIONS SANS PRÉSENCE — PRIORITÉS (${missing.length}) :
 ${missing.map((q,i)=>`${i+1}. ${q}`).join("\n")||"Aucune"}
+
+QUESTIONS FAVORITES — PÉRIMÈTRE STRATÉGIQUE (${(questions||[]).filter(q=>q.is_favorite).length}) :
+${(questions||[]).filter(q=>q.is_favorite).map((q,i)=>`${i+1}. ${q.question}`).join("\n")||"Aucune"}
+(Priorise EXPLICITEMENT les recommandations qui concernent ces questions favorites.)
 
 TOP CONCURRENTS CITÉS :
 ${topComps.map(([n,c])=>`- ${n}: ${c}×`).join("\n")||"Aucun"}
@@ -2690,7 +2808,12 @@ export default function GeoAuditTab({
   const siteResults   = useMemo(() => results.filter(r => r.site_id === site?.id), [results, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const siteQuestions = useMemo(() => questions.filter(q => q.site_id === site?.id), [questions, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const siteUrls      = useMemo(() => urlIndex.filter(u => u.project_id === projectId), [urlIndex, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
-  const audit         = useMemo(() => computeAudit(siteQuestions, siteResults, siteUrls, brand, site, calendarEntries, keywords, competitors), [siteQuestions, siteResults, siteUrls, brand, site, calendarEntries, keywords, competitors]); // eslint-disable-line react-hooks/exhaustive-deps
+  const audit         = useMemo(() => computeAudit(siteQuestions, siteResults, siteUrls, brand, site, calendarEntries, keywords, competitors), [siteQuestions, siteResults, siteUrls, brand, site, calendarEntries, keywords, competitors]);
+  // ── Audit recalculé sur le sous-ensemble FAVORIS (affichage parallèle) ──
+  const favQuestions  = useMemo(() => siteQuestions.filter(q => q.is_favorite), [siteQuestions]);
+  const favQIds       = useMemo(() => new Set(favQuestions.map(q => q.id)), [favQuestions]);
+  const favResults    = useMemo(() => siteResults.filter(r => favQIds.has(r.question_id)), [siteResults, favQIds]);
+  const auditFav      = useMemo(() => favQuestions.length ? computeAudit(favQuestions, favResults, siteUrls, brand, site, calendarEntries, keywords, competitors) : null, [favQuestions, favResults, siteUrls, brand, site, calendarEntries, keywords, competitors]); // eslint-disable-line react-hooks/exhaustive-deps
   const noData        = !siteResults.length;
 
 
@@ -2859,7 +2982,7 @@ export default function GeoAuditTab({
                 BLOC 1 — SYNTHÈSE EXÉCUTIVE
                 Présence GEO + KPIs clés en un coup d'œil
             ══════════════════════════════════════════════════════ */}
-            <div data-tour="audit-score"><GeoScoreBanner audit={audit} brand={brand} site={site} /></div>
+            <div data-tour="audit-score"><GeoScoreBanner audit={audit} auditFav={auditFav} brand={brand} site={site} /></div>
 
             {/* ══════════════════════════════════════════════════════
                 BLOC 2 — VISIBILITÉ MARQUE
@@ -2962,6 +3085,14 @@ export default function GeoAuditTab({
               brand={brand}
               claudeKey={claudeKey}
             />
+
+            {/* ══════════════════════════════════════════════════════
+                BLOC 2bis — PERFORMANCE DES FAVORIS
+                Met en avant le périmètre stratégique (questions ★)
+            ══════════════════════════════════════════════════════ */}
+            <div data-tour="audit-favorites" style={{ display: "contents" }}><Section title="Performance des favoris" sub="Vos questions stratégiques (★) classées par niveau de maîtrise">
+              <FavoritesPerformance questions={siteQuestions} results={siteResults} />
+            </Section></div>
 
             {/* ══════════════════════════════════════════════════════
                 BLOC 3 — ANALYSE CONCURRENTIELLE

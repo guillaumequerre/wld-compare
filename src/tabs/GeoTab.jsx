@@ -2686,6 +2686,10 @@ ${brandQsData.slice(0, 12).map((q, i) => `${i+1}. "${q.question}" — ${q.mentio
 
 SYNTHÈSE PAR CATÉGORIE :
 ${Object.entries(byCat).map(([cat, s]) => `- ${cat} : ${s.mentioned}/${s.total} questions avec mention (${Math.round(s.mentioned/s.total*100)}%)`).join("\n") || "Aucune catégorie"}
+
+QUESTIONS FAVORITES — PÉRIMÈTRE STRATÉGIQUE PRIORITAIRE (${favClassified.length}) :
+${favClassified.slice(0, 25).map((f, i) => `${i+1}. "${f.question}" — ${f.bucket === "defend" ? "à défendre (lead)" : f.bucket === "watch" ? "à surveiller (top 4-10)" : f.bucket === "conquest_priority" ? "conquête prioritaire" : "à conquérir"}${f.pos ? ` #${f.pos}` : ""}`).join("\n") || "Aucune question favorite"}
+IMPORTANT : les questions favorites sont le périmètre stratégique du client. Priorise EXPLICITEMENT les actions qui les concernent. Pour toute action de la roadmap liée à une question favorite, mets "favorite": true.
 ${previousForComparison ? `\nANALYSE PRÉCÉDENTE (pour comparaison) :\n${JSON.stringify(previousForComparison).slice(0, 1500)}` : ""}
 
 ---
@@ -2697,7 +2701,7 @@ Réponds UNIQUEMENT avec un objet JSON valide (sans markdown, sans backticks) de
     { "category": "nom catégorie", "synthesis": "synthèse 1-2 phrases", "recommendation": "reco actionnable précise" }
   ],
   "roadmap": [
-    { "action": "action concrète et précise", "category": "catégorie concernée ou 'Marque'", "impact": 8, "confidence": 7, "ease": 5 }
+    { "action": "action concrète et précise", "category": "catégorie concernée ou 'Marque'", "impact": 8, "confidence": 7, "ease": 5, "favorite": false }
   ],
   ${previousForComparison ? `"comparison": { "better": "ce qui a mieux fonctionné", "worse": "ce qui a moins bien fonctionné", "done": "ce qui semble avoir été fait", "missing": "ce qui semble avoir manqué", "reinforce": "ce qui est à renforcer" }` : `"comparison": null`}
 }
@@ -2750,10 +2754,10 @@ RÈGLES :
   // ── Export CSV roadmap ──
   const exportRoadmapCSV = () => {
     if (!data?.roadmap?.length) return;
-    const header = ["Action", "Catégorie", "Impact", "Confidence", "Ease", "Score ICE"];
+    const header = ["Action", "Catégorie", "Favori", "Impact", "Confidence", "Ease", "Score ICE"];
     const rows = [header, ...data.roadmap.map(r => {
       const ice = ((r.impact || 0) + (r.confidence || 0) + (r.ease || 0));
-      return [r.action, r.category || "", r.impact, r.confidence, r.ease, ice];
+      return [r.action, r.category || "", r.favorite ? "Oui" : "", r.impact, r.confidence, r.ease, ice];
     })];
     downloadText(toCSV(rows), `roadmap_geo_${new Date().toISOString().slice(0,10)}.csv`);
   };
@@ -2822,6 +2826,29 @@ RÈGLES :
       {open && status === "done" && data && !data.error && (
         <div style={{ borderTop: "0.5px solid #1A3C2E0D", paddingTop: 16, display: "flex", flexDirection: "column", gap: 24 }}>
 
+          {/* 0. Accroche favoris — périmètre stratégique en tête */}
+          {Array.isArray(data.favorites) && data.favorites.length > 0 && (() => {
+            const counts = data.favorites.reduce((acc, f) => { acc[f.bucket] = (acc[f.bucket] || 0) + 1; return acc; }, {});
+            const META = { defend: { l: "à défendre", c: "#1A7A4A" }, watch: { l: "à surveiller", c: "#C97820" }, conquest_priority: { l: "en conquête prioritaire", c: "#E8541A" }, conquer: { l: "à conquérir", c: "#1A3C2E77" } };
+            return (
+              <div style={{ background: "#FFFBF5", border: "0.5px solid #C9782022", borderRadius: 10, padding: "14px 16px" }}>
+                <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.10em", textTransform: "uppercase", color: "#C97820", marginBottom: 8, display: "flex", alignItems: "center", gap: 5 }}>
+                  <span>★</span> Périmètre stratégique — {data.favorites.length} favori{data.favorites.length > 1 ? "s" : ""}
+                </div>
+                <div style={{ fontSize: 12, color: "#1A3C2E", lineHeight: 1.7 }}>
+                  {["defend", "watch", "conquest_priority", "conquer"].filter(b => counts[b]).map((b, i, arr) => (
+                    <span key={b}>
+                      <strong style={{ color: META[b].c }}>{counts[b]}</strong> {META[b].l}{i < arr.length - 1 ? " · " : ""}
+                    </span>
+                  ))}
+                </div>
+                <div style={{ fontSize: 11, color: "#1A3C2E66", marginTop: 6 }}>
+                  Les recommandations ci-dessous priorisent ces questions (★ dans la roadmap).
+                </div>
+              </div>
+            );
+          })()}
+
           {/* 1. Analyse requêtes marque */}
           {data.brandAnalysis && (
             <div style={{ borderLeft: "2px solid #1A3C2E18", paddingLeft: 16 }}>
@@ -2876,12 +2903,18 @@ RÈGLES :
                     </tr>
                   </thead>
                   <tbody>
-                    {[...data.roadmap].sort((a, b) => ((b.impact||0)+(b.confidence||0)+(b.ease||0)) - ((a.impact||0)+(a.confidence||0)+(a.ease||0))).map((r, i) => {
+                    {[...data.roadmap].sort((a, b) => {
+                      if (!!b.favorite !== !!a.favorite) return b.favorite ? 1 : -1; // Favoris d'abord
+                      return ((b.impact||0)+(b.confidence||0)+(b.ease||0)) - ((a.impact||0)+(a.confidence||0)+(a.ease||0));
+                    }).map((r, i) => {
                       const ice = (r.impact || 0) + (r.confidence || 0) + (r.ease || 0);
                       const isBrand = (r.category || "").toLowerCase() === "marque";
                       return (
-                        <tr key={i} style={{ borderBottom: "0.5px solid #1A3C2E0D" }}>
-                          <td style={{ padding: "8px", color: "#1A3C2E", lineHeight: 1.4 }}>{r.action}</td>
+                        <tr key={i} style={{ borderBottom: "0.5px solid #1A3C2E0D", background: r.favorite ? "#FFFBF5" : "transparent" }}>
+                          <td style={{ padding: "8px", color: "#1A3C2E", lineHeight: 1.4 }}>
+                            {r.favorite && <span title="Concerne une question favorite" style={{ color: "#C97820", marginRight: 5 }}>★</span>}
+                            {r.action}
+                          </td>
                           <td style={{ padding: "8px" }}>
                             <span style={{ fontSize: 10, fontWeight: 600, color: isBrand ? "#1A3C2E" : "#1A3C2E77", background: isBrand ? "#1A3C2E11" : "transparent", border: `0.5px solid ${isBrand ? "#1A3C2E33" : "#1A3C2E11"}`, borderRadius: 10, padding: "1px 8px", whiteSpace: "nowrap" }}>
                               {r.category || "—"}
