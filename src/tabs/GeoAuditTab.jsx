@@ -2632,6 +2632,7 @@ export default function GeoAuditTab({
     setSelectedSite(sites?.[0]?.id || "");
   }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
   const [aiText, setAiText]             = useState("");
+  const [roadmapData, setRoadmapData]   = useState(null);
   const [exporting, setExporting]       = useState(false);
   const [showTour, setShowTour]         = useState(false);
   const [sfCorrFilter, setSfCorrFilter] = useState("all"); // "all" | "gsc" | "bing" | "fanout"
