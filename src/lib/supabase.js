@@ -578,16 +578,14 @@ export async function sbSaveGeoResult(result) {
   if (result.brand_evocation_position !== undefined) detailCols.brand_evocation_position = result.brand_evocation_position ?? null;
   if (result.brand_citation_position  !== undefined) detailCols.brand_citation_position  = result.brand_citation_position  ?? null;
 
-  // ── Helper POST : insert simple, sans on-conflict fragile ──
-  // On déduplique manuellement : DELETE le résultat du jour pour ce
-  // couple (question_id, model) puis INSERT le nouveau. Ainsi pas de
-  // dépendance à une contrainte unique côté Postgres.
-  const today = (result.created_at || new Date().toISOString()).slice(0, 10);
-  // Supprimer un éventuel résultat existant du même jour pour ce question+model
+  // ── Dédoublonnage : la contrainte unique est geo_results_question_model_unique
+  // sur (question_id, model) — SANS la date. On doit donc supprimer TOUT
+  // résultat existant pour ce couple (peu importe sa date) avant d'insérer,
+  // sinon l'INSERT viole la contrainte (409 Conflict).
   await fetchSupabase(
-    `${PROXY}/rest/v1/geo_results?question_id=eq.${encodeURIComponent(result.question_id)}&model=eq.${encodeURIComponent(result.model)}&created_at=gte.${today}T00:00:00&created_at=lte.${today}T23:59:59`,
+    `${PROXY}/rest/v1/geo_results?question_id=eq.${encodeURIComponent(result.question_id)}&model=eq.${encodeURIComponent(result.model)}`,
     { method: "DELETE", headers: { ...authHeaders(), "Prefer": "return=minimal" } }
-  ).catch(() => {}); // best-effort — si ça échoue on insère quand même
+  ).catch(() => {}); // best-effort — si ça échoue on tente quand même l'insert/upsert
 
   // Tentative 1 : insert avec colonnes détaillées
   const doInsert = async (row) => fetchSupabase(`${PROXY}/rest/v1/geo_results`, {
@@ -600,6 +598,18 @@ export async function sbSaveGeoResult(result) {
     body: JSON.stringify(row),
   });
 
+  // UPSERT : si le DELETE n'a pas suffi (latence, droits), on fusionne sur conflit
+  // au lieu d'échouer en 409. Nécessite que (question_id, model) soit la clé de conflit.
+  const doUpsert = async (row) => fetchSupabase(`${PROXY}/rest/v1/geo_results`, {
+    method: "POST",
+    headers: {
+      ...authHeaders(),
+      "Content-Type": "application/json",
+      "Prefer": "return=representation,resolution=merge-duplicates",
+    },
+    body: JSON.stringify(row),
+  });
+
   let res = await doInsert({ ...baseRow, ...detailCols });
 
   // Si échec à cause d'une colonne inconnue (400/PGRST204) → retry sans les colonnes détaillées
@@ -608,6 +618,18 @@ export async function sbSaveGeoResult(result) {
     if (res.status === 400 || /column|PGRST204|schema/i.test(errPeek)) {
       console.warn("[sbSaveGeoResult] retry sans colonnes détaillées:", errPeek.slice(0, 120));
       res = await doInsert(baseRow);
+    }
+  }
+
+  // Si conflit de clé unique (409) malgré le DELETE → bascule en UPSERT (merge)
+  if (!res.ok && res.status === 409) {
+    console.warn("[sbSaveGeoResult] 409 conflict → bascule en upsert (merge-duplicates)");
+    res = await doUpsert({ ...baseRow, ...detailCols });
+    if (!res.ok && Object.keys(detailCols).length > 0) {
+      const peek = await res.clone().text().catch(() => "");
+      if (res.status === 400 || /column|PGRST204|schema/i.test(peek)) {
+        res = await doUpsert(baseRow);
+      }
     }
   }
 
@@ -817,24 +839,47 @@ export async function sbGetPresenceHistoryBatch(project_id, site_id) {
 
 export async function sbAddCalendarEntry(question_id, provider_id, brand_present, presType) {
   // presType: "mention" | "citation" | "evocation" | null
+  const test_date = new Date().toISOString().slice(0, 10);
+  const present = brand_present === true || brand_present === 1;
+
+  // Payload complet (avec ventilation M/É/C). Si la table ne possède pas ces
+  // colonnes, PostgREST renvoie une 400 → on réessaie avec les colonnes de base.
+  const fullBody = {
+    question_id,
+    provider_id,
+    brand_present: present,
+    brand_mention:   presType === "mention"   ? 1 : 0,
+    brand_citation:  presType === "citation"  ? 1 : 0,
+    brand_evocation: presType === "evocation" ? 1 : 0,
+    test_date,
+  };
+  const baseBody = { question_id, provider_id, brand_present: present, test_date };
+
+  const post = async (body) => fetchSupabase(`${PROXY}/rest/v1/geo_calendar_dates`, {
+    method: "POST",
+    headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "return=representation" },
+    body: JSON.stringify(body),
+  });
+
   try {
-    const res = await fetchSupabase(`${PROXY}/rest/v1/geo_calendar_dates`, {
-      method: "POST",
-      headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "return=representation" },
-      body: JSON.stringify({
-        question_id,
-        provider_id,
-        brand_present: brand_present === true || brand_present === 1,
-        brand_mention:   presType === "mention"   ? 1 : 0,
-        brand_citation:  presType === "citation"  ? 1 : 0,
-        brand_evocation: presType === "evocation" ? 1 : 0,
-        test_date: new Date().toISOString().slice(0, 10),
-      }),
-    });
-    if (!res.ok) { console.warn("sbAddCalendarEntry failed:", res.status); return null; }
+    let res = await post(fullBody);
+    // Colonnes manquantes ou contrainte → retomber sur le payload minimal
+    if (!res.ok && (res.status === 400 || res.status === 404 || res.status === 422)) {
+      const errText = await res.text().catch(() => "");
+      console.warn("[sbAddCalendarEntry] full payload rejected (" + res.status + "), retry base columns:", errText.slice(0, 160));
+      res = await post(baseBody);
+    }
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "");
+      console.error("[sbAddCalendarEntry] failed:", res.status, errText.slice(0, 200));
+      return null;
+    }
     const data = await res.json();
     return Array.isArray(data) ? data[0] : data;
-  } catch(e) { console.warn("sbAddCalendarEntry error:", e.message); return null; }
+  } catch(e) {
+    console.error("[sbAddCalendarEntry] error:", e.message);
+    return null;
+  }
 }
 
 // Par question (utilisé par PresenceCalendar)
