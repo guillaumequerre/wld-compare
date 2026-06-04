@@ -444,7 +444,21 @@ function Section({ icon, title, sub, children }) {
 // ── Scatter plot concurrents : citations (X) × position moy. (Y) ──
 // ── FavoritesPerformance — met en avant les questions favorites ──
 // 4 buckets : À défendre (#1-3) / À surveiller (#4-10) / Conquête prioritaire / À conquérir
-function FavoritesPerformance({ questions, results }) {
+function FavoritesPerformance({ questions, results, projectId = null, siteId = null }) {
+  // Overrides manuels de bucket par question (drag & drop), persistés en localStorage
+  const storageKey = `geoFavBuckets_${projectId || "p"}_${siteId || "s"}`;
+  const [overrides, setOverrides] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(storageKey) || "{}"); } catch { return {}; }
+  });
+  const [dragOverBucket, setDragOverBucket] = useState(null);
+
+  const persistOverrides = useCallback((next) => {
+    setOverrides(next);
+    try { localStorage.setItem(storageKey, JSON.stringify(next)); } catch { /* quota */ }
+  }, [storageKey]);
+
+  const order = ["defend", "watch", "conquest_priority", "conquer"];
+
   const data = useMemo(() => {
     const favs = questions.filter(q => q.is_favorite);
     if (!favs.length) return null;
@@ -456,18 +470,21 @@ function FavoritesPerformance({ questions, results }) {
       return ps.length ? Math.min(...ps) : null;
     };
     const mentioned = (qId) => (byQ[qId] || []).some(r => r.brand_mentioned === true || r.brand_mentioned === 1);
+    const computedBucket = (q, pos, ment) => {
+      if (ment && pos != null && pos <= 3) return "defend";
+      if (ment && pos != null && pos >= 4 && pos <= 10) return "watch";
+      if (!ment && q.keyword_id) return "conquest_priority";
+      return "conquer";
+    };
     const buckets = { defend: [], watch: [], conquest_priority: [], conquer: [] };
     favs.forEach(q => {
       const pos = posOf(q.id), ment = mentioned(q.id);
-      let b;
-      if (ment && pos != null && pos <= 3) b = "defend";
-      else if (ment && pos != null && pos >= 4 && pos <= 10) b = "watch";
-      else if (!ment && q.keyword_id) b = "conquest_priority";
-      else b = "conquer";
-      buckets[b].push({ question: q.question, pos });
+      const auto = computedBucket(q, pos, ment);
+      const b = overrides[q.id] && order.includes(overrides[q.id]) ? overrides[q.id] : auto;
+      buckets[b].push({ id: q.id, question: q.question, pos, moved: !!overrides[q.id] && overrides[q.id] !== auto });
     });
     return { buckets, total: favs.length };
-  }, [questions, results]);
+  }, [questions, results, overrides]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!data) return (
     <div style={{ fontSize: 12, color: "#1A3C2E44", fontStyle: "italic", padding: "8px 0" }}>
@@ -481,10 +498,33 @@ function FavoritesPerformance({ questions, results }) {
     conquest_priority: { label: "Conquête prioritaire", color: "#E8541A", desc: "Non positionnée · fort potentiel" },
     conquer:           { label: "À conquérir",          color: "#1A3C2E77", desc: "Non positionnée" },
   };
-  const order = ["defend", "watch", "conquest_priority", "conquer"];
+
+  const moveToBucket = (qId, targetBucket) => {
+    if (!qId || !order.includes(targetBucket)) return;
+    persistOverrides({ ...overrides, [qId]: targetBucket });
+  };
+  const resetOverride = (qId) => {
+    const next = { ...overrides };
+    delete next[qId];
+    persistOverrides(next);
+  };
+
+  const hasOverrides = Object.keys(overrides).length > 0;
 
   return (
     <div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+        <div style={{ fontSize: 11, color: "#1A3C2E66" }}>
+          Glissez-déposez une question d'une colonne à l'autre pour ajuster sa priorité.
+        </div>
+        {hasOverrides && (
+          <button onClick={() => persistOverrides({})}
+            style={{ fontSize: 10, padding: "3px 10px", borderRadius: 6, border: "0.5px solid #1A3C2E22", background: "transparent", color: "#1A3C2E77", cursor: "pointer" }}>
+            ↺ Réinitialiser le classement
+          </button>
+        )}
+      </div>
+
       {/* Barre de répartition */}
       <div style={{ display: "flex", height: 6, borderRadius: 3, overflow: "hidden", background: "#1A3C2E0C", marginBottom: 14 }}>
         {order.map(b => {
@@ -494,28 +534,47 @@ function FavoritesPerformance({ questions, results }) {
         })}
       </div>
 
-      {/* Grille des 4 buckets */}
+      {/* Grille des 4 buckets (drop zones) */}
       <div className="audit-questions-grid">
         {order.map(b => {
           const items = data.buckets[b];
           const meta = META[b];
+          const isDropTarget = dragOverBucket === b;
           return (
-            <div key={b} style={{ border: "0.5px solid #1A3C2E0D", borderRadius: 10, padding: "12px 14px" }}>
+            <div key={b}
+              onDragOver={(e) => { e.preventDefault(); if (dragOverBucket !== b) setDragOverBucket(b); }}
+              onDragLeave={(e) => { if (e.currentTarget === e.target) setDragOverBucket(null); }}
+              onDrop={(e) => {
+                e.preventDefault();
+                const qId = e.dataTransfer.getData("text/plain");
+                setDragOverBucket(null);
+                if (qId) moveToBucket(qId, b);
+              }}
+              style={{
+                border: `0.5px solid ${isDropTarget ? meta.color : "#1A3C2E0D"}`,
+                background: isDropTarget ? `${meta.color}0A` : "transparent",
+                borderRadius: 10, padding: "12px 14px", transition: "background 0.15s, border-color 0.15s",
+              }}>
               <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 8 }}>
                 <span style={{ width: 8, height: 8, borderRadius: "50%", background: meta.color, flexShrink: 0 }} />
                 <span style={{ fontSize: 12, fontWeight: 600, color: meta.color }}>{meta.label}</span>
                 <span style={{ fontSize: 16, fontWeight: 700, color: meta.color, marginLeft: "auto" }}>{items.length}</span>
               </div>
               <div style={{ fontSize: 10, color: "#1A3C2E44", marginBottom: 8 }}>{meta.desc}</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 3, maxHeight: 130, overflowY: "auto" }}>
-                {items.slice(0, 8).map((it, i) => (
-                  <div key={i} style={{ fontSize: 11, color: "#1A3C2E", lineHeight: 1.4, display: "flex", gap: 6, alignItems: "baseline" }}>
-                    <span style={{ flex: 1 }}>{it.question}</span>
+              <div style={{ display: "flex", flexDirection: "column", gap: 3, minHeight: 30, maxHeight: 200, overflowY: "auto" }}>
+                {items.map((it) => (
+                  <div key={it.id}
+                    draggable
+                    onDragStart={(e) => { e.dataTransfer.setData("text/plain", it.id); e.dataTransfer.effectAllowed = "move"; }}
+                    title={it.moved ? "Déplacée manuellement — double-clic pour rétablir le classement auto" : "Glissez pour déplacer"}
+                    onDoubleClick={() => it.moved && resetOverride(it.id)}
+                    style={{ fontSize: 11, color: "#1A3C2E", lineHeight: 1.4, display: "flex", gap: 6, alignItems: "baseline", cursor: "grab", padding: "3px 4px", borderRadius: 4, background: it.moved ? `${meta.color}0C` : "transparent" }}>
+                    <span style={{ color: "#1A3C2E22", flexShrink: 0, fontSize: 10 }}>⋮⋮</span>
+                    <span style={{ flex: 1 }}>{it.question}{it.moved && <span style={{ color: meta.color, marginLeft: 4 }}>•</span>}</span>
                     {it.pos != null && <span style={{ fontSize: 10, color: meta.color, flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>#{it.pos}</span>}
                   </div>
                 ))}
-                {items.length > 8 && <div style={{ fontSize: 10, color: "#1A3C2E33" }}>+ {items.length - 8} autres</div>}
-                {!items.length && <div style={{ fontSize: 10, color: "#1A3C2E22", fontStyle: "italic" }}>—</div>}
+                {!items.length && <div style={{ fontSize: 10, color: "#1A3C2E22", fontStyle: "italic", padding: "8px 0", textAlign: "center" }}>Déposez ici</div>}
               </div>
             </div>
           );
@@ -524,7 +583,6 @@ function FavoritesPerformance({ questions, results }) {
     </div>
   );
 }
-
 
 function GeoScoreBanner({ audit, auditFav = null, brand, site }) {
   const score = audit.presenceRate;
@@ -806,16 +864,22 @@ function computeAudit(questions, results, urlIndex, brand, site, calendarEntries
   results.forEach(r => { if (r.answer_type) typeCount[r.answer_type] = (typeCount[r.answer_type] || 0) + 1; });
   const compStats = {};
   // 1. Depuis competitors_mentioned (résultats récents)
+  // Chaque entrée concurrent : { name, mentioned, position, in_sources }
+  // → Mention = position numérotée · Évocation = citée sans position · Citation = dans les sources
   results.forEach(r => (r.competitors_mentioned || []).forEach(c => {
-    if (!compStats[c.name]) compStats[c.name] = { mentions: 0, positions: [], category: null, color: null };
-    compStats[c.name].mentions++;
-    if (c.position) compStats[c.name].positions.push(c.position);
+    if (!c.name) return;
+    if (!compStats[c.name]) compStats[c.name] = { mentions: 0, evocations: 0, citations: 0, positions: [], category: null, color: null };
+    const st = compStats[c.name];
+    const hasPos = c.position != null && c.position > 0;
+    if (hasPos) { st.mentions++; st.positions.push(c.position); }
+    else if (c.mentioned) { st.evocations++; }
+    if (c.in_sources) { st.citations++; }
   }));
 
   // 2. Enrichir avec les concurrents qualifiés (catégorie + recherche rétroactive)
   competitors.forEach(comp => {
     const key = comp.name;
-    if (!compStats[key]) compStats[key] = { mentions: 0, positions: [], category: null, color: null, enabled: true };
+    if (!compStats[key]) compStats[key] = { mentions: 0, evocations: 0, citations: 0, positions: [], category: null, color: null, enabled: true };
     // Attacher la catégorie, la couleur et le statut actif depuis geo_competitors
     compStats[key].category = comp.category || "other";
     compStats[key].color    = comp.color || "#64748B";
@@ -825,7 +889,8 @@ function computeAudit(questions, results, urlIndex, brand, site, calendarEntries
     results.forEach(r => {
       const alreadyCounted = (r.competitors_mentioned || []).some(c => c.name?.toLowerCase() === key.toLowerCase());
       if (!alreadyCounted && re.test(r.answer || "")) {
-        compStats[key].mentions++;
+        // Apparition dans le texte sans position structurée → évocation
+        compStats[key].evocations = (compStats[key].evocations || 0) + 1;
       }
     });
   });
@@ -3091,7 +3156,7 @@ export default function GeoAuditTab({
                 Met en avant le périmètre stratégique (questions ★)
             ══════════════════════════════════════════════════════ */}
             <div data-tour="audit-favorites" style={{ display: "contents" }}><Section title="Performance des favoris" sub="Vos questions stratégiques (★) classées par niveau de maîtrise">
-              <FavoritesPerformance questions={siteQuestions} results={siteResults} />
+              <FavoritesPerformance questions={siteQuestions} results={siteResults} projectId={projectId} siteId={site?.id} />
             </Section></div>
 
             {/* ══════════════════════════════════════════════════════
@@ -3105,7 +3170,7 @@ export default function GeoAuditTab({
                 const brandName = brand?.brand_name || "Marque";
                 const top5 = audit.top5Competitors?.length ? audit.top5Competitors : audit.top5Fallback || [];
                 const allRows = [
-                  { name: brandName, stats: { mentions: audit.withRanked||0, evocations: audit.withMentionOnly||0, citations: audit.withSourceOnly||0, positions: [] }, isRef: true },
+                  { name: brandName, stats: { mentions: audit.withRanked||0, evocations: audit.withMentionOnly||0, citations: audit.withSourceOnly||0, positions: audit.avgMentionPos ? [parseFloat(audit.avgMentionPos)] : [] }, isRef: true },
                   ...top5.map(([name, s]) => ({ name, stats: s, isRef: false })),
                 ];
                 return (

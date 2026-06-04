@@ -62,6 +62,53 @@ function stripQuery(url) {
 }
 
 // Convertit le markdown basique (gras, italique, listes) en éléments React
+// Répare un JSON tronqué (réponse LLM coupée par max_tokens) : retire le
+// dernier élément incomplet et referme les structures ouvertes. Best-effort.
+function repairTruncatedJson(str) {
+  if (!str) return null;
+  let s = str.trim();
+  // Retirer une virgule traînante éventuelle
+  // Parcourir et suivre la pile des structures ouvertes hors chaînes
+  const stack = [];
+  let inStr = false, esc = false, lastSafe = -1;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (inStr) {
+      if (esc) { esc = false; }
+      else if (c === "\\") { esc = true; }
+      else if (c === '"') { inStr = false; }
+      continue;
+    }
+    if (c === '"') { inStr = true; continue; }
+    if (c === "{" || c === "[") { stack.push(c); }
+    else if (c === "}" || c === "]") { stack.pop(); }
+    // Point sûr : fin d'un élément complet (valeur ou objet/tableau fermé)
+    if ((c === "}" || c === "]") && stack.length >= 0) lastSafe = i;
+  }
+  // Tronquer après le dernier point sûr connu, puis refermer la pile
+  let body = lastSafe >= 0 ? s.slice(0, lastSafe + 1) : s;
+  // Recalculer la pile sur le body tronqué
+  const st2 = [];
+  inStr = false; esc = false;
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i];
+    if (inStr) {
+      if (esc) esc = false; else if (c === "\\") esc = true; else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') inStr = true;
+    else if (c === "{" || c === "[") st2.push(c);
+    else if (c === "}" || c === "]") st2.pop();
+  }
+  // Retirer virgule traînante avant fermeture
+  body = body.replace(/,\s*$/, "");
+  // Refermer dans l'ordre inverse
+  for (let i = st2.length - 1; i >= 0; i--) {
+    body += st2[i] === "{" ? "}" : "]";
+  }
+  try { return JSON.parse(body); } catch { return null; }
+}
+
 function renderMarkdown(text) {
   if (!text) return null;
   const lines = text.split("\n");
@@ -2717,7 +2764,7 @@ RÈGLES :
       const res = await fetch("/api/claude-geo", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Claude-Key": claudeKey },
-        body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 2600, messages: [{ role: "user", content: prompt }] }),
+        body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 4096, messages: [{ role: "user", content: prompt }] }),
       });
       const respData = await res.json();
       if (!res.ok) throw new Error(respData.error?.message || `Claude ${res.status}`);
@@ -2726,11 +2773,21 @@ RÈGLES :
       // Parser le JSON (retirer un éventuel wrapping ```json)
       const cleaned = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();
       let parsed;
-      try { parsed = JSON.parse(cleaned); }
-      catch {
-        // tentative d'extraction du premier objet JSON
+      try {
+        parsed = JSON.parse(cleaned);
+      } catch {
+        // 1) extraction du bloc { ... } le plus large
         const s = cleaned.indexOf("{"); const e = cleaned.lastIndexOf("}");
-        parsed = JSON.parse(cleaned.slice(s, e + 1));
+        let candidate = (s >= 0 && e > s) ? cleaned.slice(s, e + 1) : cleaned;
+        try {
+          parsed = JSON.parse(candidate);
+        } catch {
+          // 2) réparation d'un JSON tronqué (réponse coupée par max_tokens) :
+          //    on retire un éventuel dernier élément incomplet puis on referme
+          //    les structures ouvertes ([ et {) dans le bon ordre.
+          parsed = repairTruncatedJson(s >= 0 ? cleaned.slice(s) : cleaned);
+          if (!parsed) throw new Error("Réponse de l'IA incomplète ou mal formée. Réessaie — si le problème persiste, réduis le nombre de questions.");
+        }
       }
 
       // Ajouter le tableau favoris (calculé localement, pas via Claude)
@@ -3048,6 +3105,7 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, setCa
   const [filterFav,        setFilterFavRaw]        = useState(savedF.filterFav        || false);
   const [filterPositioned, setFilterPositionedRaw] = useState(savedF.filterPositioned || false);
   const [filterLost,       setFilterLostRaw]       = useState(savedF.filterLost       || false);
+  const [sortByResult,     setSortByResult]        = useState(savedF.sortByResult     || false); // tri par résultat (mention/évoc/citation)
   const [filterCat,        setFilterCatRaw]        = useState(savedF.filterCat        || "");
   const [filterKeyword,    setFilterKeywordRaw]    = useState(savedF.filterKeyword    || "");
   const [filterSearch,     setFilterSearchRaw]     = useState(savedF.filterSearch     || "");
@@ -3427,6 +3485,38 @@ ${question}`;
     return out;
   }, [resultsByQ]);
 
+  // ── Rang de tri "par résultat" (pour le bouton trier) ───────────────
+  // Ordre voulu : 1) mentions par position croissante (Top1, Top2…)
+  //               2) évocations sans mention
+  //               3) citations sans mention ni évocation
+  //               4) le reste (aucune présence / sans résultat)
+  // On agrège TOUS les résultats d'une question et on garde sa meilleure présence.
+  const resultRankByQ = useMemo(() => {
+    const out = {};
+    const allQIds = new Set([...Object.keys(resultsByQ), ...questions.map(q => q.id)]);
+    allQIds.forEach(qId => {
+      const rs = resultsByQ[qId] || [];
+      let bestMentionPos = null, hasEvocation = false, hasCitation = false;
+      rs.forEach(r => {
+        const mPos = r.brand_mention_position ?? (r.brand_position != null && r.brand_position > 0 ? r.brand_position : null);
+        if (mPos != null && mPos > 0) {
+          if (bestMentionPos == null || mPos < bestMentionPos) bestMentionPos = mPos;
+        }
+        const evPos = r.brand_evocation_position;
+        if (evPos != null || (r.brand_mentioned === true || r.brand_mentioned === 1)) hasEvocation = true;
+        if (r.brand_citation_position != null || r.brand_in_sources) hasCitation = true;
+      });
+      // tier : 0 = mention, 1 = évocation, 2 = citation, 3 = reste
+      let tier, pos;
+      if (bestMentionPos != null) { tier = 0; pos = bestMentionPos; }
+      else if (hasEvocation)      { tier = 1; pos = 0; }
+      else if (hasCitation)       { tier = 2; pos = 0; }
+      else                        { tier = 3; pos = 0; }
+      out[qId] = { tier, pos };
+    });
+    return out;
+  }, [resultsByQ, questions]);
+
   // Per question: était positionnée dans les 30 derniers jours (carré vert calendrier)
   // mais absente du dernier résultat → "Positionnée précédemment"
   const lostByQ = useMemo(() => {
@@ -3466,7 +3556,7 @@ ${question}`;
     return out;
   }, [calendarEntries, resultsByQ, latestResultByQ]);
 
-  const filtered = useMemo(() => sortedQuestions.filter(q => {
+  const filtered = useMemo(() => { const base = sortedQuestions.filter(q => {
     // Filtres cumulatifs (ET)
     if (filterFav && !q.is_favorite) return false;
     if (filterCat && q.category_id !== filterCat) return false;
@@ -3492,7 +3582,19 @@ ${question}`;
       if (!matchPositioned && !matchLost) return false;
     }
     return true;
-  }), [questions, filterFav, filterCat, filterKeyword, filterSearch, filterProviders, filterPositioned, filterLost, resultsByQ, latestResultByQ, lostByQ]); // eslint-disable-line react-hooks/exhaustive-deps
+  });
+    // Tri optionnel "par résultat" : mentions (pos croissante) → évocations → citations → reste.
+    // À égalité de tier/pos, on conserve l'ordre de base (favoris-first puis mot-clé).
+    if (!sortByResult) return base;
+    return base
+      .map((q, i) => ({ q, i, rank: resultRankByQ[q.id] || { tier: 3, pos: 0 } }))
+      .sort((a, b) => {
+        if (a.rank.tier !== b.rank.tier) return a.rank.tier - b.rank.tier;
+        if (a.rank.pos !== b.rank.pos)   return a.rank.pos - b.rank.pos; // position croissante (Top1 avant Top2)
+        return a.i - b.i; // stabilité : ordre de base
+      })
+      .map(x => x.q);
+  }, [questions, filterFav, filterCat, filterKeyword, filterSearch, filterProviders, filterPositioned, filterLost, resultsByQ, latestResultByQ, lostByQ, sortByResult, resultRankByQ]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Returns providers that still need to be called for a question today
   const getProvidersToRun = (q, force = false) => {
@@ -3665,10 +3767,27 @@ ${question}`;
           <button className={`gt-filter-pill${filterPositioned ? " gt-filter-pill--active" : ""}`} onClick={() => setFilterPositioned(f => !f)} title="Marque présente dans le dernier résultat">Positionnée</button>
           <button className={`gt-filter-pill${filterLost ? " gt-filter-pill--active" : ""}`} onClick={() => setFilterLost(f => !f)} title="Positionnée dans les 30j, absente du dernier résultat">Perdue</button>
 
+          {/* Divider */}
+          <div style={{ width: "0.5px", height: 16, background: "#1A3C2E12", flexShrink: 0 }} />
+
+          {/* Tri par résultat — discret */}
+          <button
+            onClick={() => setSortByResult(s => !s)}
+            title="Trier par résultat : mentions (Top 1, 2, 3…) puis évocations, puis citations, puis le reste"
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 5, flexShrink: 0,
+              padding: "4px 10px", borderRadius: 20, fontSize: 11, fontWeight: 500, cursor: "pointer",
+              border: `0.5px solid ${sortByResult ? "#1A7A4A" : "#1A3C2E22"}`,
+              background: sortByResult ? "#1A7A4A" : "transparent",
+              color: sortByResult ? "#fff" : "#1A3C2E77",
+            }}>
+            <span style={{ fontSize: 12 }}>⇅</span> Trier par résultat
+          </button>
+
           {/* Reset — apparaît seulement si filtre actif */}
-          {(filterSearch || filterCat || filterKeyword || filterFav || filterPositioned || filterLost || filterProviders.length > 0) && (
+          {(filterSearch || filterCat || filterKeyword || filterFav || filterPositioned || filterLost || filterProviders.length > 0 || sortByResult) && (
             <button
-              onClick={() => { setFilterSearch(""); setFilterCat(""); setFilterKeyword(""); setFilterFav(false); setFilterPositioned(false); setFilterLost(false); setFilterProviders([]); }}
+              onClick={() => { setFilterSearch(""); setFilterCat(""); setFilterKeyword(""); setFilterFav(false); setFilterPositioned(false); setFilterLost(false); setFilterProviders([]); setSortByResult(false); }}
               className="gt-btn-icon"
               title="Effacer tous les filtres"
               style={{ fontSize: 12, color: "#1A3C2E44" }}>
