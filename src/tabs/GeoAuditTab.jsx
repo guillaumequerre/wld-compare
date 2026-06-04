@@ -1,5 +1,4 @@
-import { 
-            </div>useState, useMemo, useCallback, useEffect } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import "./geo-responsive.css";
 import TourGuide from "./TourGuide";
 import { sbGetBrand, sbGetQuestions, sbGetGeoResults, sbGetUrlIndex,
@@ -3162,7 +3161,6 @@ export default function GeoAuditTab({
                 <AIAnalysis audit={audit} brand={brand} site={site} questions={siteQuestions} onTextReady={setAiText} projectId={projectId} siteId={site?.id} />
               </div>
             </Section>
-            </div>
             </div>
 
           </>)}
