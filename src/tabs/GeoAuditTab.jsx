@@ -2434,7 +2434,6 @@ ${bloc1}
 ${bloc2}
 ${bloc3}
 ${bloc4}
-${blocAnalyse}
 ${bloc5}
 </div>
 ${footer}
@@ -2786,7 +2785,7 @@ async function exportPresentation(audit, brand, site, questions, results, roadma
 
   const html = `<!DOCTYPE html>
 <html lang="fr"><head><meta charset="UTF-8"><title>Audit GEO — ${brandName} — ${dateStr}</title><style>${css}</style></head>
-<body>${cover}${toc}<div class="content">${bloc1}${bloc2}${bloc3}${bloc4}${bloc5}</div>${synthese}${footer}</body></html>`;
+<body>${cover}${toc}<div class="content">${bloc1}${bloc2}${bloc3}${bloc4}${blocAnalyse}${bloc5}</div>${synthese}${footer}</body></html>`;
 
   const blob = new Blob([html], { type: "text/html;charset=utf-8" });
   const el = document.createElement("a");
