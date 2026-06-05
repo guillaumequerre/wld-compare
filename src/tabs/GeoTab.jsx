@@ -1110,11 +1110,13 @@ function parseOpenAIResponse(data, endpoint = "responses") {
 //             position = rang dans la liste de sources
 
 function detectBrand(answer, sources, brandName, brandAliases = [], competitors = []) {
-  const allTerms = [brandName, ...brandAliases].filter(Boolean).map(t => t.toLowerCase().trim());
-  const allCompetitorNames = competitors.filter(Boolean).map(t => t.toLowerCase().trim());
+  // Normalisation casse + accents : « ÉLÉAS » et « Eleas » doivent matcher.
+  const norm = (s) => (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+  const allTerms = [brandName, ...brandAliases].filter(Boolean).map(t => norm(t));
+  const allCompetitorNames = competitors.filter(Boolean).map(t => norm(t));
 
   function matches(text) {
-    const t = (text || "").toLowerCase();
+    const t = norm(text);
     return allTerms.some(term => term && t.includes(term));
   }
 
@@ -1222,7 +1224,7 @@ function detectBrand(answer, sources, brandName, brandAliases = [], competitors 
   }
 
   // ── Concurrents mentionnés (rétrocompat) ─────────────────────
-  const answerLower = (answer || "").toLowerCase();
+  const answerLower = norm(answer);
   const competitorsMentioned = allCompetitorNames
     .map(name => {
       let cpos = null;
@@ -1231,7 +1233,7 @@ function detectBrand(answer, sources, brandName, brandAliases = [], competitors 
         const m = line.match(topItemRe);
         if (m) {
           cp++;
-          if (line.toLowerCase().includes(name)) { cpos = cp; break; }
+          if (norm(line).includes(name)) { cpos = cp; break; }
         }
       }
       return {
@@ -1249,7 +1251,7 @@ function detectBrand(answer, sources, brandName, brandAliases = [], competitors 
     brandName,
     ...(brandAliases || []),
     ...allCompetitorNames,
-  ].map(t => (t || "").toLowerCase().trim()).filter(Boolean);
+  ].map(t => norm(t)).filter(Boolean);
   const rankedSeqs = sequences.filter(s => s.length >= 2).sort((a, b) => b.length - a.length);
   const topSeq = rankedSeqs[0] || [];
   const unknownEntities = [];
@@ -1262,7 +1264,7 @@ function detectBrand(answer, sources, brandName, brandAliases = [], competitors 
     nameRaw = nameRaw.replace(/\*\*/g, "").replace(/[.,;]+$/, "").trim();
     // Garder un nom plausible (2-40 car, pas une phrase entière)
     if (nameRaw.length < 2 || nameRaw.length > 40 || nameRaw.split(/\s+/).length > 5) return;
-    const low = nameRaw.toLowerCase();
+    const low = norm(nameRaw);
     // Exclure marque + concurrents connus
     if (knownTerms.some(t => low.includes(t) || t.includes(low))) return;
     unknownEntities.push({ name: nameRaw, position: item.ordinal });
