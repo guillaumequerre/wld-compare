@@ -343,7 +343,7 @@ Sois direct, concis, actionnable. Pas de généralités.`;
             ⚠️ Aucun mot-clé catégorisé ({catCoverage}% des {kwTotal} mots-clés ont une catégorie)
           </div>
           <div style={{ fontSize: 11, color: "#B45309", marginBottom: 10 }}>
-            Pour une analyse pertinente, catégorisez vos mots-clés dans <strong>Fan-outs → Mots-clés</strong>.
+            Pour une analyse pertinente, catégorisez vos mots-clés dans <strong>Suivi GEO → Mots-clés</strong>.
             Les catégories s'appliquent aux questions liées au mot-clé.
           </div>
           <div style={{ display: "flex", gap: 8 }}>
@@ -398,7 +398,7 @@ Sois direct, concis, actionnable. Pas de généralités.`;
       )}
       {catStats.length === 0 && status !== "warning" && (
         <div style={{ padding: "14px 20px", fontSize: 12, color: C.textLight, fontStyle: "italic" }}>
-          Catégorisez vos mots-clés dans Fan-outs → Mots-clés pour voir la présence par axe thématique.
+          Catégorisez vos mots-clés dans Suivi GEO → Mots-clés pour voir la présence par axe thématique.
         </div>
       )}
 
@@ -518,7 +518,7 @@ function FanoutAnalysisRecap({ projectId, siteId }) {
 
   return (
     <div data-tour="audit-fanout-recap" style={{ display: "contents" }}>
-      <Section title="Analyse Fan-out" sub="Recommandations générées dans l'onglet Fan-outs">
+      <Section title="Analyse Fan-out" sub="Recommandations générées dans l'onglet Suivi GEO">
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
           {savedDate && (
             <span style={{ fontSize: 10, color: "#1A3C2E55" }}>
@@ -592,7 +592,7 @@ function FavoritesPerformance({ questions, results, projectId = null, siteId = n
 
   if (!data) return (
     <div style={{ fontSize: 12, color: "#1A3C2E44", fontStyle: "italic", padding: "8px 0" }}>
-      Aucune question favorite. Marquez vos questions stratégiques (★) dans l'onglet Fan-outs pour les suivre ici.
+      Aucune question favorite. Marquez vos questions stratégiques (★) dans l'onglet Suivi GEO pour les suivre ici.
     </div>
   );
 
@@ -2434,6 +2434,7 @@ ${bloc1}
 ${bloc2}
 ${bloc3}
 ${bloc4}
+${blocAnalyse}
 ${bloc5}
 </div>
 ${footer}
@@ -2561,6 +2562,13 @@ async function exportPresentation(audit, brand, site, questions, results, roadma
   roadmap.sort((a, b) => (b.impact + b.confidence + b.ease) - (a.impact + a.confidence + a.ease));
   const iceColor = (s) => s >= 24 ? S.ok : s >= 18 ? S.warn : S.inkLight;
 
+  // ── Analyse « Et maintenant ? » (générée dans Suivi GEO) : constats + opportunités ──
+  const hasNextSteps = !!(roadmapData && (roadmapData.brandAnalysis || roadmapData.categoryAnalysis?.length || roadmapData.summary));
+  const nsConstats = roadmapData?.summary || roadmapData?.brandAnalysis || "";
+  const nsBrand = (roadmapData?.brandAnalysis && roadmapData.brandAnalysis !== nsConstats) ? roadmapData.brandAnalysis : "";
+  const nsCats = Array.isArray(roadmapData?.categoryAnalysis) ? roadmapData.categoryAnalysis : [];
+  const esc2 = (t) => String(t || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
   // ── Favoris catégorisés (logique NextStepsAnalysis) ──
   const resultsByQ = {};
   results.forEach(r => { (resultsByQ[r.question_id] = resultsByQ[r.question_id] || []).push(r); });
@@ -2649,7 +2657,9 @@ async function exportPresentation(audit, brand, site, questions, results, roadma
 
   const TOC = [
     "État des lieux", "Forces & opportunités par sujet", "Sources & URLs citées",
-    "Analyse concurrentielle", "Recommandations — Roadmap ICE", "Synthèse",
+    "Analyse concurrentielle",
+    ...(hasNextSteps ? ["Analyse — Et maintenant ?"] : []),
+    "Plan d'action priorisé — Roadmap ICE", "Synthèse",
   ];
 
   const cover = `<div class="cover">
@@ -2722,6 +2732,25 @@ async function exportPresentation(audit, brand, site, questions, results, roadma
     }</tbody></table>` : `<div style="font-size:13px;color:${S.inkLight};padding:12px 0;">Aucun concurrent détecté dans les réponses analysées.</div>`}
   `;
 
+  // BLOC ANALYSE — « Et maintenant ? » (récupérée de Suivi GEO) : constats + opportunités
+  const blocAnalyse = hasNextSteps ? `
+    <div class="section-hd"><div class="section-num">5</div><div class="section-title">Analyse — Et maintenant&nbsp;?</div></div>
+    <div style="font-size:13px;color:${S.inkMid};margin-bottom:18px;">Synthèse stratégique issue de l'analyse « Et maintenant&nbsp;? » générée dans Suivi GEO.</div>
+
+    <div style="margin-bottom:22px;">
+      <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:${S.green};margin-bottom:8px;">1 · Constats sur l'état GEO</div>
+      <div style="font-size:13px;line-height:1.7;color:${S.ink};">${esc2(nsConstats) || "—"}</div>
+      ${nsBrand ? `<div style="font-size:13px;line-height:1.7;color:${S.inkMid};margin-top:8px;">${esc2(nsBrand)}</div>` : ""}
+    </div>
+
+    <div style="margin-bottom:8px;">
+      <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:${S.accent};margin-bottom:8px;">2 · Pistes non exploitées &amp; opportunités</div>
+      ${nsCats.length ? `<table><thead><tr><th>Sujet</th><th>Constat</th><th>Recommandation</th></tr></thead><tbody>${
+        nsCats.map(c => `<tr><td><b>${esc2(c.category)}</b></td><td>${esc2(c.synthesis)}</td><td style="color:${S.accent}">${esc2(c.recommendation)}</td></tr>`).join("")
+      }</tbody></table>` : `<div style="font-size:13px;color:${S.inkMid};">Aucune piste par sujet dans l'analyse. Les opportunités par catégorie figurent en section « Forces &amp; opportunités ».</div>`}
+    </div>
+  ` : "";
+
   // BLOC 5 — Roadmap ICE
   const roadmapRows = roadmap.map(r => {
     const ice = r.impact + r.confidence + r.ease;
@@ -2734,9 +2763,9 @@ async function exportPresentation(audit, brand, site, questions, results, roadma
     return `<div class="bucket"><div class="bucket-hd"><span class="bucket-dot" style="background:${bucketDots[b]}"></span>${BUCKET_LABELS[b]} · ${items.length}</div><ul>${items.map(it => `<li>${it.q}${it.pos ? ` (#${it.pos})` : ""}</li>`).join("")}</ul></div>`;
   }).join("");
   const bloc5 = `
-    <div class="section-hd"><div class="section-num">5</div><div class="section-title">Recommandations — Roadmap ICE</div></div>
+    <div class="section-hd"><div class="section-num">6</div><div class="section-title">3 · Plan d'action priorisé — Roadmap ICE</div></div>
     <div style="font-size:13px; color:${S.inkMid}; margin-bottom:6px;">Priorisation par matrice ICE (Impact · Confidence · Ease). Score sur 30.</div>
-    ${roadmap.length ? `<table><thead><tr><th>Action</th><th>Catégorie</th><th class="c">I</th><th class="c">C</th><th class="c">E</th><th class="c">ICE</th></tr></thead><tbody>${roadmapRows}</tbody></table>` : `<div style="font-size:13px;color:${S.inkLight};padding:12px 0;">Générez l'analyse « Et maintenant ? » dans l'onglet Fan-outs pour une roadmap ICE détaillée.</div>`}
+    ${roadmap.length ? `<table><thead><tr><th>Action</th><th>Catégorie</th><th class="c">I</th><th class="c">C</th><th class="c">E</th><th class="c">ICE</th></tr></thead><tbody>${roadmapRows}</tbody></table>` : `<div style="font-size:13px;color:${S.inkLight};padding:12px 0;">Générez l'analyse « Et maintenant ? » dans l'onglet Suivi GEO pour une roadmap ICE détaillée.</div>`}
     ${favHtml ? `<div style="margin-top:24px;"><div style="font-size:13px;font-weight:600;color:${S.green};margin-bottom:10px;">Questions favorites par priorité</div>${favHtml}</div>` : ""}
   `;
 
@@ -3013,7 +3042,18 @@ export default function GeoAuditTab({
     return () => { cancelled = true; };
   }, [projectId, site?.id]);
 
-  const siteResults   = useMemo(() => results.filter(r => r.site_id === site?.id), [results, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Période de suivi (jours) — défaut 30 = 1 mois coulant. 0 = tout l'historique.
+  const [periodDays, setPeriodDays] = useState(30);
+  const siteResultsAll = useMemo(() => results.filter(r => r.site_id === site?.id), [results, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const siteResults   = useMemo(() => {
+    if (!periodDays) return siteResultsAll;
+    const since = Date.now() - periodDays * 86400000;
+    const filtered = siteResultsAll.filter(r => {
+      const t = r.created_at ? new Date(r.created_at).getTime() : null;
+      return t == null ? true : t >= since;
+    });
+    return filtered.length ? filtered : siteResultsAll; // repli si la période ne retient rien
+  }, [siteResultsAll, periodDays]);
   const siteQuestions = useMemo(() => questions.filter(q => q.site_id === site?.id), [questions, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const siteUrls      = useMemo(() => urlIndex.filter(u => u.project_id === projectId), [urlIndex, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
   const audit         = useMemo(() => computeAudit(siteQuestions, siteResults, siteUrls, brand, site, calendarEntries, keywords, competitors), [siteQuestions, siteResults, siteUrls, brand, site, calendarEntries, keywords, competitors]);
@@ -3063,7 +3103,7 @@ export default function GeoAuditTab({
       icon: "⚔️",
       title: "Paysage concurrentiel",
       desc: "Tableau Marque × Mention/Évocation/Citation pour votre marque (REF) et les 5 principaux concurrents détectés dans les réponses LLM. L'analyseur de pages permet de décrypter pourquoi un concurrent est plus cité.",
-      tip: "Qualifiez vos concurrents dans Fan-outs → Concurrents pour enrichir cette section.",
+      tip: "Qualifiez vos concurrents dans Suivi GEO → Concurrents pour enrichir cette section.",
       position: "top",
       onActivate: () => setMainTab("audit"),
     },
@@ -3182,7 +3222,7 @@ export default function GeoAuditTab({
             <div style={{ textAlign: "center", padding: 60, color: "#1A3C2E44" }}>
               <div style={{ fontSize: 32, marginBottom: 12 }}>📊</div>
               <div style={{ fontSize: 14, fontWeight: 600, color: "#1A3C2E", marginBottom: 6 }}>Aucun résultat disponible</div>
-              <div style={{ fontSize: 12 }}>Interrogez des questions dans l'onglet Fan-outs pour générer des données d'audit</div>
+              <div style={{ fontSize: 12 }}>Interrogez des questions dans l'onglet Suivi GEO pour générer des données d'audit</div>
             </div>
           ) : (<>
 
@@ -3190,6 +3230,19 @@ export default function GeoAuditTab({
                 BLOC 1 — SYNTHÈSE EXÉCUTIVE
                 Présence GEO + KPIs clés en un coup d'œil
             ══════════════════════════════════════════════════════ */}
+            {/* Sélecteur de période de suivi (défaut : 1 mois coulant) */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8, marginBottom: 10 }}>
+              <span style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.06em", textTransform: "uppercase", color: "#1A3C2E55" }}>Période de suivi</span>
+              <select value={periodDays} onChange={e => setPeriodDays(parseInt(e.target.value, 10))}
+                style={{ padding: "5px 10px", borderRadius: 7, border: "0.5px solid #1A3C2E22", fontSize: 12, background: "#fff", color: "#1A3C2E", cursor: "pointer" }}>
+                <option value={7}>7 derniers jours</option>
+                <option value={30}>1 mois coulant</option>
+                <option value={90}>3 mois</option>
+                <option value={180}>6 mois</option>
+                <option value={365}>12 mois</option>
+                <option value={0}>Tout l'historique</option>
+              </select>
+            </div>
             <div data-tour="audit-score"><GeoScoreBanner audit={audit} auditFav={auditFav} brand={brand} site={site} /></div>
 
             {/* ══════════════════════════════════════════════════════
@@ -3438,7 +3491,7 @@ export default function GeoAuditTab({
             </div>
 
             {/* ══════════════════════════════════════════════════════
-                 BLOC 4ter — ANALYSE FAN-OUT (récupérée de l'onglet Fan-outs)
+                 BLOC 4ter — ANALYSE FAN-OUT (récupérée de l'onglet Suivi GEO)
             ══════════════════════════════════════════════════════ */}
             <FanoutAnalysisRecap projectId={projectId} siteId={site?.id} />
 

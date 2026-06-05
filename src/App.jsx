@@ -22,7 +22,7 @@ import { sbLoadAccessibleProjects, getCurrentUser, getOrRefreshSession, authLogo
 
 // Tabs disponibles pour TOUS les utilisateurs
 const NAV_TABS_USER = [
-  { key: "geo",       label: "🔍 Fan-outs"   },
+  { key: "geo",       label: "🔍 Suivi GEO"  },
   { key: "geo_audit", label: "📋 Audit GEO"  },
 ];
 
