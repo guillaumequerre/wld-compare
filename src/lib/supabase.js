@@ -837,13 +837,14 @@ export async function sbGetPresenceHistoryBatch(project_id, site_id) {
 // Table : geo_calendar_dates
 // Columns: id, question_id, provider_id, brand_present, test_date, created_at
 
-export async function sbAddCalendarEntry(question_id, provider_id, brand_present, presType) {
+export async function sbAddCalendarEntry(question_id, provider_id, brand_present, presType, mentionPos = null) {
   // presType: "mention" | "citation" | "evocation" | null
+  // mentionPos: position numérique si presType === "mention"
   const test_date = new Date().toISOString().slice(0, 10);
   const present = brand_present === true || brand_present === 1;
 
-  // Payload complet (avec ventilation M/É/C). Si la table ne possède pas ces
-  // colonnes, PostgREST renvoie une 400 → on réessaie avec les colonnes de base.
+  // Payload complet (avec ventilation M/É/C + position). Si la table ne possède
+  // pas ces colonnes, PostgREST renvoie une 400 → on réessaie avec les colonnes de base.
   const fullBody = {
     question_id,
     provider_id,
@@ -851,6 +852,7 @@ export async function sbAddCalendarEntry(question_id, provider_id, brand_present
     brand_mention:   presType === "mention"   ? 1 : 0,
     brand_citation:  presType === "citation"  ? 1 : 0,
     brand_evocation: presType === "evocation" ? 1 : 0,
+    mention_position: presType === "mention" && mentionPos != null ? mentionPos : null,
     test_date,
   };
   const baseBody = { question_id, provider_id, brand_present: present, test_date };
@@ -888,7 +890,7 @@ export async function sbGetCalendarEntries(question_id) {
     const since = new Date(); since.setDate(since.getDate() - 30);
     const sinceStr = since.toISOString().slice(0, 10);
     const res = await fetch(
-      `${PROXY}/rest/v1/geo_calendar_dates?question_id=eq.${encodeURIComponent(question_id)}&test_date=gte.${sinceStr}&order=test_date.asc&select=provider_id,test_date,brand_present`,
+      `${PROXY}/rest/v1/geo_calendar_dates?question_id=eq.${encodeURIComponent(question_id)}&test_date=gte.${sinceStr}&order=test_date.asc&select=provider_id,test_date,brand_present,brand_mention,brand_citation,brand_evocation,mention_position`,
       { headers: authHeaders() }
     );
     if (!res.ok) return [];
@@ -927,7 +929,6 @@ export async function sbGetCalendarEntriesBatch(project_id, site_id) {
       return [];
     }
     const data = await res.json();
-    console.log("[sbGetCalendarEntriesBatch] chargé:", data.length, "entrées pour", questions.length, "questions");
     return data;
   } catch(e) {
     console.warn("[sbGetCalendarEntriesBatch] error:", e.message);

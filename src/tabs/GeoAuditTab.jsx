@@ -444,6 +444,110 @@ function Section({ icon, title, sub, children }) {
 // ── Scatter plot concurrents : citations (X) × position moy. (Y) ──
 // ── FavoritesPerformance — met en avant les questions favorites ──
 // 4 buckets : À défendre (#1-3) / À surveiller (#4-10) / Conquête prioritaire / À conquérir
+// ── Mini graphe en barres verticales pour l'audit (style Fan-out) ──
+// data: [{ name, count, kind }] · kind ∈ brand|competitor|other
+function AuditBarChart({ data, accent = "#1A3C2E" }) {
+  const [hover, setHover] = useState(null);
+  const rows = (data || []).slice(0, 14);
+  const max = rows.length ? Math.max(...rows.map(d => d.count)) : 0;
+  const colorFor = (kind) => kind === "brand" ? "#1A7A4A" : kind === "competitor" ? "#C0352A" : "#9AAEA4";
+  if (!rows.length) return <div style={{ fontSize: 11, color: "#1A3C2E44", fontStyle: "italic" }}>Aucune donnée</div>;
+  return (
+    <div>
+      <div style={{ position: "relative", height: 140, display: "flex", alignItems: "flex-end", gap: rows.length > 9 ? 3 : 6, padding: "18px 0 0" }}>
+        {rows.map((d, i) => {
+          const h = max ? Math.max((d.count / max) * 100, 4) : 4;
+          const isHover = hover === i;
+          return (
+            <div key={d.name + i}
+              onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}
+              style={{ flex: 1, minWidth: 0, height: "100%", display: "flex", flexDirection: "column", justifyContent: "flex-end", alignItems: "center", position: "relative" }}>
+              {isHover && (
+                <div style={{ position: "absolute", bottom: "calc(100% + 4px)", left: "50%", transform: "translateX(-50%)", background: "#1A3C2E", color: "#F0EBE0", borderRadius: 6, padding: "5px 9px", fontSize: 11, whiteSpace: "nowrap", zIndex: 5, boxShadow: "0 2px 8px #1A3C2E33", pointerEvents: "none" }}>
+                  <div style={{ fontWeight: 600 }}>{d.name}</div>
+                  <div style={{ opacity: 0.8 }}>{d.count} citation{d.count > 1 ? "s" : ""}</div>
+                </div>
+              )}
+              <div style={{ width: "100%", height: `${h}%`, background: colorFor(d.kind), borderRadius: "3px 3px 0 0", opacity: isHover ? 1 : 0.88, transition: "opacity 0.12s", minHeight: 3 }} />
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ display: "flex", gap: rows.length > 9 ? 3 : 6, marginTop: 6, height: 64 }}>
+        {rows.map((d, i) => (
+          <div key={d.name + i} style={{ flex: 1, minWidth: 0, display: "flex", justifyContent: "center" }}>
+            <span style={{ fontSize: 9, color: hover === i ? "#1A3C2E" : "#1A3C2E66", whiteSpace: "nowrap", transform: "rotate(-45deg)", transformOrigin: "top left", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 80, display: "inline-block", marginTop: 2 }}>{d.name}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── FanoutAnalysisRecap — récupère l'analyse produite dans Fan-out ──
+// Affiche (lecture seule) la dernière analyse "fanout" générée dans l'onglet
+// Fan-outs (GeoAnalysis), pour la retrouver directement dans l'audit.
+function FanoutAnalysisRecap({ projectId, siteId }) {
+  const [sections, setSections] = useState(null);
+  const [savedDate, setSavedDate] = useState(null);
+  const [open, setOpen] = useState(true);
+
+  useEffect(() => {
+    if (!projectId || !siteId) { setSections(null); return; }
+    let cancelled = false;
+    sbGetGeoAnalyses(projectId, siteId, "fanout").then(rows => {
+      if (cancelled || !rows?.length) { setSections(null); return; }
+      const c = rows[0].content;
+      if (c?.sections?.length) { setSections(c.sections); setSavedDate(rows[0].created_at); }
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [projectId, siteId]);
+
+  if (!sections?.length) return null;
+
+  const META = {
+    "ÉTAT DES LIEUX":    { icon: "◎", color: "#1A3C2E" },
+    "MAILLAGE INTERNE":  { icon: "⟶", color: "#1A3C2E" },
+    "PAGES À CRÉER":     { icon: "✦", color: "#C97820" },
+    "URLS CONCURRENTES": { icon: "↗", color: "#1A3C2E77" },
+  };
+  const getMeta = (title) => {
+    const key = Object.keys(META).find(k => (title || "").toUpperCase().includes(k));
+    return META[key] || { icon: "•", color: "#1A3C2E" };
+  };
+
+  return (
+    <div data-tour="audit-fanout-recap" style={{ display: "contents" }}>
+      <Section title="Analyse Fan-out" sub="Recommandations générées dans l'onglet Fan-outs">
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+          {savedDate && (
+            <span style={{ fontSize: 10, color: "#1A3C2E55" }}>
+              Générée le {new Date(savedDate).toLocaleString("fr-FR", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
+            </span>
+          )}
+          <button onClick={() => setOpen(o => !o)}
+            style={{ marginLeft: "auto", fontSize: 11, padding: "3px 10px", borderRadius: 6, border: "0.5px solid #1A3C2E22", background: "transparent", color: "#1A3C2E77", cursor: "pointer" }}>
+            {open ? "Réduire" : "Déployer"}
+          </button>
+        </div>
+        {open && sections.map((s, i) => {
+          const meta = getMeta(s.title);
+          if (s.title === "Erreur") return null;
+          return (
+            <div key={i} style={{ borderLeft: "2px solid #1A3C2E0D", paddingLeft: 16, paddingBottom: 16, marginBottom: 4 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                <span style={{ fontSize: 12, color: meta.color }}>{meta.icon}</span>
+                <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: meta.color }}>{s.title}</span>
+              </div>
+              <div style={{ fontSize: 12, lineHeight: 1.7, color: "#1A3C2E", whiteSpace: "pre-wrap" }}>{renderBold(s.body || "")}</div>
+            </div>
+          );
+        })}
+      </Section>
+    </div>
+  );
+}
+
 function FavoritesPerformance({ questions, results, projectId = null, siteId = null }) {
   // Overrides manuels de bucket par question (drag & drop), persistés en localStorage
   const storageKey = `geoFavBuckets_${projectId || "p"}_${siteId || "s"}`;
@@ -1157,6 +1261,8 @@ function AIAnalysis({ audit, brand, site, questions, onTextReady, projectId = nu
   const [status, setStatus] = useState("idle");
   const [analysis, setAnalysis] = useState("");
   const [savedDate, setSavedDate] = useState(null);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
 
   // Recharger la dernière analyse IA persistée au montage
   useEffect(() => {
@@ -1254,7 +1360,22 @@ Commence DIRECTEMENT par ## 1. Synthèse exécutive.`;
       if (projectId && siteId) {
         sbSaveGeoAnalysis({ project_id: projectId, site_id: siteId, kind: "audit-ai", content: { text, generated_at: now } }).catch(() => {});
       }
-    } catch(e) { console.error("[AIAnalysis]", e); setStatus("error"); }
+    } catch(e) { console.error("[AIAnalysis]", e);
+
+  // Édition manuelle du texte de l'audit
+  const startEdit = () => { setDraft(analysis); setEditing(true); };
+  const cancelEdit = () => { setEditing(false); setDraft(""); };
+  const saveEdit = () => {
+    const text = draft;
+    setAnalysis(text);
+    onTextReady?.(text);
+    const now = new Date().toISOString();
+    setSavedDate(now);
+    setEditing(false);
+    if (projectId && siteId) {
+      sbSaveGeoAnalysis({ project_id: projectId, site_id: siteId, kind: "audit-ai", content: { text, generated_at: now, edited: true } }).catch(() => {});
+    }
+  }; setStatus("error"); }
   }, [audit, brand, site, questions, projectId, siteId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (status === "idle") return (
@@ -1271,6 +1392,22 @@ Commence DIRECTEMENT par ## 1. Synthèse exécutive.`;
           Analyse générée le {new Date(savedDate).toLocaleString("fr-FR", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
         </div>
       )}
+      {editing ? (
+        <div>
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            style={{ width: "100%", minHeight: 320, fontSize: 12, lineHeight: 1.7, color: C.text, border: "0.5px solid #1A3C2E22", borderRadius: 8, padding: "12px 14px", fontFamily: "inherit", resize: "vertical", boxSizing: "border-box" }}
+          />
+          <div style={{ fontSize: 10, color: "#1A3C2E44", marginTop: 6 }}>
+            Astuce : « ## Titre » crée un titre de section, « **gras** » met en gras.
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+            <button onClick={saveEdit} style={{ padding: "5px 14px", border: "none", borderRadius: 6, background: "#1A3C2E", color: "#F0EBE0", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Enregistrer</button>
+            <button onClick={cancelEdit} style={{ padding: "5px 14px", border: "0.5px solid #1A3C2E22", borderRadius: 6, background: "transparent", color: "#1A3C2E77", fontSize: 11, cursor: "pointer" }}>Annuler</button>
+          </div>
+        </div>
+      ) : (
       <div style={{ fontSize: 12, lineHeight: 1.8, color: C.text }}>
         {analysis.split("\n").map((line, i) => {
           if (line.startsWith("## ")) return <div key={i} style={{ fontSize: 14, fontWeight: 800, color: C.text, marginTop: 20, marginBottom: 6, borderBottom: `2px solid ${C.border}`, paddingBottom: 4 }}>{line.slice(3)}</div>;
@@ -1279,7 +1416,13 @@ Commence DIRECTEMENT par ## 1. Synthèse exécutive.`;
           return <div key={i} style={{ marginBottom: 4 }}>{renderBold(line)}</div>;
         })}
       </div>
-      {status === "done" && <button onClick={generate} style={{ marginTop: 12, padding: "4px 12px", border: "0.5px solid #1A3C2E18", borderRadius: 6, background: "transparent", fontSize: 11, cursor: "pointer", color: "#1A3C2E55" }}>↺ Regénérer</button>}
+      )}
+      {status === "done" && !editing && (
+        <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+          <button onClick={generate} style={{ padding: "4px 12px", border: "0.5px solid #1A3C2E18", borderRadius: 6, background: "transparent", fontSize: 11, cursor: "pointer", color: "#1A3C2E55" }}>↺ Regénérer</button>
+          <button onClick={startEdit} style={{ padding: "4px 12px", border: "0.5px solid #1A3C2E18", borderRadius: 6, background: "transparent", fontSize: 11, cursor: "pointer", color: "#1A3C2E55" }}>✎ Éditer</button>
+        </div>
+      )}
       {status === "error" && <div style={{ color: "#DC2626", fontSize: 11, marginTop: 8 }}>Erreur — réessayez.</div>}
     </div>
   );
@@ -2199,7 +2342,7 @@ ${tbl(["Provider", "Présence", "Ratio", ""], providerRows)}
     `<strong>${name}</strong>`,
     s.mentions,
     `<span style="color:${S.warn}">${pct(s.mentions, audit.total)}%</span>`,
-    s.positions.length ? (s.positions.reduce((a, b) => a + b, 0) / s.positions.length).toFixed(1) : "—",
+    (s.positions && s.positions.length) ? (s.positions.reduce((a, b) => a + b, 0) / s.positions.length).toFixed(1) : "—",
   ]);
   const intentRows = Object.entries(audit.intentCount).sort((a, b) => b[1] - a[1]).map(([k, v]) => [
     k, v, `<span style="color:${S.green}">${pct(v, audit.total)}%</span>`, bar(pct(v, audit.total), S.green),
@@ -2430,7 +2573,7 @@ async function exportPresentation(audit, brand, site, questions, results, roadma
   favs.forEach(q => { favByBucket[bucketOf(q)].push({ q: q.question, pos: brandPosOf(q.id) }); });
 
   // ── Sources par type de page (depuis urlDetails / topDomains) ──
-  const topDomainsRows = (audit.topDomains || []).slice(0, 8);
+  const topDomainsRows = Object.entries(audit.topDomains || {}).sort((a, b) => b[1] - a[1]).slice(0, 8);
 
   // ── Concurrents : data réelle + IA ──
   const compRows = (audit.top5Competitors || []).map(([name, s]) => {
@@ -3222,27 +3365,24 @@ export default function GeoAuditTab({
             ══════════════════════════════════════════════════════ */}
             <div data-tour="audit-sources" style={{ display: "contents" }}><Section title="Sources & URLs" sub="URLs de la marque citées dans les réponses LLM">
 
-              {/* Top domaines */}
+              {/* Top domaines — graphe en barres (style Fan-out) */}
               <div style={{ marginBottom: 20 }}>
                 <div style={{ fontSize: 11, fontWeight: 500, color: "#1A3C2E44", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>Top domaines cités</div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 8 }}>
-                  {Object.entries(audit.topDomains).sort((a,b)=>b[1]-a[1]).slice(0,10).map(([d, cnt], i) => {
+                <AuditBarChart
+                  accent="#1A3C2E"
+                  data={Object.entries(audit.topDomains).sort((a,b)=>b[1]-a[1]).slice(0,14).map(([d, cnt]) => {
                     const isComp  = audit.competitorUrls.some(u => u.domain === d);
                     const isBrand = audit.brandUrls.some(u => u.domain === d);
-                    const dotColor = isBrand ? "#1A7A4A" : isComp ? "#C0352A" : "#1A3C2E33";
-                    return (
-                      <div key={d} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "5px 0", borderBottom: "0.5px solid #1A3C2E08" }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                          <span style={{ fontSize: 9, color: "#1A3C2E33", fontVariantNumeric: "tabular-nums", minWidth: 16 }}>#{i+1}</span>
-                          <span style={{ width: 5, height: 5, borderRadius: "50%", background: dotColor, flexShrink: 0 }} />
-                          <span style={{ fontSize: 12, color: "#1A3C2E", fontWeight: isBrand ? 600 : 400 }}>{d}</span>
-                          {isBrand && <span style={{ fontSize: 9, color: "#1A7A4A", letterSpacing: "0.04em" }}>marque</span>}
-                          {isComp  && <span style={{ fontSize: 9, color: "#C0352A", letterSpacing: "0.04em" }}>concurrent</span>}
-                        </div>
-                        <span style={{ fontSize: 11, color: "#1A3C2E55", fontVariantNumeric: "tabular-nums" }}>{cnt}×</span>
-                      </div>
-                    );
+                    return { name: d, count: cnt, kind: isBrand ? "brand" : isComp ? "competitor" : "other" };
                   })}
+                />
+                {/* Légende */}
+                <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 8 }}>
+                  {[["#1A7A4A","Votre marque"],["#C0352A","Concurrent"],["#9AAEA4","Autre"]].map(([c,l]) => (
+                    <span key={l} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10, color: "#1A3C2E77" }}>
+                      <span style={{ width: 9, height: 9, borderRadius: 2, background: c }} />{l}
+                    </span>
+                  ))}
                 </div>
               </div>
 
@@ -3296,6 +3436,11 @@ export default function GeoAuditTab({
               </div>
             </Section>
             </div>
+
+            {/* ══════════════════════════════════════════════════════
+                 BLOC 4ter — ANALYSE FAN-OUT (récupérée de l'onglet Fan-outs)
+            ══════════════════════════════════════════════════════ */}
+            <FanoutAnalysisRecap projectId={projectId} siteId={site?.id} />
 
             {/* ══════════════════════════════════════════════════════
                  BLOC 4bis — MODULES OUTILS (SF / GSC / GA / Bing)

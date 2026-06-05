@@ -778,7 +778,79 @@ function getProviderId(model) {
   return "other";
 }
 
-async function callProvider(provider, apiKey, prompt) {
+// ── Habillage visuel évocateur par provider (sans logos officiels) ──
+// Couleur d'accent + pictogramme générique + style de bulle, pour rappeler
+// l'univers de chaque LLM sans reproduire son interface propriétaire.
+const PROVIDER_THEME = {
+  openai: {
+    name: "ChatGPT",
+    accent: "#10A37F", bubbleBg: "#F7F7F8", botBg: "#FFFFFF",
+    glyph: "✦", avatarBg: "#10A37F", avatarFg: "#FFFFFF",
+    font: '"Söhne", -apple-system, "Segoe UI", Helvetica, sans-serif',
+  },
+  gemini: {
+    name: "Gemini",
+    accent: "#4285F4", bubbleBg: "#F0F4F9", botBg: "#FFFFFF",
+    glyph: "✧", avatarGradient: "linear-gradient(135deg, #4285F4, #9B72CB, #D96570)", avatarFg: "#FFFFFF",
+    font: '"Google Sans", "Product Sans", -apple-system, sans-serif',
+  },
+  perplexity: {
+    name: "Perplexity",
+    accent: "#20808D", bubbleBg: "#FBFAF4", botBg: "#FFFFFF",
+    glyph: "≈", avatarBg: "#20808D", avatarFg: "#FFFFFF",
+    font: '"FK Grotesk", -apple-system, "Segoe UI", sans-serif',
+  },
+  claude: {
+    name: "Claude",
+    accent: "#D97757", bubbleBg: "#F5F4EE", botBg: "#FFFFFF",
+    glyph: "✺", avatarBg: "#D97757", avatarFg: "#FFFFFF",
+    font: '"Styrene", "Tiempos", -apple-system, "Segoe UI", serif',
+  },
+  other: {
+    name: "Assistant",
+    accent: "#64748B", bubbleBg: "#F8FAFC", botBg: "#FFFFFF",
+    glyph: "○", avatarBg: "#64748B", avatarFg: "#FFFFFF",
+    font: '-apple-system, "Segoe UI", sans-serif',
+  },
+};
+
+// Rendu d'une réponse façon interface de chat (évocateur, neutre juridiquement)
+function ChatAnswer({ providerId, modelLabel, question, answerNode }) {
+  const t = PROVIDER_THEME[providerId] || PROVIDER_THEME.other;
+  const avatarStyle = t.avatarGradient
+    ? { background: t.avatarGradient }
+    : { background: t.avatarBg };
+  return (
+    <div style={{ borderRadius: 12, overflow: "hidden", border: `0.5px solid ${t.accent}22`, background: t.botBg, fontFamily: t.font }}>
+      {/* Barre d'en-tête provider */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderBottom: `0.5px solid ${t.accent}18`, background: `${t.accent}0A` }}>
+        <span style={{ width: 20, height: 20, borderRadius: 6, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: t.avatarFg, ...avatarStyle }}>{t.glyph}</span>
+        <span style={{ fontSize: 12, fontWeight: 600, color: t.accent }}>{t.name}</span>
+        {modelLabel && <span style={{ fontSize: 10, color: "#1A3C2E55", marginLeft: "auto", fontFamily: "monospace" }}>{modelLabel}</span>}
+      </div>
+
+      <div style={{ padding: "14px 14px 16px" }}>
+        {/* Bulle utilisateur (la question) */}
+        {question && (
+          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
+            <div style={{ maxWidth: "85%", background: t.bubbleBg, color: "#1A1A1A", borderRadius: "14px 14px 4px 14px", padding: "9px 13px", fontSize: 13, lineHeight: 1.5 }}>
+              {question}
+            </div>
+          </div>
+        )}
+        {/* Réponse de l'assistant */}
+        <div style={{ display: "flex", gap: 9, alignItems: "flex-start" }}>
+          <span style={{ width: 24, height: 24, borderRadius: 7, flexShrink: 0, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 13, color: t.avatarFg, ...avatarStyle }}>{t.glyph}</span>
+          <div style={{ flex: 1, minWidth: 0, fontSize: 13, lineHeight: 1.7, color: "#1A1A1A", wordBreak: "break-word" }}>
+            {answerNode}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+async function callProvider(provider, apiKey, prompt, maxTokens = 2000) {
   if (provider.id === "openai") {
     // Tentative 1 : Responses API avec web_search (Tier 1+)
     const resA = await fetch("/api/openai", {
@@ -788,7 +860,7 @@ async function callProvider(provider, apiKey, prompt) {
         model: provider.model,
         input: prompt,
         tools: [{ type: "web_search_preview", search_context_size: "high" }],
-        max_output_tokens: 8000,
+        max_output_tokens: Math.max(maxTokens * 4, 2000),
       }),
     });
     const rawA = await resA.text();
@@ -808,7 +880,7 @@ async function callProvider(provider, apiKey, prompt) {
         model: provider.model,
         messages: [{ role: "system", content: "Tu es un expert en recommandation d'entreprises et prestataires. Réponds directement et factuellement." }, { role: "user", content: prompt }],
         temperature: 0.7,
-        max_tokens: 2000,
+        max_tokens: maxTokens,
       }),
     });
     const raw = await res.text();
@@ -1010,18 +1082,51 @@ function detectBrand(answer, sources, brandName, brandAliases = [], competitors 
   // Pattern d'item de top : "1. Titre", "2) Titre", "• 3. Titre"
   const topItemRe = /^\s*(?:[•\-*]\s*)?(\d+)[.)]\s*(.+)/;
 
-  // ── MENTION : présence dans un item numéroté ──────────────────
+  // ── MENTION : présence dans une liste classée ────────────────
+  // FIABILITÉ DU "TOP" : on ne se fie PLUS au numéro littéral écrit par le LLM
+  // (souvent incohérent : sous-listes, redémarrages à 1, étapes non classantes).
+  // On reconstruit les séquences de liste contiguës et on prend la position
+  // ORDINALE réelle de la marque dans la séquence où elle apparaît.
   let mentionPosition = null;
 
-  for (const line of lines) {
-    const m = line.match(topItemRe);
+  // Regrouper les items consécutifs en séquences (une ligne non-item rompt la séquence,
+  // sauf lignes vides ou lignes de continuation indentées).
+  const sequences = [];
+  let current = null;
+  let prevNum = null;
+  for (const raw of lines) {
+    const m = raw.match(topItemRe);
     if (m) {
-      const rank = parseInt(m[1], 10);
-      const itemText = m[2];
-      if (matches(itemText) && mentionPosition === null) {
-        mentionPosition = rank;
+      const num = parseInt(m[1], 10);
+      const text = m[2];
+      // Nouvelle séquence si : pas de séquence en cours, ou rupture de numérotation
+      // (le numéro ne suit pas prevNum+1 et ne repart pas logiquement)
+      const continues = current && prevNum != null && (num === prevNum + 1 || num === prevNum);
+      if (!continues) { current = []; sequences.push(current); }
+      current.push({ num, text, ordinal: current.length + 1 });
+      prevNum = num;
+    } else if (raw.trim() === "") {
+      // ligne vide : ne rompt pas forcément, on garde la séquence ouverte
+      continue;
+    } else {
+      // ligne de texte normal : rompt la séquence
+      current = null; prevNum = null;
+    }
+  }
+
+  // Chercher la marque dans la plus longue séquence (la vraie liste classée)
+  // priorité aux séquences d'au moins 2 items (une vraie liste).
+  const ranked = sequences.filter(s => s.length >= 2).sort((a, b) => b.length - a.length);
+  const searchSeqs = ranked.length ? ranked : sequences;
+  for (const seq of searchSeqs) {
+    for (const item of seq) {
+      if (matches(item.text)) {
+        // Position ordinale réelle dans la séquence (1er item = 1, 2e = 2…)
+        mentionPosition = item.ordinal;
+        break;
       }
     }
+    if (mentionPosition !== null) break;
   }
 
   // ── EVOCATION : présence dans le corps narratif ───────────────
@@ -1150,6 +1255,79 @@ function StatusBadge({ status }) {
 
 // ── Stats header ──────────────────────────────────────────────────
 
+// ── Code couleur partagé pour les 3 tops (marque + catégories concurrents) ──
+const TOP_COLORS = {
+  brand:   { color: "#1A7A4A", label: "Votre marque" },   // vert Sonate
+  direct:  { color: "#C0352A", label: "Concurrent direct" },
+  geo:     { color: "#C97820", label: "Concurrent GEO" },
+  partner: { color: "#1A3C2E", label: "Partenaire" },
+  other:   { color: "#9AAEA4", label: "Autre" },
+};
+
+// Graphe en barres verticales, trié décroissant, tooltip au survol.
+// data: [{ name, count, kind }] · kind ∈ brand|direct|geo|partner|other
+function TopBarChart({ title, glyph, data, accent = "#1A3C2E" }) {
+  const [hover, setHover] = useState(null);
+  const rows = (data || []).slice(0, 12);
+  const max = rows.length ? Math.max(...rows.map(d => d.count)) : 0;
+  const total = (data || []).reduce((s, d) => s + d.count, 0);
+
+  return (
+    <div className="gt-kpi-card" style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+      {/* En-tête */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+        <span style={{ width: 22, height: 22, borderRadius: 6, background: `${accent}14`, color: accent, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 12, flexShrink: 0 }}>{glyph}</span>
+        <span className="gt-kpi-label" style={{ marginBottom: 0 }}>{title}</span>
+        <span style={{ marginLeft: "auto", fontSize: 11, color: "#1A3C2E55", fontVariantNumeric: "tabular-nums" }}>{total}</span>
+      </div>
+
+      {rows.length === 0 ? (
+        <div className="gt-caption" style={{ fontStyle: "italic", padding: "24px 0", textAlign: "center" }}>Aucune donnée</div>
+      ) : (
+        <>
+          {/* Zone graphe */}
+          <div style={{ position: "relative", height: 150, display: "flex", alignItems: "flex-end", gap: rows.length > 8 ? 3 : 5, padding: "18px 0 0", marginTop: 6 }}>
+            {rows.map((d, i) => {
+              const h = max ? Math.max((d.count / max) * 100, 4) : 4;
+              const c = (TOP_COLORS[d.kind] || TOP_COLORS.other).color;
+              const isHover = hover === i;
+              return (
+                <div key={d.name + i}
+                  onMouseEnter={() => setHover(i)}
+                  onMouseLeave={() => setHover(null)}
+                  style={{ flex: 1, minWidth: 0, height: "100%", display: "flex", flexDirection: "column", justifyContent: "flex-end", alignItems: "center", cursor: "default", position: "relative" }}>
+                  {/* Tooltip */}
+                  {isHover && (
+                    <div style={{ position: "absolute", bottom: "calc(100% + 4px)", left: "50%", transform: "translateX(-50%)", background: "#1A3C2E", color: "#F0EBE0", borderRadius: 6, padding: "5px 9px", fontSize: 11, whiteSpace: "nowrap", zIndex: 5, boxShadow: "0 2px 8px #1A3C2E33", pointerEvents: "none" }}>
+                      <div style={{ fontWeight: 600 }}>{d.name}</div>
+                      <div style={{ opacity: 0.8, fontVariantNumeric: "tabular-nums" }}>{d.count} occurrence{d.count > 1 ? "s" : ""}</div>
+                    </div>
+                  )}
+                  <div style={{
+                    width: "100%", height: `${h}%`, background: c,
+                    borderRadius: "3px 3px 0 0", transition: "opacity 0.12s, transform 0.12s",
+                    opacity: isHover ? 1 : 0.88, transform: isHover ? "scaleY(1.02)" : "none", transformOrigin: "bottom",
+                    minHeight: 3,
+                  }} />
+                </div>
+              );
+            })}
+          </div>
+          {/* Étiquettes pivotées sous les barres */}
+          <div style={{ display: "flex", gap: rows.length > 8 ? 3 : 5, marginTop: 6, height: 56 }}>
+            {rows.map((d, i) => (
+              <div key={d.name + i} style={{ flex: 1, minWidth: 0, display: "flex", justifyContent: "center" }}>
+                <span style={{ fontSize: 9, color: hover === i ? "#1A3C2E" : "#1A3C2E66", whiteSpace: "nowrap", transform: "rotate(-45deg)", transformOrigin: "top left", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 70, display: "inline-block", marginTop: 2 }}>
+                  {d.name}
+                </span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [] }) {
   const total = results.length;
 
@@ -1210,7 +1388,7 @@ function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [] 
       }
     });
   });
-  const topComps = Object.entries(compCount).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  // (topComps retiré — remplacé par les 3 TopBarChart)
 
   // Top domains
   const domainCount = {};
@@ -1220,7 +1398,7 @@ function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [] 
       domainCount[d] = (domainCount[d] || 0) + 1;
     } catch {}
   }));
-  const topDomains = Object.entries(domainCount).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  // (topDomains retiré — remplacé par topSources)
 
   // ── Helper : couleur selon le taux (nb / total) ───────────────
   function rateColor(count) {
@@ -1228,6 +1406,53 @@ function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [] 
     const pct = count / total * 100;
     return pct >= 50 ? "gt-success" : pct > 0 ? "gt-warn" : "gt-danger";
   }
+
+  // ── 3 TOPS par site : mentions / évocations / sources ─────────
+  // Code couleur : marque · concurrent direct · concurrent GEO · partenaire · autre
+  const brandKey = (brandName || "").toLowerCase().replace(/\s+/g, "");
+  const compCatByName = {};
+  (qualifiedCompetitors || []).forEach(c => {
+    if (c.name) compCatByName[c.name.toLowerCase()] = c.category || "other";
+  });
+  // Détermine le "kind" (couleur) d'un nom de site/entité
+  const kindOf = (rawName) => {
+    const n = (rawName || "").toLowerCase();
+    const compact = n.replace(/\s+/g, "").replace(/^www\./, "");
+    if (brandKey && compact.includes(brandKey)) return "brand";
+    // Chercher une correspondance concurrent (par nom inclus)
+    for (const [cname, cat] of Object.entries(compCatByName)) {
+      const cc = cname.replace(/\s+/g, "");
+      if (cc && (compact.includes(cc) || n.includes(cname))) return cat;
+    }
+    return "other";
+  };
+
+  // Top mentions & évocations : par CONCURRENT/MARQUE détecté dans les réponses
+  const mentionCount = {}, evocCount = {};
+  // Compter la marque elle-même
+  results.forEach(r => {
+    const mPos = r.brand_mention_position ?? (r.brand_position > 0 ? r.brand_position : null);
+    const isMent = mPos != null && mPos > 0;
+    const isEvoc = !isMent && (r.brand_mentioned === true || r.brand_mentioned === 1);
+    if (isMent) mentionCount[brandName] = (mentionCount[brandName] || 0) + 1;
+    if (isEvoc) evocCount[brandName] = (evocCount[brandName] || 0) + 1;
+    (r.competitors_mentioned || []).forEach(c => {
+      if (!c.name) return;
+      const cMent = c.position != null && c.position > 0;
+      const cEvoc = !cMent && c.mentioned;
+      if (cMent) mentionCount[c.name] = (mentionCount[c.name] || 0) + 1;
+      if (cEvoc) evocCount[c.name] = (evocCount[c.name] || 0) + 1;
+    });
+  });
+
+  // Top sources : par DOMAINE cité (déjà dans domainCount), enrichi du kind
+  const toSorted = (obj) => Object.entries(obj)
+    .map(([name, count]) => ({ name, count, kind: kindOf(name) }))
+    .sort((a, b) => b.count - a.count);
+
+  const topMentions = toSorted(mentionCount);
+  const topEvocations = toSorted(evocCount);
+  const topSources = toSorted(domainCount);
 
   return (
     <div style={{ marginBottom: 24 }}>
@@ -1299,50 +1524,21 @@ function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [] 
         </div>
       </div>
 
-      {/* ── Concurrents + Sites ── */}
-      <div className="gt-kpi-grid geo-stats-2col">
+      {/* ── 3 TOPS : Mentions · Évocations · Sources (barres verticales) ── */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 14 }}>
+        <TopBarChart title="Top mentions" glyph="◎" accent="#1A7A4A" data={topMentions} />
+        <TopBarChart title="Top évocations" glyph="⟶" accent="#C97820" data={topEvocations} />
+        <TopBarChart title="Top sources" glyph="↗" accent="#1A3C2E" data={topSources} />
+      </div>
 
-        {/* Concurrents */}
-        <div className="gt-kpi-card">
-          <div className="gt-kpi-label" style={{ marginBottom: 10 }}>Concurrents cités</div>
-          {topComps.length > 0 ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-              {topComps.map(([name, cnt]) => (
-                <div key={name} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span className="gt-body-sm" style={{ fontWeight: 500 }}>{name}</span>
-                  <span className="gt-caption" style={{ fontVariantNumeric: "tabular-nums" }}>{cnt}×</span>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <span className="gt-caption" style={{ fontStyle: "italic" }}>Aucun concurrent identifié</span>
-          )}
-        </div>
-
-        {/* Sites */}
-        <div className="gt-kpi-card">
-          <div className="gt-kpi-label" style={{ marginBottom: 10 }}>Sites les plus cités</div>
-          {topDomains.length > 0 ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-              {topDomains.map(([domain, cnt]) => {
-                const isBrand = brandName && domain.toLowerCase().includes(brandName.toLowerCase().replace(/\s+/g, ""));
-                return (
-                  <div key={domain} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <span className="gt-body-sm" style={{
-                      fontWeight: 500,
-                      color: isBrand ? "#1A7A4A" : undefined,
-                      background: isBrand ? "#1A7A4A11" : "transparent",
-                      borderRadius: 4, padding: isBrand ? "0 4px" : 0,
-                    }}>{domain}</span>
-                    <span className="gt-caption" style={{ fontVariantNumeric: "tabular-nums" }}>{cnt}×</span>
-                  </div>
-                );
-              })}
-            </div>
-          ) : (
-            <span className="gt-caption" style={{ fontStyle: "italic" }}>Aucun domaine source identifié</span>
-          )}
-        </div>
+      {/* Légende code couleur */}
+      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginTop: 12, paddingTop: 10, borderTop: "0.5px solid #1A3C2E0C" }}>
+        {Object.entries(TOP_COLORS).map(([k, v]) => (
+          <span key={k} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10, color: "#1A3C2E77" }}>
+            <span style={{ width: 9, height: 9, borderRadius: 2, background: v.color, flexShrink: 0 }} />
+            {v.label}
+          </span>
+        ))}
       </div>
     </div>
   );
@@ -2347,9 +2543,12 @@ function ProviderRow({ provider, results, brandName, brandAliases, brandDomain =
       {/* ── Accordéon réponse ── */}
       {open && result && (
         <div className="gt-provider-answer">
-          <div className="gt-body" style={{ lineHeight: 1.7, wordBreak: "break-word" }}>
-            {renderMarkdown(result.answer || "")}
-          </div>
+          <ChatAnswer
+            providerId={getProviderId(result.model || p.label)}
+            modelLabel={result.model || p.label}
+            question={question}
+            answerNode={renderMarkdown(result.answer || "")}
+          />
           {sources.length > 0 && (
             <div style={{ marginTop: 10 }}>
               <div className="gt-label" style={{ marginBottom: 6 }}>Sources</div>
@@ -3159,7 +3358,6 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, setCa
       setHintsMap(map);
       setKeywords(keywords);
       setCalendarEntries(calEntries || []);
-      console.log("[GeoTab] calendarEntries chargées:", (Array.isArray(calEntries) ? calEntries : []).length, "entrées — vertes:", (Array.isArray(calEntries) ? calEntries : []).filter(e => e.brand_present === true || e.brand_present === 1).length);
     }).catch(e => console.warn("[QuestionsTab] load error:", e));
   }, [projectId, site?.id, refreshTrigger]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -3398,9 +3596,23 @@ Réponds avec une liste de vrais acteurs du marché, leurs sites web et leurs ca
 Sois direct et factuel. Cite les sources que tu as consultées.
 ${question}`;
     const promptForWeb = [baseContext, "Tu es un assistant IA avec accès au web. Réponds directement et complètement à la question.", "RÈGLE ABSOLUE : Ne pose jamais de question de clarification. Donne directement une liste de recommandations concrètes.", "Pour chaque acteur recommandé : donne le nom, le site web, et une description courte.", "Sois factuel, précis, et cite tes sources.", question].filter(Boolean).join("\n");
-    const prompt = provider.id === "claude" ? promptForClaude : provider.id === "gemini" ? promptForGemini : promptForWeb;
+    let prompt = provider.id === "claude" ? promptForClaude : provider.id === "gemini" ? promptForGemini : promptForWeb;
+
+    // ── Modèle + mode choisis pour ce provider (config localStorage) ──
+    let cfg = {};
+    try { cfg = JSON.parse(localStorage.getItem(`geoProviderCfg_${projectId}`) || "{}")[provider.id] || {}; } catch { cfg = {}; }
+    const chosenModel = cfg.model || provider.model;
+    const modeId = cfg.mode || "standard";
+    const modeMaxTokens = modeId === "discussion" ? 3072 : modeId === "fidelity" ? 2048 : 1024;
+    // Le mode enrichit la consigne (et fait varier la longueur → le coût)
+    if (modeId === "fidelity") {
+      prompt += "\n\nConsigne de fiabilité : réponds comme le ferait un moteur de recherche web récent. Donne une réponse complète, structurée et SOURCÉE (URLs réelles), en privilégiant la concordance avec ce qu'un utilisateur trouverait dans son navigateur.";
+    } else if (modeId === "discussion") {
+      prompt += "\n\nConsigne de discussion : simule un échange réaliste de plusieurs messages autour de cette question transactionnelle (questions de suivi pertinentes + réponses), puis conclus par une synthèse des acteurs recommandés.";
+    }
+    const effectiveProvider = { ...provider, model: chosenModel };
     try {
-      const parsed = await callProvider(provider, pk.dec, prompt);
+      const parsed = await callProvider(effectiveProvider, pk.dec, prompt, modeMaxTokens);
       const detectedBrand = detectBrand(parsed.answer, parsed.sources, brand_name, brand_aliases, competitors);
       const { brandMentioned, brandPosition, brandInSources, competitorsMentioned } = detectedBrand;
       const domain_counts = {};
@@ -3412,7 +3624,7 @@ ${question}`;
       const now = new Date().toISOString();
       const record = {
         question_id: q.id, project_id: projectId, site_id: site.id,
-        model: `${provider.label} (${provider.model})`,
+        model: `${provider.label} (${chosenModel})`,
         answer: parsed.answer, answer_type: parsed.answer_type, intent_type: parsed.intent_type,
         sources: parsed.sources, source_types: parsed.source_types,
         brand_mentioned: brandMentioned, brand_position: brandPosition,
@@ -3447,15 +3659,16 @@ ${question}`;
         }
       }).catch(e => console.error("sbSaveGeoResult error:", e));
 
-      // Add to calendar (optimistic + persist)
-      setNewCalEntries(prev => ({ ...prev, [`${q.id}|${provider.id}`]: { provider_id: provider.id, brand_present: brandMentioned } }));
-      // Déterminer le type de présence pour le calendrier
+      // Déterminer le type de présence + position pour le calendrier
       const presTypeForCal = record.brand_mention_position != null ? "mention"
         : record.brand_in_sources ? "citation"
         : brandMentioned ? "evocation"
         : null;
+      const mentionPosForCal = record.brand_mention_position != null ? record.brand_mention_position : null;
+      // Add to calendar (optimistic + persist) — avec type + position
+      setNewCalEntries(prev => ({ ...prev, [`${q.id}|${provider.id}`]: { provider_id: provider.id, brand_present: brandMentioned, presType: presTypeForCal, mentionPos: mentionPosForCal } }));
       // Persist to DB (best effort)
-      sbAddCalendarEntry(q.id, provider.id, brandMentioned, presTypeForCal).catch(() => {});
+      sbAddCalendarEntry(q.id, provider.id, brandMentioned, presTypeForCal, mentionPosForCal).catch(() => {});
 
       // Update cached answers on question
       const cachePatch = { has_result: true, last_answer: parsed.answer, last_model: record.model, last_date: now };
