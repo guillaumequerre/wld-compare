@@ -1360,7 +1360,8 @@ Commence DIRECTEMENT par ## 1. Synthèse exécutive.`;
       if (projectId && siteId) {
         sbSaveGeoAnalysis({ project_id: projectId, site_id: siteId, kind: "audit-ai", content: { text, generated_at: now } }).catch(() => {});
       }
-    } catch(e) { console.error("[AIAnalysis]", e);
+    } catch(e) { console.error("[AIAnalysis]", e); setStatus("error"); }
+  }, [audit, brand, site, questions, projectId, siteId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Édition manuelle du texte de l'audit
   const startEdit = () => { setDraft(analysis); setEditing(true); };
@@ -1375,8 +1376,7 @@ Commence DIRECTEMENT par ## 1. Synthèse exécutive.`;
     if (projectId && siteId) {
       sbSaveGeoAnalysis({ project_id: projectId, site_id: siteId, kind: "audit-ai", content: { text, generated_at: now, edited: true } }).catch(() => {});
     }
-  }; setStatus("error"); }
-  }, [audit, brand, site, questions, projectId, siteId]); // eslint-disable-line react-hooks/exhaustive-deps
+  };
 
   if (status === "idle") return (
     <div style={{ textAlign: "center", padding: "24px 0" }}>
