@@ -1428,20 +1428,20 @@ function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [] 
   };
 
   // Top mentions & évocations : par CONCURRENT/MARQUE détecté dans les réponses
-  const mentionCount = {}, evocCount = {};
+  const mentionBySite = {}, evocBySite = {};
   // Compter la marque elle-même
   results.forEach(r => {
     const mPos = r.brand_mention_position ?? (r.brand_position > 0 ? r.brand_position : null);
     const isMent = mPos != null && mPos > 0;
     const isEvoc = !isMent && (r.brand_mentioned === true || r.brand_mentioned === 1);
-    if (isMent) mentionCount[brandName] = (mentionCount[brandName] || 0) + 1;
-    if (isEvoc) evocCount[brandName] = (evocCount[brandName] || 0) + 1;
+    if (isMent) mentionBySite[brandName] = (mentionBySite[brandName] || 0) + 1;
+    if (isEvoc) evocBySite[brandName] = (evocBySite[brandName] || 0) + 1;
     (r.competitors_mentioned || []).forEach(c => {
       if (!c.name) return;
       const cMent = c.position != null && c.position > 0;
       const cEvoc = !cMent && c.mentioned;
-      if (cMent) mentionCount[c.name] = (mentionCount[c.name] || 0) + 1;
-      if (cEvoc) evocCount[c.name] = (evocCount[c.name] || 0) + 1;
+      if (cMent) mentionBySite[c.name] = (mentionBySite[c.name] || 0) + 1;
+      if (cEvoc) evocBySite[c.name] = (evocBySite[c.name] || 0) + 1;
     });
   });
 
@@ -1450,8 +1450,8 @@ function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [] 
     .map(([name, count]) => ({ name, count, kind: kindOf(name) }))
     .sort((a, b) => b.count - a.count);
 
-  const topMentions = toSorted(mentionCount);
-  const topEvocations = toSorted(evocCount);
+  const topMentions = toSorted(mentionBySite);
+  const topEvocations = toSorted(evocBySite);
   const topSources = toSorted(domainCount);
 
   return (
