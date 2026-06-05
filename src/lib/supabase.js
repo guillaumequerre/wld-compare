@@ -577,6 +577,7 @@ export async function sbSaveGeoResult(result) {
   if (result.brand_mention_position   !== undefined) detailCols.brand_mention_position   = result.brand_mention_position   ?? null;
   if (result.brand_evocation_position !== undefined) detailCols.brand_evocation_position = result.brand_evocation_position ?? null;
   if (result.brand_citation_position  !== undefined) detailCols.brand_citation_position  = result.brand_citation_position  ?? null;
+  if (result.unknown_entities         !== undefined) detailCols.unknown_entities         = result.unknown_entities         || [];
 
   // ── Dédoublonnage : la contrainte unique est geo_results_question_model_unique
   // sur (question_id, model) — SANS la date. On doit donc supprimer TOUT

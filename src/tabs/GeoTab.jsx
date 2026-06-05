@@ -1134,22 +1134,34 @@ function detectBrand(answer, sources, brandName, brandAliases = [], competitors 
   const sequences = [];
   let current = null;
   let prevNum = null;
+  // Une sous-ligne de détail ("- Site web :", "• Description …", puce sans numéro)
+  // ne doit PAS casser la séquence : les tops LLM intercalent souvent des détails.
+  const subBulletRe = /^\s*[•\-*]\s+\S/;          // puce sans numéro = détail
+  const isDetailLine = (s) => {
+    const t = s.trim();
+    if (!t) return true;                            // ligne vide → neutre
+    if (subBulletRe.test(t) && !topItemRe.test(t)) return true; // sous-puce de détail
+    // ligne indentée (continuation) → détail
+    if (/^\s{2,}\S/.test(s)) return true;
+    // courte ligne "clé : valeur" typique d'un détail
+    if (/^[A-Za-zÀ-ÿ' ]{2,20}\s*:/.test(t) && t.length < 80) return true;
+    return false;
+  };
   for (const raw of lines) {
     const m = raw.match(topItemRe);
     if (m) {
       const num = parseInt(m[1], 10);
       const text = m[2];
       // Nouvelle séquence si : pas de séquence en cours, ou rupture de numérotation
-      // (le numéro ne suit pas prevNum+1 et ne repart pas logiquement)
       const continues = current && prevNum != null && (num === prevNum + 1 || num === prevNum);
       if (!continues) { current = []; sequences.push(current); }
       current.push({ num, text, ordinal: current.length + 1 });
       prevNum = num;
-    } else if (raw.trim() === "") {
-      // ligne vide : ne rompt pas forcément, on garde la séquence ouverte
+    } else if (isDetailLine(raw)) {
+      // ligne vide ou détail d'un item : ne rompt PAS la séquence en cours
       continue;
     } else {
-      // ligne de texte normal : rompt la séquence
+      // vrai paragraphe narratif : rompt la séquence
       current = null; prevNum = null;
     }
   }
@@ -1231,6 +1243,31 @@ function detectBrand(answer, sources, brandName, brandAliases = [], competitors 
     })
     .filter(c => c.mentioned);
 
+  // ── Autres entités présentes dans les tops (à identifier) ──
+  // Items de la plus longue séquence classée qui ne sont NI la marque NI un concurrent connu.
+  const knownTerms = [
+    brandName,
+    ...(brandAliases || []),
+    ...allCompetitorNames,
+  ].map(t => (t || "").toLowerCase().trim()).filter(Boolean);
+  const rankedSeqs = sequences.filter(s => s.length >= 2).sort((a, b) => b.length - a.length);
+  const topSeq = rankedSeqs[0] || [];
+  const unknownEntities = [];
+  topSeq.forEach(item => {
+    const txt = (item.text || "").trim();
+    if (!txt) return;
+    // Extraire un nom court : avant ":", "–", "-", "(" ou la fin de la 1ère phrase
+    let nameRaw = txt.split(/[:–\-(]/)[0].trim();
+    // Retirer un éventuel **gras** markdown et la ponctuation de fin
+    nameRaw = nameRaw.replace(/\*\*/g, "").replace(/[.,;]+$/, "").trim();
+    // Garder un nom plausible (2-40 car, pas une phrase entière)
+    if (nameRaw.length < 2 || nameRaw.length > 40 || nameRaw.split(/\s+/).length > 5) return;
+    const low = nameRaw.toLowerCase();
+    // Exclure marque + concurrents connus
+    if (knownTerms.some(t => low.includes(t) || t.includes(low))) return;
+    unknownEntities.push({ name: nameRaw, position: item.ordinal });
+  });
+
   return {
     // Nouveaux champs structurés
     mention:   { present: mentionPosition !== null,   position: mentionPosition },
@@ -1242,6 +1279,7 @@ function detectBrand(answer, sources, brandName, brandAliases = [], competitors 
     brandPosition:        mentionPosition,
     brandInSources:       citationPosition !== null,
     competitorsMentioned,
+    unknownEntities,
   };
 }
 
@@ -1513,6 +1551,23 @@ function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [],
   const topEvocations = sortByCount(evocBySite);
   const topSources = sortByCount(domainCount);
 
+  // Autres marques/entités présentes dans les tops, NI marque NI concurrent connu (à identifier)
+  const unknownAgg = {};
+  results.forEach(r => {
+    (r.unknown_entities || []).forEach(e => {
+      const nm = (e?.name || "").trim();
+      if (!nm) return;
+      const key = nm.toLowerCase();
+      if (!unknownAgg[key]) unknownAgg[key] = { name: nm, count: 0, bestPos: null };
+      unknownAgg[key].count += 1;
+      if (e.position != null && e.position > 0) unknownAgg[key].bestPos = unknownAgg[key].bestPos == null ? e.position : Math.min(unknownAgg[key].bestPos, e.position);
+    });
+  });
+  const unknownEntitiesList = Object.values(unknownAgg).sort((a, b) => {
+    const pa = a.bestPos ?? 9999, pb = b.bestPos ?? 9999;
+    return pa !== pb ? pa - pb : b.count - a.count;
+  });
+
   return (
     <div style={{ marginBottom: 24 }}>
 
@@ -1599,6 +1654,31 @@ function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [],
           </span>
         ))}
       </div>
+
+      {/* Autres marques présentes dans les tops — à identifier */}
+      {unknownEntitiesList.length > 0 && (
+        <div className="gt-kpi-card" style={{ marginTop: 14 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+            <span style={{ width: 22, height: 22, borderRadius: 6, background: "#C978201A", color: "#C97820", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 12, flexShrink: 0 }}>?</span>
+            <span className="gt-kpi-label" style={{ marginBottom: 0 }}>Autres marques à identifier</span>
+            <span style={{ marginLeft: "auto", fontSize: 11, color: "#1A3C2E55" }}>{unknownEntitiesList.length}</span>
+          </div>
+          <div style={{ fontSize: 11, color: "#1A3C2E66", marginBottom: 10 }}>
+            Entités présentes dans les tops LLM qui ne sont ni votre marque ni un concurrent renseigné. Ajoutez-les comme concurrents pour les suivre.
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {unknownEntitiesList.slice(0, 30).map((e, i) => (
+              <span key={i} title={`${e.count} apparition${e.count > 1 ? "s" : ""}${e.bestPos ? ` · meilleure position #${e.bestPos}` : ""}`}
+                style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "4px 10px", borderRadius: 14, border: "0.5px solid #1A3C2E18", background: "#fff", fontSize: 11, color: "#1A3C2E" }}>
+                {e.bestPos && <span style={{ fontSize: 9, fontWeight: 700, color: "#C97820", fontVariantNumeric: "tabular-nums" }}>#{e.bestPos}</span>}
+                {e.name}
+                <span style={{ fontSize: 9, color: "#1A3C2E44" }}>×{e.count}</span>
+              </span>
+            ))}
+            {unknownEntitiesList.length > 30 && <span style={{ fontSize: 10, color: "#1A3C2E44", alignSelf: "center" }}>+ {unknownEntitiesList.length - 30} autres</span>}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2548,14 +2628,14 @@ function ProviderRow({ provider, results, brandName, brandAliases, brandDomain =
                 {topPos ? `Top #${topPos}` : "Top"}
               </span>
             )}
-            {hasCitation && (
-              <span className="gt-provider-status gt-dimmed" title={`Cité en source${citationPos ? ` — position #${citationPos}` : ""}`}>
-                {citationPos ? `src #${citationPos}` : "src"}
-              </span>
-            )}
             {!hasMention && hasEvocation && (
               <span className="gt-provider-status gt-warn" title="Évocation dans le texte">
                 évoc.
+              </span>
+            )}
+            {hasCitation && (
+              <span className="gt-provider-status gt-dimmed" title={`Cité en source${citationPos ? ` — position #${citationPos}` : ""}`}>
+                {citationPos ? `src #${citationPos}` : "src"}
               </span>
             )}
           </>);
@@ -3359,6 +3439,7 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, setCa
   };
   const savedF = loadFilters();
   const [filterFav,        setFilterFavRaw]        = useState(savedF.filterFav        || false);
+  const favDefaultAppliedRef = useRef(false); // pour n'appliquer le défaut Favoris qu'une fois
   const [filterPositioned, setFilterPositionedRaw] = useState(savedF.filterPositioned || false);
   const [filterLost,       setFilterLostRaw]       = useState(savedF.filterLost       || false);
   const [sortByResult,     setSortByResult]        = useState(savedF.sortByResult     || false); // tri par résultat (mention/évoc/citation)
@@ -3411,6 +3492,13 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, setCa
     ]).then(([results, questions, hints, keywords, calEntries]) => {
       setResults(results.length ? results : (allResults || []));
       setQuestions(questions);
+      // Tri/filtre Favoris ON par défaut au 1er chargement s'il existe des favoris
+      // (sauf si l'utilisateur a déjà une préférence enregistrée).
+      if (!favDefaultAppliedRef.current) {
+        favDefaultAppliedRef.current = true;
+        const hasFavs = questions.some(q => q.is_favorite);
+        if (hasFavs && savedF.filterFav === undefined) setFilterFav(true);
+      }
       const map = {};
       hints.forEach(r => { map[r.question_id] = { text: r.hint_text, date: r.updated_at }; });
       setHintsMap(map);
@@ -3673,7 +3761,7 @@ ${question}`;
     try {
       const parsed = await callProvider(effectiveProvider, pk.dec, prompt, modeMaxTokens);
       const detectedBrand = detectBrand(parsed.answer, parsed.sources, brand_name, brand_aliases, competitors);
-      const { brandMentioned, brandPosition, brandInSources, competitorsMentioned } = detectedBrand;
+      const { brandMentioned, brandPosition, brandInSources, competitorsMentioned, unknownEntities } = detectedBrand;
       const domain_counts = {};
       (parsed.sources || []).forEach(url => {
         if (!domain_counts[url]) domain_counts[url] = { as_source: 0, in_answer: 0, domain: extractDomain(url) };
@@ -3687,7 +3775,7 @@ ${question}`;
         answer: parsed.answer, answer_type: parsed.answer_type, intent_type: parsed.intent_type,
         sources: parsed.sources, source_types: parsed.source_types,
         brand_mentioned: brandMentioned, brand_position: brandPosition,
-        brand_in_sources: brandInSources, competitors_mentioned: competitorsMentioned,
+        brand_in_sources: brandInSources, competitors_mentioned: competitorsMentioned, unknown_entities: unknownEntities || [],
         // Nouveaux champs de présence détaillés
         brand_mention_position:   detectedBrand.mention?.position   || null,
         brand_evocation_position: detectedBrand.evocation?.position || null,
@@ -3720,8 +3808,8 @@ ${question}`;
 
       // Déterminer le type de présence + position pour le calendrier
       const presTypeForCal = record.brand_mention_position != null ? "mention"
-        : record.brand_in_sources ? "citation"
         : brandMentioned ? "evocation"
+        : record.brand_in_sources ? "citation"
         : null;
       const mentionPosForCal = record.brand_mention_position != null ? record.brand_mention_position : null;
       // Add to calendar (optimistic + persist) — avec type + position
