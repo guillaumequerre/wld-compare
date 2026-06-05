@@ -135,19 +135,63 @@ function renderMarkdown(text) {
         remaining = "";
       }
     }
-    // Détecter les lignes de liste (- xxx ou * xxx ou ## titre)
     const trimmed = line.trimStart();
-    const isHeading = trimmed.startsWith("## ") || trimmed.startsWith("### ");
-    const isList = /^[-*•]\s/.test(trimmed) || /^\d+\.\s/.test(trimmed);
-    if (isHeading) {
-      return <div key={li} style={{ fontWeight: 700, fontSize: 13, marginTop: 8, marginBottom: 2 }}>{parts}</div>;
+    // ── Titres Markdown : # (titre) · ## / ### (sous-titre). On masque les dièses. ──
+    const h1 = trimmed.match(/^#\s+(.*)$/);          // un seul dièse → titre principal
+    const h2 = trimmed.match(/^#{2,3}\s+(.*)$/);      // deux/trois dièses → sous-titre
+    // Item numéroté de top (ex. "1. PERGAM") → à hiérarchiser fortement
+    const numItem = trimmed.match(/^(\d+)\.\s+(.*)$/);
+    // Puce simple (-, *, •) → on retire le marqueur (évite le doublon "• -")
+    const bullet = trimmed.match(/^[-*•]\s+(.*)$/);
+
+    if (h2) {
+      // Sous-titre : souligné
+      return <div key={li} style={{ fontWeight: 600, fontSize: 13, marginTop: 10, marginBottom: 3, textDecoration: "underline", textUnderlineOffset: 3, color: "#1A1A1A" }}>{renderInline(h2[1])}</div>;
     }
-    if (isList) {
-      return <div key={li} style={{ paddingLeft: 12, marginBottom: 2, display: "flex", gap: 6 }}><span style={{ flexShrink: 0 }}>•</span><span>{parts}</span></div>;
+    if (h1) {
+      // Titre principal : plus gros, mis en valeur
+      return <div key={li} style={{ fontWeight: 700, fontSize: 15, marginTop: 14, marginBottom: 5, letterSpacing: "-0.01em", color: "#1A1A1A" }}>{renderInline(h1[1])}</div>;
+    }
+    if (numItem) {
+      // Élément de top : numéro en pastille + titre en gras, bien détaché de ses détails
+      return (
+        <div key={li} style={{ display: "flex", gap: 8, alignItems: "baseline", marginTop: 12, marginBottom: 2 }}>
+          <span style={{ flexShrink: 0, fontSize: 12, fontWeight: 700, color: "#1A3C2E", fontVariantNumeric: "tabular-nums", minWidth: 18 }}>{numItem[1]}.</span>
+          <span style={{ fontSize: 14, fontWeight: 700, color: "#1A1A1A" }}>{renderInline(numItem[2])}</span>
+        </div>
+      );
+    }
+    if (bullet) {
+      // Détail (Site web / Description…) : indenté sous l'item, une seule puce
+      return <div key={li} style={{ paddingLeft: 26, marginBottom: 2, display: "flex", gap: 6 }}><span style={{ flexShrink: 0, color: "#1A3C2E55" }}>·</span><span>{renderInline(bullet[1])}</span></div>;
     }
     if (!line.trim()) return <div key={li} style={{ height: 6 }} />;
     return <div key={li} style={{ marginBottom: 2 }}>{parts}</div>;
   });
+}
+
+// Rendu inline (gras/italique) d'un fragment de texte déjà débarrassé de son marqueur
+function renderInline(text) {
+  const parts = [];
+  let remaining = text, key = 0;
+  while (remaining.length > 0) {
+    const boldMatch = remaining.match(/^(.*?)\*\*(.+?)\*\*/s);
+    const italicMatch = remaining.match(/^(.*?)\*(.+?)\*/s);
+    const useBold = boldMatch && (!italicMatch || boldMatch[1].length <= italicMatch[1].length);
+    if (useBold) {
+      if (boldMatch[1]) parts.push(<span key={key++}>{boldMatch[1]}</span>);
+      parts.push(<strong key={key++}>{boldMatch[2]}</strong>);
+      remaining = remaining.slice(boldMatch[0].length);
+    } else if (italicMatch) {
+      if (italicMatch[1]) parts.push(<span key={key++}>{italicMatch[1]}</span>);
+      parts.push(<em key={key++}>{italicMatch[2]}</em>);
+      remaining = remaining.slice(italicMatch[0].length);
+    } else {
+      parts.push(<span key={key++}>{remaining}</span>);
+      remaining = "";
+    }
+  }
+  return parts;
 }
 
 // ── renderMarkdownHighlighted — surligne marque (vert) et concurrents ──
@@ -815,7 +859,7 @@ const PROVIDER_THEME = {
 };
 
 // Rendu d'une réponse façon interface de chat (évocateur, neutre juridiquement)
-function ChatAnswer({ providerId, modelLabel, question, answerNode }) {
+function ChatAnswer({ providerId, modelLabel, answerNode }) {
   const t = PROVIDER_THEME[providerId] || PROVIDER_THEME.other;
   const avatarStyle = t.avatarGradient
     ? { background: t.avatarGradient }
@@ -830,15 +874,7 @@ function ChatAnswer({ providerId, modelLabel, question, answerNode }) {
       </div>
 
       <div style={{ padding: "14px 14px 16px" }}>
-        {/* Bulle utilisateur (la question) */}
-        {question && (
-          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
-            <div style={{ maxWidth: "85%", background: t.bubbleBg, color: "#1A1A1A", borderRadius: "14px 14px 4px 14px", padding: "9px 13px", fontSize: 13, lineHeight: 1.5 }}>
-              {question}
-            </div>
-          </div>
-        )}
-        {/* Réponse de l'assistant */}
+        {/* Réponse de l'assistant (la question n'est pas réécrite) */}
         <div style={{ display: "flex", gap: 9, alignItems: "flex-start" }}>
           <span style={{ width: 24, height: 24, borderRadius: 7, flexShrink: 0, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 13, color: t.avatarFg, ...avatarStyle }}>{t.glyph}</span>
           <div style={{ flex: 1, minWidth: 0, fontSize: 13, lineHeight: 1.7, color: "#1A1A1A", wordBreak: "break-word" }}>
@@ -962,7 +998,11 @@ function parseTextResponse(text, inTok, outTok, extraSources = []) {
       const parsed = JSON.parse(text.substring(s, e + 1));
       if (parsed.answer) {
         parsed._input_tokens = inTok; parsed._output_tokens = outTok;
-        parsed.sources = [...(parsed.sources || []), ...extraSources].filter(Boolean);
+        // Extraire aussi les URLs citées dans le corps de la réponse (Claude cite inline)
+        const urlReJson = /https?:\/\/[^\s\])"'>]+/g;
+        const HALL = [/exemple\d*\./i, /example\d*\./i, /site\d+\./i, /domaine\d*\./i, /placeholder/i];
+        const inlineUrls = [...String(parsed.answer).matchAll(urlReJson)].map(m => m[0]).filter(u => !HALL.some(p => p.test(u)));
+        parsed.sources = [...new Set([...(parsed.sources || []), ...extraSources, ...inlineUrls])].filter(Boolean);
         return parsed;
       }
     } catch {}
@@ -1266,11 +1306,12 @@ const TOP_COLORS = {
 
 // Graphe en barres verticales, trié décroissant, tooltip au survol.
 // data: [{ name, count, kind }] · kind ∈ brand|direct|geo|partner|other
-function TopBarChart({ title, glyph, data, accent = "#1A3C2E" }) {
+function TopBarChart({ title, glyph, data, accent = "#1A3C2E", onBarClick = null }) {
   const [hover, setHover] = useState(null);
-  const rows = (data || []).slice(0, 12);
+  const rows = (data || []).slice(0, 20); // jusqu'à 20 entrées (colonnes fines)
   const max = rows.length ? Math.max(...rows.map(d => d.count)) : 0;
   const total = (data || []).reduce((s, d) => s + d.count, 0);
+  const gap = rows.length > 12 ? 2 : rows.length > 8 ? 3 : 5;
 
   return (
     <div className="gt-kpi-card" style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
@@ -1285,41 +1326,42 @@ function TopBarChart({ title, glyph, data, accent = "#1A3C2E" }) {
         <div className="gt-caption" style={{ fontStyle: "italic", padding: "24px 0", textAlign: "center" }}>Aucune donnée</div>
       ) : (
         <>
-          {/* Zone graphe */}
-          <div style={{ position: "relative", height: 150, display: "flex", alignItems: "flex-end", gap: rows.length > 8 ? 3 : 5, padding: "18px 0 0", marginTop: 6 }}>
+          {/* Zone graphe — abscisse = rang (1 à gauche, ordre croissant) */}
+          <div style={{ position: "relative", height: 150, display: "flex", alignItems: "flex-end", gap, padding: "18px 0 0", marginTop: 6 }}>
             {rows.map((d, i) => {
               const h = max ? Math.max((d.count / max) * 100, 4) : 4;
               const c = (TOP_COLORS[d.kind] || TOP_COLORS.other).color;
               const isHover = hover === i;
+              const clickable = !!onBarClick;
               return (
                 <div key={d.name + i}
                   onMouseEnter={() => setHover(i)}
                   onMouseLeave={() => setHover(null)}
-                  style={{ flex: 1, minWidth: 0, height: "100%", display: "flex", flexDirection: "column", justifyContent: "flex-end", alignItems: "center", cursor: "default", position: "relative" }}>
-                  {/* Tooltip */}
+                  onClick={clickable ? () => onBarClick(d) : undefined}
+                  title={clickable ? `Filtrer sur « ${d.name} »` : undefined}
+                  style={{ flex: 1, minWidth: 0, height: "100%", display: "flex", flexDirection: "column", justifyContent: "flex-end", alignItems: "center", cursor: clickable ? "pointer" : "default", position: "relative" }}>
+                  {/* Tooltip : nom + rang + occurrences (le nom n'apparaît QU'au survol) */}
                   {isHover && (
                     <div style={{ position: "absolute", bottom: "calc(100% + 4px)", left: "50%", transform: "translateX(-50%)", background: "#1A3C2E", color: "#F0EBE0", borderRadius: 6, padding: "5px 9px", fontSize: 11, whiteSpace: "nowrap", zIndex: 5, boxShadow: "0 2px 8px #1A3C2E33", pointerEvents: "none" }}>
-                      <div style={{ fontWeight: 600 }}>{d.name}</div>
-                      <div style={{ opacity: 0.8, fontVariantNumeric: "tabular-nums" }}>{d.count} occurrence{d.count > 1 ? "s" : ""}</div>
+                      <div style={{ fontWeight: 600 }}>#{i + 1} · {d.name}</div>
+                      <div style={{ opacity: 0.8, fontVariantNumeric: "tabular-nums" }}>{d.count} occurrence{d.count > 1 ? "s" : ""}{clickable ? " · cliquer pour filtrer" : ""}</div>
                     </div>
                   )}
                   <div style={{
                     width: "100%", height: `${h}%`, background: c,
-                    borderRadius: "3px 3px 0 0", transition: "opacity 0.12s, transform 0.12s",
-                    opacity: isHover ? 1 : 0.88, transform: isHover ? "scaleY(1.02)" : "none", transformOrigin: "bottom",
+                    borderRadius: "2px 2px 0 0", transition: "opacity 0.12s, transform 0.12s",
+                    opacity: isHover ? 1 : 0.85, transform: isHover ? "scaleY(1.02)" : "none", transformOrigin: "bottom",
                     minHeight: 3,
                   }} />
                 </div>
               );
             })}
           </div>
-          {/* Étiquettes pivotées sous les barres */}
-          <div style={{ display: "flex", gap: rows.length > 8 ? 3 : 5, marginTop: 6, height: 56 }}>
+          {/* Axe des rangs : "1" à gauche, ordre croissant (pas de noms de sites) */}
+          <div style={{ display: "flex", gap, marginTop: 5, paddingTop: 5, borderTop: "0.5px solid #1A3C2E0C" }}>
             {rows.map((d, i) => (
               <div key={d.name + i} style={{ flex: 1, minWidth: 0, display: "flex", justifyContent: "center" }}>
-                <span style={{ fontSize: 9, color: hover === i ? "#1A3C2E" : "#1A3C2E66", whiteSpace: "nowrap", transform: "rotate(-45deg)", transformOrigin: "top left", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 70, display: "inline-block", marginTop: 2 }}>
-                  {d.name}
-                </span>
+                <span style={{ fontSize: 8, color: hover === i ? accent : "#1A3C2E44", fontVariantNumeric: "tabular-nums", fontWeight: hover === i ? 700 : 500 }}>{i + 1}</span>
               </div>
             ))}
           </div>
@@ -1328,7 +1370,7 @@ function TopBarChart({ title, glyph, data, accent = "#1A3C2E" }) {
     </div>
   );
 }
-function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [] }) {
+function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [], onTopClick = null }) {
   const total = results.length;
 
   // ── Métriques par type de présence (nouveaux champs + rétrocompat) ──
@@ -1427,32 +1469,49 @@ function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [] 
     return "other";
   };
 
-  // Top mentions & évocations : par CONCURRENT/MARQUE détecté dans les réponses
+  // Top mentions & évocations : par CONCURRENT/MARQUE détecté dans les réponses.
+  // mention = présent dans une liste classée (position) · évocation = cité sans position.
+  // On agrège { count, bestPos } pour pouvoir trier par MEILLEURE position.
   const mentionBySite = {}, evocBySite = {};
-  // Compter la marque elle-même
+  const bump = (obj, name, pos) => {
+    if (!name) return;
+    if (!obj[name]) obj[name] = { count: 0, bestPos: null };
+    obj[name].count += 1;
+    if (pos != null && pos > 0) obj[name].bestPos = obj[name].bestPos == null ? pos : Math.min(obj[name].bestPos, pos);
+  };
   results.forEach(r => {
+    // Marque elle-même
     const mPos = r.brand_mention_position ?? (r.brand_position > 0 ? r.brand_position : null);
-    const isMent = mPos != null && mPos > 0;
-    const isEvoc = !isMent && (r.brand_mentioned === true || r.brand_mentioned === 1);
-    if (isMent) mentionBySite[brandName] = (mentionBySite[brandName] || 0) + 1;
-    if (isEvoc) evocBySite[brandName] = (evocBySite[brandName] || 0) + 1;
+    const brandIsMent = mPos != null && mPos > 0;
+    const brandIsEvoc = !brandIsMent && (r.brand_mentioned === true || r.brand_mentioned === 1);
+    if (brandIsMent) bump(mentionBySite, brandName, mPos);
+    else if (brandIsEvoc) bump(evocBySite, brandName, null);
+    // Concurrents
     (r.competitors_mentioned || []).forEach(c => {
       if (!c.name) return;
       const cMent = c.position != null && c.position > 0;
-      const cEvoc = !cMent && c.mentioned;
-      if (cMent) mentionBySite[c.name] = (mentionBySite[c.name] || 0) + 1;
-      if (cEvoc) evocBySite[c.name] = (evocBySite[c.name] || 0) + 1;
+      if (cMent) bump(mentionBySite, c.name, c.position);
+      else if (c.mentioned) bump(evocBySite, c.name, null);
     });
   });
 
-  // Top sources : par DOMAINE cité (déjà dans domainCount), enrichi du kind
-  const toSorted = (obj) => Object.entries(obj)
-    .map(([name, count]) => ({ name, count, kind: kindOf(name) }))
+  // Tri mentions : par MEILLEURE position croissante (Top 1 d'abord), puis par occurrences.
+  const sortByPos = (obj) => Object.entries(obj)
+    .map(([name, v]) => ({ name, count: v.count, bestPos: v.bestPos, kind: kindOf(name) }))
+    .sort((a, b) => {
+      const pa = a.bestPos == null ? 9999 : a.bestPos;
+      const pb = b.bestPos == null ? 9999 : b.bestPos;
+      if (pa !== pb) return pa - pb;
+      return b.count - a.count;
+    });
+  // Tri évocations / sources : par occurrences décroissantes.
+  const sortByCount = (obj) => Object.entries(obj)
+    .map(([name, v]) => ({ name, count: (v.count != null ? v.count : v), kind: kindOf(name) }))
     .sort((a, b) => b.count - a.count);
 
-  const topMentions = toSorted(mentionBySite);
-  const topEvocations = toSorted(evocBySite);
-  const topSources = toSorted(domainCount);
+  const topMentions = sortByPos(mentionBySite);
+  const topEvocations = sortByCount(evocBySite);
+  const topSources = sortByCount(domainCount);
 
   return (
     <div style={{ marginBottom: 24 }}>
@@ -1526,9 +1585,9 @@ function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [] 
 
       {/* ── 3 TOPS : Mentions · Évocations · Sources (barres verticales) ── */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 14 }}>
-        <TopBarChart title="Top mentions" glyph="◎" accent="#1A7A4A" data={topMentions} />
-        <TopBarChart title="Top évocations" glyph="⟶" accent="#C97820" data={topEvocations} />
-        <TopBarChart title="Top sources" glyph="↗" accent="#1A3C2E" data={topSources} />
+        <TopBarChart title="Top mentions" glyph="◎" accent="#1A7A4A" data={topMentions} onBarClick={onTopClick ? (d) => onTopClick("mention", d.name) : null} />
+        <TopBarChart title="Top évocations" glyph="⟶" accent="#C97820" data={topEvocations} onBarClick={onTopClick ? (d) => onTopClick("evocation", d.name) : null} />
+        <TopBarChart title="Top sources" glyph="↗" accent="#1A3C2E" data={topSources} onBarClick={onTopClick ? (d) => onTopClick("citation", d.name) : null} />
       </div>
 
       {/* Légende code couleur */}
@@ -2409,11 +2468,11 @@ function HintPanelQuestion({ questionId, question, sources, brandName, brandAlia
         onClick={() => hasHint ? setOpen(o => !o) : (!status.includes("loading") && run())}>
         <span style={{ fontSize: 14 }}>💡</span>
         {status === "loading" ? (
-          <span style={{ fontSize: 11, color: "#D97706" }}>⏳ Génération du hint…</span>
+          <span style={{ fontSize: 11, color: "#D97706" }}>⏳ Génération de la recommandation…</span>
         ) : hasHint ? (
           <>
             <span style={{ fontSize: 11, fontWeight: 700, color: "#D97706", flex: 1 }}>
-              {open ? "▲ Masquer le Hint" : "▼ Voir le Hint"}
+              {open ? "▲ Masquer la recommandation" : "▼ Voir la recommandation"}
             </span>
             {savedHintDate && (
               <span style={{ fontSize: 10, color: "#B45309" }}>
@@ -2427,7 +2486,7 @@ function HintPanelQuestion({ questionId, question, sources, brandName, brandAlia
             </button>
           </>
         ) : (
-          <span style={{ fontSize: 11, fontWeight: 700, color: "#D97706" }}>✨ Générer un Hint</span>
+          <span style={{ fontSize: 11, fontWeight: 700, color: "#D97706" }}>✨ Générer une recommandation</span>
         )}
       </div>
       {open && hint && (
@@ -2546,7 +2605,6 @@ function ProviderRow({ provider, results, brandName, brandAliases, brandDomain =
           <ChatAnswer
             providerId={getProviderId(result.model || p.label)}
             modelLabel={result.model || p.label}
-            question={question}
             answerNode={renderMarkdown(result.answer || "")}
           />
           {sources.length > 0 && (
@@ -2561,8 +2619,7 @@ function ProviderRow({ provider, results, brandName, brandAliases, brandDomain =
                       style={{ fontSize: 11, color: ib ? "#1A7A4A" : "#1A3C2E88", wordBreak: "break-all", flex: 1, minWidth: 0 }}>
                       {stripQuery(url)}
                     </a>
-                    {ib && <span className="gt-badge gt-badge--success">marque</span>}
-                  </div>
+                    </div>
                 );
               })}
             </div>
@@ -3252,7 +3309,7 @@ RÈGLES :
 
           {/* 4. Rappel hint */}
           <div style={{ fontSize: 11, color: "#1A3C2E77", fontStyle: "italic", background: "#FFFBEB", border: "0.5px solid #C9782022", borderRadius: 6, padding: "10px 12px" }}>
-            💡 Pour des recommandations plus précises sur une question donnée, cliquez sur « Générer un hint » sous chaque question.
+            💡 Pour des recommandations plus précises sur une question donnée, cliquez sur « Générer une recommandation » sous chaque question.
           </div>
         </div>
       )}
@@ -3308,6 +3365,7 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, setCa
   const [filterCat,        setFilterCatRaw]        = useState(savedF.filterCat        || "");
   const [filterKeyword,    setFilterKeywordRaw]    = useState(savedF.filterKeyword    || "");
   const [filterSearch,     setFilterSearchRaw]     = useState(savedF.filterSearch     || "");
+  const [searchField,      setSearchField]         = useState(savedF.searchField      || "question"); // question|answer|mention|evocation|citation
   const [filterProviders,  setFilterProvidersRaw]  = useState(savedF.filterProviders  || []);
 
   // Wrap setters to also persist to localStorage
@@ -3590,6 +3648,7 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, setCa
     const promptForClaude = `${baseContext}Tu es un expert en recommandation d'entreprises et prestataires. Réponds à la question suivante en te basant sur tes connaissances pour donner une liste de vrais acteurs, entreprises ou prestataires du marché.
 RÈGLE : Ne dis jamais que tu n'as pas accès au web ou aux avis récents. Donne directement des recommandations concrètes avec les vrais noms d'entreprises que tu connais.
 Réponds en texte libre structuré. Liste les acteurs avec une courte description de chacun.
+Pour chaque acteur, indique son site web réel (URL complète https://…) afin qu'il apparaisse comme source.
 ${question}`;
     const promptForGemini = `${baseContext}Tu as accès à Google Search en temps réel. Utilise-le pour trouver les meilleurs acteurs, entreprises et prestataires actuels.
 Réponds avec une liste de vrais acteurs du marché, leurs sites web et leurs caractéristiques principales.
@@ -3775,10 +3834,31 @@ ${question}`;
     if (filterCat && q.category_id !== filterCat) return false;
     if (filterKeyword && q.keyword_id !== filterKeyword) return false;
     if (filterSearch) {
+      // Construire le texte cible selon le champ choisi (question/réponse/mention/évocation/citation)
+      const qRes = resultsByQ[q.id] || [];
+      let haystack = "";
+      if (searchField === "question") {
+        haystack = q.question || "";
+      } else if (searchField === "answer") {
+        haystack = qRes.map(r => r.answer || "").join("\n");
+      } else if (searchField === "mention") {
+        // éléments classés (mention) : nom de la marque/concurrents positionnés
+        haystack = qRes.flatMap(r => [
+          ...((r.brand_mention_position != null) ? [brand_name] : []),
+          ...(r.competitors_mentioned || []).filter(c => c.position != null && c.position > 0).map(c => c.name),
+        ]).join(" ");
+      } else if (searchField === "evocation") {
+        haystack = qRes.flatMap(r => [
+          ...((r.brand_mentioned && r.brand_mention_position == null) ? [brand_name] : []),
+          ...(r.competitors_mentioned || []).filter(c => c.mentioned && !(c.position != null && c.position > 0)).map(c => c.name),
+        ]).join(" ");
+      } else if (searchField === "citation") {
+        haystack = qRes.flatMap(r => (r.sources || [])).join(" ");
+      }
       try {
         const rx = new RegExp(filterSearch, 'i');
-        if (!rx.test(q.question)) return false;
-      } catch { if (!q.question.toLowerCase().includes(filterSearch.toLowerCase())) return false; }
+        if (!rx.test(haystack)) return false;
+      } catch { if (!haystack.toLowerCase().includes(filterSearch.toLowerCase())) return false; }
     }
     if (filterProviders.length > 0) {
       const qRes = resultsByQ[q.id] || [];
@@ -3807,7 +3887,7 @@ ${question}`;
         return a.i - b.i; // stabilité : ordre de base
       })
       .map(x => x.q);
-  }, [questions, filterFav, filterCat, filterKeyword, filterSearch, filterProviders, filterPositioned, filterLost, resultsByQ, latestResultByQ, lostByQ, sortByResult, resultRankByQ]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [questions, filterFav, filterCat, filterKeyword, filterSearch, searchField, filterProviders, filterPositioned, filterLost, resultsByQ, latestResultByQ, lostByQ, sortByResult, resultRankByQ]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Returns providers that still need to be called for a question today
   const getProvidersToRun = (q, force = false) => {
@@ -3898,7 +3978,8 @@ ${question}`;
       />
 
       {/* ── Stats header (filtered) ── */}
-      <div data-tour="stats-header"><StatsHeader questions={filtered} results={filteredResults} brandName={brand_name} qualifiedCompetitors={competitors.filter(c => c.enabled !== false)} /></div>
+      <div data-tour="stats-header"><StatsHeader questions={filtered} results={filteredResults} brandName={brand_name} qualifiedCompetitors={competitors.filter(c => c.enabled !== false)}
+            onTopClick={(field, name) => { setSearchField(field); setFilterSearch(name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")); }} /></div>
 
       {/* ══════════════════════════════════════════════════════
            ZONE AJOUT + FILTRES + ACTIONS
@@ -3954,11 +4035,18 @@ ${question}`;
         {/* ── Ligne 2 : Filtres ── */}
         <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", paddingBottom: 10, borderBottom: "0.5px solid #1A3C2E08", marginBottom: 10 }}>
 
-          {/* Recherche */}
+          {/* Recherche — choix du champ + saisie regex */}
+          <select value={searchField} onChange={e => setSearchField(e.target.value)} className="gt-select" title="Sur quel texte appliquer la recherche">
+            <option value="question">Questions</option>
+            <option value="answer">Réponses</option>
+            <option value="mention">Mentions</option>
+            <option value="evocation">Évocations</option>
+            <option value="citation">Citations</option>
+          </select>
           <input
             value={filterSearch}
             onChange={e => setFilterSearch(e.target.value)}
-            placeholder="Rechercher…"
+            placeholder="Rechercher (regex)…"
             className="gt-input"
             style={{ width: 160 }}
           />
@@ -4315,7 +4403,7 @@ ${question}`;
                         />
                       ) : (
                         <div style={{ fontSize: 10, color: C.textLight, fontStyle: "italic", marginTop: 4 }}>
-                          💡 Clé Claude manquante pour générer un hint
+                          💡 Clé Claude manquante pour générer une recommandation
                         </div>
                       )}
                     </div>
