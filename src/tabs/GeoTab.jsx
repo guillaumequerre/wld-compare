@@ -1537,7 +1537,9 @@ function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [],
     // ── MARQUE du projet ──
     const bMent = r.brand_mention_position ?? (r.brand_position > 0 ? r.brand_position : null);
     if (bMent != null && bMent > 0) addMent(brandName, bMent);
-    else if (r.brand_mentioned === true || r.brand_mentioned === 1) addEvoc(brandName);
+    // Évocation comptée INDÉPENDAMMENT de la mention : une marque listée dans un top
+    // peut aussi être évoquée dans le récit → elle doit apparaître dans le top évocations.
+    if (r.brand_evocation_position != null) addEvoc(brandName);
     if (r.brand_in_sources === true || r.brand_in_sources === 1) addCit(brandName, r.brand_citation_position ?? null);
 
     // ── CONCURRENTS flaggués (positions fiables M/É/C) ──
@@ -1545,7 +1547,7 @@ function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [],
       if (!c.name) return;
       const mPos = c.mention_position != null ? c.mention_position : (c.position != null && c.position > 0 ? c.position : null);
       if (mPos != null && mPos > 0) addMent(c.name, mPos);
-      else if (c.evocation_position != null || c.mentioned) addEvoc(c.name);
+      if (c.evocation_position != null) addEvoc(c.name);
       if (c.in_sources || c.citation_position != null) addCit(c.name, c.citation_position ?? null);
     });
 
@@ -1554,7 +1556,7 @@ function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [],
       if (!e?.name) return;
       const mPos = e.mention_position != null ? e.mention_position : (e.position != null && e.position > 0 ? e.position : null);
       if (mPos != null && mPos > 0) addMent(e.name, mPos);
-      else if (e.evocation_position != null) addEvoc(e.name);
+      if (e.evocation_position != null) addEvoc(e.name);
       if (e.in_sources || e.citation_position != null) addCit(e.name, e.citation_position ?? null);
     });
   });
@@ -5237,18 +5239,23 @@ function UrlsTab({ projectId, categories, brand, allResults }) {
     return 0;
   }), [urls, search, filterTpl, filterType, sortBy, brandName, brandAliases, competitors, allResults]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Domain aggregation
+  // Domain aggregation — repart de `filtered` pour que la recherche, le filtre de
+  // classe (marque/concurrents/autre) et le filtre template s'appliquent AUSSI à la
+  // vue Domaines, et applique le même tri (sortBy) que la vue URLs.
   const domains = useMemo(() => {
     const m = {};
-    urls.forEach(u => {
+    filtered.forEach(u => {
       if (!u.domain) return;
       if (!m[u.domain]) m[u.domain] = { domain: u.domain, count_as_source: 0, count_in_answer: 0, urls: [] };
       m[u.domain].count_as_source += u.count_as_source || 0;
       m[u.domain].count_in_answer += u.count_in_answer || 0;
       m[u.domain].urls.push(u);
     });
-    return Object.values(m).sort((a, b) => (b.count_as_source + b.count_in_answer) - (a.count_as_source + a.count_in_answer));
-  }, [urls]);
+    return Object.values(m).sort((a, b) => {
+      if (sortBy === "domain" || sortBy === "alpha") return (a.domain || "").localeCompare(b.domain || "");
+      return (b.count_as_source + b.count_in_answer) - (a.count_as_source + a.count_in_answer);
+    });
+  }, [filtered, sortBy]);
 
   // Counts per class
   const classCounts = useMemo(() => {
