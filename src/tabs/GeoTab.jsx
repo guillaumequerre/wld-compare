@@ -16,7 +16,10 @@ import {
   sbGetUrlIndex, sbUpdateUrlMeta, sbIncrementUrlCounts,
   sbAddCalendarEntry, sbGetCalendarEntriesBatch,
   sbDownload, sbSaveProject, sbDeleteProject,
-  sbGetCompetitors, sbSaveCompetitor, sbUpdateCompetitor, sbDeleteCompetitor,
+  sbGetCompetitors,
+  sbGetAliases,
+  sbSaveAlias,
+  sbDeleteAlias, sbSaveCompetitor, sbUpdateCompetitor, sbDeleteCompetitor,
   sbSaveGeoAnalysis, sbGetGeoAnalyses,
 } from "../lib/supabase";
 import { ProviderConfigPanel, BrandConfigPanel } from "../components/GeoConfig";
@@ -24,6 +27,7 @@ import UploadCard from "../components/UploadCard";
 import { newProject, parseCSV, parseSemrushCSV } from "../lib/helpers";
 import { parseSemrush } from "../lib/parsers";
 import { C, SITE_PALETTE } from "../lib/constants";
+import { matchGscForQuestion } from "../lib/audit-tools";
 // Note: sbSaveGeoAxes is called via onSaveAxes prop from App.jsx
 
 
@@ -1112,166 +1116,171 @@ function parseOpenAIResponse(data, endpoint = "responses") {
 function detectBrand(answer, sources, brandName, brandAliases = [], competitors = []) {
   // Normalisation casse + accents : « ÉLÉAS » et « Eleas » doivent matcher.
   const norm = (s) => (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
-  const allTerms = [brandName, ...brandAliases].filter(Boolean).map(t => norm(t));
-  const allCompetitorNames = competitors.filter(Boolean).map(t => norm(t));
-
-  function matches(text) {
-    const t = norm(text);
-    return allTerms.some(term => term && t.includes(term));
-  }
 
   const lines = (answer || "").split("\n");
   // Pattern d'item de top : "1. Titre", "2) Titre", "• 3. Titre"
   const topItemRe = /^\s*(?:[•\-*]\s*)?(\d+)[.)]\s*(.+)/;
 
-  // ── MENTION : présence dans une liste classée ────────────────
-  // FIABILITÉ DU "TOP" : on ne se fie PLUS au numéro littéral écrit par le LLM
-  // (souvent incohérent : sous-listes, redémarrages à 1, étapes non classantes).
-  // On reconstruit les séquences de liste contiguës et on prend la position
-  // ORDINALE réelle de la marque dans la séquence où elle apparaît.
-  let mentionPosition = null;
-
-  // Regrouper les items consécutifs en séquences (une ligne non-item rompt la séquence,
-  // sauf lignes vides ou lignes de continuation indentées).
-  const sequences = [];
-  let current = null;
-  let prevNum = null;
-  // Une sous-ligne de détail ("- Site web :", "• Description …", puce sans numéro)
-  // ne doit PAS casser la séquence : les tops LLM intercalent souvent des détails.
-  const subBulletRe = /^\s*[•\-*]\s+\S/;          // puce sans numéro = détail
+  // ── Reconstruction des séquences de liste classées (fiabilité du "Top") ──
+  // On ne se fie PAS au numéro littéral écrit par le LLM (sous-listes, redémarrages…).
+  // On prend la position ORDINALE réelle dans la séquence contiguë la plus longue.
+  const subBulletRe = /^\s*[•\-*]\s+\S/;
   const isDetailLine = (s) => {
     const t = s.trim();
-    if (!t) return true;                            // ligne vide → neutre
-    if (subBulletRe.test(t) && !topItemRe.test(t)) return true; // sous-puce de détail
-    // ligne indentée (continuation) → détail
+    if (!t) return true;
+    if (subBulletRe.test(t) && !topItemRe.test(t)) return true;
     if (/^\s{2,}\S/.test(s)) return true;
-    // courte ligne "clé : valeur" typique d'un détail
     if (/^[A-Za-zÀ-ÿ' ]{2,20}\s*:/.test(t) && t.length < 80) return true;
     return false;
   };
+  const sequences = [];
+  let current = null, prevNum = null;
   for (const raw of lines) {
     const m = raw.match(topItemRe);
     if (m) {
       const num = parseInt(m[1], 10);
-      const text = m[2];
-      // Nouvelle séquence si : pas de séquence en cours, ou rupture de numérotation
       const continues = current && prevNum != null && (num === prevNum + 1 || num === prevNum);
       if (!continues) { current = []; sequences.push(current); }
-      current.push({ num, text, ordinal: current.length + 1 });
+      current.push({ num, text: m[2], ordinal: current.length + 1 });
       prevNum = num;
     } else if (isDetailLine(raw)) {
-      // ligne vide ou détail d'un item : ne rompt PAS la séquence en cours
       continue;
     } else {
-      // vrai paragraphe narratif : rompt la séquence
       current = null; prevNum = null;
     }
   }
-
-  // Chercher la marque dans la plus longue séquence (la vraie liste classée)
-  // priorité aux séquences d'au moins 2 items (une vraie liste).
+  // La (les) vraie(s) liste(s) classée(s) = séquences d'au moins 2 items, plus longue d'abord.
   const ranked = sequences.filter(s => s.length >= 2).sort((a, b) => b.length - a.length);
   const searchSeqs = ranked.length ? ranked : sequences;
-  for (const seq of searchSeqs) {
-    for (const item of seq) {
-      if (matches(item.text)) {
-        // Position ordinale réelle dans la séquence (1er item = 1, 2e = 2…)
-        mentionPosition = item.ordinal;
-        break;
-      }
-    }
-    if (mentionPosition !== null) break;
-  }
 
-  // ── EVOCATION : présence dans le corps narratif ───────────────
-  let evocationPosition = null;
-  let narrativeCount = 0;
-
+  // Lignes narratives (hors items de top et hors métadonnées) — pour l'évocation.
+  const narrativeLines = [];
   for (const line of lines) {
     const stripped = line.trim();
     if (!stripped) continue;
     if (topItemRe.test(line)) continue;
-    // Ignorer les lignes de métadonnées
     if (
-      stripped.startsWith("http") ||
-      stripped.startsWith("[") ||
-      stripped.startsWith("- Site") ||
-      stripped.startsWith("- Description") ||
-      stripped.startsWith("Source") ||
-      stripped.match(/^\d+\.\s*https?:/)
+      stripped.startsWith("http") || stripped.startsWith("[") ||
+      stripped.startsWith("- Site") || stripped.startsWith("- Description") ||
+      stripped.startsWith("Source") || stripped.match(/^\d+\.\s*https?:/)
     ) continue;
-
-    narrativeCount++;
-    if (matches(stripped) && evocationPosition === null) {
-      evocationPosition = narrativeCount;
-    }
+    narrativeLines.push(stripped);
   }
 
-  // ── CITATION : domaine dans les sources ──────────────────────
-  let citationPosition = null;
-  const domainTerms = allTerms.map(t => t.replace(/\s+/g, ""));
-
-  // Aussi extraire les URLs du texte de réponse
+  // Sources = sources fournies + URLs extraites du texte.
   const urlRe = /https?:\/\/[^\s),'"\]]+/g;
   const textUrls = [...(answer || "").matchAll(urlRe)].map(m => m[0].replace(/[.,;:]+$/, ""));
   const allSources = [...new Set([...(Array.isArray(sources) ? sources : []), ...textUrls])];
+  const normSources = allSources.map(s => norm(s).replace(/^www\./, "").replace(/https?:\/\//, ""));
 
-  for (let i = 0; i < allSources.length; i++) {
-    const src = allSources[i].toLowerCase().replace("www.", "");
-    if (domainTerms.some(d => d && src.includes(d)) && citationPosition === null) {
-      citationPosition = i + 1;
+  // ── MOTEUR UNIQUE de détection M/É/C pour une entité (marque OU concurrent) ──
+  // terms : liste de noms/alias normalisés à chercher.
+  // Renvoie { mentionPosition, evocationPosition, citationPosition }.
+  function detectEntity(terms) {
+    const T = terms.filter(Boolean);
+    if (!T.length) return { mentionPosition: null, evocationPosition: null, citationPosition: null };
+    // Match sur LIMITES DE MOTS pour éviter les faux positifs par sous-chaîne
+    // (ex. « Eleas » ne doit pas matcher « Eleastic »). Insensible casse+accents.
+    // Une frontière = début/fin de chaîne ou caractère non alphanumérique.
+    const wordHit = (haystack, term) => {
+      if (!term) return false;
+      const esc = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      // \p{L}\p{N} = lettre/chiffre Unicode ; frontière manuelle car \b est ASCII-only
+      const re = new RegExp(`(^|[^\\p{L}\\p{N}])${esc}([^\\p{L}\\p{N}]|$)`, "u");
+      return re.test(haystack);
+    };
+    const hit = (text) => { const t = norm(text); return T.some(term => wordHit(t, term)); };
+
+    // MENTION — position ordinale réelle dans la 1ère séquence où l'entité apparaît.
+    let mentionPosition = null;
+    for (const seq of searchSeqs) {
+      for (const item of seq) {
+        if (hit(item.text)) { mentionPosition = item.ordinal; break; }
+      }
+      if (mentionPosition !== null) break;
+    }
+
+    // ÉVOCATION — 1ère ligne narrative qui cite l'entité (rang dans le récit).
+    let evocationPosition = null;
+    let narrativeCount = 0;
+    for (const nl of narrativeLines) {
+      narrativeCount++;
+      if (hit(nl) && evocationPosition === null) { evocationPosition = narrativeCount; break; }
+    }
+
+    // CITATION — 1ère source où le nom apparaît comme SEGMENT délimité de l'URL
+    // (entre début/fin, /, ., -, _). Évite les faux positifs (« aw » ∈ « lawfirm »).
+    let citationPosition = null;
+    const domainTerms = T.map(t => t.replace(/\s+/g, "")).filter(Boolean);
+    const segHit = (url, term) => {
+      const esc = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      return new RegExp(`(^|[^a-z0-9])${esc}([^a-z0-9]|$)`, "i").test(url);
+    };
+    for (let i = 0; i < normSources.length; i++) {
+      if (domainTerms.some(d => segHit(normSources[i], d))) { citationPosition = i + 1; break; }
+    }
+
+    return { mentionPosition, evocationPosition, citationPosition };
+  }
+
+  // ── MARQUE ──
+  const brandTerms = [brandName, ...brandAliases].filter(Boolean).map(norm);
+  const b = detectEntity(brandTerms);
+  const mentionPosition = b.mentionPosition;
+  const evocationPosition = b.evocationPosition;
+  const citationPosition = b.citationPosition;
+
+  // ── CONCURRENTS — MÊME moteur fiable, avec positions M/É/C ──
+  const allCompetitorNames = competitors.filter(Boolean).map(c => (typeof c === "string" ? c : c.name)).filter(Boolean);
+  const competitorsMentioned = allCompetitorNames
+    .map(name => {
+      const d = detectEntity([norm(name)]);
+      const mentioned = d.mentionPosition !== null || d.evocationPosition !== null;
+      return {
+        name,
+        mentioned,
+        // position = position de MENTION (top). null si pas dans un top classé.
+        position: d.mentionPosition,
+        mention_position:   d.mentionPosition,
+        evocation_position: d.evocationPosition,
+        citation_position:  d.citationPosition,
+        in_sources: d.citationPosition !== null,
+      };
+    })
+    .filter(c => c.mentioned || c.in_sources);
+
+  // ── Autres entités présentes dans les tops (à identifier) ──
+  // On parcourt TOUTES les séquences classées (pas seulement la plus longue) et on
+  // calcule pour chaque entité inconnue son triplet M/É/C via le même moteur fiable,
+  // afin qu'elles apparaissent correctement dans Top mentions / évocations / citations.
+  const knownTerms = [brandName, ...(brandAliases || []), ...allCompetitorNames].map(norm).filter(Boolean);
+  const seenUnknown = new Set();
+  const unknownEntities = [];
+  for (const seq of (ranked.length ? ranked : sequences)) {
+    for (const item of seq) {
+      const txt = (item.text || "").trim();
+      if (!txt) continue;
+      let nameRaw = txt.split(/[:–\-(]/)[0].trim().replace(/\*\*/g, "").replace(/[.,;]+$/, "").trim();
+      if (nameRaw.length < 2 || nameRaw.length > 40 || nameRaw.split(/\s+/).length > 5) continue;
+      const low = norm(nameRaw);
+      if (!low) continue;
+      if (knownTerms.some(t => low.includes(t) || t.includes(low))) continue; // marque/concurrent connu
+      if (seenUnknown.has(low)) continue;
+      seenUnknown.add(low);
+      const d = detectEntity([low]);
+      unknownEntities.push({
+        name: nameRaw,
+        position: d.mentionPosition != null ? d.mentionPosition : item.ordinal,
+        mention_position:   d.mentionPosition,
+        evocation_position: d.evocationPosition,
+        citation_position:  d.citationPosition,
+        in_sources: d.citationPosition !== null,
+      });
     }
   }
 
-  // ── Concurrents mentionnés (rétrocompat) ─────────────────────
-  const answerLower = norm(answer);
-  const competitorsMentioned = allCompetitorNames
-    .map(name => {
-      let cpos = null;
-      let cp = 0;
-      for (const line of lines) {
-        const m = line.match(topItemRe);
-        if (m) {
-          cp++;
-          if (norm(line).includes(name)) { cpos = cp; break; }
-        }
-      }
-      return {
-        name,
-        mentioned: answerLower.includes(name),
-        position: cpos,
-        in_sources: allSources.some(s => s.toLowerCase().replace("www.", "").includes(name.replace(/\s+/g, ""))),
-      };
-    })
-    .filter(c => c.mentioned);
-
-  // ── Autres entités présentes dans les tops (à identifier) ──
-  // Items de la plus longue séquence classée qui ne sont NI la marque NI un concurrent connu.
-  const knownTerms = [
-    brandName,
-    ...(brandAliases || []),
-    ...allCompetitorNames,
-  ].map(t => norm(t)).filter(Boolean);
-  const rankedSeqs = sequences.filter(s => s.length >= 2).sort((a, b) => b.length - a.length);
-  const topSeq = rankedSeqs[0] || [];
-  const unknownEntities = [];
-  topSeq.forEach(item => {
-    const txt = (item.text || "").trim();
-    if (!txt) return;
-    // Extraire un nom court : avant ":", "–", "-", "(" ou la fin de la 1ère phrase
-    let nameRaw = txt.split(/[:–\-(]/)[0].trim();
-    // Retirer un éventuel **gras** markdown et la ponctuation de fin
-    nameRaw = nameRaw.replace(/\*\*/g, "").replace(/[.,;]+$/, "").trim();
-    // Garder un nom plausible (2-40 car, pas une phrase entière)
-    if (nameRaw.length < 2 || nameRaw.length > 40 || nameRaw.split(/\s+/).length > 5) return;
-    const low = norm(nameRaw);
-    // Exclure marque + concurrents connus
-    if (knownTerms.some(t => low.includes(t) || t.includes(low))) return;
-    unknownEntities.push({ name: nameRaw, position: item.ordinal });
-  });
-
   return {
-    // Nouveaux champs structurés
+    // Champs structurés
     mention:   { present: mentionPosition !== null,   position: mentionPosition },
     evocation: { present: evocationPosition !== null, position: evocationPosition },
     citation:  { present: citationPosition !== null,  position: citationPosition },
@@ -1284,14 +1293,6 @@ function detectBrand(answer, sources, brandName, brandAliases = [], competitors 
     unknownEntities,
   };
 }
-
-
-
-
-// ── Small UI helpers ──────────────────────────────────────────────
-
-
-
 function Btn({ children, onClick, disabled, color, variant = "solid", small, title, style: extraStyle }) {
   const base = {
     display: "inline-flex", alignItems: "center", gap: 5,
@@ -1410,7 +1411,7 @@ function TopBarChart({ title, glyph, data, accent = "#1A3C2E", onBarClick = null
     </div>
   );
 }
-function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [], onTopClick = null }) {
+function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [], aliasMap = {}, onTopClick = null }) {
   const total = results.length;
 
   // ── Métriques par type de présence (nouveaux champs + rétrocompat) ──
@@ -1472,15 +1473,6 @@ function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [],
   });
   // (topComps retiré — remplacé par les 3 TopBarChart)
 
-  // Top domains
-  const domainCount = {};
-  results.forEach(r => (r.sources || []).forEach(url => {
-    try {
-      const d = new URL(url).hostname.replace("www.", "");
-      domainCount[d] = (domainCount[d] || 0) + 1;
-    } catch {}
-  }));
-  // (topDomains retiré — remplacé par topSources)
 
   // ── Helper : couleur selon le taux (nb / total) ───────────────
   function rateColor(count) {
@@ -1500,11 +1492,17 @@ function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [],
   const kindOf = (rawName) => {
     const n = (rawName || "").toLowerCase();
     const compact = n.replace(/\s+/g, "").replace(/^www\./, "");
-    if (brandKey && compact.includes(brandKey)) return "brand";
-    // Chercher une correspondance concurrent (par nom inclus)
+    // Frontière de mot (insensible casse) pour éviter les faux positifs de classification
+    const wb = (hay, needle) => {
+      if (!needle) return false;
+      const esc = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      return new RegExp(`(^|[^a-z0-9])${esc}([^a-z0-9]|$)`, "i").test(hay);
+    };
+    if (brandKey && (wb(n, brandKey) || compact === brandKey || compact.includes(brandKey))) return "brand";
     for (const [cname, cat] of Object.entries(compCatByName)) {
       const cc = cname.replace(/\s+/g, "");
-      if (cc && (compact.includes(cc) || n.includes(cname))) return cat;
+      // match par mot dans le nom OU domaine compact identique
+      if (cc && (wb(n, cname) || compact === cc || compact.includes(cc))) return cat;
     }
     return "other";
   };
@@ -1512,63 +1510,82 @@ function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [],
   // Top mentions & évocations : par CONCURRENT/MARQUE détecté dans les réponses.
   // mention = présent dans une liste classée (position) · évocation = cité sans position.
   // On agrège { count, bestPos } pour pouvoir trier par MEILLEURE position.
-  const mentionBySite = {}, evocBySite = {};
-  const bump = (obj, name, pos) => {
-    if (!name) return;
-    if (!obj[name]) obj[name] = { count: 0, bestPos: null };
-    obj[name].count += 1;
-    if (pos != null && pos > 0) obj[name].bestPos = obj[name].bestPos == null ? pos : Math.min(obj[name].bestPos, pos);
+  // ── Agrégation des 3 tops par MARQUE (projet + concurrents + autres marques) ──
+  // Chaque entité accumule : mentions (count + meilleure position), évocations (count),
+  // citations (count). Une même marque peut apparaître dans les 3 tops.
+  const agg = {}; // name → { name, kind, ment:{count,bestPos}, evoc:{count}, cit:{count,bestPos} }
+  // Canonicalisation par alias : A est compté comme B. Insensible casse/espaces.
+  const aliasLut = {};
+  Object.entries(aliasMap || {}).forEach(([a, b]) => { aliasLut[(a || "").toLowerCase().trim()] = b; });
+  const canon = (name) => {
+    if (!name) return name;
+    const c = aliasLut[name.toLowerCase().trim()];
+    return c || name;
   };
+  const ensure = (rawName) => {
+    if (!rawName) return null;
+    const name = canon(rawName);               // somme l'alias sur le canonique
+    const key = name.toLowerCase();
+    if (!agg[key]) agg[key] = { name, kind: kindOf(name), ment: { count: 0, bestPos: null }, evoc: { count: 0 }, cit: { count: 0, bestPos: null } };
+    return agg[key];
+  };
+  const addMent = (name, pos) => { const e = ensure(name); if (!e) return; e.ment.count++; if (pos != null && pos > 0) e.ment.bestPos = e.ment.bestPos == null ? pos : Math.min(e.ment.bestPos, pos); };
+  const addEvoc = (name) => { const e = ensure(name); if (e) e.evoc.count++; };
+  const addCit  = (name, pos) => { const e = ensure(name); if (!e) return; e.cit.count++; if (pos != null && pos > 0) e.cit.bestPos = e.cit.bestPos == null ? pos : Math.min(e.cit.bestPos, pos); };
+
   results.forEach(r => {
-    // Marque elle-même
-    const mPos = r.brand_mention_position ?? (r.brand_position > 0 ? r.brand_position : null);
-    const brandIsMent = mPos != null && mPos > 0;
-    const brandIsEvoc = !brandIsMent && (r.brand_mentioned === true || r.brand_mentioned === 1);
-    if (brandIsMent) bump(mentionBySite, brandName, mPos);
-    else if (brandIsEvoc) bump(evocBySite, brandName, null);
-    // Concurrents
+    // ── MARQUE du projet ──
+    const bMent = r.brand_mention_position ?? (r.brand_position > 0 ? r.brand_position : null);
+    if (bMent != null && bMent > 0) addMent(brandName, bMent);
+    else if (r.brand_mentioned === true || r.brand_mentioned === 1) addEvoc(brandName);
+    if (r.brand_in_sources === true || r.brand_in_sources === 1) addCit(brandName, r.brand_citation_position ?? null);
+
+    // ── CONCURRENTS flaggués (positions fiables M/É/C) ──
     (r.competitors_mentioned || []).forEach(c => {
       if (!c.name) return;
-      const cMent = c.position != null && c.position > 0;
-      if (cMent) bump(mentionBySite, c.name, c.position);
-      else if (c.mentioned) bump(evocBySite, c.name, null);
+      const mPos = c.mention_position != null ? c.mention_position : (c.position != null && c.position > 0 ? c.position : null);
+      if (mPos != null && mPos > 0) addMent(c.name, mPos);
+      else if (c.evocation_position != null || c.mentioned) addEvoc(c.name);
+      if (c.in_sources || c.citation_position != null) addCit(c.name, c.citation_position ?? null);
     });
-  });
 
-  // Tri mentions : par MEILLEURE position croissante (Top 1 d'abord), puis par occurrences.
-  const sortByPos = (obj) => Object.entries(obj)
-    .map(([name, v]) => ({ name, count: v.count, bestPos: v.bestPos, kind: kindOf(name) }))
-    .sort((a, b) => {
-      const pa = a.bestPos == null ? 9999 : a.bestPos;
-      const pb = b.bestPos == null ? 9999 : b.bestPos;
-      if (pa !== pb) return pa - pb;
-      return b.count - a.count;
-    });
-  // Tri évocations / sources : par occurrences décroissantes.
-  const sortByCount = (obj) => Object.entries(obj)
-    .map(([name, v]) => ({ name, count: (v.count != null ? v.count : v), kind: kindOf(name) }))
-    .sort((a, b) => b.count - a.count);
-
-  const topMentions = sortByPos(mentionBySite);
-  const topEvocations = sortByCount(evocBySite);
-  const topSources = sortByCount(domainCount);
-
-  // Autres marques/entités présentes dans les tops, NI marque NI concurrent connu (à identifier)
-  const unknownAgg = {};
-  results.forEach(r => {
+    // ── AUTRES MARQUES détectées (à identifier) ──
     (r.unknown_entities || []).forEach(e => {
-      const nm = (e?.name || "").trim();
-      if (!nm) return;
-      const key = nm.toLowerCase();
-      if (!unknownAgg[key]) unknownAgg[key] = { name: nm, count: 0, bestPos: null };
-      unknownAgg[key].count += 1;
-      if (e.position != null && e.position > 0) unknownAgg[key].bestPos = unknownAgg[key].bestPos == null ? e.position : Math.min(unknownAgg[key].bestPos, e.position);
+      if (!e?.name) return;
+      const mPos = e.mention_position != null ? e.mention_position : (e.position != null && e.position > 0 ? e.position : null);
+      if (mPos != null && mPos > 0) addMent(e.name, mPos);
+      else if (e.evocation_position != null) addEvoc(e.name);
+      if (e.in_sources || e.citation_position != null) addCit(e.name, e.citation_position ?? null);
     });
   });
-  const unknownEntitiesList = Object.values(unknownAgg).sort((a, b) => {
-    const pa = a.bestPos ?? 9999, pb = b.bestPos ?? 9999;
-    return pa !== pb ? pa - pb : b.count - a.count;
+
+  // Afficher les alias à 0 (leur compte a été sommé sur le canonique).
+  Object.keys(aliasLut).forEach(aliasLower => {
+    if (!agg[aliasLower]) {
+      // nom d'affichage : retrouver une casse réelle vue dans les données si possible
+      agg[aliasLower] = { name: aliasLower, kind: "other", ment: { count: 0, bestPos: null }, evoc: { count: 0 }, cit: { count: 0, bestPos: null }, isAlias: true };
+    }
   });
+  const aggList = Object.values(agg);
+  // Top mentions : tri par meilleure position puis count
+  const topMentions = aggList.filter(e => e.ment.count > 0)
+    .map(e => ({ name: e.name, count: e.ment.count, bestPos: e.ment.bestPos, kind: e.kind }))
+    .sort((a, b) => { const pa = a.bestPos ?? 9999, pb = b.bestPos ?? 9999; return pa !== pb ? pa - pb : b.count - a.count; });
+  // Top évocations : tri par count
+  const topEvocations = aggList.filter(e => e.evoc.count > 0)
+    .map(e => ({ name: e.name, count: e.evoc.count, kind: e.kind }))
+    .sort((a, b) => b.count - a.count);
+  // Top citations : marques citées en source, tri par count puis meilleure position
+  const topCitations = aggList.filter(e => e.cit.count > 0)
+    .map(e => ({ name: e.name, count: e.cit.count, bestPos: e.cit.bestPos, kind: e.kind }))
+    .sort((a, b) => { if (b.count !== a.count) return b.count - a.count; const pa = a.bestPos ?? 9999, pb = b.bestPos ?? 9999; return pa - pb; });
+  // (Top sources par domaine retiré de l'affichage — remplacé par Top citations par marque)
+
+  // Liste des autres marques à identifier (celles NI marque NI concurrent connu)
+  const unknownEntitiesList = aggList
+    .filter(e => e.kind === "other" && !e.isAlias && (e.ment.count + e.evoc.count + e.cit.count) > 0)
+    .map(e => ({ name: e.name, count: e.ment.count + e.evoc.count + e.cit.count, bestPos: e.ment.bestPos }))
+    .sort((a, b) => { const pa = a.bestPos ?? 9999, pb = b.bestPos ?? 9999; return pa !== pb ? pa - pb : b.count - a.count; });
 
   return (
     <div style={{ marginBottom: 24 }}>
@@ -1644,7 +1661,7 @@ function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [],
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 14 }}>
         <TopBarChart title="Top mentions" glyph="◎" accent="#1A7A4A" data={topMentions} onBarClick={onTopClick ? (d) => onTopClick("mention", d.name) : null} />
         <TopBarChart title="Top évocations" glyph="⟶" accent="#C97820" data={topEvocations} onBarClick={onTopClick ? (d) => onTopClick("evocation", d.name) : null} />
-        <TopBarChart title="Top sources" glyph="↗" accent="#1A3C2E" data={topSources} onBarClick={onTopClick ? (d) => onTopClick("citation", d.name) : null} />
+        <TopBarChart title="Top citations" glyph="↗" accent="#1A3C2E" data={topCitations} onBarClick={onTopClick ? (d) => onTopClick("citation", d.name) : null} />
       </div>
 
       {/* Légende code couleur */}
@@ -1698,6 +1715,37 @@ function CompetitorManager({ projectId, siteId, allResults, competitors, setComp
   const [newCat,  setNewCat]  = useState("direct");
   const [saving,  setSaving]  = useState(false);
   const [sortBy,  setSortBy]  = useState("mentions");
+  const [catMenuFor, setCatMenuFor] = useState(null); // marque dont le menu de catégorie est ouvert
+  // Alias : alias A → canonique B (sommés partout dans le projet)
+  const [aliases, setAliases] = useState([]);
+  const [aliasA, setAliasA] = useState("");   // le nom variante
+  const [aliasB, setAliasB] = useState("");   // la forme canonique
+  const [aliasSaving, setAliasSaving] = useState(false);
+  useEffect(() => {
+    if (!projectId || !siteId) { setAliases([]); return; }
+    let cancelled = false;
+    sbGetAliases(projectId, siteId).then(rows => { if (!cancelled) setAliases(rows || []); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [projectId, siteId]);
+  const saveAlias = async () => {
+    if (!aliasA.trim() || !aliasB.trim() || !projectId || !siteId) return;
+    if (aliasA.trim().toLowerCase() === aliasB.trim().toLowerCase()) return; // pas d'auto-alias
+    setAliasSaving(true);
+    try {
+      const saved = await sbSaveAlias({ project_id: projectId, site_id: siteId, alias: aliasA, canonical: aliasB });
+      setAliases(prev => {
+        const idx = prev.findIndex(a => a.alias.toLowerCase() === aliasA.trim().toLowerCase());
+        if (idx >= 0) { const n = [...prev]; n[idx] = saved; return n; }
+        return [...prev, saved];
+      });
+      setAliasA(""); setAliasB("");
+    } catch(e) { console.error(e); }
+    setAliasSaving(false);
+  };
+  const removeAlias = async (id) => {
+    try { await sbDeleteAlias(id); setAliases(prev => prev.filter(a => a.id !== id)); }
+    catch(e) { console.error(e); }
+  };
 
   const detectedNames = useMemo(() => {
     const mentions = {}; const display = {};
@@ -1707,6 +1755,13 @@ function CompetitorManager({ projectId, siteId, allResults, competitors, setComp
         const lower = c.name.toLowerCase();
         mentions[lower] = (mentions[lower] || 0) + 1;
         if (!display[lower]) display[lower] = c.name;
+      });
+      // Marques détectées dans les tops mais non flaggées (à identifier)
+      (r.unknown_entities || []).forEach(e => {
+        if (!e?.name) return;
+        const lower = e.name.toLowerCase();
+        mentions[lower] = (mentions[lower] || 0) + 1;
+        if (!display[lower]) display[lower] = e.name;
       });
     });
     // Recherche rétroactive
@@ -1743,6 +1798,20 @@ function CompetitorManager({ projectId, siteId, allResults, competitors, setComp
       setNewName("");
     } catch(e) { console.error(e); }
     setSaving(false);
+  };
+
+  // Catégoriser directement une marque détectée → la déplacer dans Concurrents
+  const categorizeDetected = async (name, category) => {
+    if (!name || !projectId || !siteId) return;
+    const catDef = getCatDef(category);
+    try {
+      const saved = await sbSaveCompetitor({ project_id: projectId, site_id: siteId, name: name.trim(), category, color: catDef.color, enabled: true });
+      setCompetitors(prev => {
+        const idx = prev.findIndex(c => c.name.toLowerCase() === name.trim().toLowerCase());
+        if (idx >= 0) { const n = [...prev]; n[idx] = saved; return n; }
+        return [...prev, saved].sort((a, b) => a.name.localeCompare(b.name));
+      });
+    } catch(e) { console.error(e); }
   };
 
   const updateCat = async (comp, category) => {
@@ -1794,20 +1863,71 @@ function CompetitorManager({ projectId, siteId, allResults, competitors, setComp
           </button>
         </div>
       </div>
-      {/* Détectés non qualifiés */}
+      {/* Marques détectées non qualifiées — cliquer pour catégoriser → Concurrents */}
       {detectedNames.filter(d => !competitors.some(c => c.name.toLowerCase() === d.lower)).length > 0 && (
-        <div style={{ marginBottom: 12 }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 6 }}>Détectés dans les réponses — non qualifiés</div>
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 4 }}>Marques détectées — à catégoriser</div>
+          <div style={{ fontSize: 10, color: "#94A3B8", marginBottom: 8 }}>Cliquez une marque puis choisissez sa catégorie : elle rejoint vos concurrents.</div>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            {detectedNames.filter(d => !competitors.some(c => c.name.toLowerCase() === d.lower)).slice(0, 12).map(d => (
-              <button key={d.lower} onClick={() => { setNewName(d.name); }}
-                style={{ padding: "3px 10px", borderRadius: 20, fontSize: 11, border: "1px solid #E2E8F0", background: "#F8FAFC", color: "#64748B", cursor: "pointer" }}>
-                {d.name} <span style={{ color: "#94A3B8" }}>{d.mentions}×</span>
-              </button>
+            {detectedNames.filter(d => !competitors.some(c => c.name.toLowerCase() === d.lower)).slice(0, 20).map(d => (
+              <div key={d.lower} style={{ position: "relative", display: "inline-block" }}>
+                <button onClick={() => setCatMenuFor(catMenuFor === d.lower ? null : d.lower)}
+                  style={{ padding: "3px 10px", borderRadius: 20, fontSize: 11, border: catMenuFor === d.lower ? "1px solid #1A3C2E" : "1px solid #E2E8F0", background: catMenuFor === d.lower ? "#1A3C2E0A" : "#F8FAFC", color: "#64748B", cursor: "pointer" }}>
+                  {d.name} <span style={{ color: "#94A3B8" }}>{d.mentions}×</span>
+                </button>
+                {catMenuFor === d.lower && (
+                  <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 20, background: "#fff", border: "0.5px solid #1A3C2E22", borderRadius: 8, boxShadow: "0 4px 14px #1A3C2E22", padding: 4, minWidth: 160 }}>
+                    {COMP_CATEGORIES.map(c => (
+                      <button key={c.key}
+                        onClick={() => { categorizeDetected(d.name, c.key); setCatMenuFor(null); }}
+                        style={{ display: "flex", alignItems: "center", gap: 7, width: "100%", textAlign: "left", padding: "6px 9px", border: "none", background: "transparent", borderRadius: 6, fontSize: 12, color: "#1A3C2E", cursor: "pointer" }}
+                        onMouseEnter={e => e.currentTarget.style.background = "#F8FAFC"}
+                        onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                        <span style={{ width: 9, height: 9, borderRadius: 3, background: c.color, flexShrink: 0 }} />
+                        {c.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             ))}
           </div>
         </div>
       )}
+      {/* ── Panneau Alias : A compté comme B partout dans le projet ── */}
+      <div style={{ marginBottom: 16, paddingBottom: 16, borderBottom: "0.5px solid #1A3C2E0D" }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 4 }}>Alias de marques</div>
+        <div style={{ fontSize: 10, color: "#94A3B8", marginBottom: 8 }}>
+          Déclarez qu'un nom (A) doit être compté comme un autre (B). Ex. « 2io » → « Deux.io ». Les mentions / évocations / citations de A sont sommées sur B ; A apparaît ensuite à 0.
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: aliases.length ? 10 : 0 }}>
+          <input value={aliasA} onChange={e => setAliasA(e.target.value)} placeholder="Alias (A)…"
+            onKeyDown={e => e.key === "Enter" && saveAlias()}
+            style={{ flex: "1 1 130px", padding: "6px 10px", border: "1px solid #E2E8F0", borderRadius: 7, fontSize: 12 }} />
+          <span style={{ fontSize: 13, color: "#94A3B8" }}>→</span>
+          <input value={aliasB} onChange={e => setAliasB(e.target.value)} placeholder="Compté comme (B)…"
+            onKeyDown={e => e.key === "Enter" && saveAlias()}
+            style={{ flex: "1 1 130px", padding: "6px 10px", border: "1px solid #E2E8F0", borderRadius: 7, fontSize: 12 }} />
+          <button onClick={saveAlias} disabled={aliasSaving || !aliasA.trim() || !aliasB.trim()}
+            style={{ padding: "6px 14px", background: (aliasA.trim() && aliasB.trim()) ? "#1A3C2E" : "#F1F5F9", color: (aliasA.trim() && aliasB.trim()) ? "#F0EBE0" : "#94A3B8", border: "none", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: (aliasA.trim() && aliasB.trim()) ? "pointer" : "default" }}>
+            {aliasSaving ? "…" : "Ajouter"}
+          </button>
+        </div>
+        {aliases.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            {aliases.map(a => (
+              <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#1A3C2E", padding: "4px 0" }}>
+                <span style={{ fontWeight: 600 }}>{a.alias}</span>
+                <span style={{ color: "#94A3B8" }}>→</span>
+                <span style={{ fontWeight: 600, color: "#1A7A4A" }}>{a.canonical}</span>
+                <button onClick={() => removeAlias(a.id)}
+                  style={{ marginLeft: "auto", fontSize: 11, color: "#C0352A", background: "transparent", border: "none", cursor: "pointer" }}>Supprimer</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       {/* Liste qualifiés */}
       {competitors.length > 0 && (
         <div>
@@ -2960,12 +3080,19 @@ RÈGLES :
 //  4. Rappel "générer un hint" par question
 //  5. Comparaison avec la version précédente (si existante)
 // Persistée en BDD (kind="roadmap"), datée.
-function NextStepsAnalysis({ questions, results, brand, categories = [], claudeKey, projectId = null, siteId = null }) {
+function NextStepsAnalysis({ questions, results, brand, categories = [], gscRows = [], claudeKey, projectId = null, siteId = null }) {
   const [status, setStatus]   = useState("idle");
   const [data, setData]       = useState(null);   // { brandAnalysis, categoryAnalysis, roadmap[], comparison }
   const [open, setOpen]       = useState(false);
   const [savedDate, setSavedDate] = useState(null);
   // prevData : l'analyse précédente est lue depuis data avant reset (pas de state séparé)
+
+  // ── Mode d'affichage : "url" (roadmap ICE existante) ou "action" (par type d'action) ──
+  const [mode, setMode]                 = useState("url");
+  const [actionData, setActionData]     = useState(null); // { generated_at, presence, actionGroups[] }
+  const [actionStatus, setActionStatus] = useState("idle"); // idle | loading | done | error
+  const [actionSavedDate, setActionSavedDate] = useState(null);
+  const [openActionTypes, setOpenActionTypes] = useState({}); // accordéons par type d'action
 
   const brandName    = brand?.brand_name || "";
   const brandDomain  = brand?.brand_domain || "";
@@ -2987,7 +3114,21 @@ function NextStepsAnalysis({ questions, results, brand, categories = [], claudeK
     return () => { cancelled = true; };
   }, [projectId, siteId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Helpers de classification des questions ──
+  // ── Charger la dernière analyse "par action" persistée ──
+  useEffect(() => {
+    if (!projectId || !siteId) return;
+    let cancelled = false;
+    sbGetGeoAnalyses(projectId, siteId, "roadmap-actions").then(rows => {
+      if (cancelled || !rows?.length) return;
+      const latest = rows[0];
+      if (latest.content) {
+        setActionData(latest.content);
+        setActionStatus("done");
+        setActionSavedDate(latest.created_at);
+      }
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [projectId, siteId]); // eslint-disable-line react-hooks/exhaustive-deps
   const resultsByQ = useMemo(() => {
     const m = {};
     results.forEach(r => { if (!m[r.question_id]) m[r.question_id] = []; m[r.question_id].push(r); });
@@ -3007,6 +3148,145 @@ function NextStepsAnalysis({ questions, results, brand, categories = [], claudeK
     return positions.length ? Math.min(...positions) : null;
   };
   const isMentioned = (qId) => (resultsByQ[qId] || []).some(r => r.brand_mentioned === true || r.brand_mentioned === 1);
+
+  // ── Catalogue des types d'action (regroupement des recos) ──
+  const ACTION_TYPES = {
+    optimize:   { label: "Optimiser une page existante", color: "#1A7A4A", icon: "✎" },
+    create:     { label: "Créer une nouvelle page",       color: "#E8541A", icon: "＋" },
+    enrich:     { label: "Enrichir / restructurer le contenu", color: "#C97820", icon: "≣" },
+    netlink:    { label: "Netlinking / autorité",          color: "#7C3AED", icon: "⚓" },
+    schema:     { label: "Données structurées (Schema)",   color: "#0EA5E9", icon: "{}" },
+    media:      { label: "Médias (images, vidéo, formats)", color: "#DB2777", icon: "▦" },
+    other:      { label: "Autres actions",                 color: "#64748B", icon: "•" },
+  };
+
+  // ── Mode "Par action" : présence par favori → page GSC → type d'action → récap ICE ──
+  const runActionMode = async () => {
+    if (!claudeKey) { setActionStatus("error"); setActionData({ error: "Clé Claude manquante (⚙️ Gestion des Providers)." }); return; }
+    const favs = questions.filter(q => q.is_favorite);
+    if (!favs.length) { setActionStatus("error"); setActionData({ error: "Aucune question favorite. Marquez des questions en favori (★) pour cibler le périmètre stratégique." }); return; }
+    setActionStatus("loading"); setOpen(true);
+
+    const siteDomain = (brandDomain || "").toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/$/, "");
+
+    // 1+2a. Pour chaque favori : présence marque + meilleure page GSC du site
+    const perQuestion = favs.map(q => {
+      const pos = brandPosOf(q.id);
+      const ment = isMentioned(q.id);
+      const gsc = matchGscForQuestion(q.question, gscRows, siteDomain);
+      return {
+        question: q.question,
+        present: ment,
+        brandPos: pos,
+        gscUrl: gsc?.url || null,
+        gscPos: gsc?.position || null,
+        gscQuery: gsc?.query || null,
+        hasPage: !!(gsc && gsc.url),
+      };
+    });
+
+    const hasGsc = Array.isArray(gscRows) && gscRows.length > 0;
+
+    // 2b. Demander à Claude de classer l'action à mener pour chaque question
+    const typeKeys = Object.keys(ACTION_TYPES);
+    const prompt = `Tu es un expert GEO/SEO senior. Pour "${brandName}" (${siteDomain || "site"}), tu dois définir, pour chaque question favorite, LE type d'action prioritaire à mener pour améliorer la présence de la marque dans les réponses des moteurs IA.
+
+CONTEXTE par question :
+- "present" : la marque est-elle déjà mentionnée dans les réponses IA ?
+- "brandPos" : meilleure position de la marque dans un top IA (null si absente)
+- "gscUrl" : page du site la mieux positionnée sur cette requête d'après Google Search Console (null si aucune page ne ranke)
+- "gscPos" : position Google de cette page (null si inconnue)
+${hasGsc ? "" : "\nNOTE : aucune donnée Google Search Console importée — base-toi sur present/brandPos et juge s'il faut probablement créer ou optimiser une page.\n"}
+RÈGLE de décision (à adapter finement) :
+- Si une page du site ranke déjà (gscUrl présent) → privilégier "optimize" ou "enrich".
+- Si aucune page ne ranke (gscUrl null) → souvent "create".
+- "schema", "media", "netlink" si pertinent en complément.
+
+TYPES D'ACTION AUTORISÉS (clé exacte) : ${typeKeys.join(", ")}
+
+QUESTIONS :
+${JSON.stringify(perQuestion.map((p, i) => ({ i, question: p.question, present: p.present, brandPos: p.brandPos, gscUrl: p.gscUrl, gscPos: p.gscPos })), null, 0)}
+
+Réponds UNIQUEMENT en JSON valide, sans texte autour :
+{
+  "items": [
+    { "i": 0, "actionType": "optimize", "reason": "justification courte (1 phrase)", "targetUrl": "url existante à optimiser ou null si création" }
+  ],
+  "groups": [
+    { "actionType": "optimize", "impact": 8, "confidence": 7, "ease": 6, "summary": "ce que regroupe ce type d'action et pourquoi (1-2 phrases)" }
+  ]
+}
+- "items" : une entrée par question (même ordre d'index "i").
+- "groups" : une entrée par type d'action RÉELLEMENT utilisé, avec une matrice ICE (entiers 1-10) et un résumé.`;
+
+    try {
+      const res = await fetch("/api/claude-geo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Claude-Key": claudeKey },
+        body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 2000, messages: [{ role: "user", content: prompt }] }),
+      });
+      const text = await res.text();
+      if (text.trimStart().startsWith("<")) throw new Error("Proxy /api/claude-geo introuvable");
+      let data;
+      try { data = JSON.parse(text); } catch { throw new Error(`Réponse non-JSON (${res.status})`); }
+      const raw = data?.content?.[0]?.text || data?.completion || data?.choices?.[0]?.message?.content || "";
+      const jsonMatch = raw.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) throw new Error("Aucun JSON dans la réponse");
+      const parsed = JSON.parse(jsonMatch[0]);
+
+      // 2c + 3. Regrouper les recos par type d'action
+      const itemsByType = {};
+      (parsed.items || []).forEach(it => {
+        const t = ACTION_TYPES[it.actionType] ? it.actionType : "other";
+        const pq = perQuestion[it.i] || {};
+        if (!itemsByType[t]) itemsByType[t] = [];
+        itemsByType[t].push({
+          question: pq.question,
+          present: pq.present,
+          brandPos: pq.brandPos,
+          url: it.targetUrl || pq.gscUrl || null,
+          gscPos: pq.gscPos,
+          reason: it.reason || "",
+        });
+      });
+      const groupMeta = {};
+      (parsed.groups || []).forEach(g => { groupMeta[g.actionType] = g; });
+
+      const actionGroups = Object.entries(itemsByType).map(([type, items]) => {
+        const g = groupMeta[type] || {};
+        const impact = Number(g.impact) || 5, confidence = Number(g.confidence) || 5, ease = Number(g.ease) || 5;
+        const ice = +(impact * confidence * ease / 100).toFixed(1); // score ICE normalisé 0-10
+        const urls = [...new Set(items.map(it => it.url).filter(Boolean))];
+        return {
+          type,
+          label: ACTION_TYPES[type].label,
+          summary: g.summary || "",
+          impact, confidence, ease, ice,
+          count: items.length,
+          urlCount: urls.length,
+          urls,
+          items,
+        };
+      }).sort((a, b) => b.ice - a.ice);
+
+      const presence = {
+        total: favs.length,
+        present: perQuestion.filter(p => p.present).length,
+        absent: perQuestion.filter(p => !p.present).length,
+        withPage: perQuestion.filter(p => p.hasPage).length,
+      };
+
+      const payload = { generated_at: new Date().toISOString(), hasGsc, presence, actionGroups, perQuestion };
+      setActionData(payload);
+      setActionStatus("done");
+      setActionSavedDate(payload.generated_at);
+      if (projectId && siteId) sbSaveGeoAnalysis({ project_id: projectId, site_id: siteId, kind: "roadmap-actions", content: payload }).catch(() => {});
+    } catch (e) {
+      console.error("runActionMode:", e);
+      setActionStatus("error");
+      setActionData({ error: e.message || "Échec de l'analyse par action" });
+    }
+  };
 
   const run = async () => {
     if (!claudeKey || !results.length) return;
@@ -3188,37 +3468,164 @@ RÈGLES :
   return (
     <div style={{ marginBottom: 24 }}>
       {/* ── Header ── */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: open && status === "done" ? 16 : 0 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: open ? 16 : 0, flexWrap: "wrap", gap: 10 }}>
         <div>
           <div className="gt-label" style={{ marginBottom: 3 }}>Et maintenant ?</div>
           <div style={{ fontSize: 13, fontWeight: 400, color: "#1A3C2E", letterSpacing: "-0.005em" }}>
-            Plan d'action priorisé — roadmap ICE & favoris catégorisés
+            {mode === "url" ? "Plan d'action priorisé — roadmap ICE & favoris catégorisés" : "Actions à mener par type — ICE & pages concernées (favoris)"}
           </div>
-          {savedDate && (
+          {mode === "url" && savedDate && (
             <div style={{ fontSize: 10, color: "#1A3C2E55", marginTop: 2 }}>
               Dernière génération : {new Date(savedDate).toLocaleString("fr-FR", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
             </div>
           )}
-        </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          {status === "done" && (
-            <button onClick={() => setOpen(o => !o)} className="gt-btn gt-btn--ghost" style={{ fontSize: 11 }}>
-              {open ? "Masquer" : "Voir le plan"}
-            </button>
+          {mode === "action" && actionSavedDate && (
+            <div style={{ fontSize: 10, color: "#1A3C2E55", marginTop: 2 }}>
+              Dernière génération : {new Date(actionSavedDate).toLocaleString("fr-FR", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
+            </div>
           )}
-          <button
-            onClick={run}
-            disabled={status === "loading" || !claudeKey}
-            className={`gt-btn ${status === "idle" ? "gt-btn--solid" : "gt-btn--ghost"}`}
-            title={!claudeKey ? "Clé Claude manquante" : undefined}
-            style={{ opacity: (!claudeKey || status === "loading") ? 0.4 : 1 }}>
-            {status === "loading" ? "Génération…" : status === "done" ? "↺ Régénérer" : "Et maintenant ?"}
-          </button>
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          {/* Switch de mode */}
+          <div style={{ display: "inline-flex", background: "#1A3C2E0A", borderRadius: 8, padding: 2 }}>
+            {[["url", "Par URL"], ["action", "Par action"]].map(([m, lbl]) => (
+              <button key={m} onClick={() => { setMode(m); setOpen(true); }}
+                style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 6, cursor: "pointer",
+                  background: mode === m ? "#fff" : "transparent", color: mode === m ? "#1A3C2E" : "#1A3C2E66",
+                  boxShadow: mode === m ? "0 1px 3px #1A3C2E1A" : "none" }}>
+                {lbl}
+              </button>
+            ))}
+          </div>
+
+          {mode === "url" && (
+            <>
+              {status === "done" && (
+                <button onClick={() => setOpen(o => !o)} className="gt-btn gt-btn--ghost" style={{ fontSize: 11 }}>
+                  {open ? "Masquer" : "Voir le plan"}
+                </button>
+              )}
+              <button
+                onClick={run}
+                disabled={status === "loading" || !claudeKey}
+                className={`gt-btn ${status === "idle" ? "gt-btn--solid" : "gt-btn--ghost"}`}
+                title={!claudeKey ? "Clé Claude manquante" : undefined}
+                style={{ opacity: (!claudeKey || status === "loading") ? 0.4 : 1 }}>
+                {status === "loading" ? "Génération…" : status === "done" ? "↺ Régénérer" : "Et maintenant ?"}
+              </button>
+            </>
+          )}
+
+          {mode === "action" && (
+            <>
+              {actionStatus === "done" && (
+                <button onClick={() => setOpen(o => !o)} className="gt-btn gt-btn--ghost" style={{ fontSize: 11 }}>
+                  {open ? "Masquer" : "Voir les actions"}
+                </button>
+              )}
+              <button
+                onClick={runActionMode}
+                disabled={actionStatus === "loading" || !claudeKey}
+                className={`gt-btn ${actionStatus === "idle" ? "gt-btn--solid" : "gt-btn--ghost"}`}
+                title={!claudeKey ? "Clé Claude manquante" : undefined}
+                style={{ opacity: (!claudeKey || actionStatus === "loading") ? 0.4 : 1 }}>
+                {actionStatus === "loading" ? "Analyse…" : actionStatus === "done" ? "↺ Régénérer" : "Analyser les actions"}
+              </button>
+            </>
+          )}
         </div>
       </div>
 
+      {/* ── Mode PAR ACTION : rendu ── */}
+      {mode === "action" && open && (
+        <div style={{ borderTop: "0.5px solid #1A3C2E0D", paddingTop: 16 }}>
+          {actionStatus === "loading" && (
+            <div style={{ fontSize: 12, color: "#1A3C2E77", padding: "12px 0" }}>Analyse des actions en cours… (présence, pages GSC, classification)</div>
+          )}
+          {actionStatus === "error" && actionData?.error && (
+            <div style={{ fontSize: 12, color: "#C0352A", background: "#FEF2F2", border: "1px solid #FCA5A5", borderRadius: 8, padding: "10px 12px" }}>{actionData.error}</div>
+          )}
+          {actionStatus === "done" && actionData && !actionData.error && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+              {/* Constat de présence */}
+              <div style={{ display: "flex", gap: 20, flexWrap: "wrap", padding: "12px 16px", background: "#1A3C2E08", borderRadius: 10 }}>
+                <div><div style={{ fontSize: 10, color: "#1A3C2E66", textTransform: "uppercase", letterSpacing: 0.5 }}>Favoris analysés</div><div style={{ fontSize: 20, fontWeight: 800, color: "#1A3C2E" }}>{actionData.presence.total}</div></div>
+                <div><div style={{ fontSize: 10, color: "#1A3C2E66", textTransform: "uppercase", letterSpacing: 0.5 }}>Marque présente</div><div style={{ fontSize: 20, fontWeight: 800, color: "#1A7A4A" }}>{actionData.presence.present}</div></div>
+                <div><div style={{ fontSize: 10, color: "#1A3C2E66", textTransform: "uppercase", letterSpacing: 0.5 }}>Marque absente</div><div style={{ fontSize: 20, fontWeight: 800, color: "#C0352A" }}>{actionData.presence.absent}</div></div>
+                <div><div style={{ fontSize: 10, color: "#1A3C2E66", textTransform: "uppercase", letterSpacing: 0.5 }}>Page GSC trouvée</div><div style={{ fontSize: 20, fontWeight: 800, color: "#1A3C2E" }}>{actionData.presence.withPage}</div></div>
+              </div>
+
+              {!actionData.hasGsc && (
+                <div style={{ fontSize: 11, color: "#C97820", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, padding: "8px 12px" }}>
+                  ⚠ Aucune donnée Google Search Console importée (onglet Audit → Imports). Les pages cibles n'ont pas pu être identifiées via GSC ; l'analyse repose sur la présence IA seule. Importez un export GSC pour des recommandations « optimiser vs créer » plus précises.
+                </div>
+              )}
+
+              {/* Récap par type d'action */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {actionData.actionGroups.map(g => {
+                  const meta = ACTION_TYPES[g.type] || ACTION_TYPES.other;
+                  const isOpen = !!openActionTypes[g.type];
+                  return (
+                    <div key={g.type} style={{ border: "0.5px solid #1A3C2E18", borderRadius: 12, overflow: "hidden" }}>
+                      {/* Bandeau type */}
+                      <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", background: meta.color + "0D" }}>
+                        <span style={{ width: 26, height: 26, borderRadius: 7, background: meta.color, color: "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700, flexShrink: 0 }}>{meta.icon}</span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: "#1A3C2E" }}>{g.label}</div>
+                          {g.summary && <div style={{ fontSize: 11, color: "#1A3C2E88", marginTop: 1 }}>{g.summary}</div>}
+                        </div>
+                        {/* Matrice ICE */}
+                        <div style={{ display: "flex", gap: 10, flexShrink: 0 }}>
+                          {[["Impact", g.impact], ["Confiance", g.confidence], ["Facilité", g.ease]].map(([lbl, v]) => (
+                            <div key={lbl} style={{ textAlign: "center" }}>
+                              <div style={{ fontSize: 9, color: "#1A3C2E66", textTransform: "uppercase" }}>{lbl}</div>
+                              <div style={{ fontSize: 14, fontWeight: 700, color: "#1A3C2E", fontVariantNumeric: "tabular-nums" }}>{v}</div>
+                            </div>
+                          ))}
+                          <div style={{ textAlign: "center", paddingLeft: 8, borderLeft: "0.5px solid #1A3C2E18" }}>
+                            <div style={{ fontSize: 9, color: meta.color, textTransform: "uppercase", fontWeight: 700 }}>ICE</div>
+                            <div style={{ fontSize: 16, fontWeight: 800, color: meta.color, fontVariantNumeric: "tabular-nums" }}>{g.ice}</div>
+                          </div>
+                        </div>
+                      </div>
+                      {/* Accordéon URLs / questions */}
+                      <button onClick={() => setOpenActionTypes(p => ({ ...p, [g.type]: !p[g.type] }))}
+                        style={{ width: "100%", textAlign: "left", padding: "8px 14px", border: "none", borderTop: "0.5px solid #1A3C2E0D", background: "#fff", cursor: "pointer", fontSize: 11, color: "#1A3C2E88", display: "flex", alignItems: "center", gap: 6 }}>
+                        <span style={{ transform: isOpen ? "rotate(90deg)" : "none", transition: "transform 0.15s" }}>▸</span>
+                        {g.count} question{g.count > 1 ? "s" : ""} concernée{g.count > 1 ? "s" : ""}{g.urlCount > 0 ? ` · ${g.urlCount} URL${g.urlCount > 1 ? "s" : ""}` : ""}
+                      </button>
+                      {isOpen && (
+                        <div style={{ padding: "4px 14px 12px", background: "#fff", display: "flex", flexDirection: "column", gap: 8 }}>
+                          {g.items.map((it, i) => (
+                            <div key={i} style={{ paddingTop: 8, borderTop: i ? "0.5px solid #1A3C2E08" : "none" }}>
+                              <div style={{ fontSize: 12, color: "#1A3C2E", fontWeight: 500 }}>{it.question}</div>
+                              <div style={{ fontSize: 11, color: "#1A3C2E77", marginTop: 2, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                                <span style={{ color: it.present ? "#1A7A4A" : "#C0352A" }}>{it.present ? `Présente${it.brandPos ? ` #${it.brandPos}` : ""}` : "Absente"}</span>
+                                {it.url && <span>↳ <a href={it.url} target="_blank" rel="noopener noreferrer" style={{ color: meta.color, textDecoration: "none" }}>{it.url.replace(/^https?:\/\//, "").slice(0, 60)}</a>{it.gscPos ? ` (GSC #${Math.round(it.gscPos)})` : ""}</span>}
+                                {!it.url && <span style={{ fontStyle: "italic" }}>aucune page existante</span>}
+                              </div>
+                              {it.reason && <div style={{ fontSize: 11, color: "#1A3C2E99", marginTop: 2 }}>{it.reason}</div>}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+          {actionStatus === "idle" && (
+            <div style={{ fontSize: 12, color: "#1A3C2E77", padding: "12px 0" }}>
+              Lancez l'analyse pour identifier, par question favorite, l'action prioritaire (optimiser, créer, enrichir…) et le récapitulatif par type d'action avec matrice ICE.
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ── Contenu ── */}
-      {open && status === "done" && data && !data.error && (
+      {mode === "url" && open && status === "done" && data && !data.error && (
         <div style={{ borderTop: "0.5px solid #1A3C2E0D", paddingTop: 16, display: "flex", flexDirection: "column", gap: 24 }}>
 
           {/* 0. Accroche favoris — périmètre stratégique en tête */}
@@ -3396,7 +3803,7 @@ RÈGLES :
         </div>
       )}
 
-      {open && status === "error" && data?.error && (
+      {mode === "url" && open && status === "error" && data?.error && (
         <div style={{ fontSize: 12, color: "#C0352A", padding: "10px 0", borderTop: "0.5px solid #1A3C2E0D", marginTop: 8 }}>
           Erreur : {data.error}
         </div>
@@ -3408,7 +3815,7 @@ RÈGLES :
 
 // ── Questions sub-tab (v2) ────────────────────────────────────────
 
-function QuestionsTab({ site, projectId, apiKey, model, brand, categories, setCategories, allResults, onResultSaved, activeProviders = ["openai"], providerKeys = {}, runMode = "parallel", keywordsOrder = [], refreshTrigger = 0, competitors = [], setCompetitors = null, onSaveKey = null, isReadOnly = false }) {
+function QuestionsTab({ site, projectId, apiKey, model, brand, categories, setCategories, allResults, gscRows = [], onResultSaved, activeProviders = ["openai"], providerKeys = {}, runMode = "parallel", keywordsOrder = [], refreshTrigger = 0, competitors = [], setCompetitors = null, onSaveKey = null, isReadOnly = false }) {
   const [questions, setQuestions]   = useState([]);
   const [results, setResults]       = useState(allResults || []);
   // Sort: favorites first, then by keyword order, then by creation date
@@ -3430,6 +3837,11 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, setCa
   const [manualQ, setManualQ]       = useState("");
   const [csvImporting, setCsvImporting] = useState(false);
   const csvInputRef = useRef(null);
+  // Génération de questions depuis une URL (crawl léger + IA)
+  const [urlGenOpen, setUrlGenOpen]   = useState(false);
+  const [urlGenUrl, setUrlGenUrl]     = useState("");
+  const [urlGenCount, setUrlGenCount] = useState(15);  // 10–25
+  const [urlGenStatus, setUrlGenStatus] = useState(""); // "", "crawl", "gen", "error:…", "done:N"
   const [editingQ, setEditingQ]     = useState(null); // { id, text } — question being edited
   const [editingKw, setEditingKw]       = useState(null);
   const [kwInput, setKwInput]           = useState("");
@@ -3591,6 +4003,91 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, setCa
     const saved = await sbSaveQuestions([{ project_id: projectId, site_id: site.id, question: q, is_manual: true }]);
     setQuestions(prev => [...saved, ...prev]);
     setManualQ("");
+  };
+
+  // Génère des questions GEO à partir du contenu d'une URL (crawl léger → IA)
+  const generateFromUrl = async () => {
+    const resolvedKey = providerKeys?.openai?.dec || apiKey;
+    let url = (urlGenUrl || "").trim();
+    if (!url) return;
+    if (!/^https?:\/\//i.test(url)) url = "https://" + url;
+    if (!resolvedKey) { setUrlGenStatus("error:Clé OpenAI manquante (⚙️ Gestion des Providers)"); return; }
+    const n = Math.max(10, Math.min(25, parseInt(urlGenCount, 10) || 15));
+    try {
+      // 1) Crawl léger de la page
+      setUrlGenStatus("crawl");
+      const cres = await fetch("/api/crawl", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+      const ctext = await cres.text();
+      if (ctext.trimStart().startsWith("<")) throw new Error("Proxy /api/crawl introuvable");
+      let cdata;
+      try { cdata = JSON.parse(ctext); } catch { throw new Error(`Crawl non-JSON (${cres.status})`); }
+      if (!cres.ok || cdata.error) throw new Error(cdata.error || `Crawl ${cres.status}`);
+      const sections = Array.isArray(cdata.sections) ? cdata.sections : [];
+      // Construire un extrait compact du contenu (titres + texte), borné pour le prompt
+      const content = sections
+        .map(s => [s.title, s.text || s.content || ""].filter(Boolean).join(" : "))
+        .join("\n")
+        .slice(0, 6000);
+      if (!content.trim()) throw new Error("Aucun contenu exploitable sur cette page");
+
+      // 2) Génération des questions via OpenAI
+      setUrlGenStatus("gen");
+      const prompt = `Tu es un expert GEO (Generative Engine Optimization). À partir du CONTENU ci-dessous (extrait d'une page web), génère exactement ${n} questions de recherche que des utilisateurs poseraient à un moteur IA (ChatGPT, Gemini, Perplexity) sur ce sujet.
+
+OBJECTIF : chaque question doit naturellement amener l'IA à citer des noms de marques, d'enseignes, de sites ou d'entreprises concrètes — jamais une réponse purement générique.
+
+CONTRAINTES :
+- Couvre les différents thèmes/produits/services présents dans le contenu
+- Maximum 14 mots par question
+- Ton naturel, comme une vraie requête de recherche
+- Commence de préférence par "Quelles", "Quel", "Qui", "Lesquels"
+- Pas de doublons
+
+CONTENU DE LA PAGE :
+"""
+${content}
+"""
+
+Réponds UNIQUEMENT avec les ${n} questions séparées par des points-virgules (;), sans numérotation, sans texte avant ou après.`;
+
+      const res = await fetch("/api/openai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Openai-Key": resolvedKey, "X-Openai-Endpoint": "completions" },
+        body: JSON.stringify({ model, messages: [{ role: "user", content: prompt }], temperature: 0.7, max_tokens: 700 }),
+      });
+      const text = await res.text();
+      if (text.trimStart().startsWith("<")) throw new Error("Proxy /api/openai introuvable");
+      let data;
+      try { data = JSON.parse(text); } catch { throw new Error(`Réponse non-JSON (${res.status})`); }
+      if (!res.ok) throw new Error(`OpenAI ${res.status}: ${data?.error?.message || data?.error || text.slice(0,120)}`);
+      const raw = (data?.choices?.[0]?.message?.content || "").trim();
+      if (!raw) throw new Error("Réponse vide");
+
+      const qs = raw
+        .split(/[;\n]/)
+        .map(s => s.replace(/^\s*\d+[.)\s]+/, "").trim())
+        .filter(s => s.length > 5 && s.length < 250);
+      // Dédoublonnage vs questions existantes
+      const existing = new Set(questions.map(q => (q.question || "").toLowerCase().trim()));
+      const fresh = qs.filter(q => !existing.has(q.toLowerCase().trim()));
+      if (!fresh.length) throw new Error("Aucune nouvelle question générée");
+
+      // 3) Sauvegarde — questions libres rattachées au site (sans mot-clé)
+      const saved = await sbSaveQuestions(fresh.map(q => ({
+        project_id: projectId, site_id: site.id, question: q, is_manual: false,
+      })));
+      const savedCount = Array.isArray(saved) ? saved.length : fresh.length;
+      setQuestions(prev => [...(Array.isArray(saved) ? saved : []), ...prev]);
+      setUrlGenStatus(`done:${savedCount}`);
+      setUrlGenUrl("");
+    } catch (e) {
+      console.error("generateFromUrl:", e);
+      setUrlGenStatus("error:" + (e.message || "échec"));
+    }
   };
 
   const importCsvQuestions = async (file) => {
@@ -4062,13 +4559,14 @@ ${question}`;
         results={results}
         brand={brand}
         categories={categories}
+        gscRows={gscRows}
         claudeKey={providerKeysRef.current["claude"]?.dec || ""}
         projectId={projectId}
         siteId={site?.id}
       />
 
       {/* ── Stats header (filtered) ── */}
-      <div data-tour="stats-header"><StatsHeader questions={filtered} results={filteredResults} brandName={brand_name} qualifiedCompetitors={competitors.filter(c => c.enabled !== false)}
+      <div data-tour="stats-header"><StatsHeader questions={filtered} results={filteredResults} brandName={brand_name} qualifiedCompetitors={competitors.filter(c => c.enabled !== false)} aliasMap={aliasMap}
             onTopClick={(field, name) => { setSearchField(field); setFilterSearch(name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")); }} /></div>
 
       {/* ══════════════════════════════════════════════════════
@@ -4236,6 +4734,16 @@ ${question}`;
 
           <div style={{ flex: 1 }} />
           <div className="geo-toolbar-actions">
+          {/* Générer depuis une URL */}
+          {!isReadOnly && (
+            <button
+              onClick={() => { setUrlGenOpen(o => !o); setUrlGenStatus(""); }}
+              className={`gt-btn ${urlGenOpen ? "gt-btn--solid" : "gt-btn--ghost"}`}
+              title="Générer des questions à partir du contenu d'une URL"
+              style={{ padding: "3px 12px" }}>
+              🌐 Générer depuis une URL
+            </button>
+          )}
           {/* Rafraîchir */}
           <button
             onClick={() => sbGetQuestions(projectId, site.id).then(setQuestions)}
@@ -4278,6 +4786,48 @@ ${question}`;
           </div>
         </div>
       </div>
+
+      {/* ── Panneau : Générer des questions depuis une URL ── */}
+      {urlGenOpen && !isReadOnly && (
+        <div style={{ margin: "0 0 16px", padding: "14px 16px", background: "#F6F8F7", border: "0.5px solid #1A3C2E14", borderRadius: 10 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#1A3C2E", marginBottom: 4 }}>Générer des questions depuis une URL</div>
+          <div style={{ fontSize: 11, color: "#1A3C2E77", marginBottom: 12 }}>
+            La page est crawlée légèrement, puis l'IA en déduit des questions de recherche. Les questions sont rattachées au site (sans mot-clé).
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <input
+              value={urlGenUrl}
+              onChange={e => setUrlGenUrl(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && urlGenStatus !== "crawl" && urlGenStatus !== "gen" && generateFromUrl()}
+              placeholder="https://exemple.fr/page…"
+              style={{ flex: "1 1 260px", padding: "7px 11px", border: "1px solid #E2E8F0", borderRadius: 8, fontSize: 12 }} />
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+              <span style={{ fontSize: 11, color: "#1A3C2E77" }}>Nombre</span>
+              <input type="range" min="10" max="25" value={urlGenCount}
+                onChange={e => setUrlGenCount(parseInt(e.target.value, 10))}
+                style={{ accentColor: "#1A3C2E", cursor: "pointer", width: 110 }} />
+              <span style={{ fontSize: 13, fontWeight: 700, color: "#1A3C2E", minWidth: 20, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{urlGenCount}</span>
+            </div>
+            <button
+              onClick={generateFromUrl}
+              disabled={!urlGenUrl.trim() || urlGenStatus === "crawl" || urlGenStatus === "gen"}
+              className="gt-btn gt-btn--solid"
+              style={{ padding: "7px 16px", opacity: (!urlGenUrl.trim() || urlGenStatus === "crawl" || urlGenStatus === "gen") ? 0.5 : 1 }}>
+              {urlGenStatus === "crawl" ? "⏳ Lecture de la page…" : urlGenStatus === "gen" ? "⏳ Génération…" : "Générer"}
+            </button>
+          </div>
+          {urlGenStatus.startsWith("done:") && (
+            <div style={{ marginTop: 10, fontSize: 12, color: "#1A7A4A", fontWeight: 600 }}>
+              ✓ {urlGenStatus.slice(5)} question{parseInt(urlGenStatus.slice(5), 10) > 1 ? "s" : ""} ajoutée{parseInt(urlGenStatus.slice(5), 10) > 1 ? "s" : ""}.
+            </div>
+          )}
+          {urlGenStatus.startsWith("error:") && (
+            <div style={{ marginTop: 10, fontSize: 12, color: "#C0352A" }}>
+              ✗ {urlGenStatus.slice(6)}
+            </div>
+          )}
+        </div>
+      )}
 
             {/* Questions list */}
       {filtered.length === 0 ? (
@@ -5549,6 +6099,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
   const [categories, setCategories] = useState([]);
   const [axes, setAxes]             = useState(Array.isArray(geoAxes) ? geoAxes : DEFAULT_AXES);
   const [competitors, setCompetitors] = useState([]);
+  const [aliasMap, setAliasMap] = useState({}); // alias(lower) → canonique
   const [showTour, setShowTour]       = useState(false);
 
   const site = (Array.isArray(sites) ? sites : []).find(s => s.id === selectedSite) || (Array.isArray(sites) ? sites : [])[0];
@@ -5571,6 +6122,11 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
     sbGetGeoResults(projectId, site.id).then(r => { setAllResults(r); }); // keep previous data while loading
     sbGetKeywords(projectId, site.id).then(kws => { setKeywords(kws || []); });
     sbGetCompetitors(projectId, site.id).then(c => { setCompetitors(c || []); });
+    sbGetAliases(projectId, site.id).then(rows => {
+      const map = {};
+      (rows || []).forEach(a => { if (a.alias && a.canonical) map[a.alias.toLowerCase().trim()] = a.canonical.trim(); });
+      setAliasMap(map);
+    }).catch(() => {});
   }, [projectId, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Decode key when enc changes
@@ -5807,6 +6363,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
         <div style={{ display: subTab === "questions" ? "block" : "none" }}>
           <QuestionsTab
             site={site} projectId={projectId} apiKey={apiKeyDec} model={model}
+            gscRows={project?.gscData?.[site?.id] || []}
             brand={brand} categories={categories} setCategories={setCategories}
             allResults={allResults.filter(r => r.site_id === site?.id)}
             onResultSaved={() => sbGetGeoResults(projectId, site.id).then(setAllResults)}

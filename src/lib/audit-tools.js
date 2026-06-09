@@ -77,6 +77,82 @@ export function gscRowMetrics(r) {
   };
 }
 
+// Recherche d'une colonne insensible à la casse/aux accents/espaces
+function fieldCI(row, ...keys) {
+  const norm = (s) => (s || "").toString().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+  const map = {};
+  Object.keys(row || {}).forEach(k => { map[norm(k)] = row[k]; });
+  for (const k of keys) {
+    const v = map[norm(k)];
+    if (v !== undefined && v !== null && v !== "") return v;
+  }
+  return null;
+}
+
+// GSC complet — query + page + position (gère dimension Requêtes seule OU Pages+Requêtes)
+export function gscRowFull(r) {
+  return {
+    query:       (fieldCI(r, "requêtes les plus fréquentes", "requête", "requete", "query", "queries", "mot-clé", "mot clé", "keyword", "search query") || "").toString().trim(),
+    url:         fieldCI(r, "pages les plus populaires", "page", "url", "adresse", "address", "landing page") || "",
+    clicks:      tNum(fieldCI(r, "clics", "clicks")),
+    impressions: tNum(fieldCI(r, "impressions")),
+    ctr:         tNum(fieldCI(r, "ctr", "taux de clics")),
+    position:    tNum(fieldCI(r, "position", "position moyenne")),
+  };
+}
+
+// Normalise un texte pour le matching (minuscules, sans accents, sans ponctuation)
+function normText(s) {
+  return (s || "")
+    .toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+// Mots significatifs (retire les stopwords FR/EN courts et fréquents)
+const GSC_STOP = new Set("le la les un une des de du au aux et ou a en dans pour par sur avec sans quel quelle quels quelles qui que quoi est sont meilleur meilleurs meilleure meilleures comment the of to and in for on with what which who is are best how".split(" "));
+function sigWords(s) {
+  return normText(s).split(" ").filter(w => w.length >= 3 && !GSC_STOP.has(w));
+}
+
+// Pour une question, trouve la meilleure page du site dans les données GSC importées.
+// Stratégie : matching mots-clés question ↔ requête GSC (recouvrement), pondéré par
+// la position (meilleure = plus bas). Gère les deux dimensions d'export GSC :
+//  - si la ligne a une query → on matche sur la query ;
+//  - sinon (dimension Pages seule) → on matche sur l'URL/le chemin.
+// Retourne { url, position, query, score } ou null si rien d'exploitable.
+export function matchGscForQuestion(question, gscRows, siteDomain = "") {
+  if (!Array.isArray(gscRows) || !gscRows.length) return null;
+  const qWords = sigWords(question);
+  if (!qWords.length) return null;
+  const qSet = new Set(qWords);
+  let best = null;
+
+  gscRows.forEach(raw => {
+    const g = gscRowFull(raw);
+    const hayText = g.query || g.url || "";
+    if (!hayText) return;
+    const hWords = sigWords(g.query ? g.query : urlPath(g.url).replace(/[\-_/]/g, " "));
+    if (!hWords.length) return;
+    // recouvrement de mots
+    let overlap = 0;
+    hWords.forEach(w => { if (qSet.has(w)) overlap++; });
+    if (overlap === 0) return;
+    // score : recouvrement normalisé + bonus position (meilleure position = bonus)
+    const coverage = overlap / Math.max(qWords.length, 1);
+    const posBonus = g.position > 0 ? Math.max(0, (30 - Math.min(g.position, 30)) / 30) : 0;
+    const score = coverage * 0.7 + posBonus * 0.3;
+    if (!best || score > best.score || (score === best.score && (g.position || 99) < (best.position || 99))) {
+      best = { url: g.url || "", position: g.position || null, query: g.query || "", score, coverage, overlap };
+    }
+  });
+
+  // Seuil minimal de pertinence : au moins 1 mot significatif commun et couverture ≥ 25%
+  if (best && best.coverage >= 0.25) return best;
+  return best && best.overlap >= 2 ? best : null;
+}
+
 // GA — sessions / vues par URL
 export function gaRowMetrics(r) {
   return {

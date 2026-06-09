@@ -3,7 +3,7 @@ import "./geo-responsive.css";
 import TourGuide from "./TourGuide";
 import { sbGetBrand, sbGetQuestions, sbGetGeoResults, sbGetUrlIndex,
   sbSaveProject, sbDeleteProject, sbDownload,
-  sbGetCalendarEntriesBatch, sbGetKeywords, sbGetCategories, sbGetCompetitors,
+  sbGetCalendarEntriesBatch, sbGetKeywords, sbGetCategories, sbGetCompetitors, sbGetAliases,
   sbSaveGeoAnalysis, sbGetGeoAnalyses } from "../lib/supabase";
 import {
   urlPath, sfRowMetrics, gscRowMetrics, gaRowMetrics,
@@ -800,7 +800,11 @@ function normalizeUrl(raw) {
   return u.toLowerCase();
 }
 
-function computeAudit(questions, results, urlIndex, brand, site, calendarEntries = [], keywords = [], competitors = []) {
+function computeAudit(questions, results, urlIndex, brand, site, calendarEntries = [], keywords = [], competitors = [], aliasMap = {}) {
+  // Canonicalisation par alias : un nom A est compté comme son canonique B.
+  const _aliasLut = {};
+  Object.entries(aliasMap || {}).forEach(([a, b]) => { _aliasLut[(a || "").toLowerCase().trim()] = b; });
+  const canonName = (name) => { if (!name) return name; return _aliasLut[name.toLowerCase().trim()] || name; };
   const brandName = brand?.brand_name || "";
   const brandAliases = brand?.brand_aliases || [];
   const total = results.length;
@@ -966,18 +970,86 @@ function computeAudit(questions, results, urlIndex, brand, site, calendarEntries
   results.forEach(r => { if (r.intent_type) intentCount[r.intent_type] = (intentCount[r.intent_type] || 0) + 1; });
   const typeCount = {};
   results.forEach(r => { if (r.answer_type) typeCount[r.answer_type] = (typeCount[r.answer_type] || 0) + 1; });
+
+  // ── UPGRADE 1 : Segmentation par intention (intent_type) avec perf M/É/C ──
+  // Pour chaque intention, on compte les résultats et la présence de la marque.
+  const intentStats = {};
+  results.forEach(r => {
+    const it = r.intent_type || "non classé";
+    if (!intentStats[it]) intentStats[it] = { intent: it, total: 0, mentions: 0, evocations: 0, citations: 0, positions: [] };
+    const s = intentStats[it];
+    s.total++;
+    const mPos = r.brand_mention_position ?? (r.brand_position > 0 ? r.brand_position : null);
+    if (mPos != null && mPos > 0) { s.mentions++; s.positions.push(mPos); }
+    else if (r.brand_mentioned === true || r.brand_mentioned === 1) s.evocations++;
+    if (r.brand_in_sources === true || r.brand_in_sources === 1) s.citations++;
+  });
+  const intentStatsList = Object.values(intentStats)
+    .map(s => ({ ...s, avgPos: s.positions.length ? (s.positions.reduce((a, b) => a + b, 0) / s.positions.length).toFixed(1) : null,
+      presenceRate: s.total ? Math.round(((s.mentions + s.evocations) / s.total) * 100) : 0 }))
+    .sort((a, b) => b.total - a.total);
+
+  // ── UPGRADE 2 : Classification du type de page citée (via patterns d'URL) ──
+  // produit · blog/article · catégorie · accueil · autre — sur les sources citées.
+  const classifyPage = (url) => {
+    let path = "";
+    try { path = new URL(url).pathname.toLowerCase(); } catch { path = String(url || "").toLowerCase(); }
+    if (path === "" || path === "/" ) return "accueil";
+    if (/\/(blog|article|actualit|news|guide|magazine|ressource|conseil|dossier)s?\//.test(path) || /\.(html?)$/.test(path) && /(blog|article|guide)/.test(path)) return "blog/article";
+    if (/\/(produit|product|offre|service|solution|prestation)s?\//.test(path)) return "produit/service";
+    if (/\/(categorie|category|collection|gamme|univers)s?\//.test(path)) return "catégorie";
+    if (/\/(a-propos|about|qui-sommes|equipe|contact|mentions|cgv|cgu)/.test(path)) return "institutionnel";
+    if (path.split("/").filter(Boolean).length <= 1) return "accueil";
+    return "autre";
+  };
+  const pageTypeStats = {};
+  results.forEach(r => {
+    (r.sources || []).forEach(url => {
+      const t = classifyPage(url);
+      if (!pageTypeStats[t]) pageTypeStats[t] = { type: t, count: 0, brand: 0 };
+      pageTypeStats[t].count++;
+      // est-ce une URL de la marque ?
+      const bd = (brand?.brand_domain || "").toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/$/, "");
+      if (bd && String(url).toLowerCase().includes(bd)) pageTypeStats[t].brand++;
+    });
+  });
+  const pageTypeStatsList = Object.values(pageTypeStats).sort((a, b) => b.count - a.count);
+
+  // ── UPGRADE 3 : Évolution temporelle des MENTIONS sur 30 jours ──
+  // Par jour : nb de mentions (position de marque détectée) parmi les résultats du jour.
+  const mentionByDay = {};
+  results.forEach(r => {
+    if (!r.created_at) return;
+    const key = String(r.created_at).slice(0, 10);
+    if (!mentionByDay[key]) mentionByDay[key] = { mentions: 0, evocations: 0, citations: 0, total: 0 };
+    const d = mentionByDay[key];
+    d.total++;
+    const mPos = r.brand_mention_position ?? (r.brand_position > 0 ? r.brand_position : null);
+    if (mPos != null && mPos > 0) d.mentions++;
+    else if (r.brand_mentioned === true || r.brand_mentioned === 1) d.evocations++;
+    if (r.brand_in_sources === true || r.brand_in_sources === 1) d.citations++;
+  });
+  const mentionTrend = [];
+  for (let i = 29; i >= 0; i--) {
+    const dt = new Date(today); dt.setDate(dt.getDate() - i);
+    const key = dayKey(dt);
+    const d = mentionByDay[key] || { mentions: 0, evocations: 0, citations: 0, total: 0 };
+    mentionTrend.push({ date: key, ...d });
+  }
   const compStats = {};
   // 1. Depuis competitors_mentioned (résultats récents)
   // Chaque entrée concurrent : { name, mentioned, position, in_sources }
   // → Mention = position numérotée · Évocation = citée sans position · Citation = dans les sources
   results.forEach(r => (r.competitors_mentioned || []).forEach(c => {
     if (!c.name) return;
-    if (!compStats[c.name]) compStats[c.name] = { mentions: 0, evocations: 0, citations: 0, positions: [], category: null, color: null };
-    const st = compStats[c.name];
-    const hasPos = c.position != null && c.position > 0;
-    if (hasPos) { st.mentions++; st.positions.push(c.position); }
-    else if (c.mentioned) { st.evocations++; }
-    if (c.in_sources) { st.citations++; }
+    const cname = canonName(c.name); // alias → canonique (sommation)
+    if (!compStats[cname]) compStats[cname] = { mentions: 0, evocations: 0, citations: 0, positions: [], category: null, color: null };
+    const st = compStats[cname];
+    // Position de mention fiable (mention_position) avec repli sur position (rétrocompat ancien format)
+    const mPos = c.mention_position != null ? c.mention_position : (c.position != null && c.position > 0 ? c.position : null);
+    if (mPos != null && mPos > 0) { st.mentions++; st.positions.push(mPos); }
+    else if (c.mentioned || c.evocation_position != null) { st.evocations++; }
+    if (c.in_sources || c.citation_position != null) { st.citations++; }
   }));
 
   // 2. Enrichir avec les concurrents qualifiés (catégorie + recherche rétroactive)
@@ -1065,9 +1137,18 @@ function computeAudit(questions, results, urlIndex, brand, site, calendarEntries
 
 
   // ── Top 5 concurrents depuis les mentions ─────────────────────
-  const top5Competitors = Object.entries(compStats)
-    .sort((a, b) => (b[1].mentions + (b[1].evocations||0)) - (a[1].mentions + (a[1].evocations||0)))
-    .slice(0, 5);
+  const competitorsRanked = Object.entries(compStats)
+    .filter(([, s]) => (s.mentions || 0) + (s.evocations || 0) + (s.citations || 0) > 0)
+    .sort((a, b) => {
+      // tri : d'abord par mentions, puis par meilleure position moyenne, puis évocations
+      const ma = a[1].mentions || 0, mb = b[1].mentions || 0;
+      if (mb !== ma) return mb - ma;
+      const pa = a[1].positions?.length ? a[1].positions.reduce((x,y)=>x+y,0)/a[1].positions.length : 999;
+      const pb = b[1].positions?.length ? b[1].positions.reduce((x,y)=>x+y,0)/b[1].positions.length : 999;
+      if (pa !== pb) return pa - pb;
+      return (b[1].evocations||0) - (a[1].evocations||0);
+    });
+  const top5Competitors = competitorsRanked.slice(0, 5);
 
   // ── Analyse par catégorie des questions ───────────────────────
   const resultsByQ = {};
@@ -1114,7 +1195,7 @@ function computeAudit(questions, results, urlIndex, brand, site, calendarEntries
     } catch { return false; }
   }).slice(0, 10);
 
-  return { total, withBrand, withSources, withRanked, withSourceOnly, withMentionOnly, avgPos, avgMentionPos, avgEvocationPos, avgCitationPos, mentionCount, evocationCount, citationCount, presenceRate, trendDays, sortedUrls, brandUrls, brandOwnUrls, brandExternalUrls, urlDetails, competitorUrls, referenceUrls, topDomains, intentCount, typeCount, compStats, top5Competitors, byQuestionCategory, urlsToOptimize, urlsToRework, urlsToInspire, leads, questions: questions.length, providerStats, missingBrandQs, presentBrandQs, hasFavFilter, favCount, _rawResults: results };
+  return { total, withBrand, withSources, withRanked, withSourceOnly, withMentionOnly, avgPos, avgMentionPos, avgEvocationPos, avgCitationPos, mentionCount, evocationCount, citationCount, presenceRate, trendDays, sortedUrls, brandUrls, brandOwnUrls, brandExternalUrls, urlDetails, competitorUrls, referenceUrls, topDomains, intentCount, typeCount, intentStatsList, pageTypeStatsList, mentionTrend, compStats, top5Competitors, competitorsRanked, byQuestionCategory, urlsToOptimize, urlsToRework, urlsToInspire, leads, questions: questions.length, providerStats, missingBrandQs, presentBrandQs, hasFavFilter, favCount, _rawResults: results };
 }
 
 
@@ -2867,13 +2948,14 @@ function ModuleTable({ columns, rows, limit = 8 }) {
   );
 }
 
-function ToolModulesSection({ audit, sfRows, gscRows, gaRows, bingData, brand }) {
+function ToolModulesSection({ audit, sfRows, gscRows, gaRows, bingData, brand, competitors = [], claudeKey = "" }) {
   // État d'activation des modules (tous off par défaut sauf Tier 1)
   const [enabled, setEnabled] = useState({
     seoGap: true, unblock: true, business: true,       // Tier 1
     citability: false, orphan: false,                   // Tier 2
     aiTraffic: false, cannibal: false, bing: false,     // Tier 3
   });
+  const [showAllComp, setShowAllComp] = useState(false); // tableau Paysage concurrentiel : voir toutes les marques
   const toggle = (k) => setEnabled(e => ({ ...e, [k]: !e[k] }));
 
   const brandName = (brand?.brand_name || "marque").toLowerCase().replace(/\s+/g, "-");
@@ -2999,6 +3081,7 @@ export default function GeoAuditTab({
   const [categories, setCategories]     = useState([]); // catégories de mots-clés
   const [competitors, setCompetitors]   = useState([]); // concurrents qualifiés
   const [loading, setLoading]           = useState(true);
+  const [aliasMap, setAliasMap]         = useState({}); // alias(lower) → canonique
 
   const site = (Array.isArray(sites) ? sites : []).find(s => s.id === selectedSite) || (Array.isArray(sites) ? sites : [])[0];
   const claudeKey = decodeKey(project?.claude_geo_key_enc || "");
@@ -3006,10 +3089,13 @@ export default function GeoAuditTab({
   const refreshData = useCallback(() => {
     if (!projectId || !site?.id) return;
     setLoading(true);
-    Promise.all([sbGetBrand(projectId, site.id), sbGetQuestions(projectId, site.id), sbGetGeoResults(projectId, site.id), sbGetUrlIndex(projectId), sbGetCalendarEntriesBatch(projectId, site.id), sbGetKeywords(projectId, site.id), sbGetCategories(projectId), sbGetCompetitors(projectId, site.id)])
-      .then(([b, q, r, u, cal, kws, cats, comps]) => {
+    Promise.all([sbGetBrand(projectId, site.id), sbGetQuestions(projectId, site.id), sbGetGeoResults(projectId, site.id), sbGetUrlIndex(projectId), sbGetCalendarEntriesBatch(projectId, site.id), sbGetKeywords(projectId, site.id), sbGetCategories(projectId), sbGetCompetitors(projectId, site.id), sbGetAliases(projectId, site.id)])
+      .then(([b, q, r, u, cal, kws, cats, comps, aliasRows]) => {
         setBrand(b); setQuestions(q); setResults(r); setUrlIndex(u);
         setCalendarEntries(cal || []); setKeywords(kws || []); setCategories(cats || []);
+        const amap = {};
+        (aliasRows || []).forEach(a => { if (a.alias && a.canonical) amap[a.alias.toLowerCase().trim()] = a.canonical.trim(); });
+        setAliasMap(amap);
         // Init enabled : top-5 par mentions, le reste désactivé (seulement si aucun n'a été configuré)
         const compList = comps || [];
         const hasAnyConfig = compList.some(c => c.enabled === true || c.enabled === false);
@@ -3055,7 +3141,7 @@ export default function GeoAuditTab({
   }, [siteResultsAll, periodDays]);
   const siteQuestions = useMemo(() => questions.filter(q => q.site_id === site?.id), [questions, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const siteUrls      = useMemo(() => urlIndex.filter(u => u.project_id === projectId), [urlIndex, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
-  const audit         = useMemo(() => computeAudit(siteQuestions, siteResults, siteUrls, brand, site, calendarEntries, keywords, competitors), [siteQuestions, siteResults, siteUrls, brand, site, calendarEntries, keywords, competitors]);
+  const audit         = useMemo(() => computeAudit(siteQuestions, siteResults, siteUrls, brand, site, calendarEntries, keywords, competitors, aliasMap), [siteQuestions, siteResults, siteUrls, brand, site, calendarEntries, keywords, competitors, aliasMap]);
   // ── Audit recalculé sur le sous-ensemble FAVORIS (affichage parallèle) ──
   const favQuestions  = useMemo(() => siteQuestions.filter(q => q.is_favorite), [siteQuestions]);
   const favQIds       = useMemo(() => new Set(favQuestions.map(q => q.id)), [favQuestions]);
@@ -3289,11 +3375,72 @@ export default function GeoAuditTab({
                 </div>
               )}
 
-              {/* Tendance 30 jours */}
+              {/* Tendance 30 jours — mentions / évocations / citations (depuis les résultats) */}
               <div className="audit-trend-wrap" style={{ marginBottom: 18 }}>
-                <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E44", marginBottom: 8 }}>Tendance 30 jours</div>
-                <TrendChart trendDays={audit.trendDays} />
+                <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E44", marginBottom: 8 }}>Évolution des mentions — 30 jours</div>
+                <TrendChart trendDays={(audit.mentionTrend && audit.mentionTrend.some(d => d.total > 0)) ? audit.mentionTrend.map(d => ({ date: d.date, tested: d.total, present: d.mentions + d.evocations, mentions: d.mentions, evocations: d.evocations, citations: d.citations })) : audit.trendDays} />
               </div>
+
+              {/* ── Segmentation par intention ── */}
+              {(audit.intentStatsList || []).length > 0 && (
+                <div style={{ marginBottom: 18 }}>
+                  <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E44", marginBottom: 8 }}>Performance par intention de recherche</div>
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                      <thead>
+                        <tr style={{ textAlign: "left", color: "#1A3C2E66", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                          <th style={{ padding: "6px 8px" }}>Intention</th>
+                          <th style={{ padding: "6px 8px", textAlign: "right" }}>Résultats</th>
+                          <th style={{ padding: "6px 8px", textAlign: "right", color: "#1A7A4A" }}>◎ Mentions</th>
+                          <th style={{ padding: "6px 8px", textAlign: "right", color: "#C97820" }}>⟶ Évoc.</th>
+                          <th style={{ padding: "6px 8px", textAlign: "right", color: "#1A3C2E" }}>↗ Cit.</th>
+                          <th style={{ padding: "6px 8px", textAlign: "right" }}>Pos. moy.</th>
+                          <th style={{ padding: "6px 8px", textAlign: "right" }}>Présence</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {audit.intentStatsList.map(s => (
+                          <tr key={s.intent} style={{ borderTop: "0.5px solid #1A3C2E0D" }}>
+                            <td style={{ padding: "6px 8px", fontWeight: 600, color: "#1A3C2E" }}>{s.intent}</td>
+                            <td style={{ padding: "6px 8px", textAlign: "right", color: "#1A3C2E99" }}>{s.total}</td>
+                            <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 700, color: "#1A7A4A" }}>{s.mentions}</td>
+                            <td style={{ padding: "6px 8px", textAlign: "right", color: "#C97820" }}>{s.evocations}</td>
+                            <td style={{ padding: "6px 8px", textAlign: "right", color: "#1A3C2E" }}>{s.citations}</td>
+                            <td style={{ padding: "6px 8px", textAlign: "right", color: "#1A3C2E99", fontVariantNumeric: "tabular-nums" }}>{s.avgPos ? `#${s.avgPos}` : "—"}</td>
+                            <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 600, color: s.presenceRate >= 50 ? "#1A7A4A" : s.presenceRate >= 20 ? "#C97820" : "#C0352A" }}>{s.presenceRate}%</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* ── Type de page citée ── */}
+              {(audit.pageTypeStatsList || []).length > 0 && (
+                <div style={{ marginBottom: 18 }}>
+                  <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E44", marginBottom: 8 }}>Type de page citée en source</div>
+                  <div style={{ fontSize: 11, color: "#1A3C2E66", marginBottom: 10 }}>Nature des URLs citées par les IA (toutes marques). Le compteur « dont marque » indique vos propres pages.</div>
+                  {(() => {
+                    const max = Math.max(...audit.pageTypeStatsList.map(p => p.count), 1);
+                    const COLORS = { "accueil": "#1A3C2E", "produit/service": "#1A7A4A", "blog/article": "#C97820", "catégorie": "#7C3AED", "institutionnel": "#64748B", "autre": "#9AAEA4" };
+                    return (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                        {audit.pageTypeStatsList.map(p => (
+                          <div key={p.type} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                            <span style={{ fontSize: 12, color: "#1A3C2E", minWidth: 120 }}>{p.type}</span>
+                            <div style={{ flex: 1, height: 16, background: "#1A3C2E08", borderRadius: 4, overflow: "hidden", position: "relative" }}>
+                              <div style={{ width: `${(p.count / max) * 100}%`, height: "100%", background: COLORS[p.type] || "#9AAEA4", borderRadius: 4 }} />
+                            </div>
+                            <span style={{ fontSize: 12, fontWeight: 700, color: "#1A3C2E", minWidth: 36, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{p.count}</span>
+                            {p.brand > 0 && <span style={{ fontSize: 10, color: "#1A7A4A", minWidth: 70 }}>dont {p.brand} marque</span>}
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
 
               {/* Questions ◎ mention / ✗ favorites sans mention */}
               <div className="audit-questions-grid">
@@ -3363,10 +3510,11 @@ export default function GeoAuditTab({
               {/* Tableau M/É/C top 5 concurrents */}
               {(() => {
                 const brandName = brand?.brand_name || "Marque";
-                const top5 = audit.top5Competitors?.length ? audit.top5Competitors : audit.top5Fallback || [];
+                const ranked = audit.competitorsRanked?.length ? audit.competitorsRanked : (audit.top5Competitors || []);
+                const shown = showAllComp ? ranked : ranked.slice(0, 8);
                 const allRows = [
                   { name: brandName, stats: { mentions: audit.withRanked||0, evocations: audit.withMentionOnly||0, citations: audit.withSourceOnly||0, positions: audit.avgMentionPos ? [parseFloat(audit.avgMentionPos)] : [] }, isRef: true },
-                  ...top5.map(([name, s]) => ({ name, stats: s, isRef: false })),
+                  ...shown.map(([name, s]) => ({ name, stats: s, isRef: false })),
                 ];
                 return (
                   <div className="audit-comp-table-wrap">
@@ -3403,6 +3551,14 @@ export default function GeoAuditTab({
                   </div>
                 );
               })()}
+
+              {/* Voir toutes les marques détectées */}
+              {(audit.competitorsRanked?.length || 0) > 8 && (
+                <button onClick={() => setShowAllComp(v => !v)}
+                  style={{ marginTop: 10, fontSize: 11, padding: "5px 12px", borderRadius: 6, border: "0.5px solid #1A3C2E22", background: "transparent", color: "#1A3C2E88", cursor: "pointer" }}>
+                  {showAllComp ? "▲ Afficher moins" : `▼ Voir toutes les marques (${audit.competitorsRanked.length})`}
+                </button>
+              )}
 
               {/* Analyseur de pages concurrentes */}
               <CompetitorPageAnalyzer
@@ -3502,6 +3658,8 @@ export default function GeoAuditTab({
               <ToolModulesSection
                 audit={audit}
                 brand={brand}
+                competitors={competitors}
+                claudeKey={claudeKey}
                 sfRows={(sfData && site) ? (sfData[site.id] || []) : []}
                 gscRows={(gscData && site) ? (gscData[site.id] || []) : []}
                 gaRows={(gaData && site) ? (gaData[site.id] || []) : []}

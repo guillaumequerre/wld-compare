@@ -1,5 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { C } from "../lib/constants";
+import { sbGetGeoResultsAll } from "../lib/supabase";
+import { getModelPricing } from "../components/GeoConfig";
 import { authLogin, authSignup, isSuperAdmin, sbGetProjectMembers, sbRemoveProjectMember, sbInviteMember } from "../lib/auth";
 
 function Section({ title, children }) {
@@ -69,6 +71,133 @@ function LoginCard({ onLogin }) {
 }
 
 // ── Project members manager ───────────────────────────────────────
+// ── ProjectCosts — suivi des coûts RÉELS du projet (tokens × tarifs) ──
+// Agrège les tokens réellement consommés (input/output) stockés sur geo_results,
+// par provider, avec un sélecteur de période. Tarifs : MODEL_CATALOG (USD/1M tokens).
+function ProjectCosts({ project }) {
+  const [rows, setRows]       = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [periodDays, setPeriodDays] = useState(30); // 0 = tout
+
+  useEffect(() => {
+    if (!project?.id) { setRows([]); setLoading(false); return; }
+    let cancelled = false;
+    setLoading(true);
+    sbGetGeoResultsAll(project.id).then(r => { if (!cancelled) { setRows(r || []); setLoading(false); } })
+      .catch(() => { if (!cancelled) { setRows([]); setLoading(false); } });
+    return () => { cancelled = true; };
+  }, [project?.id]);
+
+  // Extraire providerId + modelId depuis le champ model "OpenAI (gpt-4o-mini)"
+  const parseModel = (modelStr) => {
+    const s = String(modelStr || "");
+    const m = s.match(/\(([^)]+)\)\s*$/);
+    const modelId = m ? m[1].trim() : "";
+    const low = s.toLowerCase();
+    let providerId = "openai";
+    if (low.includes("gemini")) providerId = "gemini";
+    else if (low.includes("perplex") || low.includes("sonar")) providerId = "perplexity";
+    else if (low.includes("claude")) providerId = "claude";
+    else if (low.includes("openai") || low.includes("gpt")) providerId = "openai";
+    return { providerId, modelId };
+  };
+
+  const PROVIDER_LABEL = { openai: "OpenAI", gemini: "Gemini", perplexity: "Perplexity", claude: "Claude" };
+
+  const stats = useMemo(() => {
+    const since = periodDays ? Date.now() - periodDays * 86400000 : 0;
+    const byProvider = {};
+    let totalCost = 0, totalIn = 0, totalOut = 0, totalCalls = 0, withTokens = 0;
+    rows.forEach(r => {
+      const t = r.created_at ? new Date(r.created_at).getTime() : null;
+      if (since && t != null && t < since) return;
+      const { providerId, modelId } = parseModel(r.model);
+      const inTok = r.input_tokens || 0;
+      const outTok = r.output_tokens || 0;
+      const pricing = getModelPricing(providerId, modelId);
+      const cost = (inTok * pricing.in + outTok * pricing.out) / 1e6;
+      if (!byProvider[providerId]) byProvider[providerId] = { provider: providerId, calls: 0, inTok: 0, outTok: 0, cost: 0, models: {} };
+      const b = byProvider[providerId];
+      b.calls++; b.inTok += inTok; b.outTok += outTok; b.cost += cost;
+      const mk = modelId || "—";
+      if (!b.models[mk]) b.models[mk] = { calls: 0, cost: 0 };
+      b.models[mk].calls++; b.models[mk].cost += cost;
+      totalCost += cost; totalIn += inTok; totalOut += outTok; totalCalls++;
+      if (inTok || outTok) withTokens++;
+    });
+    return { list: Object.values(byProvider).sort((a, b) => b.cost - a.cost), totalCost, totalIn, totalOut, totalCalls, withTokens };
+  }, [rows, periodDays]);
+
+  const fmt$ = (n) => n < 0.01 ? `$${n.toFixed(4)}` : n < 1 ? `$${n.toFixed(3)}` : `$${n.toFixed(2)}`;
+  const fmtTok = (n) => n >= 1000 ? `${(n/1000).toFixed(1)}k` : String(n);
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
+        <div style={{ fontSize: 11, color: C.textLight }}>
+          Coûts calculés sur les tokens réellement consommés, enregistrés à chaque interrogation.
+        </div>
+        <select value={periodDays} onChange={e => setPeriodDays(parseInt(e.target.value, 10))}
+          style={{ padding: "6px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, background: "#fff", cursor: "pointer" }}>
+          <option value={7}>7 derniers jours</option>
+          <option value={30}>30 derniers jours</option>
+          <option value={90}>3 mois</option>
+          <option value={180}>6 mois</option>
+          <option value={365}>12 mois</option>
+          <option value={0}>Tout l'historique</option>
+        </select>
+      </div>
+
+      {loading ? (
+        <div style={{ fontSize: 12, color: C.textLight }}>Chargement des coûts…</div>
+      ) : stats.totalCalls === 0 ? (
+        <div style={{ fontSize: 12, color: C.textLight, fontStyle: "italic" }}>Aucune interrogation sur cette période.</div>
+      ) : (
+        <>
+          {/* Total */}
+          <div style={{ display: "flex", gap: 20, flexWrap: "wrap", padding: "14px 16px", background: "#1A3C2E08", borderRadius: 10, marginBottom: 16 }}>
+            <div>
+              <div style={{ fontSize: 10, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.5 }}>Coût total</div>
+              <div style={{ fontSize: 22, fontWeight: 800, color: "#1A3C2E" }}>{fmt$(stats.totalCost)}</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 10, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.5 }}>Interrogations</div>
+              <div style={{ fontSize: 22, fontWeight: 800, color: "#1A3C2E" }}>{stats.totalCalls}</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 10, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.5 }}>Tokens (in / out)</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: "#1A3C2E", marginTop: 4 }}>{fmtTok(stats.totalIn)} / {fmtTok(stats.totalOut)}</div>
+            </div>
+          </div>
+
+          {stats.withTokens < stats.totalCalls && (
+            <div style={{ fontSize: 11, color: "#C97820", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, padding: "8px 12px", marginBottom: 14 }}>
+              ⚠ {stats.totalCalls - stats.withTokens} interrogation(s) sans tokens enregistrés (antérieures au suivi des coûts) — non comptées dans le total.
+            </div>
+          )}
+
+          {/* Par provider */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {stats.list.map(b => (
+              <div key={b.provider} style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 14px" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: "#1A3C2E" }}>{PROVIDER_LABEL[b.provider] || b.provider}</span>
+                  <span style={{ fontSize: 15, fontWeight: 800, color: "#1A3C2E" }}>{fmt$(b.cost)}</span>
+                </div>
+                <div style={{ fontSize: 11, color: C.textLight, display: "flex", gap: 14, flexWrap: "wrap" }}>
+                  <span>{b.calls} interrogation{b.calls > 1 ? "s" : ""}</span>
+                  <span>{fmtTok(b.inTok)} in · {fmtTok(b.outTok)} out</span>
+                  <span>{Object.entries(b.models).map(([m, mv]) => `${m} (${fmt$(mv.cost)})`).join(" · ")}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function ProjectMembers({ project, ownerEmail, myRole = "owner" }) {
   const [members, setMembers] = useState([]);
   const [newEmail, setNewEmail] = useState("");
@@ -201,6 +330,12 @@ function ProjectMembers({ project, ownerEmail, myRole = "owner" }) {
       {!canManage && (
         <div style={{ fontSize: 12, color: C.textLight, fontStyle: "italic" }}>Vous avez un accès lecture seule sur ce projet.</div>
       )}
+
+      {/* ── Coûts du projet (tokens réels × tarifs) ── */}
+      <div style={{ marginTop: 22, paddingTop: 18, borderTop: `1px solid ${C.border}` }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>💸 Coûts du projet</div>
+        <ProjectCosts project={project} />
+      </div>
     </div>
   );
 }
