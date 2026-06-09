@@ -2955,7 +2955,6 @@ function ToolModulesSection({ audit, sfRows, gscRows, gaRows, bingData, brand, c
     citability: false, orphan: false,                   // Tier 2
     aiTraffic: false, cannibal: false, bing: false,     // Tier 3
   });
-  const [showAllComp, setShowAllComp] = useState(false); // tableau Paysage concurrentiel : voir toutes les marques
   const toggle = (k) => setEnabled(e => ({ ...e, [k]: !e[k] }));
 
   const brandName = (brand?.brand_name || "marque").toLowerCase().replace(/\s+/g, "-");
@@ -3072,6 +3071,7 @@ export default function GeoAuditTab({
   const [exporting, setExporting]       = useState(false);
   const [showTour, setShowTour]         = useState(false);
   const [sfCorrFilter, setSfCorrFilter] = useState("all"); // "all" | "gsc" | "bing" | "fanout"
+  const [showAllComp, setShowAllComp]   = useState(false); // tableau Paysage concurrentiel : voir toutes les marques
   const [brand, setBrand]               = useState(null);
   const [questions, setQuestions]       = useState([]);
   const [results, setResults]           = useState([]);

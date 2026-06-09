@@ -1,5805 +1,55 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import "./geo-tab.css";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import "./geo-responsive.css";
 import TourGuide from "./TourGuide";
-import PresenceCalendar from "../components/PresenceCalendar";
+import { sbGetBrand, sbGetQuestions, sbGetGeoResults, sbGetUrlIndex,
+  sbSaveProject, sbDeleteProject, sbDownload,
+  sbGetCalendarEntriesBatch, sbGetKeywords, sbGetCategories, sbGetCompetitors, sbGetAliases,
+  sbSaveGeoAnalysis, sbGetGeoAnalyses } from "../lib/supabase";
 import {
-  sbGetBrand,
-  sbSaveKeywords, sbGetKeywords, sbUpdateKeywordStatus, sbDeleteKeyword, sbUpdateKeywordVolume,
-  sbSaveQuestions, sbGetQuestions, sbUpdateQuestion, sbDeleteQuestion,
-  sbSaveGeoResult, sbGetGeoResults, sbSaveHint, sbGetHints, sbSetKeywordTags,
-  sbGetSchedule, sbSaveSchedule, sbUpdateSchedule, sbTriggerScheduler,
-  sbSaveProjectSettings,
-  sbGetCategories, sbSaveCategory, sbDeleteCategory,
-  sbSetQuestionCategory,
-  sbBulkSetKeywordCategory, sbBulkSetQuestionCategory,
-  sbGetUrlIndex, sbUpdateUrlMeta, sbIncrementUrlCounts,
-  sbAddCalendarEntry, sbGetCalendarEntriesBatch,
-  sbDownload, sbSaveProject, sbDeleteProject,
-  sbGetCompetitors,
-  sbGetAliases,
-  sbSaveAlias,
-  sbDeleteAlias, sbSaveCompetitor, sbUpdateCompetitor, sbDeleteCompetitor,
-  sbSaveGeoAnalysis, sbGetGeoAnalyses,
-} from "../lib/supabase";
-import { ProviderConfigPanel, BrandConfigPanel } from "../components/GeoConfig";
+  urlPath, sfRowMetrics, gscRowMetrics, gaRowMetrics,
+  computePagesToUnblock, computeCitabilityScores, computeOrphanCited,
+  computeSeoGeoGap, computeReverseCannibalization, computeBingGap,
+  computeBusinessValue, computeAITraffic,
+  buildCSV, downloadCSV, CSV_COLUMNS,
+} from "../lib/audit-tools";
 import UploadCard from "../components/UploadCard";
-import { newProject, parseCSV, parseSemrushCSV } from "../lib/helpers";
-import { parseSemrush } from "../lib/parsers";
+import PageTypeClassifier from "../components/PageTypeClassifier";
+import { newProject } from "../lib/helpers";
 import { C, SITE_PALETTE } from "../lib/constants";
-import { matchGscForQuestion } from "../lib/audit-tools";
-// Note: sbSaveGeoAxes is called via onSaveAxes prop from App.jsx
 
+const ANTHROPIC_PROXY = "/api/anthropic";
 
+// Catégories concurrents — miroir de GeoTab
 
-const DEFAULT_AXES = [
-  "Meilleur / top / recommandé",
-  "Pistes et approches pour utiliser / bénéficier du mot-clé",
-  "Avis / fiable / fiabilité",
-  "Pour atteindre un objectif lié au mot-clé",
-  "Pour résoudre une problématique liée au mot-clé",
-];
+// Rend les **texte** en <strong> dans toute l'app
+// ── Modèles Claude utilisés dans l'audit ─────────────────────────
+// AIAnalysis = analyse experte longue et sourcée (sonnet recommandé pour la qualité).
+// FanoutAnalysis & CompetitorPageAnalyzer = analyses courtes (haiku, plus rapide/économique).
+// Pour basculer AIAnalysis sur haiku : remplacer AUDIT_AI_MODEL par "claude-haiku-4-5-20251001".
+const AUDIT_AI_MODEL = "claude-sonnet-4-6";
 
-// ── API Key helpers — base64 obfuscation (Supabase already protected by auth) ──
-// Fallback: if stored value looks like an AES blob (not a valid sk- key after decode),
-// the user must re-enter the key once to migrate to the new format.
-function decodeKey(enc) {
-  if (!enc) return "";
-  try {
-    const k = decodeURIComponent(escape(atob(enc)));
-    return k; // may or may not start with sk- — UI will validate
-  } catch {
-    return ""; // AES blob or corrupted — user must re-enter
-  }
-}
-
-function extractDomain(url) {
-  try { return new URL(url).hostname.replace("www.", ""); } catch { return url; }
-}
-
-// Retire les query strings et fragments des URLs pour l'affichage
-function stripQuery(url) {
-  try {
-    const u = new URL(url);
-    return u.origin + u.pathname;
-  } catch { return url; }
-}
-
-// Convertit le markdown basique (gras, italique, listes) en éléments React
-// Répare un JSON tronqué (réponse LLM coupée par max_tokens) : retire le
-// dernier élément incomplet et referme les structures ouvertes. Best-effort.
-function repairTruncatedJson(str) {
-  if (!str) return null;
-  let s = str.trim();
-  // Retirer une virgule traînante éventuelle
-  // Parcourir et suivre la pile des structures ouvertes hors chaînes
-  const stack = [];
-  let inStr = false, esc = false, lastSafe = -1;
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i];
-    if (inStr) {
-      if (esc) { esc = false; }
-      else if (c === "\\") { esc = true; }
-      else if (c === '"') { inStr = false; }
-      continue;
-    }
-    if (c === '"') { inStr = true; continue; }
-    if (c === "{" || c === "[") { stack.push(c); }
-    else if (c === "}" || c === "]") { stack.pop(); }
-    // Point sûr : fin d'un élément complet (valeur ou objet/tableau fermé)
-    if ((c === "}" || c === "]") && stack.length >= 0) lastSafe = i;
-  }
-  // Tronquer après le dernier point sûr connu, puis refermer la pile
-  let body = lastSafe >= 0 ? s.slice(0, lastSafe + 1) : s;
-  // Recalculer la pile sur le body tronqué
-  const st2 = [];
-  inStr = false; esc = false;
-  for (let i = 0; i < body.length; i++) {
-    const c = body[i];
-    if (inStr) {
-      if (esc) esc = false; else if (c === "\\") esc = true; else if (c === '"') inStr = false;
-      continue;
-    }
-    if (c === '"') inStr = true;
-    else if (c === "{" || c === "[") st2.push(c);
-    else if (c === "}" || c === "]") st2.pop();
-  }
-  // Retirer virgule traînante avant fermeture
-  body = body.replace(/,\s*$/, "");
-  // Refermer dans l'ordre inverse
-  for (let i = st2.length - 1; i >= 0; i--) {
-    body += st2[i] === "{" ? "}" : "]";
-  }
-  try { return JSON.parse(body); } catch { return null; }
-}
-
-function renderMarkdown(text) {
-  if (!text) return null;
-  const lines = text.split("\n");
-  return lines.map((line, li) => {
-    // Transformer **bold** et *italic* dans chaque ligne
-    const parts = [];
-    let remaining = line;
-    let key = 0;
-    while (remaining.length > 0) {
-      const boldMatch = remaining.match(/^(.*?)\*\*(.+?)\*\*/s);
-      const italicMatch = remaining.match(/^(.*?)\*(.+?)\*/s);
-      // Choisir le match le plus proche
-      const useBold = boldMatch && (!italicMatch || boldMatch[1].length <= italicMatch[1].length);
-      if (useBold) {
-        if (boldMatch[1]) parts.push(<span key={key++}>{boldMatch[1]}</span>);
-        parts.push(<strong key={key++}>{boldMatch[2]}</strong>);
-        remaining = remaining.slice(boldMatch[0].length);
-      } else if (italicMatch) {
-        if (italicMatch[1]) parts.push(<span key={key++}>{italicMatch[1]}</span>);
-        parts.push(<em key={key++}>{italicMatch[2]}</em>);
-        remaining = remaining.slice(italicMatch[0].length);
-      } else {
-        parts.push(<span key={key++}>{remaining}</span>);
-        remaining = "";
-      }
-    }
-    const trimmed = line.trimStart();
-    // ── Titres Markdown : # (titre) · ## / ### (sous-titre). On masque les dièses. ──
-    const h1 = trimmed.match(/^#\s+(.*)$/);          // un seul dièse → titre principal
-    const h2 = trimmed.match(/^#{2,3}\s+(.*)$/);      // deux/trois dièses → sous-titre
-    // Item numéroté de top (ex. "1. PERGAM") → à hiérarchiser fortement
-    const numItem = trimmed.match(/^(\d+)\.\s+(.*)$/);
-    // Puce simple (-, *, •) → on retire le marqueur (évite le doublon "• -")
-    const bullet = trimmed.match(/^[-*•]\s+(.*)$/);
-
-    if (h2) {
-      // Sous-titre : souligné
-      return <div key={li} style={{ fontWeight: 600, fontSize: 13, marginTop: 10, marginBottom: 3, textDecoration: "underline", textUnderlineOffset: 3, color: "#1A1A1A" }}>{renderInline(h2[1])}</div>;
-    }
-    if (h1) {
-      // Titre principal : plus gros, mis en valeur
-      return <div key={li} style={{ fontWeight: 700, fontSize: 15, marginTop: 14, marginBottom: 5, letterSpacing: "-0.01em", color: "#1A1A1A" }}>{renderInline(h1[1])}</div>;
-    }
-    if (numItem) {
-      // Élément de top : numéro en pastille + titre en gras, bien détaché de ses détails
-      return (
-        <div key={li} style={{ display: "flex", gap: 8, alignItems: "baseline", marginTop: 12, marginBottom: 2 }}>
-          <span style={{ flexShrink: 0, fontSize: 12, fontWeight: 700, color: "#1A3C2E", fontVariantNumeric: "tabular-nums", minWidth: 18 }}>{numItem[1]}.</span>
-          <span style={{ fontSize: 14, fontWeight: 700, color: "#1A1A1A" }}>{renderInline(numItem[2])}</span>
-        </div>
-      );
-    }
-    if (bullet) {
-      // Détail (Site web / Description…) : indenté sous l'item, une seule puce
-      return <div key={li} style={{ paddingLeft: 26, marginBottom: 2, display: "flex", gap: 6 }}><span style={{ flexShrink: 0, color: "#1A3C2E55" }}>·</span><span>{renderInline(bullet[1])}</span></div>;
-    }
-    if (!line.trim()) return <div key={li} style={{ height: 6 }} />;
-    return <div key={li} style={{ marginBottom: 2 }}>{parts}</div>;
-  });
-}
-
-// Rendu inline (gras/italique) d'un fragment de texte déjà débarrassé de son marqueur
-function renderInline(text) {
-  const parts = [];
-  let remaining = text, key = 0;
-  while (remaining.length > 0) {
-    const boldMatch = remaining.match(/^(.*?)\*\*(.+?)\*\*/s);
-    const italicMatch = remaining.match(/^(.*?)\*(.+?)\*/s);
-    const useBold = boldMatch && (!italicMatch || boldMatch[1].length <= italicMatch[1].length);
-    if (useBold) {
-      if (boldMatch[1]) parts.push(<span key={key++}>{boldMatch[1]}</span>);
-      parts.push(<strong key={key++}>{boldMatch[2]}</strong>);
-      remaining = remaining.slice(boldMatch[0].length);
-    } else if (italicMatch) {
-      if (italicMatch[1]) parts.push(<span key={key++}>{italicMatch[1]}</span>);
-      parts.push(<em key={key++}>{italicMatch[2]}</em>);
-      remaining = remaining.slice(italicMatch[0].length);
-    } else {
-      parts.push(<span key={key++}>{remaining}</span>);
-      remaining = "";
-    }
-  }
-  return parts;
-}
-
-// ── renderMarkdownHighlighted — surligne marque (vert) et concurrents ──
-// eslint-disable-next-line no-unused-vars
-function renderMarkdownHighlighted(text, brandTerms = [], competitorMap = {}) {
-  if (!text) return null;
-  const hasHighlights = brandTerms.length > 0 || Object.keys(competitorMap).length > 0;
-  if (!hasHighlights) return renderMarkdown(text);
-  function highlightLine(line) {
-    if (!line) return [line];
-    const allTerms = [
-      ...brandTerms.map(t => ({ term: t, type: "brand" })),
-      ...Object.keys(competitorMap).map(t => ({ term: t, type: "competitor" })),
-    ].filter(t => t.term).sort((a, b) => b.term.length - a.term.length);
-    if (!allTerms.length) return [line];
-    const pattern = allTerms.map(t => t.term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
-    const re = new RegExp(`(${pattern})`, "gi");
-    const parts = line.split(re);
-    return parts.map((part, i) => {
-      const lower = part.toLowerCase();
-      if (brandTerms.some(t => t.toLowerCase() === lower))
-        return <mark key={i} style={{ background: "#DCFCE7", color: "#166534", borderRadius: 3, padding: "0 2px", fontWeight: 600 }}>{part}</mark>;
-      if (competitorMap[lower]) {
-        const cat = competitorMap[lower];
-        const bg = cat.category === "direct" ? "#FEE2E2" : cat.category === "geo" ? "#FEF3C7" : "#F3F4F6";
-        const color = cat.category === "direct" ? "#991B1B" : cat.category === "geo" ? "#92400E" : "#374151";
-        return <mark key={i} style={{ background: bg, color, borderRadius: 3, padding: "0 2px", fontWeight: 500 }}>{part}</mark>;
-      }
-      return part;
-    });
-  }
-  const lines = text.split("\n");
-  return lines.map((line, li) => {
-    const highlighted = highlightLine(line);
-    const trimmed = line.trimStart();
-    const isHeading = trimmed.startsWith("## ") || trimmed.startsWith("### ");
-    const isList = /^[-*•]\s/.test(trimmed) || /^\d+\.\s/.test(trimmed);
-    if (isHeading) return <div key={li} style={{ fontWeight: 700, fontSize: 13, marginTop: 8, marginBottom: 2 }}>{highlighted}</div>;
-    if (isList) return <div key={li} style={{ paddingLeft: 12, marginBottom: 2, display: "flex", gap: 6 }}><span style={{ flexShrink: 0 }}>•</span><span>{highlighted}</span></div>;
-    if (!line.trim()) return <div key={li} style={{ height: 6 }} />;
-    return <div key={li} style={{ marginBottom: 2 }}>{highlighted}</div>;
-  });
-}
-
-// ── Export CSV helpers ────────────────────────────────────────────
-
-function csvCell(val) {
-  if (val === null || val === undefined) return "";
-  const s = String(val).replace(/\r?\n/g, " ").replace(/"/g, '""');
-  return /[,;"\n]/.test(s) ? `"${s}"` : s;
-}
-
-function toCSV(rows) {
-  return "\uFEFF" + rows.map(r => r.map(csvCell).join(";")).join("\r\n");
-}
-
-function downloadText(content, filename, mime = "text/csv;charset=utf-8;") {
-  const blob = new Blob([content], { type: mime });
-  const url  = URL.createObjectURL(blob);
-  const a    = document.createElement("a");
-  a.href     = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-function fmtDateExport(iso) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  return d.toLocaleDateString("fr-FR") + " " + d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
-}
-
-function getProviderLabel(model) {
-  const m = (model || "").toLowerCase();
-  if (m.includes("openai") || m.includes("gpt"))       return "OpenAI";
-  if (m.includes("gemini"))                             return "Gemini";
-  if (m.includes("perplexity") || m.includes("sonar")) return "Perplexity";
-  if (m.includes("claude"))                             return "Claude";
-  return model || "Inconnu";
-}
-
-// questionScope : "brand" (marque présente) | "favorites" (favoris) | "all" (toutes)
-function exportFanoutCSV({ questions, results, brandName, brandAliases = [], keywords = [], projectName = "export", selectedProviders = [], questionScope = "brand" }) {
-  const byQ = {};
-  results.forEach(r => {
-    if (!byQ[r.question_id]) byQ[r.question_id] = [];
-    byQ[r.question_id].push(r);
-  });
-  const kwMap = {};
-  keywords.forEach(k => { kwMap[k.id] = k.keyword; });
-  const allBrandTerms = [brandName, ...brandAliases].filter(Boolean).map(t => t.toLowerCase());
-
-  const header = [
-    "Question",
-    "Favori",
-    "Mot-clé",
-    "Provider",
-    "Modèle",
-    "Marque présente",
-    "Position marque",
-    "Marque dans sources",
-    "Concurrents cités",
-    "Réponse (500 car.)",
-    "Sources citées",
-    "Date interrogation",
-    "Tokens (in+out)",
-  ];
-
-  const rows = [header];
-
-  // Filtrer les questions selon le scope
-  const scopedQuestions = questions.filter(q => {
-    if (questionScope === "favorites") return !!q.is_favorite;
-    if (questionScope === "brand") {
-      const qRes = byQ[q.id] || [];
-      return qRes.some(r => r.brand_mentioned === true || r.brand_mentioned === 1);
-    }
-    return true; // "all"
-  });
-
-  scopedQuestions.forEach(q => {
-    const qResults = (byQ[q.id] || []).filter(r =>
-      selectedProviders.length === 0 || selectedProviders.includes(getProviderId(r.model))
-    );
-
-    if (qResults.length === 0) {
-      // Question sans résultat — ligne vide pour tracer la question
-      rows.push([q.question, q.is_favorite ? "⭐" : "", kwMap[q.keyword_id] || "", "", "", "Non", "", "", "", "", "", "", ""]);
-      return;
-    }
-
-    qResults.forEach(r => {
-      const sources = r.sources || [];
-      const brandSources = sources.filter(u => allBrandTerms.some(t => u.toLowerCase().includes(t)));
-      const isBrand = r.brand_mentioned === true || r.brand_mentioned === 1;
-      const comps = (r.competitors_mentioned || [])
-        .map(c => c.position ? `${c.name} (#${c.position})` : c.name)
-        .join(", ");
-      rows.push([
-        q.question,
-        q.is_favorite ? "⭐" : "",
-        kwMap[q.keyword_id] || "",
-        getProviderLabel(r.model),
-        r.model || "",
-        isBrand ? "✓ Oui" : "Non",
-        r.brand_position ? `#${r.brand_position}` : "",
-        brandSources.length > 0 ? brandSources.join(" | ") : "Non",
-        comps || "—",
-        (r.answer || "").slice(0, 500),
-        sources.join(" | "),
-        fmtDateExport(r.created_at),
-        String((r.input_tokens || 0) + (r.output_tokens || 0)),
-      ]);
-    });
-  });
-
-  if (rows.length === 1) {
-    alert("Aucun résultat à exporter pour la sélection actuelle.");
-    return 0;
-  }
-
-  const scopeLabel = questionScope === "brand" ? "marque" : questionScope === "favorites" ? "favoris" : "toutes";
-  const slug    = projectName.replace(/[^a-z0-9]/gi, "_").toLowerCase();
-  const dateStr = new Date().toISOString().slice(0, 10);
-  downloadText(toCSV(rows), `fanout_${slug}_${scopeLabel}_${dateStr}.csv`);
-  return rows.length - 1;
-}
-
-// ── PDF export helpers ────────────────────────────────────────────
-
-// questionScope : "brand" | "favorites" | "all"
-function buildFanoutPDF({ questions, results, hintsMap = {}, brandName, brandAliases = [], keywords = [], projectName = "export", latestResultByQ = {}, lostByQ = {}, selectedProviders = [], questionScope = "brand" }) {
-  const byQ = {};
-  results.forEach(r => {
-    if (!byQ[r.question_id]) byQ[r.question_id] = [];
-    byQ[r.question_id].push(r);
-  });
-  const kwMap = {};
-  keywords.forEach(k => { kwMap[k.id] = k.keyword; });
-
-  // Filtrer par providers si sélection
-  const filterByProvider = (rs) => {
-    if (selectedProviders.length === 0) return rs;
-    return rs.filter(r => selectedProviders.includes(getProviderId(r.model)));
-  };
-
-  // Catégoriser chaque question
-  const presentQs  = []; // marque présente dans le dernier résultat
-  const lostQs     = []; // marque déjà présente mais absente maintenant
-  const absentQs   = []; // marque jamais présente
-
-  // Filtrer les questions selon le scope
-  const scopedQuestions = questions.filter(q => {
-    if (questionScope === "favorites") return !!q.is_favorite;
-    if (questionScope === "brand") {
-      const qRes = byQ[q.id] || [];
-      return qRes.some(r => r.brand_mentioned === true || r.brand_mentioned === 1);
-    }
-    return true; // "all"
-  });
-
-  scopedQuestions.forEach(q => {
-    const allRes = filterByProvider(byQ[q.id] || []);
-    const latest = latestResultByQ[q.id];
-    const latestFiltered = latest && (selectedProviders.length === 0 || selectedProviders.includes(getProviderId(latest.model))) ? latest : [...allRes].sort((a,b)=>new Date(b.created_at||0)-new Date(a.created_at||0))[0];
-    const isPresent = latestFiltered && (latestFiltered.brand_mentioned === true || latestFiltered.brand_mentioned === 1);
-    const isLost = lostByQ[q.id] && !isPresent;
-
-    if (isPresent) presentQs.push({ q, latest: latestFiltered, allRes });
-    else if (isLost) lostQs.push({ q, latest: latestFiltered, allRes });
-    else absentQs.push({ q, latest: latestFiltered, allRes });
-  });
-
-  // Métriques
-  const totalRes    = filterByProvider(results).length;
-  const withBrand   = filterByProvider(results).filter(r => r.brand_mentioned === true || r.brand_mentioned === 1).length;
-  const withSources = filterByProvider(results).filter(r => r.brand_in_sources).length;
-  const positions   = filterByProvider(results).filter(r => r.brand_position).map(r => r.brand_position);
-  const avgPos      = positions.length ? (positions.reduce((a,b)=>a+b,0)/positions.length).toFixed(1) : null;
-  const presence    = totalRes ? Math.round(withBrand/totalRes*100) : 0;
-  const dateStr     = new Date().toLocaleDateString("fr-FR", { day:"2-digit", month:"long", year:"numeric" });
-
-  // Top concurrents
-  const compCount = {};
-  filterByProvider(results).forEach(r => {
-    const seen = new Set();
-    (r.competitors_mentioned||[]).forEach(c => { if(c.name && !seen.has(c.name)) { seen.add(c.name); compCount[c.name]=(compCount[c.name]||0)+1; } });
-  });
-  const topComps = Object.entries(compCount).sort((a,b)=>b[1]-a[1]).slice(0,5);
-
-  // ── HTML du PDF ──────────────────────────────────────────────────
-  const esc = (s) => String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
-
-  const badge = (color, bg, text) =>
-    `<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;background:${bg};color:${color};border:1px solid ${color}44">${esc(text)}</span>`;
-
-  const sectionTitle = (emoji, text, color = "#1E293B") =>
-    `<div style="margin:28px 0 14px;padding:10px 16px;background:${color}08;border-left:4px solid ${color};border-radius:0 8px 8px 0;">
-      <span style="font-size:16px;font-weight:800;color:${color}">${emoji} ${esc(text)}</span>
-    </div>`;
-
-  const questionBlock = ({ q, latest, allRes }, showHint = true, showDate = false) => {
-    const kw = kwMap[q.keyword_id] || "";
-    const hint = hintsMap[q.id]?.text || "";
-    const hintDate = hintsMap[q.id]?.date || "";
-    const comps = (latest?.competitors_mentioned || []).map(c => c.name).join(", ");
-    const sources = (latest?.sources || []).slice(0, 3);
-    const dateLabel = latest?.created_at ? new Date(latest.created_at).toLocaleDateString("fr-FR", {day:"2-digit",month:"short",year:"numeric"}) : "";
-
-    return `<div style="margin-bottom:14px;padding:14px 18px;border:1px solid #E2E8F0;border-radius:10px;break-inside:avoid;page-break-inside:avoid;">
-      <div style="font-size:13px;font-weight:700;color:#0F172A;margin-bottom:8px;line-height:1.4">${esc(q.question)}</div>
-      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:${(comps||sources.length||hint) ? "10px":"0"}">
-        ${kw ? badge("#6366F1","#EEF2FF",`🔑 ${kw}`) : ""}
-        ${latest?.brand_position ? badge("#059669","#ECFDF5",`Position #${latest.brand_position}`) : ""}
-        ${latest?.brand_in_sources ? badge("#2563EB","#EFF6FF","🔗 Dans les sources") : ""}
-        ${showDate && dateLabel ? badge("#64748B","#F8FAFC",`Dernière parution : ${dateLabel}`) : ""}
-      </div>
-      ${comps ? `<div style="font-size:11px;color:#64748B;margin-bottom:6px">Concurrents cités : <strong>${esc(comps)}</strong></div>` : ""}
-      ${sources.length ? `<div style="font-size:10px;color:#94A3B8">${sources.map(u=>{ const clean=stripQuery(u); return `<a href="${esc(u)}" style="color:#6366F1">${esc(clean.length>60?clean.slice(0,60)+"…":clean)}</a>`; }).join("  ·  ")}</div>` : ""}
-      ${showHint && hint ? `<div style="margin-top:10px;padding:10px 12px;background:#FFFBEB;border:1px solid #FCD34D;border-radius:7px;">
-        <div style="font-size:10px;font-weight:700;color:#B45309;margin-bottom:4px">💡 HINT GEO${hintDate ? " · "+new Date(hintDate).toLocaleDateString("fr-FR",{day:"2-digit",month:"short"}) : ""}</div>
-        <div style="font-size:11px;color:#92400E;line-height:1.6;white-space:pre-wrap">${esc(hint.slice(0,400))}${hint.length>400?"…":""}</div>
-      </div>` : ""}
-    </div>`;
-  };
-
-  const html = `<!DOCTYPE html>
-<html lang="fr">
-<head>
-  <meta charset="UTF-8">
-  <title>Fan-outs GEO — ${esc(projectName)} — ${dateStr}</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: #0F172A; background: #fff; }
-    @media print {
-      body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-      .no-print { display: none !important; }
-      .page-break { page-break-before: always; }
-    }
-  </style>
-</head>
-<body style="padding:32px 40px;max-width:900px;margin:0 auto">
-
-  <!-- Bouton imprimer -->
-  <div class="no-print" style="text-align:right;margin-bottom:16px">
-    <button onclick="window.print()" style="padding:8px 18px;background:#6366F1;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">
-      🖨️ Imprimer / Enregistrer en PDF
-    </button>
-  </div>
-
-  <!-- ── En-tête ── -->
-  <div style="border-bottom:3px solid #6366F1;padding-bottom:20px;margin-bottom:28px">
-    <div style="font-size:11px;font-weight:700;color:#6366F1;letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">Rapport GEO — Fan-outs</div>
-    <div style="font-size:26px;font-weight:800;color:#0F172A;margin-bottom:4px">${esc(projectName)}</div>
-    <div style="font-size:13px;color:#64748B">Généré le ${dateStr}${selectedProviders.length > 0 ? " · Providers : "+selectedProviders.join(", ") : " · Tous les providers"}</div>
-  </div>
-
-  <!-- ── Chiffres clés ── -->
-  ${sectionTitle("📊","Chiffres clés","#6366F1")}
-  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px">
-    ${[
-      { label:"Présence marque", value: presence+"%", sub:`${withBrand}/${totalRes} réponses`, color: presence>=50?"#059669":presence>0?"#D97706":"#DC2626" },
-      { label:"Position moyenne", value: avgPos ? "#"+avgPos : "—", sub:"dans les fan-outs", color:"#6366F1" },
-      { label:"Dans les sources", value: withSources, sub:"questions citées", color:"#2563EB" },
-      { label:"Questions analysées", value: questions.length, sub:`${presentQs.length} positionnées`, color:"#0F172A" },
-    ].map(k=>`<div style="padding:16px;border:1px solid #E2E8F0;border-radius:12px;text-align:center">
-      <div style="font-size:10px;font-weight:700;color:#94A3B8;text-transform:uppercase;letter-spacing:.7px;margin-bottom:6px">${esc(k.label)}</div>
-      <div style="font-size:28px;font-weight:800;color:${k.color};margin-bottom:3px">${esc(String(k.value))}</div>
-      <div style="font-size:10px;color:#94A3B8">${esc(k.sub)}</div>
-    </div>`).join("")}
-  </div>
-
-  ${topComps.length > 0 ? `<div style="padding:12px 16px;border:1px solid #E2E8F0;border-radius:10px;margin-bottom:24px">
-    <div style="font-size:11px;font-weight:700;color:#64748B;margin-bottom:8px;text-transform:uppercase;letter-spacing:.7px">Top concurrents cités</div>
-    <div style="display:flex;flex-wrap:wrap;gap:8px">
-      ${topComps.map(([name,cnt])=>`<span style="padding:4px 12px;background:#FEF2F2;border:1px solid #FECACA;border-radius:20px;font-size:12px;font-weight:600;color:#DC2626">${esc(name)} <span style="opacity:.7">${cnt}×</span></span>`).join("")}
-    </div>
-  </div>` : ""}
-
-  <!-- ── Questions positionnées ── -->
-  ${presentQs.length > 0 ? `
-  ${sectionTitle("✅",`Questions positionnées (${presentQs.length})`, "#059669")}
-  ${presentQs.map(item => questionBlock(item, true, false)).join("")}
-  ` : `<div style="padding:16px;background:#F8FAFC;border-radius:8px;color:#94A3B8;font-size:13px;margin-bottom:20px">Aucune question positionnée pour l'instant.</div>`}
-
-  <!-- ── Questions déjà positionnées (perdues) ── -->
-  ${lostQs.length > 0 ? `
-  <div class="page-break"></div>
-  ${sectionTitle("📈",`Positionnées précédemment — position perdue (${lostQs.length})`, "#D97706")}
-  ${lostQs.map(item => questionBlock(item, true, true)).join("")}
-  ` : ""}
-
-  <!-- ── Questions sans présence ── -->
-  ${absentQs.length > 0 ? `
-  <div class="page-break"></div>
-  ${sectionTitle("❌",`Marque absente (${absentQs.length})`, "#DC2626")}
-  ${absentQs.map(item => questionBlock(item, true, false)).join("")}
-  ` : ""}
-
-  <!-- Pied de page -->
-  <div style="margin-top:40px;padding-top:16px;border-top:1px solid #E2E8F0;font-size:10px;color:#94A3B8;text-align:center">
-    Rapport CorrelDash GEO · ${esc(projectName)} · ${dateStr}
-  </div>
-
-</body>
-</html>`;
-
-  // Ouvrir dans un nouvel onglet pour impression
-  const win = window.open("", "_blank");
-  if (!win) { alert("Autorisez les pop-ups pour générer le PDF"); return; }
-  win.document.write(html);
-  win.document.close();
-  // Déclencher l'impression après chargement
-  win.onload = () => { setTimeout(() => win.print(), 300); };
-  return true;
-}
-
-// ── ExportFanoutBtn (avec sélection provider + CSV + PDF) ─────────
-
-function ExportFanoutBtn({ questions, results, brandName, brandAliases = [], keywords = [], projectName = "export", hintsMap = {}, latestResultByQ = {}, lostByQ = {} }) {
-  const [open, setOpen]             = useState(false);
-  const [selectedProviders, setSel] = useState([]);        // [] = tous
-  const [questionScope, setScope]   = useState("brand");   // "brand" | "favorites" | "all"
-  const [exportStatus, setStatus]   = useState("idle");
-  const [lastCount, setLastCount]   = useState(null);
-  const popRef                      = useRef();
-
-  useEffect(() => {
-    if (!open) return;
-    const h = (e) => { if (!popRef.current?.contains(e.target)) setOpen(false); };
-    document.addEventListener("mousedown", h);
-    return () => document.removeEventListener("mousedown", h);
-  }, [open]);
-
-  const byQ = {};
-  results.forEach(r => {
-    if (!byQ[r.question_id]) byQ[r.question_id] = [];
-    byQ[r.question_id].push(r);
-  });
-
-  const presentProviders = [...new Set(results.map(r => getProviderId(r.model)).filter(Boolean))];
-
-  // Compter les questions selon le scope courant
-  const scopedCount = questions.filter(q => {
-    if (questionScope === "favorites") return !!q.is_favorite;
-    if (questionScope === "brand") {
-      const qRes = byQ[q.id] || [];
-      return qRes.some(r =>
-        (r.brand_mentioned === true || r.brand_mentioned === 1) &&
-        (selectedProviders.length === 0 || selectedProviders.includes(getProviderId(r.model)))
-      );
-    }
-    return true;
-  }).length;
-
-  const toggleProvider = (pid) => {
-    setSel(prev => prev.includes(pid) ? prev.filter(p => p !== pid) : [...prev, pid]);
-  };
-
-  const doCSV = () => {
-    setStatus("exporting");
-    setTimeout(() => {
-      const n = exportFanoutCSV({ questions, results, brandName, brandAliases, keywords, projectName, selectedProviders, questionScope });
-      setLastCount(n);
-      setStatus(n > 0 ? "done" : "idle");
-      if (n > 0) setTimeout(() => { setStatus("idle"); setLastCount(null); }, 4000);
-      setOpen(false);
-    }, 0);
-  };
-
-  const doPDF = () => {
-    setStatus("exporting");
-    setTimeout(() => {
-      buildFanoutPDF({ questions, results, hintsMap, brandName, brandAliases, keywords, projectName, latestResultByQ, lostByQ, selectedProviders, questionScope });
-      setStatus("idle");
-      setOpen(false);
-    }, 0);
-  };
-
-  const providerColors = { openai:"#059669", gemini:"#2563EB", perplexity:"#7C3AED", claude:"#D97706", other:"#64748B" };
-  const providerIcons  = { openai:"🟢", gemini:"🔵", perplexity:"🟣", claude:"🟠", other:"⚪" };
-  const providerLabels = { openai:"OpenAI", gemini:"Gemini", perplexity:"Perplexity", claude:"Claude", other:"Autre" };
-
-  const SCOPES = [
-    { key: "brand",     label: "✓ Marque présente",  desc: "Questions où la marque est citée",   color: "#059669", bg: "#ECFDF5" },
-    { key: "favorites", label: "⭐ Favoris",           desc: "Questions marquées comme favoris",   color: "#F59E0B", bg: "#FFFBEB" },
-    { key: "all",       label: "◉ Toutes",            desc: "Toutes les questions et réponses",   color: "#6366F1", bg: "#EEF2FF" },
-  ];
-  const currentScope = SCOPES.find(s => s.key === questionScope);
-
-  return (
-    <div ref={popRef} style={{ position: "relative", display: "inline-block" }}>
-      {/* Bouton principal */}
-      <button
-        onClick={() => setOpen(o => !o)}
-        title="Exporter les fan-outs (CSV ou PDF)"
-        style={{
-          display: "inline-flex", alignItems: "center", gap: 6,
-          padding: "6px 14px",
-          border: `1.5px solid ${open ? "#6366F1" : "#059669"}`,
-          borderRadius: 8,
-          background: open ? "#EEF2FF" : "#ECFDF5",
-          color: open ? "#6366F1" : "#059669",
-          fontSize: 12, fontWeight: 700,
-          cursor: "pointer",
-          transition: "all 0.15s",
-          whiteSpace: "nowrap", flexShrink: 0,
-        }}
-      >
-        {exportStatus === "exporting" ? <>⏳ Export…</> :
-         exportStatus === "done" && lastCount !== null ? <>{lastCount} lignes ✓</> : (
-          <>
-            <span style={{ fontSize: 14 }}>📤</span>
-            Exporter
-            {scopedCount > 0 && (
-              <span style={{ fontSize: 10, fontWeight: 800, background: currentScope?.color || "#059669", color: "#fff", borderRadius: 10, padding: "1px 6px", marginLeft: 2 }}>
-                {scopedCount}
-              </span>
-            )}
-            <span style={{ fontSize: 10, opacity: 0.6 }}>{open ? "▲" : "▼"}</span>
-          </>
-        )}
-      </button>
-
-      {/* ── Popover ── */}
-      {open && (
-        <div className="geo-export-popup" style={{
-          zIndex: 300, background: "#fff", border: "1px solid #E2E8F0",
-          borderRadius: 12, boxShadow: "0 8px 32px rgba(0,0,0,0.14)", padding: 16, minWidth: 290,
-        }}>
-
-          {/* ── Périmètre des questions ── */}
-          <div style={{ marginBottom: 14 }}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: ".7px", marginBottom: 8 }}>
-              Questions à exporter
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-              {SCOPES.map(s => (
-                <button key={s.key} onClick={() => setScope(s.key)}
-                  style={{
-                    padding: "8px 12px", borderRadius: 8, fontSize: 12, fontWeight: 600,
-                    border: `2px solid ${questionScope === s.key ? s.color : "#E2E8F0"}`,
-                    background: questionScope === s.key ? s.bg : "transparent",
-                    color: questionScope === s.key ? s.color : "#64748B",
-                    cursor: "pointer", textAlign: "left",
-                    display: "flex", alignItems: "center", justifyContent: "space-between",
-                  }}
-                >
-                  <span>{s.label}</span>
-                  <span style={{ fontSize: 10, opacity: 0.7, fontWeight: 400 }}>{s.desc}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* ── Providers ── */}
-          {presentProviders.length > 1 && (
-            <div style={{ marginBottom: 14 }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: ".7px", marginBottom: 8 }}>
-                Providers à inclure
-              </div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                {presentProviders.map(pid => {
-                  const active = selectedProviders.includes(pid);
-                  const col = providerColors[pid] || providerColors.other;
-                  return (
-                    <button key={pid} onClick={() => toggleProvider(pid)}
-                      style={{
-                        padding: "3px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600,
-                        border: `2px solid ${active ? col : "#E2E8F0"}`,
-                        background: active ? col+"18" : "transparent",
-                        color: active ? col : "#64748B", cursor: "pointer",
-                      }}
-                    >
-                      {providerIcons[pid]||"⚪"} {providerLabels[pid]||pid}
-                    </button>
-                  );
-                })}
-              </div>
-              <div style={{ fontSize: 10, color: "#94A3B8", marginTop: 5 }}>
-                {selectedProviders.length === 0 ? "Tous les providers inclus" : `${selectedProviders.length} provider${selectedProviders.length>1?"s":""} sélectionné${selectedProviders.length>1?"s":""}`}
-              </div>
-            </div>
-          )}
-
-          {/* ── Résumé ── */}
-          <div style={{ fontSize: 11, color: "#64748B", marginBottom: 14, padding: "8px 10px", background: "#F8FAFC", borderRadius: 7 }}>
-            <strong style={{ color: currentScope?.color }}>{scopedCount}</strong> question{scopedCount>1?"s":""} · {currentScope?.desc?.toLowerCase()}
-            <br/><span style={{ color: "#94A3B8" }}>{questions.length} questions au total · {results.length} réponses</span>
-          </div>
-
-          {/* ── Boutons d'export ── */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <button onClick={doCSV} disabled={scopedCount === 0}
-              style={{
-                padding: "9px 14px", borderRadius: 8, border: "none",
-                background: scopedCount === 0 ? "#F1F5F9" : "#059669",
-                color: scopedCount === 0 ? "#94A3B8" : "#fff",
-                fontSize: 12, fontWeight: 700, cursor: scopedCount === 0 ? "not-allowed" : "pointer",
-                display: "flex", alignItems: "center", gap: 8,
-              }}
-            >
-              <span style={{ fontSize: 16 }}>📥</span>
-              <div style={{ textAlign: "left" }}>
-                <div>Exporter CSV</div>
-                <div style={{ fontSize: 10, opacity: .8 }}>Questions + réponses + hints en tableau</div>
-              </div>
-            </button>
-
-            <button onClick={doPDF}
-              style={{
-                padding: "9px 14px", borderRadius: 8, border: "none",
-                background: "#6366F1", color: "#fff",
-                fontSize: 12, fontWeight: 700, cursor: "pointer",
-                display: "flex", alignItems: "center", gap: 8,
-              }}
-            >
-              <span style={{ fontSize: 16 }}>📄</span>
-              <div style={{ textAlign: "left" }}>
-                <div>Exporter PDF</div>
-                <div style={{ fontSize: 10, opacity: .8 }}>Rapport mise en page · chiffres clés · hints</div>
-              </div>
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
+function renderBold(text) {
+  if (!text || !text.includes("**")) return text;
+  return text.split(/\*\*(.+?)\*\*/g).map((part, i) =>
+    i % 2 === 1 ? <strong key={i} style={{ fontSize: "1.05em" }}>{part}</strong> : part
   );
 }
 
-// ── OpenAI call helpers ───────────────────────────────────────────
-
-
-export const PROVIDERS = [
-  {
-    id: "openai",
-    label: "OpenAI",
-    icon: "🟢",
-    model: "gpt-4o-mini",
-    keyField: "openai_key_enc",
-    keyPrefix: "sk-",
-    keyPlaceholder: "sk-…",
-    proxyPath: "/api/openai",
-    color: "#059669",
-  },
-  {
-    id: "gemini",
-    label: "Gemini",
-    icon: "🔵",
-    model: "gemini-2.0-flash",   // supports Google Search grounding (real-time web)
-    keyField: "gemini_key_enc",
-    keyPrefix: "AIza",
-    keyPlaceholder: "AIzaSy…",
-    proxyPath: "/api/gemini",
-    color: "#2563EB",
-  },
-  {
-    id: "perplexity",
-    label: "Perplexity",
-    icon: "🟣",
-    model: "sonar",              // real-time web search + citations
-    keyField: "perplexity_key_enc",
-    keyPrefix: "pplx-",
-    keyPlaceholder: "pplx-…",
-    proxyPath: "/api/perplexity",
-    color: "#7C3AED",
-  },
-  {
-    id: "claude",
-    label: "Claude",
-    icon: "🟠",
-    model: "claude-haiku-4-5-20251001", // knowledge-based (no web access)
-    keyField: "claude_geo_key_enc",
-    keyPrefix: "sk-ant-",
-    keyPlaceholder: "sk-ant-…",
-    proxyPath: "/api/claude-geo",
-    color: "#D97706",
-  },
-];
-
-
+function pct(a, b) { return b ? Math.round(a / b * 100) : 0; }
+function getDomain(url) { try { return new URL(url).hostname.replace("www.", ""); } catch { return url; } }
+function dayKey(d) { return d.toISOString().slice(0, 10); }
+function decodeKey(enc) { try { return enc ? atob(enc) : ""; } catch { return ""; } }
 function getProviderId(model) {
   const m = (model || "").toLowerCase();
-  if (m.includes("openai") || m.includes("gpt")) return "openai";
+  if (m.includes("gpt") || m.includes("openai")) return "openai";
   if (m.includes("gemini")) return "gemini";
   if (m.includes("perplexity") || m.includes("sonar")) return "perplexity";
   if (m.includes("claude")) return "claude";
   return "other";
 }
 
-// ── Habillage visuel évocateur par provider (sans logos officiels) ──
-// Couleur d'accent + pictogramme générique + style de bulle, pour rappeler
-// l'univers de chaque LLM sans reproduire son interface propriétaire.
-const PROVIDER_THEME = {
-  openai: {
-    name: "ChatGPT",
-    accent: "#10A37F", bubbleBg: "#F7F7F8", botBg: "#FFFFFF",
-    glyph: "✦", avatarBg: "#10A37F", avatarFg: "#FFFFFF",
-    font: '"Söhne", -apple-system, "Segoe UI", Helvetica, sans-serif',
-  },
-  gemini: {
-    name: "Gemini",
-    accent: "#4285F4", bubbleBg: "#F0F4F9", botBg: "#FFFFFF",
-    glyph: "✧", avatarGradient: "linear-gradient(135deg, #4285F4, #9B72CB, #D96570)", avatarFg: "#FFFFFF",
-    font: '"Google Sans", "Product Sans", -apple-system, sans-serif',
-  },
-  perplexity: {
-    name: "Perplexity",
-    accent: "#20808D", bubbleBg: "#FBFAF4", botBg: "#FFFFFF",
-    glyph: "≈", avatarBg: "#20808D", avatarFg: "#FFFFFF",
-    font: '"FK Grotesk", -apple-system, "Segoe UI", sans-serif',
-  },
-  claude: {
-    name: "Claude",
-    accent: "#D97757", bubbleBg: "#F5F4EE", botBg: "#FFFFFF",
-    glyph: "✺", avatarBg: "#D97757", avatarFg: "#FFFFFF",
-    font: '"Styrene", "Tiempos", -apple-system, "Segoe UI", serif',
-  },
-  other: {
-    name: "Assistant",
-    accent: "#64748B", bubbleBg: "#F8FAFC", botBg: "#FFFFFF",
-    glyph: "○", avatarBg: "#64748B", avatarFg: "#FFFFFF",
-    font: '-apple-system, "Segoe UI", sans-serif',
-  },
-};
 
-// Rendu d'une réponse façon interface de chat (évocateur, neutre juridiquement)
-function ChatAnswer({ providerId, modelLabel, answerNode }) {
-  const t = PROVIDER_THEME[providerId] || PROVIDER_THEME.other;
-  const avatarStyle = t.avatarGradient
-    ? { background: t.avatarGradient }
-    : { background: t.avatarBg };
-  return (
-    <div style={{ borderRadius: 12, overflow: "hidden", border: `0.5px solid ${t.accent}22`, background: t.botBg, fontFamily: t.font }}>
-      {/* Barre d'en-tête provider */}
-      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderBottom: `0.5px solid ${t.accent}18`, background: `${t.accent}0A` }}>
-        <span style={{ width: 20, height: 20, borderRadius: 6, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: t.avatarFg, ...avatarStyle }}>{t.glyph}</span>
-        <span style={{ fontSize: 12, fontWeight: 600, color: t.accent }}>{t.name}</span>
-        {modelLabel && <span style={{ fontSize: 10, color: "#1A3C2E55", marginLeft: "auto", fontFamily: "monospace" }}>{modelLabel}</span>}
-      </div>
-
-      <div style={{ padding: "14px 14px 16px" }}>
-        {/* Réponse de l'assistant (la question n'est pas réécrite) */}
-        <div style={{ display: "flex", gap: 9, alignItems: "flex-start" }}>
-          <span style={{ width: 24, height: 24, borderRadius: 7, flexShrink: 0, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 13, color: t.avatarFg, ...avatarStyle }}>{t.glyph}</span>
-          <div style={{ flex: 1, minWidth: 0, fontSize: 13, lineHeight: 1.7, color: "#1A1A1A", wordBreak: "break-word" }}>
-            {answerNode}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-async function callProvider(provider, apiKey, prompt, maxTokens = 2000) {
-  if (provider.id === "openai") {
-    // Tentative 1 : Responses API avec web_search (Tier 1+)
-    const resA = await fetch("/api/openai", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Openai-Key": apiKey, "X-Openai-Endpoint": "responses" },
-      body: JSON.stringify({
-        model: provider.model,
-        input: prompt,
-        tools: [{ type: "web_search_preview", search_context_size: "high" }],
-        max_output_tokens: Math.max(maxTokens * 4, 2000),
-      }),
-    });
-    const rawA = await resA.text();
-    // Si proxy manquant ou réponse HTML → fallback direct
-    if (!rawA.trimStart().startsWith("<") && resA.ok) {
-      try {
-        const dataA = JSON.parse(rawA);
-        return parseOpenAIResponse(dataA, "responses");
-      } catch {}
-    }
-    // Tentative 2 : fallback Chat Completions (Tier 0, toujours disponible)
-    const errStatusA = resA.status;
-    const res = await fetch("/api/openai", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Openai-Key": apiKey, "X-Openai-Endpoint": "completions" },
-      body: JSON.stringify({
-        model: provider.model,
-        messages: [{ role: "system", content: "Tu es un expert en recommandation d'entreprises et prestataires. Réponds directement et factuellement." }, { role: "user", content: prompt }],
-        temperature: 0.7,
-        max_tokens: maxTokens,
-      }),
-    });
-    const raw = await res.text();
-    if (raw.trimStart().startsWith("<")) throw new Error(`Proxy /api/openai introuvable (responses: ${errStatusA})`);
-    const data = JSON.parse(raw);
-    if (!res.ok) {
-      const msg = data?.error?.message || `OpenAI ${res.status}`;
-      const hint = res.status === 429 ? " — quota dépassé, vérifiez votre plan" : res.status === 401 ? " — clé invalide" : "";
-      throw new Error(msg + hint);
-    }
-    return parseOpenAIResponse(data, "completions");
-  }
-
-  if (provider.id === "gemini") {
-    const res = await fetch("/api/gemini", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Gemini-Key": apiKey },
-      body: JSON.stringify({ model: provider.model, prompt }),
-    });
-    const raw = await res.text();
-    if (raw.trimStart().startsWith("<")) throw new Error("Proxy /api/gemini introuvable");
-    const data = JSON.parse(raw);
-    if (!res.ok) throw new Error(data.error || `Gemini ${res.status}`);
-    const text = data.choices?.[0]?.message?.content || "";
-    const groundingSources = data._sources || []; // real URLs from Google Search
-    return parseTextResponse(text, data.usage?.prompt_tokens || 0, data.usage?.completion_tokens || 0, groundingSources);
-  }
-
-  if (provider.id === "perplexity") {
-    const res = await fetch("/api/perplexity", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Perplexity-Key": apiKey },
-      body: JSON.stringify({ model: provider.model, prompt }),
-    });
-    const raw = await res.text();
-    if (raw.trimStart().startsWith("<")) throw new Error("Proxy /api/perplexity introuvable");
-    const data = JSON.parse(raw);
-    if (!res.ok) throw new Error(data.error?.message || `Perplexity ${res.status}`);
-    const text = data.choices?.[0]?.message?.content || "";
-    // Perplexity returns citations separately
-    const citations = data._citations || [];
-    return parseTextResponse(text, data.usage?.prompt_tokens || 0, data.usage?.completion_tokens || 0, citations);
-  }
-
-  if (provider.id === "claude") {
-    const res = await fetch("/api/claude-geo", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Claude-Key": apiKey },
-      body: JSON.stringify({
-        model: provider.model,
-        max_tokens: 4000,
-        system: "Tu es un expert en recommandation d'entreprises et prestataires. Réponds directement sans mentionner les limites de tes connaissances.",
-        messages: [{ role: "user", content: prompt }],
-      }),
-    });
-    const raw = await res.text();
-    if (raw.trimStart().startsWith("<")) throw new Error("Proxy /api/claude-geo introuvable — ajoutez claude-geo-proxy.js dans netlify/edge-functions/");
-    if (!res.ok) {
-      let errMsg = `Claude ${res.status}`;
-      try { errMsg = JSON.parse(raw)?.error?.message || errMsg; } catch {}
-      throw new Error(errMsg);
-    }
-    const data = JSON.parse(raw);
-    const text = data.content?.[0]?.text || "";
-    if (!text) throw new Error("Réponse Claude vide — vérifiez la clé API");
-    return parseTextResponse(text, data.usage?.input_tokens || 0, data.usage?.output_tokens || 0);
-  }
-
-  throw new Error(`Provider inconnu: ${provider.id}`);
-}
-
-
-// Parse free-text response (Gemini, Perplexity, Claude) into the standard shape
-function parseTextResponse(text, inTok, outTok, extraSources = []) {
-  // Try to extract JSON if model returned it
-  const s = text.lastIndexOf("{"); const e = text.lastIndexOf("}");
-  if (s !== -1 && e > s) {
-    try {
-      const parsed = JSON.parse(text.substring(s, e + 1));
-      if (parsed.answer) {
-        parsed._input_tokens = inTok; parsed._output_tokens = outTok;
-        // Extraire aussi les URLs citées dans le corps de la réponse (Claude cite inline)
-        const urlReJson = /https?:\/\/[^\s\])"'>]+/g;
-        const HALL = [/exemple\d*\./i, /example\d*\./i, /site\d+\./i, /domaine\d*\./i, /placeholder/i];
-        const inlineUrls = [...String(parsed.answer).matchAll(urlReJson)].map(m => m[0]).filter(u => !HALL.some(p => p.test(u)));
-        parsed.sources = [...new Set([...(parsed.sources || []), ...extraSources, ...inlineUrls])].filter(Boolean);
-        return parsed;
-      }
-    } catch {}
-  }
-  // Fallback: treat entire text as answer, extract URLs
-  const HALLUCINATION = [/exemple\d*\./i, /example\d*\./i, /site\d+\./i, /domaine\d*\./i, /placeholder/i];
-  const urlRe = /https?:\/\/[^\s\])"'>]+/g;
-  const foundUrls = [...text.matchAll(urlRe)].map(m => m[0]).filter(u => !HALLUCINATION.some(p => p.test(u)));
-  const allSources = [...new Set([...foundUrls, ...extraSources])];
-  return {
-    answer: text, answer_type: "Texte libre", intent_type: "Informative",
-    sources: allSources, source_types: [],
-    _input_tokens: inTok, _output_tokens: outTok,
-  };
-}
-
-function extractOpenAIUrls(data) {
-  // Extract real URLs from annotations (url_citation type) in Responses API
-  const urls = [];
-  const seen = new Set();
-  for (const item of data.output || []) {
-    if (item.type !== "message") continue;
-    for (const part of item.content || []) {
-      // annotations array contains url_citation objects
-      for (const ann of part.annotations || []) {
-        if (ann.type === "url_citation" && ann.url && !seen.has(ann.url)) {
-          seen.add(ann.url);
-          urls.push(ann.url);
-        }
-      }
-    }
-  }
-  return urls;
-}
-
-function parseOpenAIResponse(data, endpoint = "responses") {
-  const usage = data.usage || {};
-  const inTok = usage.input_tokens || usage.prompt_tokens || 0;
-  const outTok = usage.output_tokens || usage.completion_tokens || 0;
-
-  let rawText = "";
-  if (endpoint === "responses") {
-    for (const item of data.output || []) {
-      if (item.type !== "message") continue;
-      for (const part of item.content || []) {
-        if (part.type === "output_text") rawText += part.text;
-      }
-    }
-  } else {
-    rawText = data.choices?.[0]?.message?.content || "";
-  }
-
-  // Extract real URLs from annotations FIRST (before parsing JSON)
-  const realUrls = extractOpenAIUrls(data);
-
-  // Also extract URLs directly from the answer text (markdown links + plain URLs)
-  const urlRe = /https?:\/\/[^\s\])"'>]+/g;
-  const HALLUCINATION = [/exemple\d*\./i, /example\d*\./i, /site\d+\./i, /domaine\d*\./i, /placeholder/i, /turn\d+search/i];
-  const textUrls = [...rawText.matchAll(urlRe)]
-    .map(m => m[0].replace(/[.,;:)]+$/, "")) // strip trailing punctuation
-    .filter(u => !HALLUCINATION.some(p => p.test(u)));
-
-  // Merge: annotations first (most reliable), then text URLs
-  const allUrls = [...new Set([...realUrls, ...textUrls])];
-
-  // Try to parse JSON schema response
-  let parsed = { answer: rawText, answer_type: "Texte libre", intent_type: "Informative", sources: [], source_types: [] };
-  const s = rawText.lastIndexOf("{");
-  const e = rawText.lastIndexOf("}");
-  if (s !== -1 && e > s) {
-    try {
-      const jsonParsed = JSON.parse(rawText.substring(s, e + 1));
-      if (jsonParsed.answer) {
-        parsed = jsonParsed;
-        // Replace turn0searchX sources with real URLs
-        const fakeSources = (parsed.sources || []).filter(u => /turn\d+search/i.test(u) || !u.startsWith("http"));
-        if (fakeSources.length > 0 || allUrls.length > 0) {
-          parsed.sources = allUrls;
-        }
-      }
-    } catch {}
-  }
-
-  // If answer is still the raw JSON text, extract readable answer
-  if (parsed.answer && parsed.answer.startsWith("{")) {
-    parsed.answer = rawText; // use raw text as answer
-  }
-
-  // Final URL dedup and hallucination filter
-  parsed.sources = [...new Set(allUrls)].filter(u => !HALLUCINATION.some(p => p.test(u)));
-  parsed._input_tokens = inTok;
-  parsed._output_tokens = outTok;
-  return parsed;
-}
-
-// ── Brand detection — 3 types de présence ───────────────────────
-//
-// MENTION  = marque dans un item numéroté du Top (ligne "N. Marque")
-//            position = numéro du rang dans le classement
-//
-// EVOCATION = marque dans le corps narratif (hors items de top, hors sources)
-//             position = ordre d'apparition dans le texte narratif
-//
-// CITATION  = domaine de la marque dans les sources/URLs citées
-//             position = rang dans la liste de sources
-
-function detectBrand(answer, sources, brandName, brandAliases = [], competitors = []) {
-  // Normalisation casse + accents : « ÉLÉAS » et « Eleas » doivent matcher.
-  const norm = (s) => (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
-
-  const lines = (answer || "").split("\n");
-  // Pattern d'item de top : "1. Titre", "2) Titre", "• 3. Titre"
-  const topItemRe = /^\s*(?:[•\-*]\s*)?(\d+)[.)]\s*(.+)/;
-
-  // ── Reconstruction des séquences de liste classées (fiabilité du "Top") ──
-  // On ne se fie PAS au numéro littéral écrit par le LLM (sous-listes, redémarrages…).
-  // On prend la position ORDINALE réelle dans la séquence contiguë la plus longue.
-  const subBulletRe = /^\s*[•\-*]\s+\S/;
-  const isDetailLine = (s) => {
-    const t = s.trim();
-    if (!t) return true;
-    if (subBulletRe.test(t) && !topItemRe.test(t)) return true;
-    if (/^\s{2,}\S/.test(s)) return true;
-    if (/^[A-Za-zÀ-ÿ' ]{2,20}\s*:/.test(t) && t.length < 80) return true;
-    return false;
-  };
-  const sequences = [];
-  let current = null, prevNum = null;
-  for (const raw of lines) {
-    const m = raw.match(topItemRe);
-    if (m) {
-      const num = parseInt(m[1], 10);
-      const continues = current && prevNum != null && (num === prevNum + 1 || num === prevNum);
-      if (!continues) { current = []; sequences.push(current); }
-      current.push({ num, text: m[2], ordinal: current.length + 1 });
-      prevNum = num;
-    } else if (isDetailLine(raw)) {
-      continue;
-    } else {
-      current = null; prevNum = null;
-    }
-  }
-  // La (les) vraie(s) liste(s) classée(s) = séquences d'au moins 2 items, plus longue d'abord.
-  const ranked = sequences.filter(s => s.length >= 2).sort((a, b) => b.length - a.length);
-  const searchSeqs = ranked.length ? ranked : sequences;
-
-  // Lignes narratives (hors items de top et hors métadonnées) — pour l'évocation.
-  const narrativeLines = [];
-  for (const line of lines) {
-    const stripped = line.trim();
-    if (!stripped) continue;
-    if (topItemRe.test(line)) continue;
-    if (
-      stripped.startsWith("http") || stripped.startsWith("[") ||
-      stripped.startsWith("- Site") || stripped.startsWith("- Description") ||
-      stripped.startsWith("Source") || stripped.match(/^\d+\.\s*https?:/)
-    ) continue;
-    narrativeLines.push(stripped);
-  }
-
-  // Sources = sources fournies + URLs extraites du texte.
-  const urlRe = /https?:\/\/[^\s),'"\]]+/g;
-  const textUrls = [...(answer || "").matchAll(urlRe)].map(m => m[0].replace(/[.,;:]+$/, ""));
-  const allSources = [...new Set([...(Array.isArray(sources) ? sources : []), ...textUrls])];
-  const normSources = allSources.map(s => norm(s).replace(/^www\./, "").replace(/https?:\/\//, ""));
-
-  // ── MOTEUR UNIQUE de détection M/É/C pour une entité (marque OU concurrent) ──
-  // terms : liste de noms/alias normalisés à chercher.
-  // Renvoie { mentionPosition, evocationPosition, citationPosition }.
-  function detectEntity(terms) {
-    const T = terms.filter(Boolean);
-    if (!T.length) return { mentionPosition: null, evocationPosition: null, citationPosition: null };
-    // Match sur LIMITES DE MOTS pour éviter les faux positifs par sous-chaîne
-    // (ex. « Eleas » ne doit pas matcher « Eleastic »). Insensible casse+accents.
-    // Une frontière = début/fin de chaîne ou caractère non alphanumérique.
-    const wordHit = (haystack, term) => {
-      if (!term) return false;
-      const esc = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      // \p{L}\p{N} = lettre/chiffre Unicode ; frontière manuelle car \b est ASCII-only
-      const re = new RegExp(`(^|[^\\p{L}\\p{N}])${esc}([^\\p{L}\\p{N}]|$)`, "u");
-      return re.test(haystack);
-    };
-    const hit = (text) => { const t = norm(text); return T.some(term => wordHit(t, term)); };
-
-    // MENTION — position ordinale réelle dans la 1ère séquence où l'entité apparaît.
-    let mentionPosition = null;
-    for (const seq of searchSeqs) {
-      for (const item of seq) {
-        if (hit(item.text)) { mentionPosition = item.ordinal; break; }
-      }
-      if (mentionPosition !== null) break;
-    }
-
-    // ÉVOCATION — 1ère ligne narrative qui cite l'entité (rang dans le récit).
-    let evocationPosition = null;
-    let narrativeCount = 0;
-    for (const nl of narrativeLines) {
-      narrativeCount++;
-      if (hit(nl) && evocationPosition === null) { evocationPosition = narrativeCount; break; }
-    }
-
-    // CITATION — 1ère source où le nom apparaît comme SEGMENT délimité de l'URL
-    // (entre début/fin, /, ., -, _). Évite les faux positifs (« aw » ∈ « lawfirm »).
-    let citationPosition = null;
-    const domainTerms = T.map(t => t.replace(/\s+/g, "")).filter(Boolean);
-    const segHit = (url, term) => {
-      const esc = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      return new RegExp(`(^|[^a-z0-9])${esc}([^a-z0-9]|$)`, "i").test(url);
-    };
-    for (let i = 0; i < normSources.length; i++) {
-      if (domainTerms.some(d => segHit(normSources[i], d))) { citationPosition = i + 1; break; }
-    }
-
-    return { mentionPosition, evocationPosition, citationPosition };
-  }
-
-  // ── MARQUE ──
-  const brandTerms = [brandName, ...brandAliases].filter(Boolean).map(norm);
-  const b = detectEntity(brandTerms);
-  const mentionPosition = b.mentionPosition;
-  const evocationPosition = b.evocationPosition;
-  const citationPosition = b.citationPosition;
-
-  // ── CONCURRENTS — MÊME moteur fiable, avec positions M/É/C ──
-  const allCompetitorNames = competitors.filter(Boolean).map(c => (typeof c === "string" ? c : c.name)).filter(Boolean);
-  const competitorsMentioned = allCompetitorNames
-    .map(name => {
-      const d = detectEntity([norm(name)]);
-      const mentioned = d.mentionPosition !== null || d.evocationPosition !== null;
-      return {
-        name,
-        mentioned,
-        // position = position de MENTION (top). null si pas dans un top classé.
-        position: d.mentionPosition,
-        mention_position:   d.mentionPosition,
-        evocation_position: d.evocationPosition,
-        citation_position:  d.citationPosition,
-        in_sources: d.citationPosition !== null,
-      };
-    })
-    .filter(c => c.mentioned || c.in_sources);
-
-  // ── Autres entités présentes dans les tops (à identifier) ──
-  // On parcourt TOUTES les séquences classées (pas seulement la plus longue) et on
-  // calcule pour chaque entité inconnue son triplet M/É/C via le même moteur fiable,
-  // afin qu'elles apparaissent correctement dans Top mentions / évocations / citations.
-  const knownTerms = [brandName, ...(brandAliases || []), ...allCompetitorNames].map(norm).filter(Boolean);
-  const seenUnknown = new Set();
-  const unknownEntities = [];
-  for (const seq of (ranked.length ? ranked : sequences)) {
-    for (const item of seq) {
-      const txt = (item.text || "").trim();
-      if (!txt) continue;
-      let nameRaw = txt.split(/[:–\-(]/)[0].trim().replace(/\*\*/g, "").replace(/[.,;]+$/, "").trim();
-      if (nameRaw.length < 2 || nameRaw.length > 40 || nameRaw.split(/\s+/).length > 5) continue;
-      const low = norm(nameRaw);
-      if (!low) continue;
-      if (knownTerms.some(t => low.includes(t) || t.includes(low))) continue; // marque/concurrent connu
-      if (seenUnknown.has(low)) continue;
-      seenUnknown.add(low);
-      const d = detectEntity([low]);
-      unknownEntities.push({
-        name: nameRaw,
-        position: d.mentionPosition != null ? d.mentionPosition : item.ordinal,
-        mention_position:   d.mentionPosition,
-        evocation_position: d.evocationPosition,
-        citation_position:  d.citationPosition,
-        in_sources: d.citationPosition !== null,
-      });
-    }
-  }
-
-  return {
-    // Champs structurés
-    mention:   { present: mentionPosition !== null,   position: mentionPosition },
-    evocation: { present: evocationPosition !== null, position: evocationPosition },
-    citation:  { present: citationPosition !== null,  position: citationPosition },
-
-    // Rétrocompat — champs utilisés par le reste de l'app
-    brandMentioned:       mentionPosition !== null || evocationPosition !== null,
-    brandPosition:        mentionPosition,
-    brandInSources:       citationPosition !== null,
-    competitorsMentioned,
-    unknownEntities,
-  };
-}
-function Btn({ children, onClick, disabled, color, variant = "solid", small, title, style: extraStyle }) {
-  const base = {
-    display: "inline-flex", alignItems: "center", gap: 5,
-    padding: small ? "4px 14px" : "7px 20px",
-    fontSize: small ? 11 : 12, fontWeight: 500,
-    letterSpacing: "0.02em",
-    borderRadius: 20, cursor: disabled ? "not-allowed" : "pointer",
-    opacity: disabled ? 0.35 : 1,
-    transition: "opacity 0.2s, background 0.2s",
-    border: "1px solid transparent",
-    userSelect: "none", whiteSpace: "nowrap",
-    ...(variant === "solid"
-      ? { background: "#1A3C2E", color: "#F0EBE0", borderColor: "#1A3C2E" }
-      : variant === "outline" || variant === "ghost"
-      ? { background: "transparent", color: "#1A3C2E", borderColor: "#1A3C2E33" }
-      : { background: "#F0EBE0", color: "#1A3C2E", borderColor: "#1A3C2E11" }),
-    ...extraStyle,
-  };
-  return <button onClick={disabled ? undefined : onClick} disabled={disabled} title={title} style={base}>{children}</button>;
-}
-
-function StatusBadge({ status }) {
-  const map = {
-    pending:       { label: "Prêt",       color: "#1A3C2E55" },
-    generating_q:  { label: "Génération…", color: "#E8541A" },
-    done_q:        { label: "Généré",      color: "#1A7A4A" },
-    generating_r:  { label: "LLM…",       color: "#E8541A" },
-    done:          { label: "Terminé",     color: "#1A3C2E" },
-    error:         { label: "Erreur",      color: "#C0352A" },
-  };
-  const s = map[status] || map.pending;
-  return (
-    <span style={{
-      fontSize: 10, fontWeight: 500, letterSpacing: "0.06em", textTransform: "uppercase",
-      color: s.color, padding: "0 0", background: "none", border: "none",
-    }}>
-      {s.label}
-    </span>
-  );
-}
-
-// ── Stats header ──────────────────────────────────────────────────
-
-// ── Code couleur partagé pour les 3 tops (marque + catégories concurrents) ──
-const TOP_COLORS = {
-  brand:   { color: "#1A7A4A", label: "Votre marque" },   // vert Sonate
-  direct:  { color: "#C0352A", label: "Concurrent direct" },
-  geo:     { color: "#C97820", label: "Concurrent GEO" },
-  partner: { color: "#1A3C2E", label: "Partenaire" },
-  other:   { color: "#9AAEA4", label: "Autre" },
-};
-
-// Graphe en barres verticales, trié décroissant, tooltip au survol.
-// data: [{ name, count, kind }] · kind ∈ brand|direct|geo|partner|other
-function TopBarChart({ title, glyph, data, accent = "#1A3C2E", onBarClick = null }) {
-  const [hover, setHover] = useState(null);
-  const rows = (data || []).slice(0, 20); // jusqu'à 20 entrées (colonnes fines)
-  const max = rows.length ? Math.max(...rows.map(d => d.count)) : 0;
-  const total = (data || []).reduce((s, d) => s + d.count, 0);
-  const gap = rows.length > 12 ? 2 : rows.length > 8 ? 3 : 5;
-
-  return (
-    <div className="gt-kpi-card" style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
-      {/* En-tête */}
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-        <span style={{ width: 22, height: 22, borderRadius: 6, background: `${accent}14`, color: accent, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 12, flexShrink: 0 }}>{glyph}</span>
-        <span className="gt-kpi-label" style={{ marginBottom: 0 }}>{title}</span>
-        <span style={{ marginLeft: "auto", fontSize: 11, color: "#1A3C2E55", fontVariantNumeric: "tabular-nums" }}>{total}</span>
-      </div>
-
-      {rows.length === 0 ? (
-        <div className="gt-caption" style={{ fontStyle: "italic", padding: "24px 0", textAlign: "center" }}>Aucune donnée</div>
-      ) : (
-        <>
-          {/* Zone graphe — abscisse = rang (1 à gauche, ordre croissant) */}
-          <div style={{ position: "relative", height: 150, display: "flex", alignItems: "flex-end", gap, padding: "18px 0 0", marginTop: 6 }}>
-            {rows.map((d, i) => {
-              const h = max ? Math.max((d.count / max) * 100, 4) : 4;
-              const c = (TOP_COLORS[d.kind] || TOP_COLORS.other).color;
-              const isHover = hover === i;
-              const clickable = !!onBarClick;
-              return (
-                <div key={d.name + i}
-                  onMouseEnter={() => setHover(i)}
-                  onMouseLeave={() => setHover(null)}
-                  onClick={clickable ? () => onBarClick(d) : undefined}
-                  title={clickable ? `Filtrer sur « ${d.name} »` : undefined}
-                  style={{ flex: 1, minWidth: 0, height: "100%", display: "flex", flexDirection: "column", justifyContent: "flex-end", alignItems: "center", cursor: clickable ? "pointer" : "default", position: "relative" }}>
-                  {/* Tooltip : nom + rang + occurrences (le nom n'apparaît QU'au survol) */}
-                  {isHover && (
-                    <div style={{ position: "absolute", bottom: "calc(100% + 4px)", left: "50%", transform: "translateX(-50%)", background: "#1A3C2E", color: "#F0EBE0", borderRadius: 6, padding: "5px 9px", fontSize: 11, whiteSpace: "nowrap", zIndex: 5, boxShadow: "0 2px 8px #1A3C2E33", pointerEvents: "none" }}>
-                      <div style={{ fontWeight: 600 }}>#{i + 1} · {d.name}</div>
-                      <div style={{ opacity: 0.8, fontVariantNumeric: "tabular-nums" }}>{d.count} occurrence{d.count > 1 ? "s" : ""}{clickable ? " · cliquer pour filtrer" : ""}</div>
-                    </div>
-                  )}
-                  <div style={{
-                    width: "100%", height: `${h}%`, background: c,
-                    borderRadius: "2px 2px 0 0", transition: "opacity 0.12s, transform 0.12s",
-                    opacity: isHover ? 1 : 0.85, transform: isHover ? "scaleY(1.02)" : "none", transformOrigin: "bottom",
-                    minHeight: 3,
-                  }} />
-                </div>
-              );
-            })}
-          </div>
-          {/* Axe des rangs : "1" à gauche, ordre croissant (pas de noms de sites) */}
-          <div style={{ display: "flex", gap, marginTop: 5, paddingTop: 5, borderTop: "0.5px solid #1A3C2E0C" }}>
-            {rows.map((d, i) => (
-              <div key={d.name + i} style={{ flex: 1, minWidth: 0, display: "flex", justifyContent: "center" }}>
-                <span style={{ fontSize: 8, color: hover === i ? accent : "#1A3C2E44", fontVariantNumeric: "tabular-nums", fontWeight: hover === i ? 700 : 500 }}>{i + 1}</span>
-              </div>
-            ))}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [], aliasMap = {}, onTopClick = null }) {
-  const total = results.length;
-
-  // ── Métriques par type de présence (nouveaux champs + rétrocompat) ──
-
-  // MENTION = dans un top numéroté
-  // Rétrocompat : brand_position > 0 sur anciens résultats
-  const mentionResults   = results.filter(r =>
-    r.brand_mention_position != null ||
-    (r.brand_position != null && r.brand_position > 0)
-  );
-  const mentionPositions = mentionResults
-    .map(r => r.brand_mention_position || r.brand_position)
-    .filter(Boolean);
-  const mentionCount    = mentionResults.length;
-  const mentionAvgPos   = mentionPositions.length
-    ? (mentionPositions.reduce((a, b) => a + b, 0) / mentionPositions.length).toFixed(1)
-    : null;
-
-  // ÉVOCATION = dans le corps narratif hors top
-  // Rétrocompat : brand_mentioned=true SANS position dans un top = évocation
-  const evocationResults   = results.filter(r => {
-    if (r.brand_evocation_position != null) return true;
-    // Ancien résultat : mentionné mais pas dans un top → évocation
-    const isMentioned = r.brand_mentioned === true || r.brand_mentioned === 1;
-    const hasTopPos   = (r.brand_mention_position != null) || (r.brand_position != null && r.brand_position > 0);
-    return isMentioned && !hasTopPos;
-  });
-  const evocationPositions = evocationResults
-    .map(r => r.brand_evocation_position)
-    .filter(Boolean);
-  const evocationCount   = evocationResults.length;
-  const evocationAvgPos  = evocationPositions.length
-    ? (evocationPositions.reduce((a, b) => a + b, 0) / evocationPositions.length).toFixed(1)
-    : null;
-
-  // CITATION = domaine dans les sources
-  const citationResults   = results.filter(r =>
-    r.brand_citation_position != null || r.brand_in_sources
-  );
-  const citationPositions = citationResults
-    .map(r => r.brand_citation_position)
-    .filter(Boolean);
-  const citationCount   = citationResults.length;
-  const citationAvgPos  = citationPositions.length
-    ? (citationPositions.reduce((a, b) => a + b, 0) / citationPositions.length).toFixed(1)
-    : null;
-
-
-  // Top competitors
-  const compCount = {};
-  results.forEach(r => {
-    const seen = new Set();
-    (r.competitors_mentioned || []).forEach(c => {
-      if (c.name && !seen.has(c.name)) {
-        seen.add(c.name);
-        compCount[c.name] = (compCount[c.name] || 0) + 1;
-      }
-    });
-  });
-  // (topComps retiré — remplacé par les 3 TopBarChart)
-
-
-  // ── Helper : couleur selon le taux (nb / total) ───────────────
-  function rateColor(count) {
-    if (!total) return "";
-    const pct = count / total * 100;
-    return pct >= 50 ? "gt-success" : pct > 0 ? "gt-warn" : "gt-danger";
-  }
-
-  // ── 3 TOPS par site : mentions / évocations / sources ─────────
-  // Code couleur : marque · concurrent direct · concurrent GEO · partenaire · autre
-  const brandKey = (brandName || "").toLowerCase().replace(/\s+/g, "");
-  const compCatByName = {};
-  (qualifiedCompetitors || []).forEach(c => {
-    if (c.name) compCatByName[c.name.toLowerCase()] = c.category || "other";
-  });
-  // Détermine le "kind" (couleur) d'un nom de site/entité
-  const kindOf = (rawName) => {
-    const n = (rawName || "").toLowerCase();
-    const compact = n.replace(/\s+/g, "").replace(/^www\./, "");
-    // Frontière de mot (insensible casse) pour éviter les faux positifs de classification
-    const wb = (hay, needle) => {
-      if (!needle) return false;
-      const esc = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      return new RegExp(`(^|[^a-z0-9])${esc}([^a-z0-9]|$)`, "i").test(hay);
-    };
-    if (brandKey && (wb(n, brandKey) || compact === brandKey || compact.includes(brandKey))) return "brand";
-    for (const [cname, cat] of Object.entries(compCatByName)) {
-      const cc = cname.replace(/\s+/g, "");
-      // match par mot dans le nom OU domaine compact identique
-      if (cc && (wb(n, cname) || compact === cc || compact.includes(cc))) return cat;
-    }
-    return "other";
-  };
-
-  // Top mentions & évocations : par CONCURRENT/MARQUE détecté dans les réponses.
-  // mention = présent dans une liste classée (position) · évocation = cité sans position.
-  // On agrège { count, bestPos } pour pouvoir trier par MEILLEURE position.
-  // ── Agrégation des 3 tops par MARQUE (projet + concurrents + autres marques) ──
-  // Chaque entité accumule : mentions (count + meilleure position), évocations (count),
-  // citations (count). Une même marque peut apparaître dans les 3 tops.
-  const agg = {}; // name → { name, kind, ment:{count,bestPos}, evoc:{count}, cit:{count,bestPos} }
-  // Canonicalisation par alias : A est compté comme B. Insensible casse/espaces.
-  const aliasLut = {};
-  Object.entries(aliasMap || {}).forEach(([a, b]) => { aliasLut[(a || "").toLowerCase().trim()] = b; });
-  const canon = (name) => {
-    if (!name) return name;
-    const c = aliasLut[name.toLowerCase().trim()];
-    return c || name;
-  };
-  const ensure = (rawName) => {
-    if (!rawName) return null;
-    const name = canon(rawName);               // somme l'alias sur le canonique
-    const key = name.toLowerCase();
-    if (!agg[key]) agg[key] = { name, kind: kindOf(name), ment: { count: 0, bestPos: null }, evoc: { count: 0 }, cit: { count: 0, bestPos: null } };
-    return agg[key];
-  };
-  const addMent = (name, pos) => { const e = ensure(name); if (!e) return; e.ment.count++; if (pos != null && pos > 0) e.ment.bestPos = e.ment.bestPos == null ? pos : Math.min(e.ment.bestPos, pos); };
-  const addEvoc = (name) => { const e = ensure(name); if (e) e.evoc.count++; };
-  const addCit  = (name, pos) => { const e = ensure(name); if (!e) return; e.cit.count++; if (pos != null && pos > 0) e.cit.bestPos = e.cit.bestPos == null ? pos : Math.min(e.cit.bestPos, pos); };
-
-  results.forEach(r => {
-    // ── MARQUE du projet ──
-    const bMent = r.brand_mention_position ?? (r.brand_position > 0 ? r.brand_position : null);
-    if (bMent != null && bMent > 0) addMent(brandName, bMent);
-    else if (r.brand_mentioned === true || r.brand_mentioned === 1) addEvoc(brandName);
-    if (r.brand_in_sources === true || r.brand_in_sources === 1) addCit(brandName, r.brand_citation_position ?? null);
-
-    // ── CONCURRENTS flaggués (positions fiables M/É/C) ──
-    (r.competitors_mentioned || []).forEach(c => {
-      if (!c.name) return;
-      const mPos = c.mention_position != null ? c.mention_position : (c.position != null && c.position > 0 ? c.position : null);
-      if (mPos != null && mPos > 0) addMent(c.name, mPos);
-      else if (c.evocation_position != null || c.mentioned) addEvoc(c.name);
-      if (c.in_sources || c.citation_position != null) addCit(c.name, c.citation_position ?? null);
-    });
-
-    // ── AUTRES MARQUES détectées (à identifier) ──
-    (r.unknown_entities || []).forEach(e => {
-      if (!e?.name) return;
-      const mPos = e.mention_position != null ? e.mention_position : (e.position != null && e.position > 0 ? e.position : null);
-      if (mPos != null && mPos > 0) addMent(e.name, mPos);
-      else if (e.evocation_position != null) addEvoc(e.name);
-      if (e.in_sources || e.citation_position != null) addCit(e.name, e.citation_position ?? null);
-    });
-  });
-
-  // Afficher les alias à 0 (leur compte a été sommé sur le canonique).
-  Object.keys(aliasLut).forEach(aliasLower => {
-    if (!agg[aliasLower]) {
-      // nom d'affichage : retrouver une casse réelle vue dans les données si possible
-      agg[aliasLower] = { name: aliasLower, kind: "other", ment: { count: 0, bestPos: null }, evoc: { count: 0 }, cit: { count: 0, bestPos: null }, isAlias: true };
-    }
-  });
-  const aggList = Object.values(agg);
-  // Top mentions : tri par meilleure position puis count
-  const topMentions = aggList.filter(e => e.ment.count > 0)
-    .map(e => ({ name: e.name, count: e.ment.count, bestPos: e.ment.bestPos, kind: e.kind }))
-    .sort((a, b) => { const pa = a.bestPos ?? 9999, pb = b.bestPos ?? 9999; return pa !== pb ? pa - pb : b.count - a.count; });
-  // Top évocations : tri par count
-  const topEvocations = aggList.filter(e => e.evoc.count > 0)
-    .map(e => ({ name: e.name, count: e.evoc.count, kind: e.kind }))
-    .sort((a, b) => b.count - a.count);
-  // Top citations : marques citées en source, tri par count puis meilleure position
-  const topCitations = aggList.filter(e => e.cit.count > 0)
-    .map(e => ({ name: e.name, count: e.cit.count, bestPos: e.cit.bestPos, kind: e.kind }))
-    .sort((a, b) => { if (b.count !== a.count) return b.count - a.count; const pa = a.bestPos ?? 9999, pb = b.bestPos ?? 9999; return pa - pb; });
-  // (Top sources par domaine retiré de l'affichage — remplacé par Top citations par marque)
-
-  // Liste des autres marques à identifier (celles NI marque NI concurrent connu)
-  const unknownEntitiesList = aggList
-    .filter(e => e.kind === "other" && !e.isAlias && (e.ment.count + e.evoc.count + e.cit.count) > 0)
-    .map(e => ({ name: e.name, count: e.ment.count + e.evoc.count + e.cit.count, bestPos: e.ment.bestPos }))
-    .sort((a, b) => { const pa = a.bestPos ?? 9999, pb = b.bestPos ?? 9999; return pa !== pb ? pa - pb : b.count - a.count; });
-
-  return (
-    <div style={{ marginBottom: 24 }}>
-
-      {/* ── 3 couples Présence + Position ── */}
-      <div className="gt-kpi-grid geo-stats-kpi-grid" style={{ marginBottom: 12 }}>
-
-        {/* Mention */}
-        <div className="gt-kpi-card">
-          <div className="gt-kpi-label" style={{ marginBottom: 6 }}>
-            Mention
-            <span className="gt-caption" style={{ marginLeft: 6, textTransform: "none", letterSpacing: 0 }}>
-              dans le top
-            </span>
-          </div>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-            <div className={`gt-kpi-val ${rateColor(mentionCount)}`}>
-              {total ? Math.round(mentionCount / total * 100) : 0}%
-            </div>
-            {mentionAvgPos && (
-              <div className="gt-caption" style={{ fontVariantNumeric: "tabular-nums" }}>
-                pos. moy. #{mentionAvgPos}
-              </div>
-            )}
-          </div>
-          <div className="gt-kpi-sub">{mentionCount} / {total} réponses</div>
-        </div>
-
-        {/* Évocation */}
-        <div className="gt-kpi-card">
-          <div className="gt-kpi-label" style={{ marginBottom: 6 }}>
-            Évocation
-            <span className="gt-caption" style={{ marginLeft: 6, textTransform: "none", letterSpacing: 0 }}>
-              dans le texte
-            </span>
-          </div>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-            <div className={`gt-kpi-val ${rateColor(evocationCount)}`}>
-              {total ? Math.round(evocationCount / total * 100) : 0}%
-            </div>
-            {evocationAvgPos && (
-              <div className="gt-caption" style={{ fontVariantNumeric: "tabular-nums" }}>
-                pos. moy. #{evocationAvgPos}
-              </div>
-            )}
-          </div>
-          <div className="gt-kpi-sub">{evocationCount} / {total} réponses</div>
-        </div>
-
-        {/* Citation */}
-        <div className="gt-kpi-card">
-          <div className="gt-kpi-label" style={{ marginBottom: 6 }}>
-            Citation
-            <span className="gt-caption" style={{ marginLeft: 6, textTransform: "none", letterSpacing: 0 }}>
-              dans les sources
-            </span>
-          </div>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-            <div className={`gt-kpi-val ${rateColor(citationCount)}`}>
-              {total ? Math.round(citationCount / total * 100) : 0}%
-            </div>
-            {citationAvgPos && (
-              <div className="gt-caption" style={{ fontVariantNumeric: "tabular-nums" }}>
-                pos. moy. #{citationAvgPos}
-              </div>
-            )}
-          </div>
-          <div className="gt-kpi-sub">{citationCount} / {total} réponses</div>
-        </div>
-      </div>
-
-      {/* ── 3 TOPS : Mentions · Évocations · Sources (barres verticales) ── */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 14 }}>
-        <TopBarChart title="Top mentions" glyph="◎" accent="#1A7A4A" data={topMentions} onBarClick={onTopClick ? (d) => onTopClick("mention", d.name) : null} />
-        <TopBarChart title="Top évocations" glyph="⟶" accent="#C97820" data={topEvocations} onBarClick={onTopClick ? (d) => onTopClick("evocation", d.name) : null} />
-        <TopBarChart title="Top citations" glyph="↗" accent="#1A3C2E" data={topCitations} onBarClick={onTopClick ? (d) => onTopClick("citation", d.name) : null} />
-      </div>
-
-      {/* Légende code couleur */}
-      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginTop: 12, paddingTop: 10, borderTop: "0.5px solid #1A3C2E0C" }}>
-        {Object.entries(TOP_COLORS).map(([k, v]) => (
-          <span key={k} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10, color: "#1A3C2E77" }}>
-            <span style={{ width: 9, height: 9, borderRadius: 2, background: v.color, flexShrink: 0 }} />
-            {v.label}
-          </span>
-        ))}
-      </div>
-
-      {/* Autres marques présentes dans les tops — à identifier */}
-      {unknownEntitiesList.length > 0 && (
-        <div className="gt-kpi-card" style={{ marginTop: 14 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-            <span style={{ width: 22, height: 22, borderRadius: 6, background: "#C978201A", color: "#C97820", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 12, flexShrink: 0 }}>?</span>
-            <span className="gt-kpi-label" style={{ marginBottom: 0 }}>Autres marques à identifier</span>
-            <span style={{ marginLeft: "auto", fontSize: 11, color: "#1A3C2E55" }}>{unknownEntitiesList.length}</span>
-          </div>
-          <div style={{ fontSize: 11, color: "#1A3C2E66", marginBottom: 10 }}>
-            Entités présentes dans les tops LLM qui ne sont ni votre marque ni un concurrent renseigné. Ajoutez-les comme concurrents pour les suivre.
-          </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            {unknownEntitiesList.slice(0, 30).map((e, i) => (
-              <span key={i} title={`${e.count} apparition${e.count > 1 ? "s" : ""}${e.bestPos ? ` · meilleure position #${e.bestPos}` : ""}`}
-                style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "4px 10px", borderRadius: 14, border: "0.5px solid #1A3C2E18", background: "#fff", fontSize: 11, color: "#1A3C2E" }}>
-                {e.bestPos && <span style={{ fontSize: 9, fontWeight: 700, color: "#C97820", fontVariantNumeric: "tabular-nums" }}>#{e.bestPos}</span>}
-                {e.name}
-                <span style={{ fontSize: 9, color: "#1A3C2E44" }}>×{e.count}</span>
-              </span>
-            ))}
-            {unknownEntitiesList.length > 30 && <span style={{ fontSize: 10, color: "#1A3C2E44", alignSelf: "center" }}>+ {unknownEntitiesList.length - 30} autres</span>}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Competitor categories ─────────────────────────────────────────
-const COMP_CATEGORIES = [
-  { key: "direct",  label: "Concurrent direct",  color: "#DC2626", bg: "#FEF2F2" },
-  { key: "geo",     label: "Concurrent GEO",      color: "#D97706", bg: "#FFFBEB" },
-  { key: "partner", label: "Partenaire",           color: "#059669", bg: "#ECFDF5" },
-  { key: "other",   label: "Autre",                color: "#64748B", bg: "#F1F5F9" },
-];
-
-function CompetitorManager({ projectId, siteId, allResults, competitors, setCompetitors }) {
-  const [newName, setNewName] = useState("");
-  const [newCat,  setNewCat]  = useState("direct");
-  const [saving,  setSaving]  = useState(false);
-  const [sortBy,  setSortBy]  = useState("mentions");
-  const [catMenuFor, setCatMenuFor] = useState(null); // marque dont le menu de catégorie est ouvert
-  // Alias : alias A → canonique B (sommés partout dans le projet)
-  const [aliases, setAliases] = useState([]);
-  const [aliasA, setAliasA] = useState("");   // le nom variante
-  const [aliasB, setAliasB] = useState("");   // la forme canonique
-  const [aliasSaving, setAliasSaving] = useState(false);
-  useEffect(() => {
-    if (!projectId || !siteId) { setAliases([]); return; }
-    let cancelled = false;
-    sbGetAliases(projectId, siteId).then(rows => { if (!cancelled) setAliases(rows || []); }).catch(() => {});
-    return () => { cancelled = true; };
-  }, [projectId, siteId]);
-  const saveAlias = async () => {
-    if (!aliasA.trim() || !aliasB.trim() || !projectId || !siteId) return;
-    if (aliasA.trim().toLowerCase() === aliasB.trim().toLowerCase()) return; // pas d'auto-alias
-    setAliasSaving(true);
-    try {
-      const saved = await sbSaveAlias({ project_id: projectId, site_id: siteId, alias: aliasA, canonical: aliasB });
-      setAliases(prev => {
-        const idx = prev.findIndex(a => a.alias.toLowerCase() === aliasA.trim().toLowerCase());
-        if (idx >= 0) { const n = [...prev]; n[idx] = saved; return n; }
-        return [...prev, saved];
-      });
-      setAliasA(""); setAliasB("");
-    } catch(e) { console.error(e); }
-    setAliasSaving(false);
-  };
-  const removeAlias = async (id) => {
-    try { await sbDeleteAlias(id); setAliases(prev => prev.filter(a => a.id !== id)); }
-    catch(e) { console.error(e); }
-  };
-
-  const detectedNames = useMemo(() => {
-    const mentions = {}; const display = {};
-    allResults.forEach(r => {
-      (r.competitors_mentioned || []).forEach(c => {
-        if (!c.name) return;
-        const lower = c.name.toLowerCase();
-        mentions[lower] = (mentions[lower] || 0) + 1;
-        if (!display[lower]) display[lower] = c.name;
-      });
-      // Marques détectées dans les tops mais non flaggées (à identifier)
-      (r.unknown_entities || []).forEach(e => {
-        if (!e?.name) return;
-        const lower = e.name.toLowerCase();
-        mentions[lower] = (mentions[lower] || 0) + 1;
-        if (!display[lower]) display[lower] = e.name;
-      });
-    });
-    // Recherche rétroactive
-    competitors.forEach(comp => {
-      const lower = comp.name.toLowerCase();
-      const re = new RegExp(comp.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
-      allResults.forEach(r => {
-        const already = (r.competitors_mentioned || []).some(c => c.name?.toLowerCase() === lower);
-        if (!already && re.test(r.answer || "")) {
-          mentions[lower] = (mentions[lower] || 0) + 1;
-          if (!display[lower]) display[lower] = comp.name;
-        }
-      });
-    });
-    return Object.keys(mentions).map(lower => ({
-      name: display[lower] || lower, lower,
-      mentions: mentions[lower] || 0,
-    })).sort((a, b) => b.mentions - a.mentions);
-  }, [allResults, competitors]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const getCatDef = (cat) => COMP_CATEGORIES.find(c => c.key === cat) || COMP_CATEGORIES[3];
-
-  const save = async () => {
-    if (!newName.trim() || !projectId || !siteId) return;
-    setSaving(true);
-    try {
-      const catDef = getCatDef(newCat);
-      const saved = await sbSaveCompetitor({ project_id: projectId, site_id: siteId, name: newName.trim(), category: newCat, color: catDef.color, enabled: true });
-      setCompetitors(prev => {
-        const idx = prev.findIndex(c => c.name.toLowerCase() === newName.trim().toLowerCase());
-        if (idx >= 0) { const n = [...prev]; n[idx] = saved; return n; }
-        return [...prev, saved].sort((a, b) => a.name.localeCompare(b.name));
-      });
-      setNewName("");
-    } catch(e) { console.error(e); }
-    setSaving(false);
-  };
-
-  // Catégoriser directement une marque détectée → la déplacer dans Concurrents
-  const categorizeDetected = async (name, category) => {
-    if (!name || !projectId || !siteId) return;
-    const catDef = getCatDef(category);
-    try {
-      const saved = await sbSaveCompetitor({ project_id: projectId, site_id: siteId, name: name.trim(), category, color: catDef.color, enabled: true });
-      setCompetitors(prev => {
-        const idx = prev.findIndex(c => c.name.toLowerCase() === name.trim().toLowerCase());
-        if (idx >= 0) { const n = [...prev]; n[idx] = saved; return n; }
-        return [...prev, saved].sort((a, b) => a.name.localeCompare(b.name));
-      });
-    } catch(e) { console.error(e); }
-  };
-
-  const updateCat = async (comp, category) => {
-    const catDef = getCatDef(category);
-    try {
-      await sbUpdateCompetitor(comp.id, { category, color: catDef.color });
-      setCompetitors(prev => prev.map(c => c.id === comp.id ? { ...c, category, color: catDef.color } : c));
-    } catch(e) { console.error(e); }
-  };
-
-  const updateEnabled = async (comp, enabled) => {
-    try {
-      await sbUpdateCompetitor(comp.id, { enabled });
-      setCompetitors(prev => prev.map(c => c.id === comp.id ? { ...c, enabled } : c));
-    } catch(e) { console.error(e); }
-  };
-
-  const remove = async (id) => {
-    try { await sbDeleteCompetitor(id); setCompetitors(prev => prev.filter(c => c.id !== id)); }
-    catch(e) { console.error(e); }
-  };
-
-  const displayed = useMemo(() => {
-    return [...competitors].sort((a, b) => {
-      if (sortBy === "alpha") return a.name.localeCompare(b.name);
-      if (sortBy === "cat") return (a.category||"").localeCompare(b.category||"");
-      const ma = detectedNames.find(d => d.lower === a.name.toLowerCase())?.mentions || 0;
-      const mb = detectedNames.find(d => d.lower === b.name.toLowerCase())?.mentions || 0;
-      return mb - ma;
-    });
-  }, [competitors, sortBy, detectedNames]);
-
-  return (
-    <div>
-      {/* Formulaire ajout */}
-      <div style={{ background: "transparent", border: "none", borderBottom: "0.5px solid #1A3C2E0D", padding: "0 0 16px 0", marginBottom: 16 }}>
-        <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.12em", textTransform: "uppercase", color: "#1A3C2E44", marginBottom: 10 }}>Ajouter un concurrent</div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
-          <input value={newName} onChange={e => setNewName(e.target.value)} placeholder="Nom du concurrent…"
-            onKeyDown={e => e.key === "Enter" && save()}
-            style={{ flex: "1 1 180px", padding: "6px 10px", border: "1px solid #E2E8F0", borderRadius: 7, fontSize: 12 }} />
-          <select value={newCat} onChange={e => setNewCat(e.target.value)}
-            style={{ padding: "6px 10px", border: "1px solid #E2E8F0", borderRadius: 7, fontSize: 12 }}>
-            {COMP_CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
-          </select>
-          <button onClick={save} disabled={saving || !newName.trim()}
-            style={{ padding: "6px 14px", background: newName.trim() ? "#1A3C2E" : "#F1F5F9", color: newName.trim() ? "#F0EBE0" : "#94A3B8", border: "none", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: newName.trim() ? "pointer" : "default" }}>
-            {saving ? "…" : "Ajouter"}
-          </button>
-        </div>
-      </div>
-      {/* Marques détectées non qualifiées — cliquer pour catégoriser → Concurrents */}
-      {detectedNames.filter(d => !competitors.some(c => c.name.toLowerCase() === d.lower)).length > 0 && (
-        <div style={{ marginBottom: 16 }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 4 }}>Marques détectées — à catégoriser</div>
-          <div style={{ fontSize: 10, color: "#94A3B8", marginBottom: 8 }}>Cliquez une marque puis choisissez sa catégorie : elle rejoint vos concurrents.</div>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            {detectedNames.filter(d => !competitors.some(c => c.name.toLowerCase() === d.lower)).slice(0, 20).map(d => (
-              <div key={d.lower} style={{ position: "relative", display: "inline-block" }}>
-                <button onClick={() => setCatMenuFor(catMenuFor === d.lower ? null : d.lower)}
-                  style={{ padding: "3px 10px", borderRadius: 20, fontSize: 11, border: catMenuFor === d.lower ? "1px solid #1A3C2E" : "1px solid #E2E8F0", background: catMenuFor === d.lower ? "#1A3C2E0A" : "#F8FAFC", color: "#64748B", cursor: "pointer" }}>
-                  {d.name} <span style={{ color: "#94A3B8" }}>{d.mentions}×</span>
-                </button>
-                {catMenuFor === d.lower && (
-                  <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 20, background: "#fff", border: "0.5px solid #1A3C2E22", borderRadius: 8, boxShadow: "0 4px 14px #1A3C2E22", padding: 4, minWidth: 160 }}>
-                    {COMP_CATEGORIES.map(c => (
-                      <button key={c.key}
-                        onClick={() => { categorizeDetected(d.name, c.key); setCatMenuFor(null); }}
-                        style={{ display: "flex", alignItems: "center", gap: 7, width: "100%", textAlign: "left", padding: "6px 9px", border: "none", background: "transparent", borderRadius: 6, fontSize: 12, color: "#1A3C2E", cursor: "pointer" }}
-                        onMouseEnter={e => e.currentTarget.style.background = "#F8FAFC"}
-                        onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
-                        <span style={{ width: 9, height: 9, borderRadius: 3, background: c.color, flexShrink: 0 }} />
-                        {c.label}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-      {/* ── Panneau Alias : A compté comme B partout dans le projet ── */}
-      <div style={{ marginBottom: 16, paddingBottom: 16, borderBottom: "0.5px solid #1A3C2E0D" }}>
-        <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 4 }}>Alias de marques</div>
-        <div style={{ fontSize: 10, color: "#94A3B8", marginBottom: 8 }}>
-          Déclarez qu'un nom (A) doit être compté comme un autre (B). Ex. « 2io » → « Deux.io ». Les mentions / évocations / citations de A sont sommées sur B ; A apparaît ensuite à 0.
-        </div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: aliases.length ? 10 : 0 }}>
-          <input value={aliasA} onChange={e => setAliasA(e.target.value)} placeholder="Alias (A)…"
-            onKeyDown={e => e.key === "Enter" && saveAlias()}
-            style={{ flex: "1 1 130px", padding: "6px 10px", border: "1px solid #E2E8F0", borderRadius: 7, fontSize: 12 }} />
-          <span style={{ fontSize: 13, color: "#94A3B8" }}>→</span>
-          <input value={aliasB} onChange={e => setAliasB(e.target.value)} placeholder="Compté comme (B)…"
-            onKeyDown={e => e.key === "Enter" && saveAlias()}
-            style={{ flex: "1 1 130px", padding: "6px 10px", border: "1px solid #E2E8F0", borderRadius: 7, fontSize: 12 }} />
-          <button onClick={saveAlias} disabled={aliasSaving || !aliasA.trim() || !aliasB.trim()}
-            style={{ padding: "6px 14px", background: (aliasA.trim() && aliasB.trim()) ? "#1A3C2E" : "#F1F5F9", color: (aliasA.trim() && aliasB.trim()) ? "#F0EBE0" : "#94A3B8", border: "none", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: (aliasA.trim() && aliasB.trim()) ? "pointer" : "default" }}>
-            {aliasSaving ? "…" : "Ajouter"}
-          </button>
-        </div>
-        {aliases.length > 0 && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            {aliases.map(a => (
-              <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#1A3C2E", padding: "4px 0" }}>
-                <span style={{ fontWeight: 600 }}>{a.alias}</span>
-                <span style={{ color: "#94A3B8" }}>→</span>
-                <span style={{ fontWeight: 600, color: "#1A7A4A" }}>{a.canonical}</span>
-                <button onClick={() => removeAlias(a.id)}
-                  style={{ marginLeft: "auto", fontSize: 11, color: "#C0352A", background: "transparent", border: "none", cursor: "pointer" }}>Supprimer</button>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Liste qualifiés */}
-      {competitors.length > 0 && (
-        <div>
-          <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 10 }}>
-            <span style={{ fontSize: 11, color: "#94A3B8" }}>{competitors.length} concurrent{competitors.length > 1 ? "s" : ""} qualifié{competitors.length > 1 ? "s" : ""}</span>
-            <div style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
-              {[{ key: "mentions", label: "Mentions" }, { key: "alpha", label: "A→Z" }, { key: "cat", label: "Catégorie" }].map(s => (
-                <button key={s.key} onClick={() => setSortBy(s.key)}
-                  style={{ fontSize: 10, padding: "3px 8px", borderRadius: 6, border: `1px solid ${sortBy === s.key ? "#1A3C2E" : "#E2E8F0"}`, background: sortBy === s.key ? "#1A3C2E" : "transparent", color: sortBy === s.key ? "#F0EBE0" : "#64748B", cursor: "pointer" }}>
-                  {s.label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-            {displayed.map(comp => {
-              const catDef = getCatDef(comp.category);
-              const mentions = detectedNames.find(d => d.lower === comp.name.toLowerCase())?.mentions || 0;
-              const enabled = comp.enabled !== false;
-              return (
-                <div key={comp.id} style={{ border: "none", borderBottom: "0.5px solid #1A3C2E08", borderRadius: 0, background: "transparent", padding: "9px 0", display: "flex", alignItems: "center", gap: 8, opacity: enabled ? 1 : 0.4 }}>
-                  <div style={{ width: 8, height: 8, borderRadius: "50%", background: catDef.color, flexShrink: 0 }} />
-                  <span style={{ fontSize: 12, fontWeight: 600, color: "#1A3C2E", flex: 1 }}>{comp.name}</span>
-                  {mentions > 0 && <span style={{ fontSize: 10, color: catDef.color, background: "#fff", border: `1px solid ${catDef.color}33`, borderRadius: 5, padding: "1px 6px", fontWeight: 600 }}>{mentions}×</span>}
-                  <button onClick={() => updateEnabled(comp, !enabled)}
-                    style={{ width: 32, height: 18, borderRadius: 9, border: "none", cursor: "pointer", background: enabled ? "#1A3C2E" : "#CBD5E1", position: "relative", transition: "background 0.2s", flexShrink: 0 }}>
-                    <span style={{ position: "absolute", top: 1, left: enabled ? 15 : 1, width: 16, height: 16, borderRadius: "50%", background: "#fff", transition: "left 0.2s" }} />
-                  </button>
-                  <select value={comp.category} onChange={e => updateCat(comp, e.target.value)}
-                    style={{ fontSize: 10, padding: "2px 5px", border: `1px solid ${catDef.color}44`, borderRadius: 5, background: "#fff", color: catDef.color, fontWeight: 700, cursor: "pointer" }}>
-                    {COMP_CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
-                  </select>
-                  <button onClick={() => remove(comp.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "#94A3B8", fontSize: 11 }}>✕</button>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-      {competitors.length === 0 && detectedNames.length === 0 && (
-        <div style={{ fontSize: 12, color: "#94A3B8", fontStyle: "italic" }}>Interrogez des questions pour détecter les concurrents cités.</div>
-      )}
-    </div>
-  );
-}
-
-// ── Category Manager ─────────────────────────────────────────────
-
-const CAT_COLORS = ["#2563EB","#059669","#7C3AED","#D97706","#DC2626","#0891B2","#EA580C","#64748B"];
-
-function CategoryManager({ projectId, categories, setCategories, compact }) {
-  const [newName, setNewName] = useState("");
-  const [newColor, setNewColor] = useState(CAT_COLORS[0]);
-  const [adding, setAdding] = useState(false);
-
-  const add = async () => {
-    if (!newName.trim()) return;
-    try {
-      const cat = await sbSaveCategory({ project_id: projectId, name: newName.trim(), color: newColor });
-      setCategories(prev => [...prev, cat]);
-      setNewName(""); setAdding(false);
-    } catch(e) { console.error(e); }
-  };
-
-  const del = async (id) => {
-    await sbDeleteCategory(id);
-    setCategories(prev => prev.filter(c => c.id !== id));
-  };
-
-  if (compact) return (
-    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-      {categories.map(c => (
-        <span key={c.id} style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: c.color + "18", color: c.color, border: `1px solid ${c.color}44` }}>
-          {c.name}
-          <button onClick={() => del(c.id)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 10, color: c.color, padding: 0, lineHeight: 1 }}>×</button>
-        </span>
-      ))}
-      {adding ? (
-        <span style={{ display: "inline-flex", gap: 4, alignItems: "center" }}>
-          {CAT_COLORS.map(col => (
-            <button key={col} onClick={() => setNewColor(col)} style={{ width: 14, height: 14, borderRadius: "50%", background: col, border: `2px solid ${newColor === col ? "#000" : "transparent"}`, cursor: "pointer" }} />
-          ))}
-          <input autoFocus value={newName} onChange={e => setNewName(e.target.value)} onKeyDown={e => e.key === "Enter" && add()} placeholder="Nom…" style={{ padding: "2px 6px", border: "0.5px solid #1A3C2E0D", borderRadius: 6, fontSize: 11, width: 100 }} />
-          <button onClick={add} style={{ padding: "2px 7px", borderRadius: 6, background: newColor, color: "#fff", border: "none", fontSize: 11, cursor: "pointer" }}>OK</button>
-          <button onClick={() => setAdding(false)} style={{ padding: "2px 6px", borderRadius: 6, background: "#FAFAF8", border: "0.5px solid #1A3C2E0D", fontSize: 11, cursor: "pointer" }}>✕</button>
-        </span>
-      ) : (
-        <button onClick={() => setAdding(true)} style={{ padding: "2px 8px", borderRadius: 12, fontSize: 11, background: "#FAFAF8", border: `1px dashed ${C.border}`, color: C.textLight, cursor: "pointer" }}>+ Catégorie</button>
-      )}
-    </div>
-  );
-
-  return null;
-}
-
-// ── Category selector dropdown ────────────────────────────────────
-
-// ── Multi-tag selector ───────────────────────────────────────────
-function TagSelect({ values = [], categories, onChange, placeholder = "Tags…" }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef();
-  useEffect(() => {
-    if (!open) return;
-    const h = (e) => { if (!ref.current?.contains(e.target)) setOpen(false); };
-    document.addEventListener("mousedown", h);
-    return () => document.removeEventListener("mousedown", h);
-  }, [open]);
-  const toggle = (id) => {
-    const next = values.includes(id) ? values.filter(v => v !== id) : [...values, id];
-    onChange(next);
-  };
-  const selected = categories.filter(c => values.includes(c.id));
-  return (
-    <div ref={ref} style={{ position: "relative", display: "inline-block" }}>
-      <div onClick={() => setOpen(o => !o)}
-        style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center", minWidth: 80, padding: "3px 6px", border: "0.5px solid #1A3C2E0D", borderRadius: 7, cursor: "pointer", background: "#fff", fontSize: 11 }}>
-        {selected.length === 0
-          ? <span style={{ color: C.textLight }}>{placeholder}</span>
-          : selected.map(c => (
-            <span key={c.id} style={{ background: c.color + "22", color: c.color, border: `1px solid ${c.color}44`, borderRadius: 4, padding: "1px 5px", fontSize: 10, fontWeight: 700 }}>
-              {c.name}
-            </span>
-          ))
-        }
-        <span style={{ color: C.textLight, marginLeft: 2 }}>▾</span>
-      </div>
-      {open && (
-        <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 200, background: "#fff", border: "0.5px solid #1A3C2E0D", borderRadius: 9, boxShadow: "0 4px 16px rgba(0,0,0,0.1)", padding: 6, minWidth: 160 }}>
-          {categories.length === 0
-            ? <div style={{ fontSize: 11, color: C.textLight, padding: "4px 8px" }}>Aucune catégorie</div>
-            : categories.map(c => (
-              <div key={c.id} onClick={() => toggle(c.id)}
-                style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 8px", borderRadius: 6, cursor: "pointer", background: values.includes(c.id) ? c.color + "18" : "transparent" }}>
-                <div style={{ width: 14, height: 14, borderRadius: 4, border: `2px solid ${values.includes(c.id) ? c.color : C.border}`, background: values.includes(c.id) ? c.color : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                  {values.includes(c.id) && <span style={{ color: "#fff", fontSize: 9, lineHeight: 1 }}>✓</span>}
-                </div>
-                <span style={{ fontSize: 11, color: c.color, fontWeight: 600 }}>{c.name}</span>
-              </div>
-            ))
-          }
-          {selected.length > 0 && (
-            <div onClick={() => onChange([])}
-              style={{ marginTop: 4, padding: "4px 8px", fontSize: 10, color: C.textLight, cursor: "pointer", borderTop: `1px solid ${C.border}` }}>
-              ✕ Tout retirer
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function CatSelect({ value, categories, onChange, placeholder = "Catégorie…" }) {
-  return (
-    <select value={value || ""} onChange={e => onChange(e.target.value || null)}
-      style={{ padding: "4px 8px", border: "0.5px solid #1A3C2E0D", borderRadius: 6, fontSize: 11, color: C.text, background: "#fff", cursor: "pointer" }}>
-      <option value="">{placeholder}</option>
-      {(Array.isArray(categories) ? categories : []).filter(c => c.id && c.name).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-    </select>
-  );
-}
-
-// ── Keywords sub-tab (v2) ─────────────────────────────────────────
-
-function KeywordsTab({ site, projectId, apiKey, model, axes, context, categories, setCategories, onAxesChange, onQuestionsGenerated, semrushKey = "", providerKeys = {} }) {
-  const [keywords, setKeywords] = useState([]);
-  const [input, setInput]       = useState("");
-  const [loading, setLoading]   = useState(false);
-  const [busy, setBusy]         = useState({});
-  const [runningAll, setRunningAll] = useState(false);
-  const [selected, setSelected]   = useState(new Set());
-  const [bulkCat, setBulkCat]     = useState("");
-  const [filterCat, setFilterCat] = useState("");
-  const [filterSearch, setFilterSearch] = useState(""); // regex/text filter on keyword
-  const stopRef = useRef(false);
-  const [enriching, setEnriching] = useState(false);
-  const fileVolRef = useRef(null);
-
-  useEffect(() => {
-    if (!projectId || !site?.id) return;
-    // Load keywords + count questions per keyword
-    Promise.all([
-      sbGetKeywords(projectId, site.id),
-      sbGetQuestions(projectId, site.id),
-    ]).then(([kws, qs]) => {
-      const countByKw = {};
-      qs.forEach(q => { if (q.keyword_id) countByKw[q.keyword_id] = (countByKw[q.keyword_id] || 0) + 1; });
-      setKeywords(kws.map(k => ({ ...k, question_count: countByKw[k.id] || 0 })));
-    });
-  }, [projectId, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const addKeywords = async () => {
-    const lines = input.split("\n").map(l => l.trim()).filter(Boolean);
-    if (!lines.length) return;
-    setLoading(true);
-    try {
-      const rows = lines.map(keyword => ({ project_id: projectId, site_id: site.id, keyword, status: "pending" }));
-      const saved = await sbSaveKeywords(rows);
-      setKeywords(prev => [...saved, ...prev]);
-      setInput("");
-    } catch(e) { console.error(e); }
-    setLoading(false);
-  };
-
-  // Import CSV: col1=keyword, col2=category name
-  const importCSV = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = async (ev) => {
-      const rows = parseCSV(ev.target.result).filter(r => r[0]);
-      const toAdd = [];
-      for (const [keyword, catName] of rows) {
-        const cat = catName ? categories.find(c => c.name.toLowerCase() === catName.toLowerCase()) : null;
-        toAdd.push({ project_id: projectId, site_id: site.id, keyword, status: "pending", ...(cat ? { category_id: cat.id } : {}) });
-      }
-      if (!toAdd.length) return;
-      const saved = await sbSaveKeywords(toAdd);
-      setKeywords(prev => [...saved, ...prev]);
-    };
-    reader.readAsText(file);
-    e.target.value = "";
-  };
-
-  // ── Volume enrichment from Semrush API ──────────────────────
-  const enrichFromApi = async () => {
-    if (!semrushKey || !keywords.length) return;
-    setEnriching(true);
-    const batch = keywords.slice(0, 100);
-    try {
-      const res = await fetch("/api/semrush-volume", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Semrush-Key": semrushKey },
-        body: JSON.stringify({ keywords: batch.map(k => k.keyword), database: "fr" }),
-      });
-      const data = await res.json();
-      if (data.error) { alert("Erreur Semrush : " + data.error); return; }
-      const vols = data.volumes || {};
-      for (const kw of batch) {
-        const vol = vols[kw.keyword.toLowerCase()];
-        if (vol !== undefined) {
-          await sbUpdateKeywordVolume(kw.id, vol, "semrush_api");
-          setKeywords(prev => prev.map(k => k.id === kw.id ? { ...k, search_volume: vol, volume_source: "semrush_api" } : k));
-        }
-      }
-    } catch(e) { alert("Erreur : " + e.message); }
-    setEnriching(false);
-  };
-
-  // ── Volume enrichment from Semrush CSV ───────────────────────
-  const enrichFromCsv = (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = async (ev) => {
-      const text = ev.target.result;
-      const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
-      if (lines.length < 2) return;
-      const header = lines[0].split(";").map(h => h.toLowerCase().replace(/"/g, "").trim());
-      const kwIdx  = header.findIndex(h => h === "keyword" || h === "mot-clé" || h.startsWith("keyword"));
-      const volIdx = header.findIndex(h => h === "volume" || h.includes("volume"));
-      if (kwIdx === -1 || volIdx === -1) {
-        alert("Colonnes non trouvées. Le CSV doit avoir des colonnes 'Keyword' et 'Volume'.");
-        return;
-      }
-      const volMap = {};
-      for (const line of lines.slice(1)) {
-        const cols = line.split(";").map(c => c.replace(/"/g, "").trim());
-        const kw  = cols[kwIdx]?.toLowerCase();
-        const vol = parseInt(cols[volIdx], 10);
-        if (kw && !isNaN(vol)) volMap[kw] = vol;
-      }
-      let updated = 0;
-      for (const kw of keywords) {
-        const vol = volMap[kw.keyword.toLowerCase()];
-        if (vol !== undefined) {
-          await sbUpdateKeywordVolume(kw.id, vol, "semrush_csv");
-          setKeywords(prev => prev.map(k => k.id === kw.id ? { ...k, search_volume: vol, volume_source: "semrush_csv" } : k));
-          updated++;
-        }
-      }
-      alert(`${updated} mot${updated > 1 ? "s-clés" : "-clé"} enrichi${updated > 1 ? "s" : ""} depuis le CSV.`);
-      if (fileVolRef.current) fileVolRef.current.value = "";
-    };
-    reader.readAsText(file, "UTF-8");
-  };
-
-  const generateQuestions = async (kw, axes) => {
-    // Use providerKeys.openai first (set via UI), fallback to legacy apiKey prop
-    const resolvedKey = providerKeys?.openai?.dec || apiKey;
-    if (!resolvedKey) return;
-    setBusy(b => ({ ...b, [kw.id]: "q" }));
-    await sbUpdateKeywordStatus(kw.id, "generating_q");
-    setKeywords(prev => prev.map(k => k.id === kw.id ? { ...k, status: "generating_q" } : k));
-    try {
-      const activeAxes = (axes && axes.length ? axes : DEFAULT_AXES);
-      const numQ = activeAxes.length;
-      const axesWithInstructions = activeAxes.map((axe, i) => `${i+1}. [${axe}]`).join("\n");
-      const prompt = `Tu es un expert GEO. Pour le mot-clé "${kw.keyword}", génère exactement ${numQ} questions de recherche — une par axe ci-dessous.
-
-OBJECTIF : chaque question doit naturellement amener un moteur IA (ChatGPT, Gemini, Perplexity) à citer des noms de marques, d'enseignes, de sites ou d'entreprises concrètes — jamais une réponse générique ou des conseils.
-
-TERMINOLOGIE : adapte au contexte du mot-clé :
-- Commerce / retail → privilégie "magasins", "enseignes", "boutiques"
-- Services / B2B → privilégie "entreprises", "prestataires", "agences"
-- E-commerce / web → privilégie "sites", "plateformes", "marques"
-- Mixte → utilise le terme le plus naturel pour ce secteur
-
-RÈGLE sur les axes :
-- Chaque axe définit l'angle de la question, pas son sujet
-- La réponse attendue doit toujours être une liste de noms (marques, sites, entreprises)
-- "Alternative / pistes" = qui propose ce produit/service — PAS quoi remplace ce produit
-
-AXES À TRAITER :
-${axesWithInstructions}
-
-CONTRAINTES :
-- Une question par axe, dans l'ordre
-- Maximum 12 mots par question
-- Commence par "Quelles", "Quel", "Qui", "Lesquels" de préférence
-- Ton naturel, comme une vraie requête de recherche
-
-Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgules (;), sans numérotation, sans texte avant ou après.`;
-
-      // Direct fetch — plain text, no json_object format
-      const res = await fetch("/api/openai", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Openai-Key": resolvedKey, "X-Openai-Endpoint": "completions" },
-        body: JSON.stringify({ model, messages: [{ role: "user", content: prompt }], temperature: 0.7, max_tokens: 400 }),
-      });
-      const text = await res.text();
-      if (text.trimStart().startsWith("<")) throw new Error("Proxy /api/openai introuvable — copiez openai-proxy.js dans netlify/edge-functions/");
-      let data;
-      try { data = JSON.parse(text); } catch { throw new Error(`Réponse non-JSON (${res.status}): ${text.slice(0,100)}`); }
-      if (!res.ok) {
-        const msg = data?.error?.message || data?.error || text.slice(0, 200);
-        throw new Error(`OpenAI ${res.status}: ${msg}`);
-      }
-
-      const raw = (data?.choices?.[0]?.message?.content || "").trim();
-      if (!raw) throw new Error(`Réponse vide. Data reçue: ${JSON.stringify(data).slice(0, 200)}`);
-
-      const questions = raw
-        .split(/[;\n]/)
-        .map(s => s.replace(/^\s*\d+[.)\s]+/, "").trim())
-        .filter(s => s.length > 5 && s.length < 250);
-
-      if (!questions.length) throw new Error(`Parsing échoué. Reçu: "${raw.slice(0, 100)}"`);
-
-      // Save — strip category_id if column not migrated yet
-      const baseRow = (q) => ({ project_id: projectId, site_id: site.id, keyword_id: kw.id, question: q, is_manual: false });
-      let saved;
-      try {
-        const qRows = questions.map(q => kw.category_id ? { ...baseRow(q), category_id: kw.category_id } : baseRow(q));
-        saved = await sbSaveQuestions(qRows);
-      } catch(saveErr) {
-        console.warn("Retry without category_id:", saveErr.message);
-        saved = await sbSaveQuestions(questions.map(baseRow));
-      }
-      const savedCount = Array.isArray(saved) ? saved.length : questions.length;
-      console.log(`✓ ${savedCount} questions saved for "${kw.keyword}"`);
-
-      await sbUpdateKeywordStatus(kw.id, "done_q");
-      setKeywords(prev => prev.map(k => k.id === kw.id
-        ? { ...k, status: "done_q", question_count: (k.question_count || 0) + savedCount }
-        : k
-      ));
-      onQuestionsGenerated?.(false);
-    } catch(e) {
-      console.error("generateQuestions error:", e);
-      await sbUpdateKeywordStatus(kw.id, "error");
-      setKeywords(prev => prev.map(k => k.id === kw.id ? { ...k, status: "error", error_msg: e.message } : k));
-    }
-    setBusy(b => ({ ...b, [kw.id]: false }));
-  };
-
-  const deleteKw = async (id) => {
-    await sbDeleteKeyword(id);
-    setKeywords(prev => prev.filter(k => k.id !== id));
-    setSelected(prev => { const n = new Set(prev); n.delete(id); return n; });
-  };
-
-  const generateAll = async () => {
-    if (!apiKey) { setKeywords(prev => prev); return; } // apiKey missing shown in UI
-    const toProcess = keywords.filter(kw => kw.status === "pending" || kw.status === "error");
-    if (!toProcess.length) return;
-    setRunningAll(true);
-    stopRef.current = false;
-    for (const kw of toProcess) {
-      if (stopRef.current) break;
-      await generateQuestions(kw, null);
-    }
-    setRunningAll(false);
-    onQuestionsGenerated?.(true);
-  };
-
-  const toggleSelect = (id) => setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  const clearSel = () => setSelected(new Set());
-
-  const applyBulkCat = async () => {
-    if (!bulkCat || !selected.size) return;
-    const ids = [...selected];
-    await sbBulkSetKeywordCategory(ids, bulkCat || null);
-    setKeywords(prev => prev.map(k => selected.has(k.id) ? { ...k, category_id: bulkCat || null } : k));
-    clearSel(); setBulkCat("");
-  };
-
-  const bulkGenerate = async () => {
-    const resolvedKey = providerKeys?.openai?.dec || apiKey;
-    if (!selected.size || !resolvedKey) return;
-    const toProcess = keywords.filter(k => selected.has(k.id));
-    setRunningAll(true);
-    stopRef.current = false;
-    for (const kw of toProcess) {
-      if (stopRef.current) break;
-      await generateQuestions(kw, null);
-    }
-    setRunningAll(false);
-    onQuestionsGenerated?.(true);
-  };
-
-  const bulkDelete = async () => {
-    if (!selected.size) return;
-    const ids = [...selected];
-    await Promise.all(ids.map(id => sbDeleteKeyword(id)));
-    setKeywords(prev => prev.filter(k => !selected.has(k.id)));
-    clearSel();
-  };
-
-  const setTagsSingle = async (kwId, tags) => {
-    await sbSetKeywordTags(kwId, tags);
-    setKeywords(prev => prev.map(k => k.id === kwId ? { ...k, tags: tags || [] } : k));
-  };
-
-  const filtered = useMemo(() => {
-    let kws = keywords;
-    if (filterCat) kws = kws.filter(k => (k.tags || (k.category_id ? [k.category_id] : [])).includes(filterCat));
-    if (filterSearch.trim()) {
-      try {
-        const rx = new RegExp(filterSearch.trim(), "i");
-        kws = kws.filter(k => rx.test(k.keyword));
-      } catch {
-        kws = kws.filter(k => k.keyword.toLowerCase().includes(filterSearch.trim().toLowerCase()));
-      }
-    }
-    return kws;
-  }, [keywords, filterCat, filterSearch]);
-
-
-  return (
-    <div>
-      {/* ── Volume enrichment toolbar ── */}
-      {keywords.length > 0 && (
-        <div className="geo-volume-toolbar" style={{ background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 10, padding: "10px 14px", marginBottom: 12 }}>
-          <span style={{ fontSize: 11, fontWeight: 700, color: "#1D4ED8" }}>🔍 Volumes de recherche</span>
-          <span style={{ fontSize: 11, color: "#3B82F6" }}>
-            {keywords.filter(k => k.search_volume != null).length}/{keywords.length} enrichis
-          </span>
-          <div className="geo-volume-toolbar-actions" style={{ gap: 6 }}>
-            <input ref={fileVolRef} type="file" accept=".csv" style={{ display: "none" }} onChange={enrichFromCsv} />
-            <button onClick={() => fileVolRef.current?.click()}
-              style={{ fontSize: 11, fontWeight: 600, padding: "4px 10px", border: "1px solid #BFDBFE", borderRadius: 7, background: "#fff", color: "#2563EB", cursor: "pointer" }}>
-              📄 CSV Semrush
-            </button>
-            <button onClick={enrichFromApi} disabled={enriching || !semrushKey}
-              title={!semrushKey ? "Clé API Semrush non configurée — ajoutez-la dans ⚙️ Gestion des Providers" : "Récupérer les volumes depuis l'API Semrush (1 crédit/mot-clé)"}
-              style={{ fontSize: 11, fontWeight: 600, padding: "4px 10px", border: "1px solid #BFDBFE", borderRadius: 7, background: semrushKey ? "#2563EB" : C.bg, color: semrushKey ? "#fff" : C.textLight, cursor: semrushKey ? "pointer" : "not-allowed", opacity: semrushKey ? 1 : 0.6 }}>
-              {enriching ? "⏳ Enrichissement…" : "⚡ API Semrush"}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Input + CSV import */}
-      <div style={{ background: "#fff", border: "0.5px solid #1A3C2E0D", borderRadius: 12, padding: 20, marginBottom: 16 }}>
-        <div style={{ display: "flex", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
-          <div style={{ flex: 1, minWidth: 220 }}>
-            <div style={{ fontSize: 11, fontWeight: 600, color: C.textMid, marginBottom: 6 }}>Ajouter des mots-clés (un par ligne)</div>
-            <textarea value={input} onChange={e => setInput(e.target.value)}
-              placeholder={"Mot clé 1\nMot clé 2\nMot clé 3"}
-              style={{ width: "100%", minHeight: 90, padding: "8px 12px", border: "0.5px solid #1A3C2E0D", borderRadius: 8, fontSize: 12, color: C.text, resize: "vertical", fontFamily: "inherit", boxSizing: "border-box" }} />
-            <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
-              <Btn onClick={addKeywords} disabled={loading || !input.trim()}>{loading ? "Ajout…" : "➕ Ajouter"}</Btn>
-            </div>
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingTop: 22 }}>
-            <label style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", border: "0.5px solid #1A3C2E0D", borderRadius: 8, fontSize: 12, fontWeight: 600, color: C.textMid, cursor: "pointer", background: C.white }}>
-              📥 Importer CSV
-              <input type="file" accept=".csv,.txt" onChange={importCSV} style={{ display: "none" }} />
-            </label>
-            <div style={{ fontSize: 10, color: C.textLight }}>Col. 1 = mot-clé<br />Col. 2 = catégorie (optionnel)</div>
-          </div>
-        </div>
-      </div>
-
-      {/* Categories */}
-      <div style={{ background: "#fff", border: "0.5px solid #1A3C2E0D", borderRadius: 12, padding: "12px 16px", marginBottom: 16 }}>
-        <div style={{ fontSize: 11, fontWeight: 600, color: C.textMid, marginBottom: 8 }}>Catégories du projet</div>
-        <CategoryManager projectId={projectId} categories={categories} setCategories={setCategories} compact />
-      </div>
-
-      {/* Bulk bar + filters */}
-      {keywords.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
-          {/* Row 1: stats + search/regex + category filter */}
-          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <span style={{ fontSize: 11, color: C.textLight, flexShrink: 0 }}>
-              {filtered.length} mot{filtered.length > 1 ? "s-clés" : "-clé"}
-              {" · "}<span style={{ color: "#059669", fontWeight: 600 }}>{filtered.filter(k => k.status === "done_q" || k.status === "done").length} générés</span>
-              {" · "}{filtered.reduce((s, k) => s + (k.question_count || 0), 0)} question{filtered.reduce((s, k) => s + (k.question_count || 0), 0) > 1 ? "s" : ""}
-              {selected.size > 0 && <strong style={{ color: C.text }}> · {selected.size} sélectionné{selected.size > 1 ? "s" : ""}</strong>}
-            </span>
-
-            {/* Regex search */}
-            <input
-              value={filterSearch}
-              onChange={e => { setFilterSearch(e.target.value); setSelected(new Set()); }}
-              placeholder="Filtrer par regex ou texte…"
-              style={{ flex: 1, minWidth: 160, padding: "4px 10px", border: `1px solid ${filterSearch ? "#7C3AED" : C.border}`, borderRadius: 7, fontSize: 11, color: C.text }}
-            />
-            {filterSearch && (
-              <button onClick={() => setFilterSearch("")} style={{ fontSize: 11, padding: "3px 8px", border: "0.5px solid #1A3C2E0D", borderRadius: 5, background: "#fff", cursor: "pointer", color: C.textMid }}>✕</button>
-            )}
-
-            {/* Filter by category */}
-            <CatSelect value={filterCat} categories={categories} onChange={v => { setFilterCat(v || ""); setSelected(new Set()); }} placeholder="Toutes catégories" />
-          </div>
-
-          {/* Row 2: select all + bulk actions */}
-          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-            {/* Select all filtered */}
-            <input
-              type="checkbox"
-              checked={filtered.length > 0 && filtered.every(k => selected.has(k.id))}
-              onChange={e => e.target.checked ? setSelected(new Set(filtered.map(k => k.id))) : clearSel()}
-              title="Tout sélectionner / désélectionner"
-              style={{ cursor: "pointer", width: 14, height: 14 }}
-            />
-            <span style={{ fontSize: 11, color: C.textLight }}>
-              {selected.size > 0 ? `${selected.size} sélectionné${selected.size > 1 ? "s" : ""}` : "Tout sélectionner"}
-            </span>
-
-            {selected.size > 0 && (
-              <>
-                <div style={{ width: 1, height: 14, background: C.border, margin: "0 2px" }} />
-                {/* Bulk categorize */}
-                <CatSelect value={bulkCat} categories={categories} onChange={setBulkCat} placeholder="Catégorie…" />
-                {bulkCat && <Btn onClick={applyBulkCat} disabled={!bulkCat} small color="#7C3AED">Appliquer</Btn>}
-                {/* Bulk generate */}
-                <Btn onClick={bulkGenerate} disabled={runningAll || !apiKey} small color={site.color}
-                  title={!apiKey ? "Clé OpenAI manquante — ajoutez-la dans ⚙️ Gestion des Providers" : `Générer les questions pour ${selected.size} mot${selected.size > 1 ? "s-clés" : "-clé"}`}>
-                  💬 Générer ({selected.size})
-                </Btn>
-                {/* Bulk delete */}
-                <Btn onClick={bulkDelete} small color="#DC2626" variant="outline"
-                  title={`Supprimer ${selected.size} mot${selected.size > 1 ? "s-clés" : "-clé"}`}>
-                  🗑 Supprimer ({selected.size})
-                </Btn>
-              </>
-            )}
-
-            <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-              {runningAll && <Btn onClick={() => { stopRef.current = true; setRunningAll(false); }} color="#DC2626" variant="outline" small>⏹ Arrêter</Btn>}
-            <Btn onClick={generateAll} disabled={runningAll || (!apiKey && !providerKeys?.openai?.dec)} color={site.color} small
-              title={(!apiKey && !providerKeys?.openai?.dec) ? "Clé OpenAI manquante — ajoutez-la dans ⚙️ Gestion des Providers (en haut de page)" : undefined}>
-              {runningAll ? "⏳ Génération en cours…" : "💬 Générer toutes les questions"}
-            </Btn>
-          </div>
-          </div>
-        </div>
-      )}
-
-      {/* Keywords list */}
-      {filtered.length === 0 ? (
-        keywords.length === 0 ? (
-          <div style={{ background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 12, padding: "20px 24px", marginTop: 8 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: "#92400E", marginBottom: 10 }}>⚠️ Aucun mot-clé ajouté</div>
-            <div style={{ fontSize: 12, color: "#78350F", lineHeight: 1.6, marginBottom: 14 }}>Ajoutez vos mots-clés ci-dessus, puis configurez :</div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              <div style={{ background: "#fff", border: "2px solid #F59E0B", borderRadius: 10, padding: "10px 14px", display: "flex", alignItems: "center", gap: 10 }}>
-                <span style={{ fontSize: 18, flexShrink: 0 }}>⚙️</span>
-                <div>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: "#92400E" }}>Gestion des Providers</div>
-                  <div style={{ fontSize: 11, color: "#B45309" }}>Ajoutez vos clés API dans <strong>⚙️ Gestion des Providers</strong> en haut de l'onglet</div>
-                </div>
-              </div>
-              <div style={{ background: "#fff", border: "2px solid #F59E0B", borderRadius: 10, padding: "10px 14px", display: "flex", alignItems: "center", gap: 10 }}>
-                <span style={{ fontSize: 18, flexShrink: 0 }}>🏷️</span>
-                <div>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: "#92400E" }}>Setup de la marque</div>
-                  <div style={{ fontSize: 11, color: "#B45309" }}>Renseignez votre marque et vos concurrents dans la <strong>carte du site</strong> ci-dessus</div>
-                </div>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div style={{ textAlign: "center", padding: 40, color: C.textLight, fontSize: 12 }}>
-            Aucun mot-clé dans cette catégorie
-          </div>
-        )
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          {filtered.map(kw => {
-            const isSel = selected.has(kw.id);
-            return (
-              <div key={kw.id} className={`gt-item${isSel ? " gt-item--selected" : ""}`} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <input type="checkbox" checked={isSel} onChange={() => toggleSelect(kw.id)} style={{ cursor: "pointer", flexShrink: 0 }} />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{kw.keyword}</div>
-                  <div style={{ display: "flex", gap: 6, marginTop: 3, alignItems: "center", flexWrap: "wrap" }}>
-                    <StatusBadge status={kw.status} />
-                    {kw.search_volume > 0 && (
-                      <span style={{ fontSize: 10, fontWeight: 700, color: "#2563EB", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 10, padding: "1px 8px" }}
-                        title={`Volume de recherche mensuel${kw.volume_source ? " (" + kw.volume_source + ")" : ""}`}>
-                        🔍 {kw.search_volume >= 1000 ? (kw.search_volume / 1000).toFixed(1) + "k" : kw.search_volume}
-                      </span>
-                    )}
-                    {kw.error_msg && (
-                      <span style={{ fontSize: 10, color: "#DC2626", fontStyle: "italic", maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={kw.error_msg}>
-                        {kw.error_msg}
-                      </span>
-                    )}
-                    {kw.question_count > 0 && (
-                      <span style={{ fontSize: 10, fontWeight: 700, color: "#059669", background: "#ECFDF5", border: "1px solid #059669", borderRadius: 10, padding: "1px 8px" }}>
-                        {kw.question_count} question{kw.question_count > 1 ? "s" : ""}
-                      </span>
-                    )}
-                    {(kw.tags || (kw.category_id ? [kw.category_id] : [])).map(tagId => {
-                      const tagCat = categories.find(c => c.id === tagId);
-                      return tagCat ? (
-                        <span key={tagId} style={{ fontSize: 10, fontWeight: 700, color: tagCat.color, background: tagCat.color + "18", border: `1px solid ${tagCat.color}44`, borderRadius: 10, padding: "1px 7px" }}>{tagCat.name}</span>
-                      ) : null;
-                    })}
-                  </div>
-                </div>
-                <div style={{ display: "flex", gap: 6, flexShrink: 0, alignItems: "center" }}>
-                  <TagSelect values={kw.tags || (kw.category_id ? [kw.category_id] : [])} categories={categories} onChange={tags => setTagsSingle(kw.id, tags)} />
-                  <button onClick={() => generateQuestions(kw, null)} disabled={!!busy[kw.id] || (!apiKey && !providerKeys?.openai?.dec)}
-                    style={{ padding: "4px 12px", border: "0.5px solid #1A3C2E22", borderRadius: 20, background: "transparent", color: "#1A3C2E", fontSize: 11, fontWeight: 500, cursor: (!!busy[kw.id] || (!apiKey && !providerKeys?.openai?.dec)) ? "not-allowed" : "pointer", opacity: (!!busy[kw.id] || (!apiKey && !providerKeys?.openai?.dec)) ? 0.35 : 1, letterSpacing: "0.01em", transition: "opacity 0.2s" }}
-                    title={(!apiKey && !providerKeys?.openai?.dec) ? "Clé OpenAI manquante" : undefined}>
-                    {busy[kw.id] === "q" ? "…" : kw.status === "done_q" ? "↺" : "▶"}
-                  </button>
-                  <button onClick={() => deleteKw(kw.id)} style={{ padding: "3px 8px", border: "none", background: "transparent", color: "#1A3C2E22", fontSize: 12, cursor: "pointer", transition: "color 0.15s" }}>✕</button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── 30-day presence calendar ─────────────────────────────────────
-
-
-function isBrandPresent(r) {
-  return !!r && (r.brand_mentioned === true || r.brand_mentioned === 1);
-}
-
-
-
-
-// history: [{ test_date: "YYYY-MM-DD", brand_mentioned: bool }]
-// results: current geo_results for this provider (for today's optimistic update)
-
-// ── HintPanelQuestion — one hint per question ────────────────────
-function HintPanelQuestion({ questionId, question, sources, brandName, brandAliases, brandDomain, claudeKey, hasBrand, projectId, siteId, savedHint, savedHintDate = null, onHintSaved, initialOpen = false }) {
-  const [open, setOpen]     = useState(false); // always start closed
-  const [status, setStatus] = useState(savedHint ? "done" : "idle");
-  const [hint, setHint]     = useState(savedHint || "");
-  const hasHint = !!hint;
-
-  const run = async () => {
-    if (!claudeKey) return;
-    setStatus("loading");
-    const bDomain = brandDomain || brandName;
-    const sourcesText = (Array.isArray(sources) ? sources : []).length > 0
-      ? "Pages dans la réponse :\n" + sources.slice(0, 6).map((u, i) => `[${i+1}] ${u}`).join("\n")
-      : "Aucune source listée.";
-    const brandContext = hasBrand
-      ? `La marque est présente. Analyse comment RENFORCER cette présence sur ${bDomain}.`
-      : `Si une page de ${bDomain} est pertinente → comment l'optimiser. Sinon → quel contenu créer.`;
-    const prompt = [
-      `Tu es un expert GEO. Un moteur d'IA a répondu à cette question sans mentionner "${brandName}" :`,
-      `"${question}"`,
-      "",
-      sourcesText,
-      "",
-      "REGLES STRICTES :",
-      "- Commence directement par la recommandation, sans introduction",
-      "- 5 à 7 lignes max, ton direct et actionnable",
-      "",
-      brandContext,
-    ].join("\n");
-
-    try {
-      const res = await fetch("/api/claude-geo", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Claude-Key": claudeKey },
-        body: JSON.stringify({
-          model: "claude-haiku-4-5-20251001",
-          max_tokens: 500,
-          messages: [{ role: "user", content: prompt }],
-        }),
-      });
-      const raw = await res.text();
-      const data = JSON.parse(raw);
-      if (!res.ok) throw new Error(data.error?.message || `Claude ${res.status}`);
-      const text = (data.content || [])
-        .filter(b => b.type === "text")
-        .map(b => b.text)
-        .join("\n")
-        .trim();
-      const cleaned = text
-        .replace(/^(Je vais|En effectuant|Je recherche|Voici|Permettez)[^\n]*/gim, "")
-        .replace(/^\s*\n/gm, "")
-        .trim();
-      const finalHint = cleaned || "Aucune recommandation générée.";
-      setHint(finalHint);
-      setStatus("done");
-      setOpen(true);
-      onHintSaved?.(finalHint);
-      if (questionId && projectId && siteId) {
-        sbSaveHint(questionId, siteId, projectId, finalHint).catch(e =>
-          console.warn("[Hint] save failed:", e.message)
-        );
-      }
-    } catch(e) {
-      setHint(`Erreur : ${e.message}`);
-      setStatus("error");
-      setOpen(true);
-    }
-  };
-
-  return (
-    <div style={{ borderRadius: 0, overflow: "hidden", border: "none", borderTop: "0.5px solid #1A3C2E08" }}>
-      <div
-        style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", background: "transparent", cursor: "pointer" }}
-        onClick={() => hasHint ? setOpen(o => !o) : (!status.includes("loading") && run())}>
-        <span style={{ fontSize: 14 }}>💡</span>
-        {status === "loading" ? (
-          <span style={{ fontSize: 11, color: "#D97706" }}>⏳ Génération de la recommandation…</span>
-        ) : hasHint ? (
-          <>
-            <span style={{ fontSize: 11, fontWeight: 700, color: "#D97706", flex: 1 }}>
-              {open ? "▲ Masquer la recommandation" : "▼ Voir la recommandation"}
-            </span>
-            {savedHintDate && (
-              <span style={{ fontSize: 10, color: "#B45309" }}>
-                {new Date(savedHintDate).toLocaleDateString("fr-FR", { day: "2-digit", month: "short" })}
-              </span>
-            )}
-            <button
-              onClick={(e) => { e.stopPropagation(); setStatus("idle"); setHint(""); setOpen(false); setTimeout(run, 0); }}
-              style={{ fontSize: 10, color: C.textLight, background: "none", border: "none", cursor: "pointer" }}>
-              ↺
-            </button>
-          </>
-        ) : (
-          <span style={{ fontSize: 11, fontWeight: 700, color: "#D97706" }}>✨ Générer une recommandation</span>
-        )}
-      </div>
-      {open && hint && (
-        <div style={{ padding: "10px 0 4px 0", background: "transparent" }}>
-          {(savedHintDate || status === "done") && (
-            <div style={{ fontSize: 10, color: "#B45309", marginBottom: 6 }}>
-              🕐 {savedHintDate ? new Date(savedHintDate).toLocaleString("fr-FR", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : new Date().toLocaleString("fr-FR", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
-            </div>
-          )}
-          <div style={{ fontSize: 11, lineHeight: 1.7, color: status === "error" ? "#DC2626" : "#92400E" }}>
-            {status === "error" ? hint : renderMarkdown(hint)}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── ProviderRow — calendar + info + accordion + run button ────────
-
-function ProviderRow({ provider, results, brandName, brandAliases, brandDomain = "", hasKey, isRunning, onRun, questionId, newCalEntry = null, question = "", claudeKey = "", projectId = null, siteId = null, savedHint = "", brandTerms = [], competitorMap = {}, lastCalDate = null, isReadOnly = false, errorMsg = null }) {
-  const [open, setOpen] = useState(false);
-  const p = provider;
-
-  const result = [...(results || [])].sort((a,b) => new Date(b.created_at||0) - new Date(a.created_at||0))[0] || null;
-  const sources = result?.sources || [];
-  const comps   = result?.competitors_mentioned || [];
-
-  const displayDate = result?.created_at || lastCalDate || null;
-
-  return (
-    <div>
-      {/* ── Ligne provider ── */}
-      <div className="gt-provider-row">
-
-        {/* Nom */}
-        <span className="gt-provider-name">{p.label}</span>
-
-        {/* Calendrier de présence 30j */}
-        <PresenceCalendar questionId={questionId} providers={[provider]} newEntry={newCalEntry} />
-
-        {/* Présence — 3 types calculés depuis les champs DB ─────── */}
-        {(() => {
-          if (!result) return null;
-          // Champs nouveaux (post-migration)
-          const mentionPos   = result.brand_mention_position;
-          const evocPos      = result.brand_evocation_position;
-          const citationPos  = result.brand_citation_position;
-          // Rétrocompat champs anciens
-          const hasMention   = mentionPos != null || (result.brand_position != null && result.brand_position > 0);
-          const hasEvocation = evocPos != null || (
-            (result.brand_mentioned === true || result.brand_mentioned === 1) && !hasMention
-          );
-          const hasCitation  = citationPos != null || result.brand_in_sources;
-          const topPos       = mentionPos || result.brand_position;
-          return (<>
-            {hasMention && (
-              <span className="gt-provider-status gt-success" title={`Mention dans le Top${topPos ? ` — position #${topPos}` : ""}`}>
-                {topPos ? `Top #${topPos}` : "Top"}
-              </span>
-            )}
-            {!hasMention && hasEvocation && (
-              <span className="gt-provider-status gt-warn" title="Évocation dans le texte">
-                évoc.
-              </span>
-            )}
-            {hasCitation && (
-              <span className="gt-provider-status gt-dimmed" title={`Cité en source${citationPos ? ` — position #${citationPos}` : ""}`}>
-                {citationPos ? `src #${citationPos}` : "src"}
-              </span>
-            )}
-          </>);
-        })()}
-
-        {/* Bouton voir réponse */}
-        {result && (
-          <button className="gt-provider-toggle" onClick={() => setOpen(o => !o)}>
-            {open ? "▲" : "Réponse ▾"}
-          </button>
-        )}
-
-        <div style={{ flex: 1 }} />
-
-        {/* Date et tokens — méta discrète */}
-        {displayDate && (
-          <span className="gt-mono">
-            {new Date(displayDate).toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit" })}
-          </span>
-        )}
-        {result && (
-          <span className="gt-mono">{(result.input_tokens||0)+(result.output_tokens||0)} tok</span>
-        )}
-
-        {/* Message d'erreur provider */}
-        {errorMsg && (
-          <span style={{ fontSize: 10, color: "#C0352A", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={errorMsg}>
-            ⚠ {errorMsg.slice(0, 60)}{errorMsg.length > 60 ? "…" : ""}
-          </span>
-        )}
-        {/* Bouton run */}
-        {hasKey && !isReadOnly && (
-          <button
-            className="gt-provider-run"
-            onClick={onRun}
-            disabled={isRunning || !hasKey}
-            title={`Interroger ${p.label}`}
-          >
-            {isRunning ? "·" : "▶"}
-          </button>
-        )}
-      </div>
-
-      {/* ── Accordéon réponse ── */}
-      {open && result && (
-        <div className="gt-provider-answer">
-          <ChatAnswer
-            providerId={getProviderId(result.model || p.label)}
-            modelLabel={result.model || p.label}
-            answerNode={renderMarkdown(result.answer || "")}
-          />
-          {sources.length > 0 && (
-            <div style={{ marginTop: 10 }}>
-              <div className="gt-label" style={{ marginBottom: 6 }}>Sources</div>
-              {sources.map((url, i) => {
-                const ib = [brandName, ...(brandAliases||[])].some(t => url.toLowerCase().includes((t||"").toLowerCase()));
-                return (
-                  <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 5, marginBottom: 4, minWidth: 0 }}>
-                    <span className="gt-caption" style={{ minWidth: 18, flexShrink: 0, paddingTop: 1 }}>[{i+1}]</span>
-                    <a href={url} target="_blank" rel="noreferrer"
-                      style={{ fontSize: 11, color: ib ? "#1A7A4A" : "#1A3C2E88", wordBreak: "break-all", flex: 1, minWidth: 0 }}>
-                      {stripQuery(url)}
-                    </a>
-                    </div>
-                );
-              })}
-            </div>
-          )}
-          {comps.length > 0 && (
-            <div style={{ marginTop: 8 }}>
-              <div className="gt-label" style={{ marginBottom: 6 }}>Concurrents</div>
-              <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-                {comps.map(c => (
-                  <span key={c.name} className="gt-badge gt-badge--warn">
-                    {c.name}{c.position ? ` #${c.position}` : ""}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-
-
-
-// ── GeoAnalysis — AI analysis of fan-out presence ─────────────────
-
-function GeoAnalysis({ questions, results, brand, claudeKey, projectId = null, siteId = null }) {
-  const [status, setStatus] = useState("idle");
-  const [sections, setSections] = useState([]);
-  const [open, setOpen] = useState(false);
-  const [savedDate, setSavedDate] = useState(null); // date de la dernière analyse persistée
-
-  const brandName   = brand?.brand_name   || "";
-  const brandDomain = brand?.brand_domain || "";
-  const brandAliases = brand?.brand_aliases || [];
-
-  // Charger la dernière analyse "fanout" persistée au montage
-  useEffect(() => {
-    if (!projectId || !siteId) return;
-    let cancelled = false;
-    sbGetGeoAnalyses(projectId, siteId, "fanout").then(rows => {
-      if (cancelled || !rows?.length) return;
-      const latest = rows[0];
-      const c = latest.content;
-      if (c?.sections?.length) {
-        setSections(c.sections);
-        setStatus("done");
-        setSavedDate(latest.created_at);
-      }
-    }).catch(() => {});
-    return () => { cancelled = true; };
-  }, [projectId, siteId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const run = async () => {
-    if (!claudeKey || !results.length) return;
-    setStatus("loading"); setSections([]); setOpen(true);
-
-    const total      = results.length;
-    const withBrand  = results.filter(r => r.brand_mentioned === true || r.brand_mentioned === 1).length;
-    const withSrc    = results.filter(r => r.brand_in_sources).length;
-    const positions  = results.filter(r => r.brand_position).map(r => r.brand_position);
-    const avgPos     = positions.length ? (positions.reduce((a,b)=>a+b,0)/positions.length).toFixed(1) : null;
-    const presence   = total ? Math.round(withBrand/total*100) : 0;
-
-    // Questions sans présence
-    const qMap = {};
-    questions.forEach(q => { qMap[q.id] = q.question; });
-    const missing = [...new Set(results.filter(r => !(r.brand_mentioned===true||r.brand_mentioned===1)).map(r=>qMap[r.question_id]).filter(Boolean))].slice(0,8);
-    const present = [...new Set(results.filter(r => r.brand_mentioned===true||r.brand_mentioned===1).map(r=>qMap[r.question_id]).filter(Boolean))].slice(0,5);
-
-    // Top concurrents
-    const compCount = {};
-    results.forEach(r => (r.competitors_mentioned||[]).forEach(c=>{
-      if(c.name) compCount[c.name]=(compCount[c.name]||0)+1;
-    }));
-    const topComps = Object.entries(compCount).sort((a,b)=>b[1]-a[1]).slice(0,5);
-
-    // URLs
-    const urlCount = {};
-    results.forEach(r=>(r.sources||[]).forEach(url=>{ urlCount[url]=(urlCount[url]||0)+1; }));
-    const allTerms = [brandName,...brandAliases].filter(Boolean).map(t=>t.toLowerCase());
-    const brandUrls = Object.entries(urlCount).filter(([u])=>allTerms.some(t=>u.toLowerCase().includes(t))).sort((a,b)=>b[1]-a[1]).slice(0,8);
-    const competitorUrls = Object.entries(urlCount).filter(([u])=>!allTerms.some(t=>u.toLowerCase().includes(t))).sort((a,b)=>b[1]-a[1]).slice(0,10);
-
-    // Provider stats
-    const provStats = {};
-    results.forEach(r=>{
-      const pid = r.model?.includes("openai")||r.model?.includes("gpt")?"OpenAI":r.model?.includes("gemini")?"Gemini":r.model?.includes("perplexity")||r.model?.includes("sonar")?"Perplexity":r.model?.includes("claude")?"Claude":"Autre";
-      if(!provStats[pid]) provStats[pid]={total:0,with:0};
-      provStats[pid].total++;
-      if(r.brand_mentioned===true||r.brand_mentioned===1) provStats[pid].with++;
-    });
-
-    const prompt = `Tu es un expert GEO (Generative Engine Optimization) senior. Analyse la présence de "${brandName}" (${brandDomain}) dans les LLMs et produis des recommandations précises et actionnables.
-
-DONNÉES DE PRÉSENCE :
-- Mention dans les tops : ${withBrand}/${total} réponses (${presence}%)
-- Citée en source : ${withSrc} fois
-- Position moyenne : ${avgPos ? "#"+avgPos : "non mesurée"}
-
-PAR PROVIDER :
-${Object.entries(provStats).map(([p,s])=>`- ${p}: ${s.with}/${s.total} (${Math.round(s.with/s.total*100)}%)`).join("\n")}
-
-QUESTIONS AVEC MENTION (${present.length}) :
-${present.map((q,i)=>`${i+1}. ${q}`).join("\n")||"Aucune"}
-
-QUESTIONS SANS MENTION — PRIORITÉS (${missing.length}) :
-${missing.map((q,i)=>`${i+1}. ${q}`).join("\n")||"Aucune"}
-
-TOP CONCURRENTS CITÉS :
-${topComps.map(([n,c])=>`- ${n}: ${c}×`).join("\n")||"Aucun"}
-
-URLS MARQUE CITÉES EN SOURCE :
-${brandUrls.map(([u,c])=>`- ${u} (${c}×)`).join("\n")||"Aucune"}
-
-TOP URLS CONCURRENTES :
-${competitorUrls.slice(0,8).map(([u,c])=>`- ${u} (${c}×)`).join("\n")||"Aucune"}
-
----
-
-Produis exactement 4 sections dans ce format :
-
-## ÉTAT DES LIEUX
-[Diagnostic factuel en 4-5 points clés. Cite les chiffres exacts. Identifie les providers où la présence est faible vs forte.]
-
-## MAILLAGE INTERNE — PAGES À RELIER
-[2-4 recommandations de maillage interne : quelles pages du site ${brandDomain} doivent pointer vers quelles autres. Base-toi sur les URLs citées en source et les thèmes des questions sans mention.]
-
-## PAGES À CRÉER OU ADAPTER
-[3-5 pages à créer ou adapter sur ${brandDomain}. Pour chaque page : indiquer le titre H1 suggéré, l'angle éditorial, et la question sans présence qu'elle ciblerait.]
-
-## URLS CONCURRENTES — CE QUI FONCTIONNE
-[Pour les 3-5 URLs concurrentes les plus citées : analyser pourquoi les LLMs les citent. Identifier les patterns (format liste, comparatif, chiffres clés, FAQ) et recommander comment les reproduire sur ${brandDomain}.]
-
-RÈGLES :
-- Commence DIRECTEMENT par ## ÉTAT DES LIEUX, pas d'introduction
-- Recommandations concrètes : noms de pages, H1 suggérés, types de contenu
-- Chaque recommandation = une action précise, réalisable, avec un résultat attendu
-- Pas de formules génériques comme "améliorer le contenu" — être spécifique`;
-
-    try {
-      const res = await fetch("/api/claude-geo", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Claude-Key": claudeKey },
-        body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 1800, messages: [{ role: "user", content: prompt }] }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error?.message || `Claude ${res.status}`);
-      const text = (data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n").trim();
-
-      // Parser les sections
-      const parsed = text.split(/^## /m).filter(Boolean).map(s => {
-        const idx = s.indexOf("\n");
-        return { title: s.slice(0, idx).trim(), body: s.slice(idx+1).trim() };
-      });
-      setSections(parsed);
-      setStatus("done");
-      const now = new Date().toISOString();
-      setSavedDate(now);
-      // Persister en BDD (best-effort)
-      if (projectId && siteId) {
-        sbSaveGeoAnalysis({ project_id: projectId, site_id: siteId, kind: "fanout", content: { sections: parsed, generated_at: now } }).catch(() => {});
-      }
-    } catch(e) {
-      setSections([{ title: "Erreur", body: e.message }]);
-      setStatus("error");
-    }
-  };
-
-  // Icônes par section
-  const SECTION_META = {
-    "ÉTAT DES LIEUX":                 { icon: "◎", color: "#1A3C2E",   border: "#1A3C2E18" },
-    "MAILLAGE INTERNE":               { icon: "⟶", color: "#1A3C2E",   border: "#1A3C2E11" },
-    "PAGES À CRÉER OU ADAPTER":       { icon: "✦", color: "#C97820",   border: "#C9782018" },
-    "URLS CONCURRENTES":              { icon: "↗", color: "#1A3C2E77", border: "#1A3C2E0D" },
-  };
-  const getMeta = (title) => {
-    const key = Object.keys(SECTION_META).find(k => title.includes(k));
-    return SECTION_META[key] || { icon: "·", color: "#1A3C2E77", border: "#1A3C2E0D" };
-  };
-
-  if (!results.length) return null;
-
-  return (
-    <div style={{ marginBottom: 24 }}>
-      {/* ── Header ── */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: open && status === "done" ? 16 : 0 }}>
-        <div>
-          <div className="gt-label" style={{ marginBottom: 3 }}>Analyse GEO</div>
-          <div style={{ fontSize: 13, fontWeight: 400, color: "#1A3C2E", letterSpacing: "-0.005em" }}>
-            Recommandations actionnables — {results.length} réponses analysées
-          </div>
-          {savedDate && (
-            <div style={{ fontSize: 10, color: "#1A3C2E55", marginTop: 2 }}>
-              Dernière analyse : {new Date(savedDate).toLocaleString("fr-FR", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
-            </div>
-          )}
-        </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          {status === "done" && (
-            <button onClick={() => setOpen(o => !o)} className="gt-btn gt-btn--ghost" style={{ fontSize: 11 }}>
-              {open ? "Masquer" : "Voir l'analyse"}
-            </button>
-          )}
-          <button
-            onClick={run}
-            disabled={status === "loading" || !claudeKey}
-            className={`gt-btn ${status === "idle" ? "gt-btn--solid" : "gt-btn--ghost"}`}
-            title={!claudeKey ? "Clé Claude manquante" : undefined}
-            style={{ opacity: (!claudeKey || status === "loading") ? 0.4 : 1 }}>
-            {status === "loading" ? "Analyse…" : status === "done" ? "↺ Relancer" : "Analyser"}
-          </button>
-        </div>
-      </div>
-
-      {/* ── Contenu ── */}
-      {open && status === "done" && sections.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 1, borderTop: "0.5px solid #1A3C2E0D", paddingTop: 16 }}>
-          {sections.map((s, i) => {
-            const meta = getMeta(s.title);
-            if (s.title === "Erreur") return (
-              <div key={i} style={{ fontSize: 12, color: "#C0352A", padding: "10px 0" }}>{s.body}</div>
-            );
-            return (
-              <div key={i} style={{
-                borderLeft: `2px solid ${meta.border}`,
-                paddingLeft: 16, paddingBottom: 16,
-                marginBottom: i < sections.length - 1 ? 4 : 0,
-              }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-                  <span style={{ fontSize: 12, color: meta.color, fontWeight: 500 }}>{meta.icon}</span>
-                  <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.10em", textTransform: "uppercase", color: meta.color }}>
-                    {s.title}
-                  </span>
-                </div>
-                <div style={{ fontSize: 12, color: "#1A3C2E", lineHeight: 1.75 }}>
-                  {renderMarkdown(s.body)}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-
-// ── NextStepsAnalysis — "Et maintenant ?" ────────────────────────
-// Analyse multi-niveaux produisant des recommandations actionnables :
-//  1. Analyse des requêtes marque (ton + synthèse + recos)
-//  2. Synthèse par catégorie de questions
-//  3a. Tableau roadmap ICE (Impact/Confidence/Ease) — export CSV
-//  3b. Tableau favoris catégorisés (défendre/surveiller/conquête/conquérir) — export CSV
-//  4. Rappel "générer un hint" par question
-//  5. Comparaison avec la version précédente (si existante)
-// Persistée en BDD (kind="roadmap"), datée.
-function NextStepsAnalysis({ questions, results, brand, categories = [], gscRows = [], claudeKey, projectId = null, siteId = null }) {
-  const [status, setStatus]   = useState("idle");
-  const [data, setData]       = useState(null);   // { brandAnalysis, categoryAnalysis, roadmap[], comparison }
-  const [open, setOpen]       = useState(false);
-  const [savedDate, setSavedDate] = useState(null);
-  // prevData : l'analyse précédente est lue depuis data avant reset (pas de state séparé)
-
-  // ── Mode d'affichage : "url" (roadmap ICE existante) ou "action" (par type d'action) ──
-  const [mode, setMode]                 = useState("url");
-  const [actionData, setActionData]     = useState(null); // { generated_at, presence, actionGroups[] }
-  const [actionStatus, setActionStatus] = useState("idle"); // idle | loading | done | error
-  const [actionSavedDate, setActionSavedDate] = useState(null);
-  const [openActionTypes, setOpenActionTypes] = useState({}); // accordéons par type d'action
-
-  const brandName    = brand?.brand_name || "";
-  const brandDomain  = brand?.brand_domain || "";
-  const brandAliases = Array.isArray(brand?.brand_aliases) ? brand.brand_aliases : [];
-
-  // ── Charger la dernière analyse roadmap persistée ──
-  useEffect(() => {
-    if (!projectId || !siteId) return;
-    let cancelled = false;
-    sbGetGeoAnalyses(projectId, siteId, "roadmap").then(rows => {
-      if (cancelled || !rows?.length) return;
-      const latest = rows[0];
-      if (latest.content) {
-        setData(latest.content);
-        setStatus("done");
-        setSavedDate(latest.created_at);
-      }
-    }).catch(() => {});
-    return () => { cancelled = true; };
-  }, [projectId, siteId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ── Charger la dernière analyse "par action" persistée ──
-  useEffect(() => {
-    if (!projectId || !siteId) return;
-    let cancelled = false;
-    sbGetGeoAnalyses(projectId, siteId, "roadmap-actions").then(rows => {
-      if (cancelled || !rows?.length) return;
-      const latest = rows[0];
-      if (latest.content) {
-        setActionData(latest.content);
-        setActionStatus("done");
-        setActionSavedDate(latest.created_at);
-      }
-    }).catch(() => {});
-    return () => { cancelled = true; };
-  }, [projectId, siteId]); // eslint-disable-line react-hooks/exhaustive-deps
-  const resultsByQ = useMemo(() => {
-    const m = {};
-    results.forEach(r => { if (!m[r.question_id]) m[r.question_id] = []; m[r.question_id].push(r); });
-    return m;
-  }, [results]);
-
-  const isBrandQuestion = (q) => {
-    const terms = [brandName, ...brandAliases].filter(Boolean).map(t => t.toLowerCase().trim());
-    const txt = (q.question || "").toLowerCase();
-    return terms.some(t => t.length >= 2 && txt.includes(t));
-  };
-
-  // Position de la marque sur une question (meilleur résultat)
-  const brandPosOf = (qId) => {
-    const rs = resultsByQ[qId] || [];
-    const positions = rs.map(r => r.brand_mention_position || r.brand_position).filter(p => p != null && p > 0);
-    return positions.length ? Math.min(...positions) : null;
-  };
-  const isMentioned = (qId) => (resultsByQ[qId] || []).some(r => r.brand_mentioned === true || r.brand_mentioned === 1);
-
-  // ── Catalogue des types d'action (regroupement des recos) ──
-  const ACTION_TYPES = {
-    optimize:   { label: "Optimiser une page existante", color: "#1A7A4A", icon: "✎" },
-    create:     { label: "Créer une nouvelle page",       color: "#E8541A", icon: "＋" },
-    enrich:     { label: "Enrichir / restructurer le contenu", color: "#C97820", icon: "≣" },
-    netlink:    { label: "Netlinking / autorité",          color: "#7C3AED", icon: "⚓" },
-    schema:     { label: "Données structurées (Schema)",   color: "#0EA5E9", icon: "{}" },
-    media:      { label: "Médias (images, vidéo, formats)", color: "#DB2777", icon: "▦" },
-    other:      { label: "Autres actions",                 color: "#64748B", icon: "•" },
-  };
-
-  // ── Mode "Par action" : présence par favori → page GSC → type d'action → récap ICE ──
-  const runActionMode = async () => {
-    if (!claudeKey) { setActionStatus("error"); setActionData({ error: "Clé Claude manquante (⚙️ Gestion des Providers)." }); return; }
-    const favs = questions.filter(q => q.is_favorite);
-    if (!favs.length) { setActionStatus("error"); setActionData({ error: "Aucune question favorite. Marquez des questions en favori (★) pour cibler le périmètre stratégique." }); return; }
-    setActionStatus("loading"); setOpen(true);
-
-    const siteDomain = (brandDomain || "").toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/$/, "");
-
-    // 1+2a. Pour chaque favori : présence marque + meilleure page GSC du site
-    const perQuestion = favs.map(q => {
-      const pos = brandPosOf(q.id);
-      const ment = isMentioned(q.id);
-      const gsc = matchGscForQuestion(q.question, gscRows, siteDomain);
-      return {
-        question: q.question,
-        present: ment,
-        brandPos: pos,
-        gscUrl: gsc?.url || null,
-        gscPos: gsc?.position || null,
-        gscQuery: gsc?.query || null,
-        hasPage: !!(gsc && gsc.url),
-      };
-    });
-
-    const hasGsc = Array.isArray(gscRows) && gscRows.length > 0;
-
-    // 2b. Demander à Claude de classer l'action à mener pour chaque question
-    const typeKeys = Object.keys(ACTION_TYPES);
-    const prompt = `Tu es un expert GEO/SEO senior. Pour "${brandName}" (${siteDomain || "site"}), tu dois définir, pour chaque question favorite, LE type d'action prioritaire à mener pour améliorer la présence de la marque dans les réponses des moteurs IA.
-
-CONTEXTE par question :
-- "present" : la marque est-elle déjà mentionnée dans les réponses IA ?
-- "brandPos" : meilleure position de la marque dans un top IA (null si absente)
-- "gscUrl" : page du site la mieux positionnée sur cette requête d'après Google Search Console (null si aucune page ne ranke)
-- "gscPos" : position Google de cette page (null si inconnue)
-${hasGsc ? "" : "\nNOTE : aucune donnée Google Search Console importée — base-toi sur present/brandPos et juge s'il faut probablement créer ou optimiser une page.\n"}
-RÈGLE de décision (à adapter finement) :
-- Si une page du site ranke déjà (gscUrl présent) → privilégier "optimize" ou "enrich".
-- Si aucune page ne ranke (gscUrl null) → souvent "create".
-- "schema", "media", "netlink" si pertinent en complément.
-
-TYPES D'ACTION AUTORISÉS (clé exacte) : ${typeKeys.join(", ")}
-
-QUESTIONS :
-${JSON.stringify(perQuestion.map((p, i) => ({ i, question: p.question, present: p.present, brandPos: p.brandPos, gscUrl: p.gscUrl, gscPos: p.gscPos })), null, 0)}
-
-Réponds UNIQUEMENT en JSON valide, sans texte autour :
-{
-  "items": [
-    { "i": 0, "actionType": "optimize", "reason": "justification courte (1 phrase)", "targetUrl": "url existante à optimiser ou null si création" }
-  ],
-  "groups": [
-    { "actionType": "optimize", "impact": 8, "confidence": 7, "ease": 6, "summary": "ce que regroupe ce type d'action et pourquoi (1-2 phrases)" }
-  ]
-}
-- "items" : une entrée par question (même ordre d'index "i").
-- "groups" : une entrée par type d'action RÉELLEMENT utilisé, avec une matrice ICE (entiers 1-10) et un résumé.`;
-
-    try {
-      const res = await fetch("/api/claude-geo", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Claude-Key": claudeKey },
-        body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 2000, messages: [{ role: "user", content: prompt }] }),
-      });
-      const text = await res.text();
-      if (text.trimStart().startsWith("<")) throw new Error("Proxy /api/claude-geo introuvable");
-      let data;
-      try { data = JSON.parse(text); } catch { throw new Error(`Réponse non-JSON (${res.status})`); }
-      const raw = data?.content?.[0]?.text || data?.completion || data?.choices?.[0]?.message?.content || "";
-      const jsonMatch = raw.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) throw new Error("Aucun JSON dans la réponse");
-      const parsed = JSON.parse(jsonMatch[0]);
-
-      // 2c + 3. Regrouper les recos par type d'action
-      const itemsByType = {};
-      (parsed.items || []).forEach(it => {
-        const t = ACTION_TYPES[it.actionType] ? it.actionType : "other";
-        const pq = perQuestion[it.i] || {};
-        if (!itemsByType[t]) itemsByType[t] = [];
-        itemsByType[t].push({
-          question: pq.question,
-          present: pq.present,
-          brandPos: pq.brandPos,
-          url: it.targetUrl || pq.gscUrl || null,
-          gscPos: pq.gscPos,
-          reason: it.reason || "",
-        });
-      });
-      const groupMeta = {};
-      (parsed.groups || []).forEach(g => { groupMeta[g.actionType] = g; });
-
-      const actionGroups = Object.entries(itemsByType).map(([type, items]) => {
-        const g = groupMeta[type] || {};
-        const impact = Number(g.impact) || 5, confidence = Number(g.confidence) || 5, ease = Number(g.ease) || 5;
-        const ice = +(impact * confidence * ease / 100).toFixed(1); // score ICE normalisé 0-10
-        const urls = [...new Set(items.map(it => it.url).filter(Boolean))];
-        return {
-          type,
-          label: ACTION_TYPES[type].label,
-          summary: g.summary || "",
-          impact, confidence, ease, ice,
-          count: items.length,
-          urlCount: urls.length,
-          urls,
-          items,
-        };
-      }).sort((a, b) => b.ice - a.ice);
-
-      const presence = {
-        total: favs.length,
-        present: perQuestion.filter(p => p.present).length,
-        absent: perQuestion.filter(p => !p.present).length,
-        withPage: perQuestion.filter(p => p.hasPage).length,
-      };
-
-      const payload = { generated_at: new Date().toISOString(), hasGsc, presence, actionGroups, perQuestion };
-      setActionData(payload);
-      setActionStatus("done");
-      setActionSavedDate(payload.generated_at);
-      if (projectId && siteId) sbSaveGeoAnalysis({ project_id: projectId, site_id: siteId, kind: "roadmap-actions", content: payload }).catch(() => {});
-    } catch (e) {
-      console.error("runActionMode:", e);
-      setActionStatus("error");
-      setActionData({ error: e.message || "Échec de l'analyse par action" });
-    }
-  };
-
-  const run = async () => {
-    if (!claudeKey || !results.length) return;
-    setStatus("loading"); setOpen(true);
-
-    // Sauver l'analyse courante comme "précédente" avant d'en générer une nouvelle
-    const previousForComparison = data;
-
-    // ── Préparer les données ──
-    const qMap = {};
-    questions.forEach(q => { qMap[q.id] = q; });
-
-    // Questions marque
-    const brandQs = questions.filter(isBrandQuestion);
-    const brandQsData = brandQs.map(q => {
-      const rs = resultsByQ[q.id] || [];
-      const answers = rs.map(r => (r.answer || "").slice(0, 400)).join(" | ");
-      return { question: q.question, mentioned: isMentioned(q.id), pos: brandPosOf(q.id), excerpt: answers.slice(0, 600) };
-    });
-
-    // Catégories de questions (via tags)
-    const catMap = {};
-    categories.forEach(c => { catMap[c.id] = c.name; });
-    const byCat = {};
-    questions.forEach(q => {
-      const tags = Array.isArray(q.tags) ? q.tags : (q.category_id ? [q.category_id] : []);
-      const cats = tags.length ? tags : ["__none__"];
-      cats.forEach(cid => {
-        const name = catMap[cid] || "Sans catégorie";
-        if (!byCat[name]) byCat[name] = { total: 0, mentioned: 0 };
-        byCat[name].total++;
-        if (isMentioned(q.id)) byCat[name].mentioned++;
-      });
-    });
-
-    // Favoris catégorisés
-    const favs = questions.filter(q => q.is_favorite);
-    const favClassified = favs.map(q => {
-      const pos = brandPosOf(q.id);
-      const ment = isMentioned(q.id);
-      const kw = q.keyword_id;
-      let bucket;
-      if (ment && pos != null && pos <= 3) bucket = "defend";        // À défendre (lead)
-      else if (ment && pos != null && pos >= 4 && pos <= 10) bucket = "watch"; // À surveiller (top 4-10)
-      else if (!ment && kw) bucket = "conquest_priority";            // Conquête prioritaire (non positionné, potentiel marchand = a un mot-clé)
-      else bucket = "conquer";                                        // À conquérir (non positionné, non catégorisé)
-      return { question: q.question, pos, mentioned: ment, bucket };
-    });
-
-    const total      = results.length;
-    const withBrand  = results.filter(r => r.brand_mentioned === true || r.brand_mentioned === 1).length;
-    const presence   = total ? Math.round(withBrand / total * 100) : 0;
-
-    // ── Prompt Claude — JSON structuré ──
-    const prompt = `Tu es un expert GEO (Generative Engine Optimization) senior. Tu produis un plan d'action stratégique pour "${brandName}" (${brandDomain}).
-
-DONNÉES GLOBALES :
-- Présence marque : ${withBrand}/${total} réponses (${presence}%)
-
-QUESTIONS MARQUE (${brandQsData.length}) :
-${brandQsData.slice(0, 12).map((q, i) => `${i+1}. "${q.question}" — ${q.mentioned ? "mentionnée" + (q.pos ? ` #${q.pos}` : "") : "absente"}`).join("\n") || "Aucune question marque"}
-
-SYNTHÈSE PAR CATÉGORIE :
-${Object.entries(byCat).map(([cat, s]) => `- ${cat} : ${s.mentioned}/${s.total} questions avec mention (${Math.round(s.mentioned/s.total*100)}%)`).join("\n") || "Aucune catégorie"}
-
-QUESTIONS FAVORITES — PÉRIMÈTRE STRATÉGIQUE PRIORITAIRE (${favClassified.length}) :
-${favClassified.slice(0, 25).map((f, i) => `${i+1}. "${f.question}" — ${f.bucket === "defend" ? "à défendre (lead)" : f.bucket === "watch" ? "à surveiller (top 4-10)" : f.bucket === "conquest_priority" ? "conquête prioritaire" : "à conquérir"}${f.pos ? ` #${f.pos}` : ""}`).join("\n") || "Aucune question favorite"}
-IMPORTANT : les questions favorites sont le périmètre stratégique du client. Priorise EXPLICITEMENT les actions qui les concernent. Pour toute action de la roadmap liée à une question favorite, mets "favorite": true.
-${previousForComparison ? `\nANALYSE PRÉCÉDENTE (pour comparaison) :\n${JSON.stringify(previousForComparison).slice(0, 1500)}` : ""}
-
----
-
-Réponds UNIQUEMENT avec un objet JSON valide (sans markdown, sans backticks) de cette forme exacte :
-{
-  "brandAnalysis": "Analyse du ton et synthèse des réponses sur les questions marque (3-4 phrases). Puis 2-3 recommandations actionnables concrètes pour améliorer le GEO sur ces requêtes marque. Si aucune question marque, indique-le brièvement.",
-  "categoryAnalysis": [
-    { "category": "nom catégorie", "synthesis": "synthèse 1-2 phrases", "recommendation": "reco actionnable précise" }
-  ],
-  "roadmap": [
-    { "action": "action concrète et précise", "category": "catégorie concernée ou 'Marque'", "impact": 8, "confidence": 7, "ease": 5, "favorite": false }
-  ],
-  ${previousForComparison ? `"comparison": { "better": "ce qui a mieux fonctionné", "worse": "ce qui a moins bien fonctionné", "done": "ce qui semble avoir été fait", "missing": "ce qui semble avoir manqué", "reinforce": "ce qui est à renforcer" }` : `"comparison": null`}
-}
-
-RÈGLES :
-- roadmap : 6 à 10 actions, triées par priorité décroissante. impact/confidence/ease sont des entiers de 1 à 10.
-- Pour les actions liées aux questions marque, mets "category": "Marque".
-- categoryAnalysis : une entrée par catégorie réelle ci-dessus (max 8).
-- Recommandations spécifiques (noms de pages, formats, H1) — jamais génériques.
-- Réponds en français.`;
-
-    try {
-      const res = await fetch("/api/claude-geo", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Claude-Key": claudeKey },
-        body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 4096, messages: [{ role: "user", content: prompt }] }),
-      });
-      const respData = await res.json();
-      if (!res.ok) throw new Error(respData.error?.message || `Claude ${res.status}`);
-      const text = (respData.content || []).filter(b => b.type === "text").map(b => b.text).join("\n").trim();
-
-      // Parser le JSON (retirer un éventuel wrapping ```json)
-      const cleaned = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();
-      let parsed;
-      try {
-        parsed = JSON.parse(cleaned);
-      } catch {
-        // 1) extraction du bloc { ... } le plus large
-        const s = cleaned.indexOf("{"); const e = cleaned.lastIndexOf("}");
-        let candidate = (s >= 0 && e > s) ? cleaned.slice(s, e + 1) : cleaned;
-        try {
-          parsed = JSON.parse(candidate);
-        } catch {
-          // 2) réparation d'un JSON tronqué (réponse coupée par max_tokens) :
-          //    on retire un éventuel dernier élément incomplet puis on referme
-          //    les structures ouvertes ([ et {) dans le bon ordre.
-          parsed = repairTruncatedJson(s >= 0 ? cleaned.slice(s) : cleaned);
-          if (!parsed) throw new Error("Réponse de l'IA incomplète ou mal formée. Réessaie — si le problème persiste, réduis le nombre de questions.");
-        }
-      }
-
-      // Ajouter le tableau favoris (calculé localement, pas via Claude)
-      parsed.favorites = favClassified;
-      parsed.generated_at = new Date().toISOString();
-
-      setData(parsed);
-      setStatus("done");
-      setSavedDate(parsed.generated_at);
-
-      // Persister
-      if (projectId && siteId) {
-        sbSaveGeoAnalysis({ project_id: projectId, site_id: siteId, kind: "roadmap", content: parsed }).catch(() => {});
-      }
-    } catch(e) {
-      setData({ error: e.message });
-      setStatus("error");
-    }
-  };
-
-  // ── Export CSV roadmap ──
-  const exportRoadmapCSV = () => {
-    if (!data?.roadmap?.length) return;
-    const header = ["Action", "Catégorie", "Favori", "Impact", "Confidence", "Ease", "Score ICE"];
-    const rows = [header, ...data.roadmap.map(r => {
-      const ice = ((r.impact || 0) + (r.confidence || 0) + (r.ease || 0));
-      return [r.action, r.category || "", r.favorite ? "Oui" : "", r.impact, r.confidence, r.ease, ice];
-    })];
-    downloadText(toCSV(rows), `roadmap_geo_${new Date().toISOString().slice(0,10)}.csv`);
-  };
-
-  // ── Export CSV favoris ──
-  const BUCKET_LABELS = {
-    defend:             "À défendre",
-    watch:              "À surveiller",
-    conquest_priority:  "Conquête prioritaire",
-    conquer:            "À conquérir",
-  };
-  const exportFavoritesCSV = () => {
-    if (!data?.favorites?.length) return;
-    const header = ["Question", "Catégorie", "Position marque", "Mentionnée"];
-    const order = ["defend", "watch", "conquest_priority", "conquer"];
-    const sorted = [...data.favorites].sort((a, b) => order.indexOf(a.bucket) - order.indexOf(b.bucket));
-    const rows = [header, ...sorted.map(f => [
-      f.question, BUCKET_LABELS[f.bucket] || f.bucket, f.pos != null ? `#${f.pos}` : "—", f.mentioned ? "Oui" : "Non",
-    ])];
-    downloadText(toCSV(rows), `favoris_geo_${new Date().toISOString().slice(0,10)}.csv`);
-  };
-
-  if (!results.length) return null;
-
-  const iceColor = (score) => score >= 24 ? "#1A7A4A" : score >= 18 ? "#C97820" : "#1A3C2E77";
-  const BUCKET_META = {
-    defend:            { label: "À défendre",          color: "#1A7A4A", desc: "La marque lead (#1-3)" },
-    watch:             { label: "À surveiller",         color: "#C97820", desc: "Top 4-10" },
-    conquest_priority: { label: "Conquête prioritaire", color: "#E8541A", desc: "Non positionnée, fort potentiel" },
-    conquer:           { label: "À conquérir",          color: "#1A3C2E77", desc: "Non positionnée" },
-  };
-
-  return (
-    <div style={{ marginBottom: 24 }}>
-      {/* ── Header ── */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: open ? 16 : 0, flexWrap: "wrap", gap: 10 }}>
-        <div>
-          <div className="gt-label" style={{ marginBottom: 3 }}>Et maintenant ?</div>
-          <div style={{ fontSize: 13, fontWeight: 400, color: "#1A3C2E", letterSpacing: "-0.005em" }}>
-            {mode === "url" ? "Plan d'action priorisé — roadmap ICE & favoris catégorisés" : "Actions à mener par type — ICE & pages concernées (favoris)"}
-          </div>
-          {mode === "url" && savedDate && (
-            <div style={{ fontSize: 10, color: "#1A3C2E55", marginTop: 2 }}>
-              Dernière génération : {new Date(savedDate).toLocaleString("fr-FR", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
-            </div>
-          )}
-          {mode === "action" && actionSavedDate && (
-            <div style={{ fontSize: 10, color: "#1A3C2E55", marginTop: 2 }}>
-              Dernière génération : {new Date(actionSavedDate).toLocaleString("fr-FR", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
-            </div>
-          )}
-        </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          {/* Switch de mode */}
-          <div style={{ display: "inline-flex", background: "#1A3C2E0A", borderRadius: 8, padding: 2 }}>
-            {[["url", "Par URL"], ["action", "Par action"]].map(([m, lbl]) => (
-              <button key={m} onClick={() => { setMode(m); setOpen(true); }}
-                style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 6, cursor: "pointer",
-                  background: mode === m ? "#fff" : "transparent", color: mode === m ? "#1A3C2E" : "#1A3C2E66",
-                  boxShadow: mode === m ? "0 1px 3px #1A3C2E1A" : "none" }}>
-                {lbl}
-              </button>
-            ))}
-          </div>
-
-          {mode === "url" && (
-            <>
-              {status === "done" && (
-                <button onClick={() => setOpen(o => !o)} className="gt-btn gt-btn--ghost" style={{ fontSize: 11 }}>
-                  {open ? "Masquer" : "Voir le plan"}
-                </button>
-              )}
-              <button
-                onClick={run}
-                disabled={status === "loading" || !claudeKey}
-                className={`gt-btn ${status === "idle" ? "gt-btn--solid" : "gt-btn--ghost"}`}
-                title={!claudeKey ? "Clé Claude manquante" : undefined}
-                style={{ opacity: (!claudeKey || status === "loading") ? 0.4 : 1 }}>
-                {status === "loading" ? "Génération…" : status === "done" ? "↺ Régénérer" : "Et maintenant ?"}
-              </button>
-            </>
-          )}
-
-          {mode === "action" && (
-            <>
-              {actionStatus === "done" && (
-                <button onClick={() => setOpen(o => !o)} className="gt-btn gt-btn--ghost" style={{ fontSize: 11 }}>
-                  {open ? "Masquer" : "Voir les actions"}
-                </button>
-              )}
-              <button
-                onClick={runActionMode}
-                disabled={actionStatus === "loading" || !claudeKey}
-                className={`gt-btn ${actionStatus === "idle" ? "gt-btn--solid" : "gt-btn--ghost"}`}
-                title={!claudeKey ? "Clé Claude manquante" : undefined}
-                style={{ opacity: (!claudeKey || actionStatus === "loading") ? 0.4 : 1 }}>
-                {actionStatus === "loading" ? "Analyse…" : actionStatus === "done" ? "↺ Régénérer" : "Analyser les actions"}
-              </button>
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* ── Mode PAR ACTION : rendu ── */}
-      {mode === "action" && open && (
-        <div style={{ borderTop: "0.5px solid #1A3C2E0D", paddingTop: 16 }}>
-          {actionStatus === "loading" && (
-            <div style={{ fontSize: 12, color: "#1A3C2E77", padding: "12px 0" }}>Analyse des actions en cours… (présence, pages GSC, classification)</div>
-          )}
-          {actionStatus === "error" && actionData?.error && (
-            <div style={{ fontSize: 12, color: "#C0352A", background: "#FEF2F2", border: "1px solid #FCA5A5", borderRadius: 8, padding: "10px 12px" }}>{actionData.error}</div>
-          )}
-          {actionStatus === "done" && actionData && !actionData.error && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-              {/* Constat de présence */}
-              <div style={{ display: "flex", gap: 20, flexWrap: "wrap", padding: "12px 16px", background: "#1A3C2E08", borderRadius: 10 }}>
-                <div><div style={{ fontSize: 10, color: "#1A3C2E66", textTransform: "uppercase", letterSpacing: 0.5 }}>Favoris analysés</div><div style={{ fontSize: 20, fontWeight: 800, color: "#1A3C2E" }}>{actionData.presence.total}</div></div>
-                <div><div style={{ fontSize: 10, color: "#1A3C2E66", textTransform: "uppercase", letterSpacing: 0.5 }}>Marque présente</div><div style={{ fontSize: 20, fontWeight: 800, color: "#1A7A4A" }}>{actionData.presence.present}</div></div>
-                <div><div style={{ fontSize: 10, color: "#1A3C2E66", textTransform: "uppercase", letterSpacing: 0.5 }}>Marque absente</div><div style={{ fontSize: 20, fontWeight: 800, color: "#C0352A" }}>{actionData.presence.absent}</div></div>
-                <div><div style={{ fontSize: 10, color: "#1A3C2E66", textTransform: "uppercase", letterSpacing: 0.5 }}>Page GSC trouvée</div><div style={{ fontSize: 20, fontWeight: 800, color: "#1A3C2E" }}>{actionData.presence.withPage}</div></div>
-              </div>
-
-              {!actionData.hasGsc && (
-                <div style={{ fontSize: 11, color: "#C97820", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, padding: "8px 12px" }}>
-                  ⚠ Aucune donnée Google Search Console importée (onglet Audit → Imports). Les pages cibles n'ont pas pu être identifiées via GSC ; l'analyse repose sur la présence IA seule. Importez un export GSC pour des recommandations « optimiser vs créer » plus précises.
-                </div>
-              )}
-
-              {/* Récap par type d'action */}
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {actionData.actionGroups.map(g => {
-                  const meta = ACTION_TYPES[g.type] || ACTION_TYPES.other;
-                  const isOpen = !!openActionTypes[g.type];
-                  return (
-                    <div key={g.type} style={{ border: "0.5px solid #1A3C2E18", borderRadius: 12, overflow: "hidden" }}>
-                      {/* Bandeau type */}
-                      <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", background: meta.color + "0D" }}>
-                        <span style={{ width: 26, height: 26, borderRadius: 7, background: meta.color, color: "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700, flexShrink: 0 }}>{meta.icon}</span>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 13, fontWeight: 700, color: "#1A3C2E" }}>{g.label}</div>
-                          {g.summary && <div style={{ fontSize: 11, color: "#1A3C2E88", marginTop: 1 }}>{g.summary}</div>}
-                        </div>
-                        {/* Matrice ICE */}
-                        <div style={{ display: "flex", gap: 10, flexShrink: 0 }}>
-                          {[["Impact", g.impact], ["Confiance", g.confidence], ["Facilité", g.ease]].map(([lbl, v]) => (
-                            <div key={lbl} style={{ textAlign: "center" }}>
-                              <div style={{ fontSize: 9, color: "#1A3C2E66", textTransform: "uppercase" }}>{lbl}</div>
-                              <div style={{ fontSize: 14, fontWeight: 700, color: "#1A3C2E", fontVariantNumeric: "tabular-nums" }}>{v}</div>
-                            </div>
-                          ))}
-                          <div style={{ textAlign: "center", paddingLeft: 8, borderLeft: "0.5px solid #1A3C2E18" }}>
-                            <div style={{ fontSize: 9, color: meta.color, textTransform: "uppercase", fontWeight: 700 }}>ICE</div>
-                            <div style={{ fontSize: 16, fontWeight: 800, color: meta.color, fontVariantNumeric: "tabular-nums" }}>{g.ice}</div>
-                          </div>
-                        </div>
-                      </div>
-                      {/* Accordéon URLs / questions */}
-                      <button onClick={() => setOpenActionTypes(p => ({ ...p, [g.type]: !p[g.type] }))}
-                        style={{ width: "100%", textAlign: "left", padding: "8px 14px", border: "none", borderTop: "0.5px solid #1A3C2E0D", background: "#fff", cursor: "pointer", fontSize: 11, color: "#1A3C2E88", display: "flex", alignItems: "center", gap: 6 }}>
-                        <span style={{ transform: isOpen ? "rotate(90deg)" : "none", transition: "transform 0.15s" }}>▸</span>
-                        {g.count} question{g.count > 1 ? "s" : ""} concernée{g.count > 1 ? "s" : ""}{g.urlCount > 0 ? ` · ${g.urlCount} URL${g.urlCount > 1 ? "s" : ""}` : ""}
-                      </button>
-                      {isOpen && (
-                        <div style={{ padding: "4px 14px 12px", background: "#fff", display: "flex", flexDirection: "column", gap: 8 }}>
-                          {g.items.map((it, i) => (
-                            <div key={i} style={{ paddingTop: 8, borderTop: i ? "0.5px solid #1A3C2E08" : "none" }}>
-                              <div style={{ fontSize: 12, color: "#1A3C2E", fontWeight: 500 }}>{it.question}</div>
-                              <div style={{ fontSize: 11, color: "#1A3C2E77", marginTop: 2, display: "flex", gap: 10, flexWrap: "wrap" }}>
-                                <span style={{ color: it.present ? "#1A7A4A" : "#C0352A" }}>{it.present ? `Présente${it.brandPos ? ` #${it.brandPos}` : ""}` : "Absente"}</span>
-                                {it.url && <span>↳ <a href={it.url} target="_blank" rel="noopener noreferrer" style={{ color: meta.color, textDecoration: "none" }}>{it.url.replace(/^https?:\/\//, "").slice(0, 60)}</a>{it.gscPos ? ` (GSC #${Math.round(it.gscPos)})` : ""}</span>}
-                                {!it.url && <span style={{ fontStyle: "italic" }}>aucune page existante</span>}
-                              </div>
-                              {it.reason && <div style={{ fontSize: 11, color: "#1A3C2E99", marginTop: 2 }}>{it.reason}</div>}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-          {actionStatus === "idle" && (
-            <div style={{ fontSize: 12, color: "#1A3C2E77", padding: "12px 0" }}>
-              Lancez l'analyse pour identifier, par question favorite, l'action prioritaire (optimiser, créer, enrichir…) et le récapitulatif par type d'action avec matrice ICE.
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ── Contenu ── */}
-      {mode === "url" && open && status === "done" && data && !data.error && (
-        <div style={{ borderTop: "0.5px solid #1A3C2E0D", paddingTop: 16, display: "flex", flexDirection: "column", gap: 24 }}>
-
-          {/* 0. Accroche favoris — périmètre stratégique en tête */}
-          {Array.isArray(data.favorites) && data.favorites.length > 0 && (() => {
-            const counts = data.favorites.reduce((acc, f) => { acc[f.bucket] = (acc[f.bucket] || 0) + 1; return acc; }, {});
-            const META = { defend: { l: "à défendre", c: "#1A7A4A" }, watch: { l: "à surveiller", c: "#C97820" }, conquest_priority: { l: "en conquête prioritaire", c: "#E8541A" }, conquer: { l: "à conquérir", c: "#1A3C2E77" } };
-            return (
-              <div style={{ background: "#FFFBF5", border: "0.5px solid #C9782022", borderRadius: 10, padding: "14px 16px" }}>
-                <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.10em", textTransform: "uppercase", color: "#C97820", marginBottom: 8, display: "flex", alignItems: "center", gap: 5 }}>
-                  <span>★</span> Périmètre stratégique — {data.favorites.length} favori{data.favorites.length > 1 ? "s" : ""}
-                </div>
-                <div style={{ fontSize: 12, color: "#1A3C2E", lineHeight: 1.7 }}>
-                  {["defend", "watch", "conquest_priority", "conquer"].filter(b => counts[b]).map((b, i, arr) => (
-                    <span key={b}>
-                      <strong style={{ color: META[b].c }}>{counts[b]}</strong> {META[b].l}{i < arr.length - 1 ? " · " : ""}
-                    </span>
-                  ))}
-                </div>
-                <div style={{ fontSize: 11, color: "#1A3C2E66", marginTop: 6 }}>
-                  Les recommandations ci-dessous priorisent ces questions (★ dans la roadmap).
-                </div>
-              </div>
-            );
-          })()}
-
-          {/* 1. Analyse requêtes marque */}
-          {data.brandAnalysis && (
-            <div style={{ borderLeft: "2px solid #1A3C2E18", paddingLeft: 16 }}>
-              <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E", marginBottom: 8 }}>
-                ◎ Requêtes marque
-              </div>
-              <div style={{ fontSize: 12, color: "#1A3C2E", lineHeight: 1.75 }}>
-                {renderMarkdown(data.brandAnalysis)}
-              </div>
-            </div>
-          )}
-
-          {/* 2. Synthèse par catégorie */}
-          {Array.isArray(data.categoryAnalysis) && data.categoryAnalysis.length > 0 && (
-            <div style={{ borderLeft: "2px solid #C9782018", paddingLeft: 16 }}>
-              <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.10em", textTransform: "uppercase", color: "#C97820", marginBottom: 10 }}>
-                ⟶ Synthèse par catégorie
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {data.categoryAnalysis.map((c, i) => (
-                  <div key={i} style={{ paddingBottom: 10, borderBottom: i < data.categoryAnalysis.length - 1 ? "0.5px solid #1A3C2E08" : "none" }}>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: "#1A3C2E", marginBottom: 2 }}>{c.category}</div>
-                    <div style={{ fontSize: 11, color: "#1A3C2E99", lineHeight: 1.6, marginBottom: 4 }}>{c.synthesis}</div>
-                    <div style={{ fontSize: 11, color: "#1A7A4A", lineHeight: 1.6 }}>→ {c.recommendation}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* 3a. Tableau roadmap ICE */}
-          {Array.isArray(data.roadmap) && data.roadmap.length > 0 && (
-            <div>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-                <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E" }}>
-                  ✦ Roadmap priorisée (ICE)
-                </div>
-                <button onClick={exportRoadmapCSV} className="gt-btn gt-btn--ghost" style={{ fontSize: 10, padding: "3px 10px" }}>
-                  ↓ Export CSV
-                </button>
-              </div>
-              <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, minWidth: 540 }}>
-                  <thead>
-                    <tr style={{ borderBottom: "1px solid #1A3C2E22" }}>
-                      <th style={{ textAlign: "left", padding: "6px 8px", fontWeight: 600, color: "#1A3C2E77", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em" }}>Action</th>
-                      <th style={{ textAlign: "left", padding: "6px 8px", fontWeight: 600, color: "#1A3C2E77", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em" }}>Catégorie</th>
-                      <th style={{ textAlign: "center", padding: "6px 8px", fontWeight: 600, color: "#1A3C2E77", fontSize: 10 }} title="Impact">I</th>
-                      <th style={{ textAlign: "center", padding: "6px 8px", fontWeight: 600, color: "#1A3C2E77", fontSize: 10 }} title="Confidence">C</th>
-                      <th style={{ textAlign: "center", padding: "6px 8px", fontWeight: 600, color: "#1A3C2E77", fontSize: 10 }} title="Ease">E</th>
-                      <th style={{ textAlign: "center", padding: "6px 8px", fontWeight: 600, color: "#1A3C2E77", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em" }}>Score</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {[...data.roadmap].sort((a, b) => {
-                      if (!!b.favorite !== !!a.favorite) return b.favorite ? 1 : -1; // Favoris d'abord
-                      return ((b.impact||0)+(b.confidence||0)+(b.ease||0)) - ((a.impact||0)+(a.confidence||0)+(a.ease||0));
-                    }).map((r, i) => {
-                      const ice = (r.impact || 0) + (r.confidence || 0) + (r.ease || 0);
-                      const isBrand = (r.category || "").toLowerCase() === "marque";
-                      return (
-                        <tr key={i} style={{ borderBottom: "0.5px solid #1A3C2E0D", background: r.favorite ? "#FFFBF5" : "transparent" }}>
-                          <td style={{ padding: "8px", color: "#1A3C2E", lineHeight: 1.4 }}>
-                            {r.favorite && <span title="Concerne une question favorite" style={{ color: "#C97820", marginRight: 5 }}>★</span>}
-                            {r.action}
-                          </td>
-                          <td style={{ padding: "8px" }}>
-                            <span style={{ fontSize: 10, fontWeight: 600, color: isBrand ? "#1A3C2E" : "#1A3C2E77", background: isBrand ? "#1A3C2E11" : "transparent", border: `0.5px solid ${isBrand ? "#1A3C2E33" : "#1A3C2E11"}`, borderRadius: 10, padding: "1px 8px", whiteSpace: "nowrap" }}>
-                              {r.category || "—"}
-                            </span>
-                          </td>
-                          <td style={{ padding: "8px", textAlign: "center", color: "#1A3C2E99", fontVariantNumeric: "tabular-nums" }}>{r.impact}</td>
-                          <td style={{ padding: "8px", textAlign: "center", color: "#1A3C2E99", fontVariantNumeric: "tabular-nums" }}>{r.confidence}</td>
-                          <td style={{ padding: "8px", textAlign: "center", color: "#1A3C2E99", fontVariantNumeric: "tabular-nums" }}>{r.ease}</td>
-                          <td style={{ padding: "8px", textAlign: "center", fontWeight: 700, color: iceColor(ice), fontVariantNumeric: "tabular-nums" }}>{ice}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {/* 3b. Tableau favoris catégorisés */}
-          {Array.isArray(data.favorites) && data.favorites.length > 0 && (
-            <div>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-                <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E" }}>
-                  ★ Favoris catégorisés
-                </div>
-                <button onClick={exportFavoritesCSV} className="gt-btn gt-btn--ghost" style={{ fontSize: 10, padding: "3px 10px" }}>
-                  ↓ Export CSV
-                </button>
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                {["defend", "watch", "conquest_priority", "conquer"].map(bucket => {
-                  const items = data.favorites.filter(f => f.bucket === bucket);
-                  if (!items.length) return null;
-                  const meta = BUCKET_META[bucket];
-                  return (
-                    <div key={bucket}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                        <span style={{ width: 8, height: 8, borderRadius: "50%", background: meta.color, flexShrink: 0 }} />
-                        <span style={{ fontSize: 11, fontWeight: 600, color: meta.color }}>{meta.label}</span>
-                        <span style={{ fontSize: 10, color: "#1A3C2E44" }}>{meta.desc} · {items.length}</span>
-                      </div>
-                      <div style={{ display: "flex", flexDirection: "column", gap: 3, paddingLeft: 16 }}>
-                        {items.map((f, i) => (
-                          <div key={i} style={{ fontSize: 11, color: "#1A3C2E", display: "flex", gap: 8, alignItems: "baseline" }}>
-                            <span style={{ flex: 1, lineHeight: 1.5 }}>{f.question}</span>
-                            {f.pos != null && <span style={{ fontSize: 10, color: meta.color, fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>#{f.pos}</span>}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* 5. Comparaison avec version précédente */}
-          {data.comparison && (
-            <div style={{ borderLeft: "2px solid #1A3C2E18", paddingLeft: 16 }}>
-              <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E", marginBottom: 10 }}>
-                ↔ Comparaison avec la version précédente
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {[
-                  { k: "better",    label: "Ce qui a mieux fonctionné",  color: "#1A7A4A" },
-                  { k: "worse",     label: "Ce qui a moins bien fonctionné", color: "#C0352A" },
-                  { k: "done",      label: "Ce qui semble avoir été fait", color: "#1A3C2E" },
-                  { k: "missing",   label: "Ce qui semble avoir manqué",  color: "#C97820" },
-                  { k: "reinforce", label: "Ce qui est à renforcer",      color: "#E8541A" },
-                ].filter(row => data.comparison[row.k]).map(row => (
-                  <div key={row.k}>
-                    <div style={{ fontSize: 10, fontWeight: 600, color: row.color, marginBottom: 2 }}>{row.label}</div>
-                    <div style={{ fontSize: 11, color: "#1A3C2E99", lineHeight: 1.6 }}>{data.comparison[row.k]}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* 4. Rappel hint */}
-          <div style={{ fontSize: 11, color: "#1A3C2E77", fontStyle: "italic", background: "#FFFBEB", border: "0.5px solid #C9782022", borderRadius: 6, padding: "10px 12px" }}>
-            💡 Pour des recommandations plus précises sur une question donnée, cliquez sur « Générer une recommandation » sous chaque question.
-          </div>
-        </div>
-      )}
-
-      {mode === "url" && open && status === "error" && data?.error && (
-        <div style={{ fontSize: 12, color: "#C0352A", padding: "10px 0", borderTop: "0.5px solid #1A3C2E0D", marginTop: 8 }}>
-          Erreur : {data.error}
-        </div>
-      )}
-    </div>
-  );
-}
-
-
-// ── Questions sub-tab (v2) ────────────────────────────────────────
-
-function QuestionsTab({ site, projectId, apiKey, model, brand, categories, setCategories, allResults, gscRows = [], onResultSaved, activeProviders = ["openai"], providerKeys = {}, runMode = "parallel", keywordsOrder = [], refreshTrigger = 0, competitors = [], setCompetitors = null, onSaveKey = null, isReadOnly = false }) {
-  const [questions, setQuestions]   = useState([]);
-  const [results, setResults]       = useState(allResults || []);
-  // Sort: favorites first, then by keyword order, then by creation date
-  const sortedQuestions = useMemo(() => {
-    const kwIndexMap = {};
-    keywordsOrder.forEach((id, i) => { kwIndexMap[id] = i; });
-    return [...questions].sort((a, b) => {
-      // 1. Favorites first
-      if (a.is_favorite && !b.is_favorite) return -1;
-      if (!a.is_favorite && b.is_favorite) return 1;
-      // 2. Keyword order (undefined → end)
-      const ia = kwIndexMap[a.keyword_id] ?? 9999;
-      const ib = kwIndexMap[b.keyword_id] ?? 9999;
-      if (ia !== ib) return ia - ib;
-      // 3. Creation date within same keyword
-      return new Date(a.created_at) - new Date(b.created_at);
-    });
-  }, [questions, keywordsOrder]); // eslint-disable-line react-hooks/exhaustive-deps
-  const [manualQ, setManualQ]       = useState("");
-  const [csvImporting, setCsvImporting] = useState(false);
-  const csvInputRef = useRef(null);
-  // Génération de questions depuis une URL (crawl léger + IA)
-  const [urlGenOpen, setUrlGenOpen]   = useState(false);
-  const [urlGenUrl, setUrlGenUrl]     = useState("");
-  const [urlGenCount, setUrlGenCount] = useState(15);  // 10–25
-  const [urlGenStatus, setUrlGenStatus] = useState(""); // "", "crawl", "gen", "error:…", "done:N"
-  const [editingQ, setEditingQ]     = useState(null); // { id, text } — question being edited
-  const [editingKw, setEditingKw]       = useState(null);
-  const [kwInput, setKwInput]           = useState("");
-  const [hintsMap, setHintsMap]     = useState({}); // { questionId: hint_text }
-  // Filters — persisted per project+site in localStorage
-  const filtersKey = `geo_filters_${projectId}_${site?.id}`;
-  const loadFilters = () => {
-    try { return JSON.parse(localStorage.getItem(filtersKey) || "{}"); } catch { return {}; }
-  };
-  const savedF = loadFilters();
-  const [filterFav,        setFilterFavRaw]        = useState(savedF.filterFav        || false);
-  const favDefaultAppliedRef = useRef(false); // pour n'appliquer le défaut Favoris qu'une fois
-  const [filterPositioned, setFilterPositionedRaw] = useState(savedF.filterPositioned || false);
-  const [filterLost,       setFilterLostRaw]       = useState(savedF.filterLost       || false);
-  const [sortByResult,     setSortByResult]        = useState(savedF.sortByResult     || false); // tri par résultat (mention/évoc/citation)
-  const [filterCat,        setFilterCatRaw]        = useState(savedF.filterCat        || "");
-  const [filterKeyword,    setFilterKeywordRaw]    = useState(savedF.filterKeyword    || "");
-  const [filterSearch,     setFilterSearchRaw]     = useState(savedF.filterSearch     || "");
-  const [searchField,      setSearchField]         = useState(savedF.searchField      || "question"); // question|answer|mention|evocation|citation
-  const [filterProviders,  setFilterProvidersRaw]  = useState(savedF.filterProviders  || []);
-
-  // Wrap setters to also persist to localStorage
-  const persistFilters = (patch) => {
-    try {
-      const current = loadFilters();
-      localStorage.setItem(filtersKey, JSON.stringify({ ...current, ...patch }));
-    } catch {}
-  };
-  const setFilterFav        = (v) => { setFilterFavRaw(v);        persistFilters({ filterFav: v }); };
-  const setFilterPositioned = (v) => { setFilterPositionedRaw(v); persistFilters({ filterPositioned: v }); };
-  const setFilterLost       = (v) => { setFilterLostRaw(v);       persistFilters({ filterLost: v }); };
-  const setFilterCat        = (v) => { setFilterCatRaw(v);        persistFilters({ filterCat: v }); };
-  const setFilterKeyword    = (v) => { setFilterKeywordRaw(v);    persistFilters({ filterKeyword: v }); };
-  const setFilterSearch     = (v) => { setFilterSearchRaw(v);     persistFilters({ filterSearch: v }); };
-  const setFilterProviders  = (v) => { setFilterProvidersRaw(v);  persistFilters({ filterProviders: v }); };
-  const [running, setRunning]       = useState({});
-  const [providerErrors, setProviderErrors] = useState({}); // { "qId-pid": errorMsg }
-  const [runAll, setRunAll]         = useState(false);
-  const stopAllRef = useRef(false);
-  // Refs so callbacks always read current values without stale closure issues
-  const activeProvidersRef = useRef(activeProviders);
-  const providerKeysRef    = useRef(providerKeys);
-  // Keep refs in sync with props on every render (not just via useEffect)
-  activeProvidersRef.current = activeProviders;
-  providerKeysRef.current    = providerKeys;
-  const [selected, setSelected]     = useState(new Set());
-  const [bulkCat, setBulkCat]       = useState("");
-  const [keywords, setKeywords]     = useState([]);
-  const [newCalEntries, setNewCalEntries] = useState({}); // { `${q.id}|${p.id}` → last newEntry for PresenceCalendar }
-  const [calendarEntries, setCalendarEntries] = useState([]); // entrées de la table geo_presence_calendar
-
-  // Load all data on mount and when project/site/refreshTrigger changes
-  useEffect(() => {
-    if (!projectId || !site?.id) return;
-    // Load in parallel
-    Promise.all([
-      sbGetGeoResults(projectId, site.id),
-      sbGetQuestions(projectId, site.id),
-      sbGetHints(projectId, site.id),
-      sbGetKeywords(projectId, site.id),
-      sbGetCalendarEntriesBatch(projectId, site.id),
-    ]).then(([results, questions, hints, keywords, calEntries]) => {
-      setResults(results.length ? results : (allResults || []));
-      setQuestions(questions);
-      // Tri/filtre Favoris ON par défaut au 1er chargement s'il existe des favoris
-      // (sauf si l'utilisateur a déjà une préférence enregistrée).
-      if (!favDefaultAppliedRef.current) {
-        favDefaultAppliedRef.current = true;
-        const hasFavs = questions.some(q => q.is_favorite);
-        if (hasFavs && savedF.filterFav === undefined) setFilterFav(true);
-      }
-      const map = {};
-      hints.forEach(r => { map[r.question_id] = { text: r.hint_text, date: r.updated_at }; });
-      setHintsMap(map);
-      setKeywords(keywords);
-      setCalendarEntries(calEntries || []);
-    }).catch(e => console.warn("[QuestionsTab] load error:", e));
-  }, [projectId, site?.id, refreshTrigger]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ── Auto-tag "Marque" : questions contenant le nom de marque ──────
-  // Crée la catégorie "Marque" si absente puis tague les questions dont
-  // le texte contient le nom de marque ou un alias.
-  useEffect(() => {
-    if (!projectId || !site?.id) return;
-    if (!questions.length) return;
-    const brandName = (brand?.brand_name || "").trim();
-    const aliases   = Array.isArray(brand?.brand_aliases) ? brand.brand_aliases : [];
-    const terms = [brandName, ...aliases].filter(Boolean).map(t => t.toLowerCase().trim()).filter(t => t.length >= 2);
-    if (!terms.length) return;
-
-    let cancelled = false;
-    (async () => {
-      // 1. Trouver ou créer la catégorie "Marque"
-      let marqueCat = categories.find(c => (c.name || "").toLowerCase() === "marque");
-      if (!marqueCat) {
-        try {
-          marqueCat = await sbSaveCategory({ project_id: projectId, name: "Marque", color: "#1A3C2E" });
-          if (cancelled || !marqueCat?.id) return;
-          setCategories(prev => prev.some(c => c.id === marqueCat.id) ? prev : [...prev, marqueCat]);
-        } catch { return; }
-      }
-      const marqueCatId = marqueCat.id;
-
-      // 2. Détecter les questions à taguer (texte contient un terme marque)
-      const toTag = questions.filter(q => {
-        const txt = (q.question || "").toLowerCase();
-        const hasBrandInText = terms.some(t => txt.includes(t));
-        if (!hasBrandInText) return false;
-        const existingTags = Array.isArray(q.tags) ? q.tags : (q.category_id ? [q.category_id] : []);
-        return !existingTags.includes(marqueCatId); // pas déjà tagué
-      });
-      if (!toTag.length || cancelled) return;
-
-      // 3. Appliquer le tag (ajout à la liste existante, sans écraser)
-      for (const q of toTag) {
-        const existingTags = Array.isArray(q.tags) ? q.tags : (q.category_id ? [q.category_id] : []);
-        const newTags = [...new Set([...existingTags, marqueCatId])];
-        sbSetKeywordTags(q.id, newTags).catch(() => {});
-        if (!q.category_id) sbSetQuestionCategory(q.id, marqueCatId).catch(() => {});
-      }
-      if (cancelled) return;
-      const tagIds = new Set(toTag.map(q => q.id));
-      setQuestions(prev => prev.map(q => {
-        if (!tagIds.has(q.id)) return q;
-        const existingTags = Array.isArray(q.tags) ? q.tags : (q.category_id ? [q.category_id] : []);
-        const newTags = [...new Set([...existingTags, marqueCatId])];
-        return { ...q, tags: newTags, category_id: q.category_id || marqueCatId };
-      }));
-    })();
-
-    return () => { cancelled = true; };
-  }, [questions, categories, brand, projectId, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const resultsByQ = useMemo(() => {
-    const m = {};
-    results.forEach(r => { if (!m[r.question_id]) m[r.question_id] = []; m[r.question_id].push(r); });
-    return m;
-  }, [results]);
-
-  const saveEdit = async () => {
-    if (!editingQ?.text?.trim()) return;
-    const newText = editingQ.text.trim();
-    const qId = editingQ.id;
-    // Optimistic update immediately
-    setQuestions(prev => prev.map(q => q.id === qId ? { ...q, question: newText } : q));
-    setEditingQ(null);
-    // Persist to Supabase
-    const ok = await sbUpdateQuestion(qId, { question: newText });
-    if (!ok) {
-      // Revert on failure
-      console.error("saveEdit failed — reverting");
-      setQuestions(prev => prev.map(q => q.id === qId ? { ...q, question: editingQ.text } : q));
-    }
-  };
-
-  const addManual = async () => {
-    const q = manualQ.trim();
-    if (!q) return;
-    const saved = await sbSaveQuestions([{ project_id: projectId, site_id: site.id, question: q, is_manual: true }]);
-    setQuestions(prev => [...saved, ...prev]);
-    setManualQ("");
-  };
-
-  // Génère des questions GEO à partir du contenu d'une URL (crawl léger → IA)
-  const generateFromUrl = async () => {
-    const resolvedKey = providerKeys?.openai?.dec || apiKey;
-    let url = (urlGenUrl || "").trim();
-    if (!url) return;
-    if (!/^https?:\/\//i.test(url)) url = "https://" + url;
-    if (!resolvedKey) { setUrlGenStatus("error:Clé OpenAI manquante (⚙️ Gestion des Providers)"); return; }
-    const n = Math.max(10, Math.min(25, parseInt(urlGenCount, 10) || 15));
-    try {
-      // 1) Crawl léger de la page
-      setUrlGenStatus("crawl");
-      const cres = await fetch("/api/crawl", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url }),
-      });
-      const ctext = await cres.text();
-      if (ctext.trimStart().startsWith("<")) throw new Error("Proxy /api/crawl introuvable");
-      let cdata;
-      try { cdata = JSON.parse(ctext); } catch { throw new Error(`Crawl non-JSON (${cres.status})`); }
-      if (!cres.ok || cdata.error) throw new Error(cdata.error || `Crawl ${cres.status}`);
-      const sections = Array.isArray(cdata.sections) ? cdata.sections : [];
-      // Construire un extrait compact du contenu (titres + texte), borné pour le prompt
-      const content = sections
-        .map(s => [s.title, s.text || s.content || ""].filter(Boolean).join(" : "))
-        .join("\n")
-        .slice(0, 6000);
-      if (!content.trim()) throw new Error("Aucun contenu exploitable sur cette page");
-
-      // 2) Génération des questions via OpenAI
-      setUrlGenStatus("gen");
-      const prompt = `Tu es un expert GEO (Generative Engine Optimization). À partir du CONTENU ci-dessous (extrait d'une page web), génère exactement ${n} questions de recherche que des utilisateurs poseraient à un moteur IA (ChatGPT, Gemini, Perplexity) sur ce sujet.
-
-OBJECTIF : chaque question doit naturellement amener l'IA à citer des noms de marques, d'enseignes, de sites ou d'entreprises concrètes — jamais une réponse purement générique.
-
-CONTRAINTES :
-- Couvre les différents thèmes/produits/services présents dans le contenu
-- Maximum 14 mots par question
-- Ton naturel, comme une vraie requête de recherche
-- Commence de préférence par "Quelles", "Quel", "Qui", "Lesquels"
-- Pas de doublons
-
-CONTENU DE LA PAGE :
-"""
-${content}
-"""
-
-Réponds UNIQUEMENT avec les ${n} questions séparées par des points-virgules (;), sans numérotation, sans texte avant ou après.`;
-
-      const res = await fetch("/api/openai", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Openai-Key": resolvedKey, "X-Openai-Endpoint": "completions" },
-        body: JSON.stringify({ model, messages: [{ role: "user", content: prompt }], temperature: 0.7, max_tokens: 700 }),
-      });
-      const text = await res.text();
-      if (text.trimStart().startsWith("<")) throw new Error("Proxy /api/openai introuvable");
-      let data;
-      try { data = JSON.parse(text); } catch { throw new Error(`Réponse non-JSON (${res.status})`); }
-      if (!res.ok) throw new Error(`OpenAI ${res.status}: ${data?.error?.message || data?.error || text.slice(0,120)}`);
-      const raw = (data?.choices?.[0]?.message?.content || "").trim();
-      if (!raw) throw new Error("Réponse vide");
-
-      const qs = raw
-        .split(/[;\n]/)
-        .map(s => s.replace(/^\s*\d+[.)\s]+/, "").trim())
-        .filter(s => s.length > 5 && s.length < 250);
-      // Dédoublonnage vs questions existantes
-      const existing = new Set(questions.map(q => (q.question || "").toLowerCase().trim()));
-      const fresh = qs.filter(q => !existing.has(q.toLowerCase().trim()));
-      if (!fresh.length) throw new Error("Aucune nouvelle question générée");
-
-      // 3) Sauvegarde — questions libres rattachées au site (sans mot-clé)
-      const saved = await sbSaveQuestions(fresh.map(q => ({
-        project_id: projectId, site_id: site.id, question: q, is_manual: false,
-      })));
-      const savedCount = Array.isArray(saved) ? saved.length : fresh.length;
-      setQuestions(prev => [...(Array.isArray(saved) ? saved : []), ...prev]);
-      setUrlGenStatus(`done:${savedCount}`);
-      setUrlGenUrl("");
-    } catch (e) {
-      console.error("generateFromUrl:", e);
-      setUrlGenStatus("error:" + (e.message || "échec"));
-    }
-  };
-
-  const importCsvQuestions = async (file) => {
-    if (!file) return;
-    setCsvImporting(true);
-    try {
-      const text = await file.text();
-      const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-
-      // Détecter si CSV avec header ou liste brute (une question par ligne)
-      let parsedQs = [];
-      const firstLine = lines[0] || "";
-      const sep = firstLine.includes(";") ? ";" : ",";
-      const headers = firstLine.split(sep).map(h => h.replace(/^["']|["']$/g, "").trim().toLowerCase());
-      const qColIdx = headers.findIndex(h => h === "question" || h === "questions" || h === "query" || h === "requête");
-
-      if (qColIdx >= 0) {
-        // CSV avec header — on prend la colonne question
-        parsedQs = lines.slice(1)
-          .map(l => { const col = l.split(sep)[qColIdx]; return col ? col.replace(/^["']|["']$/g, "").trim() : ""; })
-          .filter(Boolean);
-      } else {
-        // Pas de header détecté — une question par ligne
-        parsedQs = lines.map(l => l.replace(/^["']|["']$/g, "").trim()).filter(Boolean);
-      }
-
-      // Dédoublonner avec les questions déjà en base
-      const existingInBase = new Set(
-        questions.map(q => (q.question || "").trim().toLowerCase())
-      );
-      const toAdd = [...new Set(parsedQs)]
-        .filter(q => q && q.length > 5 && !existingInBase.has(q.toLowerCase()))
-        .map(q => ({ project_id: projectId, site_id: site.id, question: q, is_manual: true }));
-
-      if (toAdd.length === 0) {
-        alert("Aucune nouvelle question à importer (doublons ou fichier vide).");
-        return;
-      }
-
-      // Sauvegarder par batch de 50
-      const batchSize = 50;
-      const allSaved = [];
-      for (let i = 0; i < toAdd.length; i += batchSize) {
-        const batch = toAdd.slice(i, i + batchSize);
-        const saved = await sbSaveQuestions(batch);
-        allSaved.push(...(saved || []));
-      }
-
-      setQuestions(prev => [...allSaved, ...prev]);
-      alert(`✓ ${allSaved.length} question${allSaved.length > 1 ? "s" : ""} importée${allSaved.length > 1 ? "s" : ""} sur ${toAdd.length} détectée${toAdd.length > 1 ? "s" : ""}.`);
-    } catch(e) {
-      console.error("CSV import error:", e);
-      alert("Erreur lors de l'import : " + e.message);
-    } finally {
-      setCsvImporting(false);
-      if (csvInputRef.current) csvInputRef.current.value = "";
-    }
-  };
-
-  const MAX_FAVORITES = 50;
-  const toggleFav = async (qId, cur) => {
-    // Blocage : pas plus de 50 favoris (limite d'interrogation automatique)
-    if (!cur) {
-      const favCount = questions.filter(q => q.is_favorite).length;
-      if (favCount >= MAX_FAVORITES) {
-        alert(`Maximum ${MAX_FAVORITES} questions favorites. Retirez-en une avant d'en ajouter une nouvelle.`);
-        return;
-      }
-    }
-    await sbUpdateQuestion(qId, { is_favorite: !cur });
-    setQuestions(prev => prev.map(q => q.id === qId ? { ...q, is_favorite: !cur } : q));
-  };
-
-  const deleteQ = async (qId) => {
-    await sbDeleteQuestion(qId);
-    setQuestions(prev => prev.filter(q => q.id !== qId));
-    setSelected(prev => { const n = new Set(prev); n.delete(qId); return n; });
-  };
-
-  // ── Assigner ou créer un mot-clé pour une question ─────────────
-  const assignKeyword = async (q, kwName) => {
-    const trimmed = kwName.trim();
-    if (!trimmed) {
-      await sbUpdateQuestion(q.id, { keyword_id: null }).catch(() => {});
-      setQuestions(prev => prev.map(qq => qq.id === q.id ? { ...qq, keyword_id: null } : qq));
-      setEditingKw(null); setKwInput("");
-      return;
-    }
-    const existing = keywords.find(k => k.keyword.toLowerCase() === trimmed.toLowerCase());
-    let kwId;
-    if (existing) {
-      kwId = existing.id;
-    } else {
-      const saved = await sbSaveKeywords([{
-        project_id: projectId, site_id: site.id,
-        keyword: trimmed, status: "done_q",
-      }]).catch(() => []);
-      if (!saved?.length) return;
-      kwId = saved[0].id;
-      setKeywords(prev => [{ ...saved[0], question_count: 1 }, ...prev]);
-    }
-    await sbUpdateQuestion(q.id, { keyword_id: kwId }).catch(() => {});
-    setQuestions(prev => prev.map(qq => qq.id === q.id ? { ...qq, keyword_id: kwId } : qq));
-    if (existing) {
-      setKeywords(prev => prev.map(k => k.id === kwId ? { ...k, question_count: (k.question_count || 0) + 1 } : k));
-    }
-    setEditingKw(null); setKwInput("");
-  };
-
-  const removeCatFromQuestion = async (qId, catId) => {
-    setQuestions(prev => prev.map(q => {
-      if (q.id !== qId) return q;
-      const newTags = (Array.isArray(q.tags) ? q.tags : (q.category_id ? [q.category_id] : [])).filter(t => t !== catId);
-      const newPrimary = newTags[0] || null;
-      sbSetQuestionCategory(qId, newPrimary).catch(() => {});
-      sbSetKeywordTags(qId, newTags).catch(() => {});
-      return { ...q, category_id: newPrimary, tags: newTags };
-    }));
-  };
-
-  const applyBulkCat = async () => {
-    if (!selected.size || !bulkCat) return; // Ne rien faire si pas de catégorie sélectionnée
-    const ids = [...selected];
-    await sbBulkSetQuestionCategory(ids, bulkCat);
-    setQuestions(prev => prev.map(q => {
-      if (!selected.has(q.id)) return q;
-      // Multi-cat : ajouter la catégorie aux tags existants sans dupliquer
-      const existingTags = Array.isArray(q.tags) ? q.tags : (q.category_id ? [q.category_id] : []);
-      const newTags = existingTags.includes(bulkCat) ? existingTags : [...existingTags, bulkCat];
-      return { ...q, category_id: bulkCat, tags: newTags };
-    }));
-    setSelected(new Set()); setBulkCat("");
-  };
-
-
-
-  // Run a single provider on a single question
-  const runProvider = useCallback(async (q, provider) => {
-    const pk = providerKeysRef.current[provider.id];
-    if (!pk?.dec) { console.warn("No key for provider", provider.id); return; }
-    setRunning(r => ({ ...r, [`${q.id}-${provider.id}`]: true }));
-    const { brand_name = "", brand_aliases = [], competitors = [], context = "" } = brand || {};
-    const baseContext = context ? `Contexte : "${context}"\n` : "";
-    const question = `Question : ${q.question}`;
-    const promptForClaude = `${baseContext}Tu es un expert en recommandation d'entreprises et prestataires. Réponds à la question suivante en te basant sur tes connaissances pour donner une liste de vrais acteurs, entreprises ou prestataires du marché.
-RÈGLE : Ne dis jamais que tu n'as pas accès au web ou aux avis récents. Donne directement des recommandations concrètes avec les vrais noms d'entreprises que tu connais.
-Réponds en texte libre structuré. Liste les acteurs avec une courte description de chacun.
-Pour chaque acteur, indique son site web réel (URL complète https://…) afin qu'il apparaisse comme source.
-${question}`;
-    const promptForGemini = `${baseContext}Tu as accès à Google Search en temps réel. Utilise-le pour trouver les meilleurs acteurs, entreprises et prestataires actuels.
-Réponds avec une liste de vrais acteurs du marché, leurs sites web et leurs caractéristiques principales.
-Sois direct et factuel. Cite les sources que tu as consultées.
-${question}`;
-    const promptForWeb = [baseContext, "Tu es un assistant IA avec accès au web. Réponds directement et complètement à la question.", "RÈGLE ABSOLUE : Ne pose jamais de question de clarification. Donne directement une liste de recommandations concrètes.", "Pour chaque acteur recommandé : donne le nom, le site web, et une description courte.", "Sois factuel, précis, et cite tes sources.", question].filter(Boolean).join("\n");
-    let prompt = provider.id === "claude" ? promptForClaude : provider.id === "gemini" ? promptForGemini : promptForWeb;
-
-    // ── Modèle + mode choisis pour ce provider (config localStorage) ──
-    let cfg = {};
-    try { cfg = JSON.parse(localStorage.getItem(`geoProviderCfg_${projectId}`) || "{}")[provider.id] || {}; } catch { cfg = {}; }
-    const chosenModel = cfg.model || provider.model;
-    const modeId = cfg.mode || "standard";
-    const modeMaxTokens = modeId === "discussion" ? 3072 : modeId === "fidelity" ? 2048 : 1024;
-    // Le mode enrichit la consigne (et fait varier la longueur → le coût)
-    if (modeId === "fidelity") {
-      prompt += "\n\nConsigne de fiabilité : réponds comme le ferait un moteur de recherche web récent. Donne une réponse complète, structurée et SOURCÉE (URLs réelles), en privilégiant la concordance avec ce qu'un utilisateur trouverait dans son navigateur.";
-    } else if (modeId === "discussion") {
-      prompt += "\n\nConsigne de discussion : simule un échange réaliste de plusieurs messages autour de cette question transactionnelle (questions de suivi pertinentes + réponses), puis conclus par une synthèse des acteurs recommandés.";
-    }
-    const effectiveProvider = { ...provider, model: chosenModel };
-    try {
-      const parsed = await callProvider(effectiveProvider, pk.dec, prompt, modeMaxTokens);
-      const detectedBrand = detectBrand(parsed.answer, parsed.sources, brand_name, brand_aliases, competitors);
-      const { brandMentioned, brandPosition, brandInSources, competitorsMentioned, unknownEntities } = detectedBrand;
-      const domain_counts = {};
-      (parsed.sources || []).forEach(url => {
-        if (!domain_counts[url]) domain_counts[url] = { as_source: 0, in_answer: 0, domain: extractDomain(url) };
-        domain_counts[url].as_source++;
-      });
-      await Promise.all(Object.entries(domain_counts).map(([url, counts]) => sbIncrementUrlCounts(projectId, url, counts)));
-      const now = new Date().toISOString();
-      const record = {
-        question_id: q.id, project_id: projectId, site_id: site.id,
-        model: `${provider.label} (${chosenModel})`,
-        answer: parsed.answer, answer_type: parsed.answer_type, intent_type: parsed.intent_type,
-        sources: parsed.sources, source_types: parsed.source_types,
-        brand_mentioned: brandMentioned, brand_position: brandPosition,
-        brand_in_sources: brandInSources, competitors_mentioned: competitorsMentioned, unknown_entities: unknownEntities || [],
-        // Nouveaux champs de présence détaillés
-        brand_mention_position:   detectedBrand.mention?.position   || null,
-        brand_evocation_position: detectedBrand.evocation?.position || null,
-        brand_citation_position:  detectedBrand.citation?.position  || null,
-        input_tokens: parsed._input_tokens, output_tokens: parsed._output_tokens,
-        created_at: now,
-      };
-      // Optimistic local update — immediately update the card
-      const pid = getProviderId(record.model);
-      const optimisticResult = { ...record, id: `tmp-${pid}-${q.id}`, provider_id: pid };
-      setResults(prev => {
-        const existing = prev.findIndex(r => r.question_id === q.id && getProviderId(r.model) === pid);
-        if (existing >= 0) {
-          const updated = [...prev];
-          updated[existing] = { ...updated[existing], ...optimisticResult };
-          return updated;
-        }
-        return [optimisticResult, ...prev];
-      });
-
-      // Persist to Supabase in background — update with real id when done
-      sbSaveGeoResult(record).then(saved => {
-        const real = Array.isArray(saved) ? saved[0] : saved;
-        if (real?.id) {
-          setResults(prev => prev.map(r =>
-            r.id === optimisticResult.id ? { ...r, ...real } : r
-          ));
-        }
-      }).catch(e => console.error("sbSaveGeoResult error:", e));
-
-      // Déterminer le type de présence + position pour le calendrier
-      const presTypeForCal = record.brand_mention_position != null ? "mention"
-        : brandMentioned ? "evocation"
-        : record.brand_in_sources ? "citation"
-        : null;
-      const mentionPosForCal = record.brand_mention_position != null ? record.brand_mention_position : null;
-      // Add to calendar (optimistic + persist) — avec type + position
-      setNewCalEntries(prev => ({ ...prev, [`${q.id}|${provider.id}`]: { provider_id: provider.id, brand_present: brandMentioned, presType: presTypeForCal, mentionPos: mentionPosForCal } }));
-      // Persist to DB (best effort)
-      sbAddCalendarEntry(q.id, provider.id, brandMentioned, presTypeForCal, mentionPosForCal).catch(() => {});
-
-      // Update cached answers on question
-      const cachePatch = { has_result: true, last_answer: parsed.answer, last_model: record.model, last_date: now };
-      if (brandMentioned) Object.assign(cachePatch, { best_answer: parsed.answer, best_model: record.model, best_date: now });
-      sbUpdateQuestion(q.id, cachePatch).catch(() => {});
-      setQuestions(prev => prev.map(qq => qq.id === q.id ? { ...qq, ...cachePatch } : qq));
-      // Notify parent for global stats (non-blocking)
-      onResultSaved?.();
-    } catch(e) {
-      console.error(`runProvider ${provider.id} error:`, e);
-      // Afficher l'erreur dans l'UI (badge rouge sur la ligne provider)
-      setProviderErrors(prev => ({ ...prev, [`${q.id}-${provider.id}`]: e.message }));
-      // Auto-clear après 30s
-      setTimeout(() => setProviderErrors(prev => { const n = {...prev}; delete n[`${q.id}-${provider.id}`]; return n; }), 30000);
-    }
-    setRunning(r => ({ ...r, [`${q.id}-${provider.id}`]: false }));
-  }, [brand, projectId, site?.id, providerKeys, onResultSaved]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Per question: latest result (most recent by created_at)
-  const latestResultByQ = useMemo(() => {
-    const out = {};
-    Object.entries(resultsByQ).forEach(([qId, results]) => {
-      if (!results.length) return;
-      const sorted = [...results].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-      out[qId] = sorted[0];
-    });
-    return out;
-  }, [resultsByQ]);
-
-  // ── Rang de tri "par résultat" (pour le bouton trier) ───────────────
-  // Ordre voulu : 1) mentions par position croissante (Top1, Top2…)
-  //               2) évocations sans mention
-  //               3) citations sans mention ni évocation
-  //               4) le reste (aucune présence / sans résultat)
-  // On agrège TOUS les résultats d'une question et on garde sa meilleure présence.
-  const resultRankByQ = useMemo(() => {
-    const out = {};
-    const allQIds = new Set([...Object.keys(resultsByQ), ...questions.map(q => q.id)]);
-    allQIds.forEach(qId => {
-      const rs = resultsByQ[qId] || [];
-      let bestMentionPos = null, hasEvocation = false, hasCitation = false;
-      rs.forEach(r => {
-        const mPos = r.brand_mention_position ?? (r.brand_position != null && r.brand_position > 0 ? r.brand_position : null);
-        if (mPos != null && mPos > 0) {
-          if (bestMentionPos == null || mPos < bestMentionPos) bestMentionPos = mPos;
-        }
-        const evPos = r.brand_evocation_position;
-        if (evPos != null || (r.brand_mentioned === true || r.brand_mentioned === 1)) hasEvocation = true;
-        if (r.brand_citation_position != null || r.brand_in_sources) hasCitation = true;
-      });
-      // tier : 0 = mention, 1 = évocation, 2 = citation, 3 = reste
-      let tier, pos;
-      if (bestMentionPos != null) { tier = 0; pos = bestMentionPos; }
-      else if (hasEvocation)      { tier = 1; pos = 0; }
-      else if (hasCitation)       { tier = 2; pos = 0; }
-      else                        { tier = 3; pos = 0; }
-      out[qId] = { tier, pos };
-    });
-    return out;
-  }, [resultsByQ, questions]);
-
-  // Per question: était positionnée dans les 30 derniers jours (carré vert calendrier)
-  // mais absente du dernier résultat → "Positionnée précédemment"
-  const lostByQ = useMemo(() => {
-    const out = {};
-
-    // Cutoff en string YYYY-MM-DD pour comparer directement avec test_date (évite les bugs timezone)
-    const cutoffStr = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-
-    // Grouper les entrées calendar par question_id
-    const calByQ = {};
-    calendarEntries.forEach(e => {
-      if (!e.question_id) return;
-      if (!calByQ[e.question_id]) calByQ[e.question_id] = [];
-      calByQ[e.question_id].push(e);
-    });
-
-    // Parcourir toutes les questions qui ont des entrées calendar OU des résultats
-    const allQIds = new Set([...Object.keys(resultsByQ), ...Object.keys(calByQ)]);
-
-    allQIds.forEach(qId => {
-      // Condition 1 : marque absente du dernier résultat connu
-      const latest = latestResultByQ[qId];
-      const latestAbsent = !latest || !(latest.brand_mentioned === true || latest.brand_mentioned === 1);
-      if (!latestAbsent) return; // encore positionnée → pas "perdue"
-
-      // Condition 2 : au moins un carré vert dans les 30 derniers jours
-      // test_date est une string "YYYY-MM-DD" — comparaison string directe, pas de Date()
-      const entries = calByQ[qId] || [];
-      const hadGreenIn30d = entries.some(e => {
-        const dateStr = e.test_date || (e.created_at || "").slice(0, 10);
-        return dateStr >= cutoffStr && (e.brand_present === true || e.brand_present === 1);
-      });
-
-      if (hadGreenIn30d) out[qId] = true;
-    });
-
-    return out;
-  }, [calendarEntries, resultsByQ, latestResultByQ]);
-
-  const filtered = useMemo(() => { const base = sortedQuestions.filter(q => {
-    // Filtres cumulatifs (ET)
-    if (filterFav && !q.is_favorite) return false;
-    if (filterCat && q.category_id !== filterCat) return false;
-    if (filterKeyword && q.keyword_id !== filterKeyword) return false;
-    if (filterSearch) {
-      // Construire le texte cible selon le champ choisi (question/réponse/mention/évocation/citation)
-      const qRes = resultsByQ[q.id] || [];
-      let haystack = "";
-      if (searchField === "question") {
-        haystack = q.question || "";
-      } else if (searchField === "answer") {
-        haystack = qRes.map(r => r.answer || "").join("\n");
-      } else if (searchField === "mention") {
-        // éléments classés (mention) : nom de la marque/concurrents positionnés
-        haystack = qRes.flatMap(r => [
-          ...((r.brand_mention_position != null) ? [brand_name] : []),
-          ...(r.competitors_mentioned || []).filter(c => c.position != null && c.position > 0).map(c => c.name),
-        ]).join(" ");
-      } else if (searchField === "evocation") {
-        haystack = qRes.flatMap(r => [
-          ...((r.brand_mentioned && r.brand_mention_position == null) ? [brand_name] : []),
-          ...(r.competitors_mentioned || []).filter(c => c.mentioned && !(c.position != null && c.position > 0)).map(c => c.name),
-        ]).join(" ");
-      } else if (searchField === "citation") {
-        haystack = qRes.flatMap(r => (r.sources || [])).join(" ");
-      }
-      try {
-        const rx = new RegExp(filterSearch, 'i');
-        if (!rx.test(haystack)) return false;
-      } catch { if (!haystack.toLowerCase().includes(filterSearch.toLowerCase())) return false; }
-    }
-    if (filterProviders.length > 0) {
-      const qRes = resultsByQ[q.id] || [];
-      if (!qRes.some(r => filterProviders.includes(getProviderId(r.model)))) return false;
-    }
-    // Positionné ET/OU Positionné précédemment — condition OU non-exclusif si les deux sont actifs
-    if (filterPositioned || filterLost) {
-      const latest = latestResultByQ[q.id];
-      const isPositioned = !!(latest && (latest.brand_mentioned === true || latest.brand_mentioned === 1));
-      const isLost = !!lostByQ[q.id];
-      // OU non-exclusif : la question doit matcher au moins un des filtres actifs
-      const matchPositioned = filterPositioned && isPositioned;
-      const matchLost = filterLost && isLost;
-      if (!matchPositioned && !matchLost) return false;
-    }
-    return true;
-  });
-    // Tri optionnel "par résultat" : mentions (pos croissante) → évocations → citations → reste.
-    // À égalité de tier/pos, on conserve l'ordre de base (favoris-first puis mot-clé).
-    if (!sortByResult) return base;
-    return base
-      .map((q, i) => ({ q, i, rank: resultRankByQ[q.id] || { tier: 3, pos: 0 } }))
-      .sort((a, b) => {
-        if (a.rank.tier !== b.rank.tier) return a.rank.tier - b.rank.tier;
-        if (a.rank.pos !== b.rank.pos)   return a.rank.pos - b.rank.pos; // position croissante (Top1 avant Top2)
-        return a.i - b.i; // stabilité : ordre de base
-      })
-      .map(x => x.q);
-  }, [questions, filterFav, filterCat, filterKeyword, filterSearch, searchField, filterProviders, filterPositioned, filterLost, resultsByQ, latestResultByQ, lostByQ, sortByResult, resultRankByQ]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Returns providers that still need to be called for a question today
-  const getProvidersToRun = (q, force = false) => {
-    const currentKeys = providerKeysRef.current;
-    const currentActive = activeProvidersRef.current;
-    const configuredProviders = PROVIDERS.filter(p => currentActive.includes(p.id) && currentKeys[p.id]?.dec);
-    if (force) return configuredProviders; // always run all when forced (individual ▶ button)
-    const today = new Date().toISOString().slice(0, 10);
-    const qResults = resultsByQ[q.id] || [];
-    return configuredProviders.filter(p => {
-      // Skip if already generated today for this provider
-      const alreadyToday = qResults.some(r =>
-        getProviderId(r.model) === p.id &&
-        r.created_at && r.created_at.slice(0, 10) === today
-      );
-      return !alreadyToday;
-    });
-  };
-
-  const runAllQuestions = async () => {
-    const toRun = filtered
-      .map(q => ({ q, providers: getProvidersToRun(q, false) }))
-      .filter(({ providers }) => providers.length > 0);
-    if (!toRun.length) return;
-    stopAllRef.current = false;
-    setRunAll(true);
-    for (const { q, providers } of toRun) {
-      if (stopAllRef.current) break;
-      setRunning(r => ({ ...r, [q.id]: true }));
-      await Promise.all(providers.map(p => runProvider(q, p)));
-      setRunning(r => ({ ...r, [q.id]: false }));
-    }
-    setRunAll(false);
-  };
-
-  const { brand_name = "", brand_aliases = [] } = brand || {};
-
-  // Results for filtered questions, filtered by provider selection
-  const filteredResults = useMemo(() => {
-    const qIds = new Set(filtered.map(q => q.id));
-    return results.filter(r => {
-      if (!qIds.has(r.question_id)) return false;
-      if (filterProviders.length > 0 && !filterProviders.includes(getProviderId(r.model))) return false;
-      return true;
-    });
-  }, [filtered, results, filterProviders]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Count questions to generate for "Lancer tout" indicator
-  const toRunCount = useMemo(() => {
-    const today = new Date().toISOString().slice(0, 10);
-    const configuredProviders = PROVIDERS.filter(p =>
-      activeProviders.includes(p.id) && providerKeys[p.id]?.dec
-    );
-    if (!configuredProviders.length) return 0;
-    return filtered.filter(q => {
-      const qResults = resultsByQ[q.id] || [];
-      // Count questions that have at least one provider not yet done today
-      return configuredProviders.some(p =>
-        !qResults.some(r =>
-          getProviderId(r.model) === p.id &&
-          r.created_at && r.created_at.slice(0, 10) === today
-        )
-      );
-    }).length;
-  }, [filtered, resultsByQ, activeProviders, providerKeys]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  return (
-    <div>
-      {/* ── GEO Analysis ── */}
-      <div data-tour="geo-analysis"><GeoAnalysis
-        questions={questions}
-        results={results}
-        brand={brand}
-        claudeKey={providerKeysRef.current["claude"]?.dec || ""}
-        projectId={projectId}
-        siteId={site?.id}
-      /></div>
-
-      {/* ── Et maintenant ? — plan d'action priorisé ── */}
-      <NextStepsAnalysis
-        questions={questions}
-        results={results}
-        brand={brand}
-        categories={categories}
-        gscRows={gscRows}
-        claudeKey={providerKeysRef.current["claude"]?.dec || ""}
-        projectId={projectId}
-        siteId={site?.id}
-      />
-
-      {/* ── Stats header (filtered) ── */}
-      <div data-tour="stats-header"><StatsHeader questions={filtered} results={filteredResults} brandName={brand_name} qualifiedCompetitors={competitors.filter(c => c.enabled !== false)} aliasMap={aliasMap}
-            onTopClick={(field, name) => { setSearchField(field); setFilterSearch(name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")); }} /></div>
-
-      {/* ══════════════════════════════════════════════════════
-           ZONE AJOUT + FILTRES + ACTIONS
-           Layout : 3 lignes séparées par des dividers 0.5px
-           ══════════════════════════════════════════════════════ */}
-      <div style={{ marginBottom: 20 }}>
-
-        {/* ── Ligne 1 : Ajout de questions ── */}
-        <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
-
-          {/* Saisie manuelle */}
-          <input
-            value={manualQ}
-            onChange={e => setManualQ(e.target.value)}
-            onKeyDown={e => e.key === "Enter" && addManual()}
-            placeholder="Ajouter une question…"
-            className="gt-input"
-            style={{ flex: "1 1 260px", minWidth: 200 }}
-          />
-          <button
-            onClick={addManual}
-            disabled={!manualQ.trim()}
-            className="gt-btn"
-            style={{ opacity: !manualQ.trim() ? 0.35 : 1 }}>
-            + Ajouter
-          </button>
-
-          {/* Séparateur vertical */}
-          <div style={{ width: "0.5px", height: 20, background: "#1A3C2E18", flexShrink: 0 }} />
-
-          {/* Import CSV */}
-          <input ref={csvInputRef} type="file" accept=".csv,.txt" style={{ display: "none" }} onChange={e => importCsvQuestions(e.target.files?.[0])} />
-          <button
-            onClick={() => csvInputRef.current?.click()}
-            disabled={csvImporting}
-            className="gt-btn gt-btn--ghost"
-            style={{ opacity: csvImporting ? 0.4 : 1 }}>
-            {csvImporting ? "Import…" : "↑ CSV"}
-          </button>
-
-          {/* Séparateur vertical */}
-          <div style={{ width: "0.5px", height: 20, background: "#1A3C2E18", flexShrink: 0 }} />
-
-          {/* Catégories — inline compact (comme KeywordsTab) */}
-          <CategoryManager
-            projectId={projectId}
-            categories={categories}
-            setCategories={setCategories}
-            compact
-          />
-        </div>
-
-        {/* ── Ligne 2 : Filtres ── */}
-        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", paddingBottom: 10, borderBottom: "0.5px solid #1A3C2E08", marginBottom: 10 }}>
-
-          {/* Recherche — choix du champ + saisie regex */}
-          <select value={searchField} onChange={e => setSearchField(e.target.value)} className="gt-select" title="Sur quel texte appliquer la recherche">
-            <option value="question">Questions</option>
-            <option value="answer">Réponses</option>
-            <option value="mention">Mentions</option>
-            <option value="evocation">Évocations</option>
-            <option value="citation">Citations</option>
-          </select>
-          <input
-            value={filterSearch}
-            onChange={e => setFilterSearch(e.target.value)}
-            placeholder="Rechercher (regex)…"
-            className="gt-input"
-            style={{ width: 160 }}
-          />
-
-          {/* Catégorie */}
-          <CatSelect value={filterCat} categories={categories} onChange={v => setFilterCat(v || "")} placeholder="Catégorie" />
-
-          {/* Mot-clé */}
-          <select value={filterKeyword} onChange={e => setFilterKeyword(e.target.value)} className="gt-select">
-            <option value="">Tous les mots-clés</option>
-            {keywords.map(k => <option key={k.id} value={k.id}>{k.keyword}</option>)}
-          </select>
-
-          {/* Divider */}
-          <div style={{ width: "0.5px", height: 16, background: "#1A3C2E12", flexShrink: 0 }} />
-
-          {/* Pills de présence */}
-          <button className={`gt-filter-pill${filterFav ? " gt-filter-pill--active" : ""}`} onClick={() => setFilterFav(f => !f)} title="Questions favorites">⭐ Favoris</button>
-          <button className={`gt-filter-pill${filterPositioned ? " gt-filter-pill--active" : ""}`} onClick={() => setFilterPositioned(f => !f)} title="Marque présente dans le dernier résultat">Positionnée</button>
-          <button className={`gt-filter-pill${filterLost ? " gt-filter-pill--active" : ""}`} onClick={() => setFilterLost(f => !f)} title="Positionnée dans les 30j, absente du dernier résultat">Perdue</button>
-
-          {/* Divider */}
-          <div style={{ width: "0.5px", height: 16, background: "#1A3C2E12", flexShrink: 0 }} />
-
-          {/* Tri par résultat — discret */}
-          <button
-            onClick={() => setSortByResult(s => !s)}
-            title="Trier par résultat : mentions (Top 1, 2, 3…) puis évocations, puis citations, puis le reste"
-            style={{
-              display: "inline-flex", alignItems: "center", gap: 5, flexShrink: 0,
-              padding: "4px 10px", borderRadius: 20, fontSize: 11, fontWeight: 500, cursor: "pointer",
-              border: `0.5px solid ${sortByResult ? "#1A7A4A" : "#1A3C2E22"}`,
-              background: sortByResult ? "#1A7A4A" : "transparent",
-              color: sortByResult ? "#fff" : "#1A3C2E77",
-            }}>
-            <span style={{ fontSize: 12 }}>⇅</span> Trier par résultat
-          </button>
-
-          {/* Reset — apparaît seulement si filtre actif */}
-          {(filterSearch || filterCat || filterKeyword || filterFav || filterPositioned || filterLost || filterProviders.length > 0 || sortByResult) && (
-            <button
-              onClick={() => { setFilterSearch(""); setFilterCat(""); setFilterKeyword(""); setFilterFav(false); setFilterPositioned(false); setFilterLost(false); setFilterProviders([]); setSortByResult(false); }}
-              className="gt-btn-icon"
-              title="Effacer tous les filtres"
-              style={{ fontSize: 12, color: "#1A3C2E44" }}>
-              ✕
-            </button>
-          )}
-
-          {/* Compteur */}
-          <span className="gt-caption" style={{ marginLeft: 4 }}>
-            {filtered.length} question{filtered.length > 1 ? "s" : ""}
-          </span>
-        </div>
-
-        {/* ── Ligne 3 : Providers + sélection + export + lancement ── */}
-        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-
-          {/* Providers — pills */}
-          <div className="geo-provider-pills" data-tour="provider-pills">
-          {PROVIDERS.map(p => {
-            const active = filterProviders.includes(p.id);
-            const hasKey = !!providerKeys[p.id]?.dec;
-            return (
-              <button key={p.id}
-                onClick={() => hasKey && setFilterProviders(prev => active ? prev.filter(id => id !== p.id) : [...prev, p.id])}
-                className={`gt-filter-pill${active && hasKey ? " gt-filter-pill--active" : ""}`}
-                style={{ opacity: hasKey ? 1 : 0.3, cursor: hasKey ? "pointer" : "not-allowed" }}
-                title={!hasKey ? `Clé ${p.label} manquante` : p.label}>
-                {p.label}
-              </button>
-            );
-          })}
-
-          </div>
-          {/* Divider */}
-          <div style={{ width: "0.5px", height: 16, background: "#1A3C2E12", flexShrink: 0 }} />
-
-          {/* Sélection */}
-          <button
-            onClick={() => setSelected(new Set(filtered.map(q => q.id)))}
-            className="gt-btn-icon"
-            title="Tout sélectionner"
-            style={{ fontSize: 11, color: "#1A3C2E55", padding: "3px 8px" }}>
-            Tout
-          </button>
-          {selected.size > 0 && (
-            <>
-              <button onClick={() => setSelected(new Set())} className="gt-btn-icon" style={{ fontSize: 11, color: "#1A3C2E55", padding: "3px 8px" }}>Aucun</button>
-              <span className="gt-caption" style={{ color: "#1A3C2E77" }}>{selected.size} sél.</span>
-              <CatSelect value={bulkCat} categories={categories} onChange={setBulkCat} placeholder="Catégoriser…" />
-              {bulkCat && (
-                <button onClick={applyBulkCat} className="gt-btn" style={{ padding: "3px 12px" }}>Appliquer</button>
-              )}
-            </>
-          )}
-
-          <div style={{ flex: 1 }} />
-          <div className="geo-toolbar-actions">
-          {/* Générer depuis une URL */}
-          {!isReadOnly && (
-            <button
-              onClick={() => { setUrlGenOpen(o => !o); setUrlGenStatus(""); }}
-              className={`gt-btn ${urlGenOpen ? "gt-btn--solid" : "gt-btn--ghost"}`}
-              title="Générer des questions à partir du contenu d'une URL"
-              style={{ padding: "3px 12px" }}>
-              🌐 Générer depuis une URL
-            </button>
-          )}
-          {/* Rafraîchir */}
-          <button
-            onClick={() => sbGetQuestions(projectId, site.id).then(setQuestions)}
-            className="gt-btn-icon"
-            title="Rafraîchir"
-            style={{ fontSize: 13 }}>
-            ↺
-          </button>
-
-          {/* Export */}
-          <span data-tour="export-btn"><ExportFanoutBtn
-            questions={filtered}
-            results={results}
-            brandName={brand?.brand_name || ""}
-            brandAliases={brand?.brand_aliases || []}
-            keywords={keywords}
-            projectName={site?.name || "export"}
-            hintsMap={hintsMap}
-            latestResultByQ={latestResultByQ}
-            lostByQ={lostByQ}
-          />
-          </span>
-
-          {/* Lancer tout */}
-          {!isReadOnly && (
-            <>
-              <button
-                data-tour="run-all"
-                onClick={runAllQuestions}
-                disabled={runAll || toRunCount === 0}
-                className={`gt-btn ${toRunCount > 0 ? "gt-btn--solid" : "gt-btn--ghost"}`}
-                title={toRunCount === 0 ? "Tout interrogé aujourd'hui" : `Interroger ${toRunCount} question${toRunCount > 1 ? "s" : ""} sans réponse`}>
-                {runAll ? "…" : toRunCount > 0 ? `▶ Lancer (${toRunCount})` : "✓ Généré"}
-              </button>
-              {runAll && (
-                <button onClick={() => { stopAllRef.current = true; setRunAll(false); }} className="gt-btn gt-btn--ghost" style={{ borderColor: "#C0352A33", color: "#C0352A" }}>⏹</button>
-              )}
-            </>
-          )}
-          </div>
-        </div>
-      </div>
-
-      {/* ── Panneau : Générer des questions depuis une URL ── */}
-      {urlGenOpen && !isReadOnly && (
-        <div style={{ margin: "0 0 16px", padding: "14px 16px", background: "#F6F8F7", border: "0.5px solid #1A3C2E14", borderRadius: 10 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: "#1A3C2E", marginBottom: 4 }}>Générer des questions depuis une URL</div>
-          <div style={{ fontSize: 11, color: "#1A3C2E77", marginBottom: 12 }}>
-            La page est crawlée légèrement, puis l'IA en déduit des questions de recherche. Les questions sont rattachées au site (sans mot-clé).
-          </div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-            <input
-              value={urlGenUrl}
-              onChange={e => setUrlGenUrl(e.target.value)}
-              onKeyDown={e => e.key === "Enter" && urlGenStatus !== "crawl" && urlGenStatus !== "gen" && generateFromUrl()}
-              placeholder="https://exemple.fr/page…"
-              style={{ flex: "1 1 260px", padding: "7px 11px", border: "1px solid #E2E8F0", borderRadius: 8, fontSize: 12 }} />
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-              <span style={{ fontSize: 11, color: "#1A3C2E77" }}>Nombre</span>
-              <input type="range" min="10" max="25" value={urlGenCount}
-                onChange={e => setUrlGenCount(parseInt(e.target.value, 10))}
-                style={{ accentColor: "#1A3C2E", cursor: "pointer", width: 110 }} />
-              <span style={{ fontSize: 13, fontWeight: 700, color: "#1A3C2E", minWidth: 20, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{urlGenCount}</span>
-            </div>
-            <button
-              onClick={generateFromUrl}
-              disabled={!urlGenUrl.trim() || urlGenStatus === "crawl" || urlGenStatus === "gen"}
-              className="gt-btn gt-btn--solid"
-              style={{ padding: "7px 16px", opacity: (!urlGenUrl.trim() || urlGenStatus === "crawl" || urlGenStatus === "gen") ? 0.5 : 1 }}>
-              {urlGenStatus === "crawl" ? "⏳ Lecture de la page…" : urlGenStatus === "gen" ? "⏳ Génération…" : "Générer"}
-            </button>
-          </div>
-          {urlGenStatus.startsWith("done:") && (
-            <div style={{ marginTop: 10, fontSize: 12, color: "#1A7A4A", fontWeight: 600 }}>
-              ✓ {urlGenStatus.slice(5)} question{parseInt(urlGenStatus.slice(5), 10) > 1 ? "s" : ""} ajoutée{parseInt(urlGenStatus.slice(5), 10) > 1 ? "s" : ""}.
-            </div>
-          )}
-          {urlGenStatus.startsWith("error:") && (
-            <div style={{ marginTop: 10, fontSize: 12, color: "#C0352A" }}>
-              ✗ {urlGenStatus.slice(6)}
-            </div>
-          )}
-        </div>
-      )}
-
-            {/* Questions list */}
-      {filtered.length === 0 ? (
-        <div style={{ textAlign: "center", padding: 40, color: C.textLight, fontSize: 12 }}>
-          {questions.length === 0 ? "Aucune question — générez-en depuis les mots-clés ou ajoutez-en manuellement" : "Aucune question ne correspond aux filtres"}
-        </div>
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {filtered.map((q, idx) => {
-            const qResults = resultsByQ[q.id] || [];
-            const hasBrand = qResults.some(r => r.brand_mentioned === true || r.brand_mentioned === 1);
-            const isRunning = running[q.id];
-            const isSel = selected.has(q.id);
-            const kwTag = keywords.find(k => k.id === q.keyword_id);
-            return (
-              <div key={q.id} className={`gt-item${isSel ? " gt-item--selected" : ""}`} style={{
-              borderLeft: `2px solid ${hasBrand ? "#1A7A4A" : q.is_favorite ? "#C97820" : "#1A3C2E11"}`,
-              paddingLeft: 12,
-              borderRadius: 0,
-            }}>
-                <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
-                  <span style={{ flexShrink: 0, marginTop: 1, minWidth: 22, textAlign: "right", fontSize: 11, fontWeight: 600, color: "#1A3C2E33", fontVariantNumeric: "tabular-nums", userSelect: "none" }}>{idx + 1}</span>
-                  <input type="checkbox" checked={isSel} onChange={() => { setSelected(prev => { const n = new Set(prev); n.has(q.id) ? n.delete(q.id) : n.add(q.id); return n; }); }} style={{ cursor: "pointer", flexShrink: 0, marginTop: 2 }} />
-                  <button onClick={() => toggleFav(q.id, q.is_favorite)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, flexShrink: 0, opacity: q.is_favorite ? 0.9 : 0.2, transition: "opacity 0.2s" }}>⭐</button>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    {/* Question text — edit mode or display */}
-                    {editingQ?.id === q.id ? (
-                      <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 6 }}>
-                        <input
-                          autoFocus
-                          value={editingQ.text}
-                          onChange={e => setEditingQ(prev => ({ ...prev, text: e.target.value }))}
-                          onKeyDown={e => { if (e.key === "Enter") saveEdit(); if (e.key === "Escape") setEditingQ(null); }}
-                          style={{ flex: 1, padding: "5px 10px", border: `1px solid #2563EB`, borderRadius: 7, fontSize: 13, fontWeight: 600, color: C.text }}
-                        />
-                        <button onClick={saveEdit} style={{ padding: "4px 10px", background: "#2563EB", color: "#fff", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>✓</button>
-                        <button onClick={() => setEditingQ(null)} style={{ padding: "4px 8px", background: "#FAFAF8", color: C.textLight, border: "0.5px solid #1A3C2E0D", borderRadius: 6, fontSize: 11, cursor: "pointer" }}>✕</button>
-                      </div>
-                    ) : (
-                      <div className="gt-item-text">{q.question}</div>
-                    )}
-                    <div style={{ display: "flex", gap: 5, marginTop: 4, flexWrap: "wrap", alignItems: "center" }}>
-                      {/* ── Mot-clé : affichage + édition inline ── */}
-                      {editingKw === q.id ? (
-                        /* Mode édition : input autocomplete sur les keywords existants */
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                          <input
-                            autoFocus
-                            list={`kw-list-${q.id}`}
-                            value={kwInput}
-                            onChange={e => setKwInput(e.target.value)}
-                            onKeyDown={e => {
-                              if (e.key === "Enter") assignKeyword(q, kwInput);
-                              if (e.key === "Escape") { setEditingKw(null); setKwInput(""); }
-                            }}
-                            placeholder="Mot-clé…"
-                            style={{ fontSize: 10, padding: "2px 7px", border: "0.5px solid #1A3C2E33", borderRadius: 8, outline: "none", width: 120, color: "#1A3C2E" }}
-                          />
-                          <datalist id={`kw-list-${q.id}`}>
-                            {keywords.map(k => <option key={k.id} value={k.keyword} />)}
-                          </datalist>
-                          <button onClick={() => assignKeyword(q, kwInput)}
-                            style={{ fontSize: 10, padding: "2px 6px", background: "#1A3C2E", color: "#F0EBE0", border: "none", borderRadius: 5, cursor: "pointer" }}>✓</button>
-                          {kwTag && (
-                            <button onClick={() => assignKeyword(q, "")}
-                              title="Retirer le mot-clé"
-                              style={{ fontSize: 10, padding: "2px 5px", background: "none", border: "0.5px solid #C0352A22", borderRadius: 5, color: "#C0352A55", cursor: "pointer" }}>✕</button>
-                          )}
-                          <button onClick={() => { setEditingKw(null); setKwInput(""); }}
-                            style={{ fontSize: 10, color: "#1A3C2E33", background: "none", border: "none", cursor: "pointer" }}>annuler</button>
-                        </span>
-                      ) : (
-                        /* Mode affichage : badge cliquable */
-                        <span
-                          onClick={() => { setEditingKw(q.id); setKwInput(kwTag?.keyword || ""); }}
-                          title="Cliquer pour assigner un mot-clé"
-                          style={{ fontSize: 10, color: kwTag ? "#1A3C2E77" : "#1A3C2E33", background: kwTag ? "#FAFAF8" : "transparent", border: `0.5px solid ${kwTag ? "#1A3C2E0D" : "#1A3C2E11"}`, borderRadius: 10, padding: "1px 7px", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 3 }}>
-                          🔑 {kwTag ? kwTag.keyword : <em style={{ fontStyle: "italic" }}>ajouter un mot-clé</em>}
-                          {kwTag?.search_volume > 0 && (
-                            <span style={{ color: "#1A3C2E33", marginLeft: 3 }}>
-                              {kwTag.search_volume >= 1000 ? (kwTag.search_volume / 1000).toFixed(1) + "k" : kwTag.search_volume}
-                            </span>
-                          )}
-                        </span>
-                      )}
-                      {/* Multi-catégories */}
-                  {(Array.isArray(q.tags) ? q.tags : (q.category_id ? [q.category_id] : [])).map(tagId => {
-                    const tagCat = categories.find(c => c.id === tagId);
-                    return tagCat ? (
-                      <span key={tagId} style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 10, fontWeight: 500, color: tagCat.color, background: "transparent", border: `0.5px solid ${tagCat.color}44`, borderRadius: 20, padding: "2px 9px" }}>
-                        {tagCat.name}
-                        <button onClick={e => { e.stopPropagation(); removeCatFromQuestion(q.id, tagId); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 9, color: tagCat.color, padding: 0, lineHeight: 1, opacity: 0.6 }}>×</button>
-                      </span>
-                    ) : null;
-                  })}
-                      {q.is_manual && <span style={{ fontSize: 10, color: "#1A3C2E33", fontWeight: 400, fontStyle: "italic" }}>manuel</span>}
-                      {hasBrand && <span style={{ fontSize: 10, color: "#1A7A4A", fontWeight: 500, letterSpacing: "0.01em" }}>✓ {brand_name}</span>}
-                      {qResults.length > 0 && <span style={{ fontSize: 10, color: "#1A3C2E33" }}>{qResults.length} réponse{qResults.length > 1 ? "s" : ""}</span>}
-                    </div>
-                    {/* Per-provider 30-day calendar */}
-
-                  </div>
-                  <div style={{ display: "flex", gap: 6, flexShrink: 0, alignItems: "center" }}>
-                    <TagSelect
-                      values={Array.isArray(q.tags) ? q.tags : (q.category_id ? [q.category_id] : [])}
-                      categories={categories}
-                      onChange={tags => {
-                        const newPrimary = tags[0] || null;
-                        sbSetQuestionCategory(q.id, newPrimary).catch(() => {});
-                        sbSetKeywordTags(q.id, tags).catch(() => {});
-                        setQuestions(prev => prev.map(qq => qq.id === q.id ? { ...qq, category_id: newPrimary, tags } : qq));
-                      }}
-                      placeholder="Catégories…"
-                    />
-                    <button onClick={() => setEditingQ(editingQ?.id === q.id ? null : { id: q.id, text: q.question })}
-                      style={{ padding: "3px 8px", border: "0.5px solid #1A3C2E18", borderRadius: 20, background: "transparent", color: "#1A3C2E55", fontSize: 12, cursor: "pointer", fontWeight: 400 }}
-                      title="Modifier">✎</button>
-                    <button
-                      onClick={() => {
-                        const toRun = getProvidersToRun(q, true);
-                        if (!toRun.length) return;
-                        // Clear erreurs avant retry
-                        toRun.forEach(p => setProviderErrors(prev => { const n={...prev}; delete n[`${q.id}-${p.id}`]; return n; }));
-                        toRun.forEach(p => runProvider(q, p));
-                      }}
-                      disabled={isRunning}
-                      title="Lancer tous les providers"
-                      style={{ padding: "4px 16px", border: "0.5px solid #1A3C2E33", borderRadius: 20, background: "transparent", color: "#1A3C2E", fontSize: 11, fontWeight: 500, cursor: isRunning ? "wait" : "pointer", opacity: isRunning ? 0.35 : 1, letterSpacing: "0.02em", transition: "opacity 0.2s" }}>
-                      {isRunning ? "…" : "▶"}
-                    </button>
-                    <button onClick={() => deleteQ(q.id)} style={{ padding: "3px 8px", border: "none", background: "transparent", color: "#1A3C2E22", fontSize: 12, cursor: "pointer", transition: "color 0.15s" }}>✕</button>
-                  </div>
-                </div>
-                {/* One row per provider — calendar + info + accordion + run */}
-                <div style={{ marginTop: 10, display: "flex", flexDirection: "column" }}>
-                  {PROVIDERS.map(p => {
-                    const pResults = qResults.filter(r => getProviderId(r.model) === p.id);
-                    const hasKey = !!providerKeys[p.id]?.dec;
-                    if (!hasKey && !pResults.length) return null;
-                    return (
-                      <ProviderRow
-                        key={p.id}
-                        provider={p}
-                        results={pResults}
-                        allProviderResults={qResults}
-                        brandName={brand_name}
-                        brandAliases={brand_aliases}
-                        hasKey={hasKey}
-                        isRunning={!!running[`${q.id}-${p.id}`]}
-                        onRun={() => runProvider(q, p)}
-                        questionId={q.id}
-                        newCalEntry={newCalEntries[`${q.id}|${p.id}`] || null}
-                        question={q.question}
-                        brandDomain={brand?.brand_domain || ""}
-                        claudeKey={providerKeysRef.current["claude"]?.dec || ""}
-                        projectId={projectId}
-                        siteId={site?.id}
-                        savedHint={hintsMap[q.id]?.text || ""}
-                        savedHintDate={hintsMap[q.id]?.date || null}
-                        errorMsg={providerErrors[`${q.id}-${p.id}`] || null}
-                      />
-                    );
-                  })}
-                </div>
-                {/* ── Hint at question level ── */}
-                {(() => {
-                  const claudeKey = providerKeysRef.current["claude"]?.dec || "";
-                  // hintsMap[q.id] est toujours { text, date } ou undefined
-                  const savedH     = hintsMap[q.id]?.text || "";
-                  const savedHDate = hintsMap[q.id]?.date || null;
-                  const anyResult = qResults.length > 0;
-                  if (!anyResult) return null;
-                  // Get sources from latest result across all providers
-                  const latestResult = [...qResults].sort((a,b) => new Date(b.created_at||0) - new Date(a.created_at||0))[0];
-                  const hasBrandQ = isBrandPresent(latestResult);
-                  return (
-                    <div style={{ marginTop: 8 }}>
-                      {savedH ? (
-                        /* Hint exists — show toggle */
-                        <HintPanelQuestion
-                          questionId={q.id}
-                          question={q.question}
-                          sources={latestResult?.sources || []}
-                          brandName={brand_name}
-                          brandAliases={brand_aliases}
-                          brandDomain={brand?.brand_domain || ""}
-                          claudeKey={claudeKey}
-                          hasBrand={hasBrandQ}
-                          projectId={projectId}
-                          siteId={site?.id}
-                          savedHint={savedH}
-                          savedHintDate={savedHDate}
-                          onHintSaved={(text) => setHintsMap(prev => ({ ...prev, [q.id]: { text, date: new Date().toISOString() } }))}
-                          initialOpen={false}
-                        />
-                      ) : claudeKey ? (
-                        /* No hint — show generate button */
-                        <HintPanelQuestion
-                          questionId={q.id}
-                          question={q.question}
-                          sources={latestResult?.sources || []}
-                          brandName={brand_name}
-                          brandAliases={brand_aliases}
-                          brandDomain={brand?.brand_domain || ""}
-                          claudeKey={claudeKey}
-                          hasBrand={hasBrandQ}
-                          projectId={projectId}
-                          siteId={site?.id}
-                          savedHint=""
-                          savedHintDate={null}
-                          onHintSaved={(text) => setHintsMap(prev => ({ ...prev, [q.id]: { text, date: new Date().toISOString() } }))}
-                          initialOpen={false}
-                        />
-                      ) : (
-                        <div style={{ fontSize: 10, color: C.textLight, fontStyle: "italic", marginTop: 4 }}>
-                          💡 Clé Claude manquante pour générer une recommandation
-                        </div>
-                      )}
-                    </div>
-                  );
-                })()}
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── URL Index sub-tab ─────────────────────────────────────────────
-
-
-function UrlsTab({ projectId, categories, brand, allResults }) {
-  const [urls, setUrls]         = useState([]);
-  const [loading, setLoading]   = useState(true);
-  const [error, setError]       = useState(false);
-  const [crawling, setCrawling]         = useState({});
-  const [analyzingPage, setAnalyzingPage] = useState({});
-  const [pageAnalysis, setPageAnalysis]   = useState({});
-  const [filterType, setFilterType] = useState("all"); // all | brand | competitor | other
-  const [filterTpl, setFilterTpl]   = useState("");
-  const [sortBy, setSortBy]         = useState("citations"); // citations | domain | alpha
-  const [search, setSearch]         = useState("");
-  const [view, setView]             = useState("urls"); // urls | domains
-  const [openCrawl, setOpenCrawl]   = useState(null);
-
-  const brandName    = brand?.brand_name || "";
-  const brandAliases = brand?.brand_aliases || [];
-  const competitors  = brand?.competitors  || [];
-
-  useEffect(() => {
-    if (!projectId) return;
-    setLoading(true);
-    setError(false);
-    sbGetUrlIndex(projectId)
-      .then(data => {
-      if (!Array.isArray(data)) { setUrls([]); setLoading(false); return; }
-
-      // ── Normaliser et dédupliquer : regrouper www/non-www, http/https, slash final ──
-      const normalizeUrl = (url) => {
-        try {
-          const u = new URL(url);
-          // Normaliser : https, sans www, sans slash final
-          return `${u.pathname.replace(/\/+$/, "") || "/"}${u.search}`
-            .toLowerCase()
-            .replace(/^www\./, "");
-        } catch { return url.toLowerCase().trim(); }
-      };
-
-      const normalDomain = (url) => {
-        try { return new URL(url).hostname.toLowerCase().replace(/^www\./, ""); } catch { return ""; }
-      };
-
-      // Grouper par URL normalisée
-      const groups = {};
-      data.forEach(entry => {
-        const key = normalDomain(entry.url || "") + normalizeUrl(entry.url || "");
-        if (!groups[key]) {
-          groups[key] = { ...entry };
-        } else {
-          // Sommer les compteurs, garder l'URL la plus courte (sans www, avec https)
-          groups[key].count_as_source = (groups[key].count_as_source || 0) + (entry.count_as_source || 0);
-          groups[key].count_in_answer = (groups[key].count_in_answer || 0) + (entry.count_in_answer || 0);
-          // Préférer l'URL avec www si pas encore normalisée, sinon la plus courte
-          if ((entry.url || "").length < (groups[key].url || "").length) {
-            groups[key].url = entry.url;
-            groups[key].domain = entry.domain || normalDomain(entry.url || "");
-          }
-        }
-      });
-
-      setUrls(Object.values(groups));
-      setLoading(false);
-    })
-      .catch(() => { setUrls([]); setLoading(false); setError(true); });
-  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Classify a URL
-  const classifyUrl = (u) => {
-    const d = (u.domain || "").toLowerCase();
-    const allBrand = [brandName, ...brandAliases].filter(Boolean).map(t => t.toLowerCase());
-    const knownComps = competitors.filter(Boolean).map(t => t.toLowerCase());
-
-    if (allBrand.some(t => d.includes(t))) return "brand";
-
-    // Identified competitors from results
-    const compNames = new Set();
-    allResults.forEach(r => (r.competitors_mentioned || []).forEach(c => { if (c.name) compNames.add(c.name.toLowerCase()); }));
-    const identifiedComps = [...compNames];
-
-    if (knownComps.some(t => d.includes(t))) return "competitor_known";
-    if (identifiedComps.some(t => d.includes(t) || t.includes(d.split(".")[0]))) return "competitor_identified";
-    return "other";
-  };
-  // Map detailed class to display class
-  const mapCls = (c) => c.startsWith("competitor") ? "competitor" : c;
-
-  const classColors = {
-    brand:      { color: "#059669", bg: "#ECFDF5", border: "#059669", label: `✓ ${brandName || "Marque"}`,     filterKey: "brand" },
-    competitor: { color: "#DC2626", bg: "#FEF2F2", border: "#DC2626", label: "⚔️ Concurrents",                filterKey: "competitor" },
-    other:      { color: "#64748B", bg: "#F8FAFC", border: "#E2E8F0", label: "🔗 Autre source",               filterKey: "other" },
-  };
-
-  const TEMPLATE_TYPES = ["article","landing","fiche","FAQ","comparatif","forum","media","institutionnel","autre"];
-
-  const filtered = useMemo(() => urls.filter(u => {
-    if (search && !u.url?.toLowerCase().includes(search.toLowerCase()) && !u.domain?.toLowerCase().includes(search.toLowerCase())) return false;
-    if (filterTpl && u.template_type !== filterTpl) return false;
-    if (filterType !== "all") {
-      const cls = classifyUrl(u);
-      if (filterType === "brand" && cls !== "brand") return false;
-      if (filterType === "competitor" && !cls.startsWith("competitor")) return false;
-      if (filterType === "other" && cls !== "other") return false;
-    }
-    return true;
-  }).sort((a, b) => {
-    if (sortBy === "citations") return (b.count_as_source + b.count_in_answer) - (a.count_as_source + a.count_in_answer);
-    if (sortBy === "domain") return (a.domain || "").localeCompare(b.domain || "");
-    if (sortBy === "alpha") return (a.url || "").localeCompare(b.url || "");
-    return 0;
-  }), [urls, search, filterTpl, filterType, sortBy, brandName, brandAliases, competitors, allResults]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Domain aggregation
-  const domains = useMemo(() => {
-    const m = {};
-    urls.forEach(u => {
-      if (!u.domain) return;
-      if (!m[u.domain]) m[u.domain] = { domain: u.domain, count_as_source: 0, count_in_answer: 0, urls: [] };
-      m[u.domain].count_as_source += u.count_as_source || 0;
-      m[u.domain].count_in_answer += u.count_in_answer || 0;
-      m[u.domain].urls.push(u);
-    });
-    return Object.values(m).sort((a, b) => (b.count_as_source + b.count_in_answer) - (a.count_as_source + a.count_in_answer));
-  }, [urls]);
-
-  // Counts per class
-  const classCounts = useMemo(() => {
-    const c = { brand: 0, competitor: 0, other: 0 };
-    urls.forEach(u => { const cls = mapCls(classifyUrl(u)); if (c[cls] !== undefined) c[cls]++; });
-    return c;
-  }, [urls, brandName, brandAliases, competitors, allResults]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const setThemeCat = async (id, catId) => {
-    await sbUpdateUrlMeta(id, { theme_category_id: catId || null });
-    setUrls(prev => prev.map(u => u.id === id ? { ...u, theme_category_id: catId || null } : u));
-  };
-
-  const setTemplate = async (id, tpl) => {
-    await sbUpdateUrlMeta(id, { template_type: tpl || null });
-    setUrls(prev => prev.map(u => u.id === id ? { ...u, template_type: tpl || null } : u));
-  };
-
-  const launchCrawl = async (urlEntry) => {
-    setCrawling(c => ({ ...c, [urlEntry.id]: true }));
-    await sbUpdateUrlMeta(urlEntry.id, { crawl_status: "pending" });
-    setUrls(prev => prev.map(u => u.id === urlEntry.id ? { ...u, crawl_status: "pending" } : u));
-    try {
-      const res = await fetch("/api/crawl", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: urlEntry.url }),
-      });
-      const data = await res.json();
-      if (!res.ok || data.error) throw new Error(data.error || "Crawl failed");
-      const sections = data.sections || [];
-      await sbUpdateUrlMeta(urlEntry.id, { crawl_status: "done", crawl_sections: sections, crawl_at: new Date().toISOString() });
-      setUrls(prev => prev.map(u => u.id === urlEntry.id ? { ...u, crawl_status: "done", crawl_sections: sections } : u));
-      setOpenCrawl(urlEntry.id);
-    } catch(e) {
-      await sbUpdateUrlMeta(urlEntry.id, { crawl_status: "error" });
-      setUrls(prev => prev.map(u => u.id === urlEntry.id ? { ...u, crawl_status: "error" } : u));
-      console.error("Crawl échoué:", e.message);
-    }
-    setCrawling(c => ({ ...c, [urlEntry.id]: false }));
-  };
-
-  if (loading) return (
-    <div style={{ textAlign: "center", padding: 40, color: C.textLight, fontSize: 12 }}>
-      Chargement des sources citées…
-    </div>
-  );
-
-  if (error || (!loading && urls.length === 0)) return (
-    <div style={{ textAlign: "center", padding: 60, color: C.textLight }}>
-      <div style={{ fontSize: 32, marginBottom: 12 }}>🔗</div>
-      <div style={{ fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 6 }}>
-        {error ? "Table non disponible" : "Aucune source indexée"}
-      </div>
-      <div style={{ fontSize: 12 }}>
-        {error
-          ? "Exécutez migration-geo-v2.sql dans Supabase, puis interrogez des questions."
-          : "Interrogez des questions pour voir apparaître les URLs citées."}
-      </div>
-    </div>
-  );
-
-
-  const analyzePageContent = async (urlEntry) => {
-    const claudeKey = (function() {
-      try {
-        const s = sessionStorage.getItem("correl_session") || localStorage.getItem("correl_session");
-        const sess = s ? JSON.parse(s) : null;
-        return sess?.__claude_key || "";
-      } catch { return ""; }
-    })();
-    setAnalyzingPage(prev => ({ ...prev, [urlEntry.id]: true }));
-    try {
-      const sections = (urlEntry.crawl_sections || []).slice(0, 20);
-      const pageContent = sections.map(s => `[${s.type || "section"}] ${(s.text || s.title || s.content || "").slice(0, 300)}`).join("\n").slice(0, 3000);
-      const prompt = [
-        `Tu es expert GEO. Analyse cette page : ${urlEntry.url}`,
-        "",
-        pageContent ? `CONTENU :${("\n" + pageContent)}` : "(page non crawlée — analyse à partir de l'URL uniquement)",
-        "",
-        "Réponds UNIQUEMENT avec ce JSON (sans markdown) :",
-        JSON.stringify({summary:"2 phrases",geo_signals:["signal"],opportunities:["action"],content_type:"type",seo_score:7}),
-      ].join("\n");
-      const res = await fetch("/api/claude-geo", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Claude-Key": claudeKey },
-        body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 600, messages: [{ role: "user", content: prompt }] }),
-      });
-      const raw = await res.text();
-      if (!res.ok) throw new Error(`Claude ${res.status}`);
-      const data = JSON.parse(raw);
-      const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("").trim();
-      const analysis = JSON.parse(text.replace(/```json|```/g, "").trim());
-      setPageAnalysis(prev => ({ ...prev, [urlEntry.id]: analysis }));
-    } catch(e) {
-      setPageAnalysis(prev => ({ ...prev, [urlEntry.id]: { error: e.message } }));
-    }
-    setAnalyzingPage(prev => ({ ...prev, [urlEntry.id]: false }));
-  };
-
-  return (
-    <div>
-      {/* ── Legend strip ── */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-        {Object.entries(classColors).map(([cls, meta]) => {
-          const fk = meta.filterKey;
-          const active = filterType === fk;
-          const count = classCounts[cls] ?? 0;
-          return (
-            <button key={cls} onClick={() => setFilterType(active ? "all" : fk)}
-              style={{
-                display: "flex", alignItems: "center", gap: 6, padding: "6px 14px",
-                borderRadius: 20, fontSize: 11, fontWeight: 700, cursor: "pointer",
-                border: `2px solid ${active ? meta.color : meta.border}`,
-                background: active ? meta.color : meta.bg,
-                color: active ? "#fff" : meta.color,
-                transition: "all 0.15s",
-              }}>
-              {meta.label}
-              <span style={{ opacity: 0.75, fontWeight: 500 }}>({count})</span>
-            </button>
-          );
-        })}
-        {/* "Tout" reset */}
-        {filterType !== "all" && (
-          <button onClick={() => setFilterType("all")}
-            style={{ padding: "6px 12px", borderRadius: 20, fontSize: 11, fontWeight: 600, cursor: "pointer", border: "0.5px solid #1A3C2E0D", background: "#FAFAF8", color: C.textMid }}>
-            ✕ Tout afficher
-          </button>
-        )}
-      </div>
-
-      {/* ── Filters + view toggle ── */}
-      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 14, flexWrap: "wrap" }}>
-        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 Rechercher…"
-          style={{ padding: "6px 10px", border: "0.5px solid #1A3C2E0D", borderRadius: 8, fontSize: 12, color: C.text, width: 220 }} />
-        <select value={filterTpl} onChange={e => setFilterTpl(e.target.value)}
-          style={{ padding: "5px 8px", border: "0.5px solid #1A3C2E0D", borderRadius: 6, fontSize: 11, color: C.text }}>
-          <option value="">Tous templates</option>
-          {TEMPLATE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-        </select>
-        <select value={sortBy} onChange={e => setSortBy(e.target.value)}
-          style={{ padding: "5px 8px", border: "0.5px solid #1A3C2E0D", borderRadius: 6, fontSize: 11, color: C.text }}>
-          <option value="citations">Trier : + citées</option>
-          <option value="domain">Trier : domaine</option>
-          <option value="alpha">Trier : URL A→Z</option>
-        </select>
-        <span style={{ fontSize: 11, color: C.textLight }}>{filtered.length} URL{filtered.length > 1 ? "s" : ""} · {domains.length} domaine{domains.length > 1 ? "s" : ""}</span>
-
-        {/* View toggle */}
-        <div style={{ marginLeft: "auto", display: "flex", gap: 3, background: "#FAFAF8", borderRadius: 8, padding: 3 }}>
-          {[{ key: "urls", label: "🔗 URLs" }, { key: "domains", label: "🌐 Domaines" }].map(v => (
-            <button key={v.key} onClick={() => setView(v.key)} style={{
-              padding: "4px 14px", borderRadius: 6, fontSize: 12, fontWeight: view === v.key ? 700 : 400,
-              border: "none", cursor: "pointer",
-              background: view === v.key ? C.white : "transparent",
-              color: view === v.key ? C.text : C.textLight,
-              boxShadow: view === v.key ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
-            }}>{v.label}</button>
-          ))}
-        </div>
-      </div>
-
-      {/* ── URLs view ── */}
-      {view === "urls" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-          {filtered.map(u => {
-            const cls  = mapCls(classifyUrl(u));
-            const meta = classColors[cls];
-            const isOpen = openCrawl === u.id;
-            const hasSections = u.crawl_sections?.length > 0;
-            const cat = categories.find(c => c.id === u.theme_category_id);
-            return (
-              <div key={u.id} style={{ background: meta.bg, border: `1.5px solid ${meta.border}33`, borderLeft: `4px solid ${meta.color}`, borderRadius: 10, overflow: "hidden" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 14px", flexWrap: "wrap" }}>
-                  {/* Counts */}
-                  <div style={{ display: "flex", gap: 5, flexShrink: 0 }}>
-                    <span style={{ fontSize: 11, fontWeight: 700, background: `${meta.color}22`, color: meta.color, borderRadius: 5, padding: "2px 7px" }} title="Source">📎 {u.count_as_source}</span>
-  
-                  </div>
-                  {/* Class badge */}
-                  <span style={{ fontSize: 10, fontWeight: 700, color: meta.color, background: meta.bg, border: `1px solid ${meta.color}44`, borderRadius: 10, padding: "1px 8px", flexShrink: 0 }}>
-                    {meta.label}
-                  </span>
-                  {/* URL */}
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                      <span style={{ fontSize: 12, color: meta.color, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{stripQuery(u.url)}</span>
-                      <a href={u.url} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}
-                        style={{ flexShrink: 0, fontSize: 10, color: C.textLight, border: "0.5px solid #1A3C2E0D", borderRadius: 4, padding: "1px 5px", textDecoration: "none" }}>↗</a>
-                    </div>
-                    <div style={{ fontSize: 10, color: C.textLight }}>{u.domain}</div>
-                  </div>
-                  {/* Selectors */}
-                  <div style={{ display: "flex", gap: 5, flexShrink: 0, flexWrap: "wrap" }}>
-                    {cat && <span style={{ fontSize: 10, fontWeight: 700, color: cat.color, background: cat.color+"18", borderRadius: 10, padding: "1px 7px" }}>{cat.name}</span>}
-                    <CatSelect value={u.theme_category_id} categories={categories} onChange={v => setThemeCat(u.id, v)} placeholder="Thème…" />
-                    <select value={u.template_type || ""} onChange={e => setTemplate(u.id, e.target.value || null)}
-                      style={{ padding: "3px 6px", border: "0.5px solid #1A3C2E0D", borderRadius: 6, fontSize: 10, color: u.template_type ? C.text : C.textLight }}>
-                      <option value="">Template…</option>
-                      {TEMPLATE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-                    </select>
-                  </div>
-                  {/* Crawl button */}
-                  <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-                    {hasSections && (
-                      <button onClick={() => setOpenCrawl(isOpen ? null : u.id)}
-                        style={{ padding: "3px 8px", border: "0.5px solid #1A3C2E0D", borderRadius: 6, fontSize: 10, cursor: "pointer", background: isOpen ? C.bg : C.white, color: C.textMid }}>
-                        {isOpen ? "▲" : "▼"} Sections
-                      </button>
-                    )}
-                    <button onClick={() => launchCrawl(u)} disabled={crawling[u.id]}
-                      title={u.crawl_status === "done" ? "Recrawler la page" : "Analyser le contenu de la page"}
-                      style={{ padding: "3px 8px", border: `1px solid ${meta.color}`, borderRadius: 6, fontSize: 10, cursor: crawling[u.id] ? "wait" : "pointer", background: meta.bg, color: meta.color, fontWeight: 600 }}>
-                      {crawling[u.id] ? "⏳" : u.crawl_status === "done" ? "🔄" : "🕷️"}
-                    </button>
-                    {u.crawl_status === "done" && (
-                      <button
-                        onClick={() => pageAnalysis[u.id] ? setPageAnalysis(prev => { const n = {...prev}; delete n[u.id]; return n; }) : analyzePageContent(u)}
-                        disabled={!!analyzingPage[u.id]}
-                        title="Analyser le contenu GEO de la page"
-                        className="gt-btn-icon"
-                        style={{ fontSize: 11, color: pageAnalysis[u.id] ? "#1A3C2E" : "#1A3C2E55" }}>
-                        {analyzingPage[u.id] ? "…" : pageAnalysis[u.id] ? "✦ ▲" : "✦"}
-                      </button>
-                    )}
-                  </div>
-                </div>
-                {/* Crawl sections */}
-                {isOpen && hasSections && (
-                  <div style={{ borderTop: `1px solid ${meta.border}33`, background: "#FAFAF8", padding: "10px 14px" }}>
-                    <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E55", marginBottom: 8 }}>Sections · {u.crawl_sections.length}</div>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 7 }}>
-                      {u.crawl_sections.map((sec, i) => (
-                        <div key={i} style={{ background: "#fff", border: `1px solid ${sec.used_in_llm ? "#059669" : C.border}`, borderRadius: 7, padding: "8px 10px", borderLeft: `3px solid ${sec.used_in_llm ? "#059669" : C.border}` }}>
-                          <div style={{ display: "flex", gap: 5, alignItems: "center", marginBottom: 3 }}>
-                            <span style={{ fontSize: 9, fontWeight: 700, color: "#7C3AED", background: "#F5F3FF", borderRadius: 4, padding: "1px 5px" }}>{sec.type}</span>
-                            {sec.used_in_llm && <span style={{ fontSize: 9, color: "#059669", fontWeight: 600 }}>✓ LLM</span>}
-                          </div>
-                          <div style={{ fontSize: 11, fontWeight: 600, color: C.text, marginBottom: 2 }}>{sec.title}</div>
-                          <div style={{ fontSize: 10, color: C.textLight, lineHeight: 1.4 }}>{sec.summary}</div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              {/* Analyse GEO — accordéon au-dessus de la ligne URL */}
-              {pageAnalysis[u.id] && (
-                <div style={{ borderTop: "0.5px solid #1A3C2E08", padding: "12px 0 4px 0", marginBottom: 4 }}>
-                  {pageAnalysis[u.id].error ? (
-                    <div style={{ fontSize: 11, color: "#C0352A" }}>Erreur : {pageAnalysis[u.id].error}</div>
-                  ) : (
-                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                      {/* Résumé */}
-                      <div style={{ fontSize: 12, color: "#1A3C2E", lineHeight: 1.6 }}>
-                        {pageAnalysis[u.id].summary}
-                      </div>
-                      {/* Signaux + Opportunités */}
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-                        <div>
-                          <div className="gt-label" style={{ marginBottom: 6, color: "#1A7A4A" }}>Signaux GEO</div>
-                          {(pageAnalysis[u.id].geo_signals || []).map((s, i) => (
-                            <div key={i} style={{ fontSize: 11, color: "#1A3C2E", marginBottom: 3, paddingLeft: 8, borderLeft: "2px solid #1A7A4A22" }}>
-                              {s}
-                            </div>
-                          ))}
-                        </div>
-                        <div>
-                          <div className="gt-label" style={{ marginBottom: 6, color: "#C97820" }}>Opportunités</div>
-                          {(pageAnalysis[u.id].opportunities || []).map((o, i) => (
-                            <div key={i} style={{ fontSize: 11, color: "#1A3C2E", marginBottom: 3, paddingLeft: 8, borderLeft: "2px solid #C9782022" }}>
-                              {o}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                      {/* Score GEO */}
-                      {pageAnalysis[u.id].seo_score && (
-                        <div style={{ fontSize: 10, color: "#1A3C2E44" }}>
-                          Score GEO estimé : {pageAnalysis[u.id].seo_score}/10
-                          {pageAnalysis[u.id].content_type && ` · ${pageAnalysis[u.id].content_type}`}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* ── Domains view ── */}
-      {view === "domains" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {domains.map((d, i) => {
-            const cls  = mapCls(classifyUrl({ domain: d.domain }));
-            const meta = classColors[cls];
-            const total = d.count_as_source + d.count_in_answer;
-            const maxTotal = domains[0] ? domains[0].count_as_source + domains[0].count_in_answer : 1;
-            return (
-              <div key={d.domain} style={{ background: meta.bg, border: `1.5px solid ${meta.border}33`, borderLeft: `4px solid ${meta.color}`, borderRadius: 10, padding: "10px 16px" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <span style={{ fontSize: 14, fontWeight: 800, color: C.textLight, minWidth: 28 }}>#{i+1}</span>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 4 }}>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: meta.color }}>{d.domain}</span>
-                      <span style={{ fontSize: 10, fontWeight: 700, color: meta.color, background: meta.bg, border: `1px solid ${meta.color}44`, borderRadius: 10, padding: "1px 7px" }}>{meta.label}</span>
-                      <span style={{ fontSize: 10, color: C.textLight }}>{d.urls.length} URL{d.urls.length > 1 ? "s" : ""}</span>
-                    </div>
-                    {/* Bar */}
-                    <div style={{ height: 5, background: `${meta.color}22`, borderRadius: 3, overflow: "hidden", marginBottom: 4 }}>
-                      <div style={{ height: "100%", width: `${(total / maxTotal) * 100}%`, background: meta.color, borderRadius: 3, transition: "width 0.4s" }} />
-                    </div>
-                    <div style={{ display: "flex", gap: 10, fontSize: 11, color: C.textLight }}>
-                      <span>📎 {d.count_as_source} source{d.count_as_source > 1 ? "s" : ""}</span>
-
-                    </div>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Main GeoTab ───────────────────────────────────────────────────
-
-// ── AutomationTab ────────────────────────────────────────────────
-function AutomationTab({ projectId, site, user, providerKeys }) {
-  const [schedule, setSchedule]   = useState(null);
-  const [loading, setLoading]     = useState(true);
-  const [saving, setSaving]       = useState(false);
-  const [triggering, setTriggering] = useState(false);
-  const [triggerResult, setTriggerResult] = useState(null);
-  const [error, setError]         = useState("");
-
-  const [active, setActive]       = useState(true);
-  const [frequency, setFrequency] = useState("weekly");
-  const [providers, setProviders] = useState(["openai"]);
-  const [maxQ, setMaxQ]           = useState(10);
-
-  const FREQUENCIES = [
-    { key: "daily",    label: "Quotidien",    desc: "Chaque jour" },
-    { key: "weekly",   label: "Hebdomadaire", desc: "Chaque semaine" },
-    { key: "biweekly", label: "Bi-mensuel",   desc: "Toutes les 2 semaines" },
-    { key: "monthly",  label: "Mensuel",      desc: "Chaque mois" },
-  ];
-
-  useEffect(() => {
-    if (!projectId || !site?.id) return;
-    setLoading(true);
-    sbGetSchedule(projectId, site.id).then(s => {
-      if (s) {
-        setSchedule(s);
-        setActive(s.active);
-        setFrequency(s.frequency);
-        setProviders(s.providers || ["openai"]);
-        setMaxQ(s.max_questions || 10);
-      }
-      setLoading(false);
-    }).catch(() => setLoading(false));
-  }, [projectId, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const availableProviders = PROVIDERS.filter(p => !!providerKeys[p.id]?.dec);
-
-  const save = async () => {
-    if (!providers.length) { setError("Sélectionnez au moins un provider."); return; }
-    setSaving(true); setError("");
-    try {
-      const s = await sbSaveSchedule({
-        project_id: projectId, site_id: site.id,
-        owner_email: user?.email || "",
-        frequency, providers, active, max_questions: maxQ,
-      });
-      setSchedule(s);
-    } catch(e) { setError(e.message); }
-    setSaving(false);
-  };
-
-  const toggleActive = async () => {
-    if (!schedule) return;
-    const next = !active;
-    setActive(next);
-    await sbUpdateSchedule(schedule.id, { active: next });
-    setSchedule(prev => ({ ...prev, active: next }));
-  };
-
-  const trigger = async () => {
-    setTriggering(true); setTriggerResult(null); setError("");
-    try {
-      const res = await sbTriggerScheduler();
-      setTriggerResult(res);
-    } catch(e) { setError(e.message); }
-    setTriggering(false);
-  };
-
-  const toggleProvider = (id) => {
-    setProviders(prev => prev.includes(id) ? prev.filter(p => p !== id) : [...prev, id]);
-  };
-
-  const fmtDate = (d) => d ? new Date(d).toLocaleString("fr-FR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "—";
-
-  if (loading) return (
-    <div style={{ padding: 32, textAlign: "center", color: "#1A3C2E55", fontSize: 13 }}>Chargement…</div>
-  );
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 0, maxWidth: 680 }}>
-
-      {/* Header */}
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 28 }}>
-        <div>
-          <div className="gt-label" style={{ marginBottom: 4 }}>Automatisation</div>
-          <div className="gt-heading" style={{ marginBottom: 4 }}>Interrogation automatique</div>
-          <div className="gt-body-sm">Questions ⭐ favoris — sans connexion à l'app</div>
-        </div>
-        {schedule && (
-          <button
-            onClick={toggleActive}
-            className={`gt-btn ${active ? "gt-btn--ghost" : "gt-btn--solid"}`}
-            style={{ marginTop: 4 }}>
-            {active ? "Désactiver" : "Activer"}
-          </button>
-        )}
-      </div>
-
-      {error && (
-        <div style={{ background: "#FEF2F2", border: "0.5px solid #C0352A22", borderRadius: 6, padding: "10px 14px", fontSize: 12, color: "#C0352A", marginBottom: 16 }}>{error}</div>
-      )}
-
-      {/* ── Info : seules les questions favorites sont interrogées ── */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 14px", marginBottom: 20, background: "#F0FDF4", border: "0.5px solid #1A7A4A33", borderRadius: 8, fontSize: 12 }}>
-        <span style={{ fontSize: 14, flexShrink: 0 }}>⭐</span>
-        <span style={{ color: "#1A7A4A", lineHeight: 1.5 }}>
-          Seules les <strong>questions favorites</strong> sont interrogées automatiquement, avec les providers sélectionnés ci-dessous. Les appels sont enregistrés en base et apparaissent dans l'onglet Questions à votre prochaine connexion.
-        </span>
-      </div>
-
-      {/* Status si schedule existe */}
-      {schedule && (
-        <div className="geo-auto-kpi" style={{ gap: 10, marginBottom: 28 }}>
-          {[
-            { label: "Prochain run", value: fmtDate(schedule.next_run) },
-            { label: "Dernier run",  value: fmtDate(schedule.last_run) },
-            { label: "Questions",    value: schedule.last_run_count || 0 },
-          ].map(k => (
-            <div key={k.label} className="gt-kpi-card">
-              <div className="gt-kpi-label" style={{ marginBottom: 6 }}>{k.label}</div>
-              <div className="gt-body" style={{ fontWeight: 500 }}>{k.value}</div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* ── Fréquence ── */}
-      <div style={{ marginBottom: 24 }}>
-        <div className="gt-label" style={{ marginBottom: 12 }}>Fréquence</div>
-        <div className="geo-freq-grid" style={{ gap: 8 }}>
-          {FREQUENCIES.map(f => {
-            const active = frequency === f.key;
-            return (
-              <button key={f.key} onClick={() => setFrequency(f.key)}
-                style={{
-                  padding: "14px 10px", textAlign: "center", cursor: "pointer",
-                  border: active ? "1px solid #1A3C2E" : "0.5px solid #1A3C2E18",
-                  borderRadius: 8,
-                  background: active ? "#1A3C2E" : "transparent",
-                  transition: "all 0.15s",
-                }}>
-                <div className={`gt-body ${active ? "" : "gt-dimmed"}`} style={{ fontWeight: 500, fontSize: 12, color: active ? "#F0EBE0" : undefined, marginBottom: 3 }}>{f.label}</div>
-                <div style={{ fontSize: 10, color: active ? "#F0EBE077" : "#1A3C2E33" }}>{f.desc}</div>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* ── Providers ── */}
-      <div style={{ marginBottom: 24 }}>
-        <div className="gt-label" style={{ marginBottom: 12 }}>
-          Providers à interroger
-          {availableProviders.length === 0 && (
-            <span style={{ marginLeft: 8, fontSize: 10, color: "#C0352A", textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>
-              — aucune clé configurée
-            </span>
-          )}
-        </div>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-          {PROVIDERS.map(p => {
-            const hasKey = !!providerKeys[p.id]?.dec;
-            const sel = providers.includes(p.id);
-            return (
-              <button key={p.id} onClick={() => hasKey && toggleProvider(p.id)}
-                title={!hasKey ? `Clé ${p.label} manquante` : undefined}
-                className={`gt-filter-pill${sel && hasKey ? " gt-filter-pill--active" : ""}`}
-                style={{ opacity: hasKey ? 1 : 0.3, cursor: hasKey ? "pointer" : "not-allowed" }}>
-                {p.label}{!hasKey ? " ·" : sel ? " ✓" : ""}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* ── Nb max questions ── */}
-      <div style={{ marginBottom: 28 }}>
-        <div className="gt-label" style={{ marginBottom: 12 }}>Nb max de questions par run</div>
-        <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
-          <input type="range" min={1} max={50} value={maxQ} onChange={e => setMaxQ(+e.target.value)}
-            style={{ flex: 1, accentColor: "#1A3C2E", height: 2 }} />
-          <span className="gt-kpi-val" style={{ fontSize: 20, minWidth: 28, textAlign: "right" }}>{maxQ}</span>
-        </div>
-        <div className="gt-caption" style={{ marginTop: 6 }}>
-          ~{maxQ} × {providers.length} provider{providers.length > 1 ? "s" : ""} = {maxQ * providers.length} appels API par run
-        </div>
-      </div>
-
-      {/* ── Bouton save ── */}
-      <button onClick={save} disabled={saving || !providers.length}
-        className={`gt-btn gt-btn--solid`}
-        style={{ width: "100%", justifyContent: "center", padding: "11px 0", fontSize: 12, borderRadius: 8, opacity: (saving || !providers.length) ? 0.4 : 1 }}>
-        {saving ? "Sauvegarde…" : schedule ? "Mettre à jour" : "Activer l'automatisation"}
-      </button>
-
-      {/* ── Test manuel ── */}
-      {schedule && (
-        <div style={{ marginTop: 24, paddingTop: 20, borderTop: "0.5px solid #1A3C2E08" }}>
-          <div className="gt-label" style={{ marginBottom: 8 }}>Test manuel</div>
-          <div className="gt-caption" style={{ marginBottom: 12 }}>
-            Déclenche immédiatement l'interrogation des favoris en arrière-plan (jusqu'à 15 min). Les résultats apparaissent dans l'onglet Questions une fois terminé.
-          </div>
-          <button onClick={trigger} disabled={triggering}
-            className="gt-btn"
-            style={{ opacity: triggering ? 0.4 : 1 }}>
-            {triggering ? "En cours…" : "▶ Lancer maintenant"}
-          </button>
-          {triggerResult && (
-            <div style={{ marginTop: 10, fontSize: 11, color: "#1A7A4A", padding: "8px 12px", background: "transparent", border: "0.5px solid #1A7A4A22", borderRadius: 6, lineHeight: 1.5 }}>
-              {triggerResult.dispatched
-                ? "✓ Interrogation lancée en arrière-plan. Les questions favorites sont en cours d'interrogation — les résultats apparaîtront dans l'onglet Questions dans quelques minutes (rechargez la page pour les voir)."
-                : `✓ ${triggerResult.processed || 0} schedule(s) — ${triggerResult.results?.[0]?.questions_processed || 0} question(s) traitée(s)`}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-
-
-// ── BrandConfigAccordion — wrapper qui ferme la card après save ───
-function BrandConfigAccordion({ sites, projectId }) {
-  const [openId, setOpenId] = useState(null);
-  const [keys, setKeys] = useState({});
-
-  if (!sites?.length) {
-    return <div style={{ fontSize: 12, color: "#94A3B8", fontStyle: "italic" }}>Ajoutez un site pour configurer sa marque.</div>;
-  }
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      {sites.map(site => {
-        const isOpen = openId === site.id;
-        const cardKey = keys[site.id] || site.id;
-        return (
-          <div key={site.id} style={{ border: `1px solid ${site.color}33`, borderRadius: 10, overflow: "hidden" }}>
-            {/* Header accordéon */}
-            <div onClick={() => setOpenId(isOpen ? null : site.id)}
-              style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: isOpen ? site.bg : "#F8FAFC", cursor: "pointer", borderBottom: isOpen ? `1px solid ${site.color}22` : "none" }}>
-              <div style={{ width: 8, height: 8, borderRadius: "50%", background: site.color, flexShrink: 0 }} />
-              <span style={{ fontSize: 13, fontWeight: 700, color: site.color, flex: 1 }}>{site.label}</span>
-              <span style={{ fontSize: 11, color: "#94A3B8" }}>{isOpen ? "▲" : "▼"}</span>
-            </div>
-            {/* Contenu BrandConfigPanel */}
-            {isOpen && (
-              <div
-                ref={el => {
-                  if (!el) return;
-                  // Intercepter le clic sur le bouton "Sauvegarder" de BrandConfigPanel
-                  const handler = (e) => {
-                    const btn = e.target.closest("button");
-                    if (!btn) return;
-                    const label = btn.textContent?.trim().toLowerCase();
-                    if (label.includes("sauvegarder") || label.includes("save") || label.includes("enregistrer")) {
-                      // Fermer l'accordéon après un court délai (laisse le save se terminer)
-                      setTimeout(() => {
-                        setOpenId(null);
-                        // Reset la key pour forcer remount la prochaine fois
-                        setKeys(prev => ({ ...prev, [site.id]: `${site.id}-${Date.now()}` }));
-                      }, 300);
-                    }
-                    // Bouton Annuler → fermer immédiatement
-                    if (label.includes("annuler") || label.includes("cancel")) {
-                      setOpenId(null);
-                    }
-                  };
-                  el.addEventListener("click", handler);
-                  return () => el.removeEventListener("click", handler);
-                }}
-                style={{ padding: "12px 14px", background: "#fff" }}>
-                <BrandConfigPanel key={cardKey} site={site} projectId={projectId} />
-              </div>
-            )}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-
-// ── FanoutSetupPanel — vue props-only, zéro état local projet ──────
+// ── AuditSetupPanel — vue props-only, zéro état local projet ────────
 function SetupSection({ icon, title, children }) {
   return (
     <div style={{ marginBottom: 18 }}>
@@ -5811,22 +61,17 @@ function SetupSection({ icon, title, children }) {
   );
 }
 
-function FanoutSetupPanel({
+function AuditSetupPanel({
   projects, currentProjectId, setCurrentProjectId, setProjects, ownerEmail,
-  sites, setSites, smData, setSmData,
-  sfData, setSfData, gscData, setGscData, gaData, setGaData, bingData, setBingData,
+  sites, setSites, sfData, setSfData, gscData, setGscData, gaData, setGaData, bingData, setBingData,
   dbHistory, dbLoading, refreshHistory, confirmModal, setConfirmModal,
-  project, projectId, onSaveProviderKeys,
-  axes, onSaveAxes, onAxesChange,
-  onSemrushVolumes,
+  pageTypes, setPageTypes, project, projectId,
 }) {
   const [showHistory, setShowHistory] = useState(false);
 
-  // Tout normalisé ici — jamais de .map() sur une valeur non-array
   const safeProjects = Array.isArray(projects) ? projects : [];
   const safeSites    = Array.isArray(sites)    ? sites    : [];
   const safeHistory  = Array.isArray(dbHistory)? dbHistory: [];
-  const safeAxes     = Array.isArray(axes)     ? axes     : DEFAULT_AXES;
 
   const lastImports = {};
   for (const row of safeHistory) {
@@ -5843,10 +88,10 @@ function FanoutSetupPanel({
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <div style={{ position: "relative", flex: 1, minWidth: 180 }}>
               <select value={currentProjectId || ""} onChange={e => setCurrentProjectId(e.target.value)}
-                style={{ width: "100%", padding: "7px 28px 7px 10px", border: `1.5px solid ${C.blue}`, borderRadius: 8, fontSize: 13, fontWeight: 600, color: C.blue, background: C.blueLight, cursor: "pointer", appearance: "none" }}>
+                style={{ width: "100%", padding: "7px 28px 7px 10px", border: "1.5px solid #2563EB", borderRadius: 8, fontSize: 13, fontWeight: 600, color: "#2563EB", background: "#EFF6FF", cursor: "pointer", appearance: "none" }}>
                 {safeProjects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
-              <span style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: C.blue, fontSize: 11 }}>▾</span>
+              <span style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: "#2563EB", fontSize: 11 }}>▾</span>
             </div>
             {safeProjects.length > 1 && (
               <button onClick={() => setConfirmModal?.({ message: `Supprimer "${safeProjects.find(p => p.id === currentProjectId)?.name}" ?`, onConfirm: () => {
@@ -5860,7 +105,7 @@ function FanoutSetupPanel({
                 setProjects(prev => [...prev, p]);
                 setCurrentProjectId(p.id);
                 sbSaveProject(p).catch(() => {});
-              }} style={{ padding: "6px 10px", borderRadius: 7, border: `1.5px dashed ${C.blue}`, background: C.blueLight, color: C.blue, cursor: "pointer", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>+ Nouveau</button>
+              }} style={{ padding: "6px 10px", borderRadius: 7, border: "1.5px dashed #2563EB", background: "#EFF6FF", color: "#2563EB", cursor: "pointer", fontSize: 11, fontWeight: 600 }}>+ Nouveau</button>
             )}
           </div>
 
@@ -5874,7 +119,7 @@ function FanoutSetupPanel({
                 {safeSites.length > 1 && (
                   <button onClick={() => setConfirmModal?.({ message: `Supprimer "${site.label}" ?`, onConfirm: () => {
                     setSites(prev => (Array.isArray(prev) ? prev : []).filter(s => s.id !== site.id));
-                    setSmData(p => { const n = {...p}; delete n[site.id]; return n; });
+                    [setSfData, setGscData, setGaData, setBingData].forEach(fn => fn?.(p => { const n={...p}; delete n[site.id]; return n; }));
                   }})} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 10, color: "#DC2626", padding: 0 }}>✕</button>
                 )}
               </div>
@@ -5884,19 +129,19 @@ function FanoutSetupPanel({
                 const palette = SITE_PALETTE[safeSites.length] || SITE_PALETTE[0];
                 const newId = `site-${Date.now()}`;
                 setSites(prev => [...(Array.isArray(prev) ? prev : []), { id: newId, label: `Site ${safeSites.length + 1}`, ...palette }]);
-                setSmData(p => ({...p, [newId]: []}));
-              }} style={{ padding: "4px 10px", borderRadius: 20, border: `1px dashed ${C.border}`, background: "#fff", color: C.blue, cursor: "pointer", fontSize: 11, fontWeight: 600 }}>+ Site</button>
+                [setSfData, setGscData, setGaData, setBingData].forEach(fn => fn?.(p => ({...p, [newId]: []})));
+              }} style={{ padding: "4px 10px", borderRadius: 20, border: "1px dashed #E2E8F0", background: "#fff", color: "#2563EB", cursor: "pointer", fontSize: 11, fontWeight: 600 }}>+ Site</button>
             )}
           </div>
 
           {/* Historique */}
           <div style={{ marginTop: 10, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <span style={{ fontSize: 11, color: C.textLight }}>
+            <span style={{ fontSize: 11, color: "#94A3B8" }}>
               <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: dbLoading ? "#F59E0B" : safeHistory.length > 0 ? "#059669" : "#CBD5E1", marginRight: 5 }} />
               {dbLoading ? "Chargement…" : `${safeHistory.length} imports en base`}
             </span>
             <button onClick={() => { setShowHistory(h => !h); refreshHistory?.(); }}
-              style={{ fontSize: 11, color: showHistory ? C.blue : C.textLight, background: "none", border: "none", cursor: "pointer", padding: 0 }}>
+              style={{ fontSize: 11, color: showHistory ? "#2563EB" : "#94A3B8", background: "none", border: "none", cursor: "pointer", padding: 0 }}>
               {showHistory ? "▲ Masquer" : "📋 Historique"}
             </button>
           </div>
@@ -5904,12 +149,12 @@ function FanoutSetupPanel({
             <div style={{ marginTop: 8, maxHeight: 140, overflowY: "auto", display: "flex", flexDirection: "column", gap: 3 }}>
               {safeHistory.slice(0, 20).map(row => {
                 const site = safeSites.find(s => s.id === row.site_id);
-                const lbl = { sf:"🐸 SF", gsc:"🔍 GSC", ga:"📊 GA4", bing:"🤖 Bing", sm:"📈 SM" }[row.source] || row.source;
+                const lbl = { sf:"🐸 SF", gsc:"🔍 GSC", ga:"📊 GA4", bing:"🤖 Bing" }[row.source] || row.source;
                 return (
-                  <div key={row.id} style={{ display: "flex", gap: 8, padding: "4px 8px", background: "#FAFAF8", borderRadius: 5, fontSize: 10, alignItems: "center" }}>
-                    <span style={{ color: site?.color || C.text, fontWeight: 600, minWidth: 60 }}>{site?.label || "—"}</span>
-                    <span style={{ color: C.textMid }}>{lbl}</span>
-                    <span style={{ color: C.textLight, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.filename}</span>
+                  <div key={row.id} style={{ display: "flex", gap: 8, padding: "4px 8px", background: "#F1F5F9", borderRadius: 5, fontSize: 10, alignItems: "center" }}>
+                    <span style={{ color: site?.color || "#1E293B", fontWeight: 600, minWidth: 60 }}>{site?.label || "—"}</span>
+                    <span style={{ color: "#64748B" }}>{lbl}</span>
+                    <span style={{ color: "#94A3B8", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.filename}</span>
                   </div>
                 );
               })}
@@ -5918,70 +163,39 @@ function FanoutSetupPanel({
         </div>
       </SetupSection>
 
-      {/* ── Import Semrush ── */}
-      <SetupSection icon="📈" title="Import Semrush — volumes de recherche">
+      {/* ── Imports CSV ── */}
+      <SetupSection icon="📥" title="Imports CSV — SF, GSC, GA4, Bing">
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           {safeSites.map(site => (
             <div key={site.id} style={{ flex: "1 1 200px", background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 10, padding: "10px 14px" }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: site.color, marginBottom: 8 }}>{site.label}</div>
-              <UploadCard label="Semrush" icon="📈" hint="Organic pages export" color={site.color}
-                loaded={(smData||{})[site.id]?.length > 0} rows={(smData||{})[site.id]}
-                onData={(_, rawText) => { const rows = parseSemrush(parseSemrushCSV(rawText)); setSmData(p => ({...p, [site.id]: rows})); }}
-                onClear={() => setSmData(p => ({...p, [site.id]: []}))}
-                rawMode siteId={site.id} source="sm" projectId={projectId}
-                onAfterUpload={refreshHistory}
-                onLoadFromHistory={async row => { try { const t = await sbDownload(row.storage_path); const rows = parseSemrush(parseSemrushCSV(t)); setSmData(p => ({...p, [site.id]: rows})); } catch(e) {} }}
-              />
-              {(smData||{})[site.id]?.length > 0 && <div style={{ marginTop: 4, fontSize: 10, color: site.color, fontWeight: 600 }}>✓ {(smData||{})[site.id].length} pages</div>}
-              {lastImports[`${site.id}_sm`]?.storage_path && !(smData||{})[site.id]?.length && (
-                <button onClick={async () => { try { const t = await sbDownload(lastImports[`${site.id}_sm`].storage_path); const rows = parseSemrush(parseSemrushCSV(t)); setSmData(p => ({...p, [site.id]: rows})); } catch(e) {} }}
-                  style={{ marginTop: 4, width: "100%", padding: "3px 0", border: `1px solid ${site.color}`, borderRadius: 6, background: site.bg, color: site.color, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>↩ Dernier</button>
-              )}
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {[
+                  { key: "sf",   label: "Screaming Frog", icon: "🐸", data: sfData,   setter: setSfData },
+                  { key: "gsc",  label: "Search Console",  icon: "🔍", data: gscData,  setter: setGscData },
+                  { key: "ga",   label: "Analytics 4",     icon: "📊", data: gaData,   setter: setGaData },
+                  { key: "bing", label: "Bing Webmaster",  icon: "🤖", data: bingData, setter: setBingData },
+                ].map(({ key, label, icon, data, setter }) => {
+                  const hasData = data?.[site.id]?.length > 0;
+                  const lastRow = lastImports[`${site.id}_${key}`];
+                  return (
+                    <UploadCard key={key} label={`${icon} ${label}`} siteId={site.id} source={key}
+                      projectId={projectId} project={project}
+                      hasData={hasData} lastImport={lastRow}
+                      onParsed={rows => setter?.(prev => ({...prev, [site.id]: rows}))}
+                      onDownload={lastRow ? () => sbDownload(lastRow.storage_path).then(rows => setter?.(prev => ({...prev, [site.id]: rows}))) : null}
+                    />
+                  );
+                })}
+              </div>
             </div>
           ))}
         </div>
       </SetupSection>
 
-      {/* ── Clés API providers ── */}
-      <SetupSection icon="🔑" title="Clés API — providers IA">
-        <div style={{ background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 10, padding: "12px 16px" }}>
-          <ProviderConfigPanel project={project} projectId={projectId} sites={safeSites} onSaveProviderKeys={onSaveProviderKeys} />
-        </div>
-      </SetupSection>
-
-      {/* ── Axes de génération ── */}
-      <SetupSection icon="🎯" title="Axes de génération des questions">
-        <div style={{ background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 10, padding: "12px 16px" }}>
-          <div style={{ fontSize: 11, color: "#64748B", marginBottom: 10 }}>
-            Chaque mot-clé génère une question par axe. Adaptez les angles à votre secteur.
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {safeAxes.map((a, i) => (
-              <div key={i} style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                <span style={{ fontSize: 11, color: "#94A3B8", minWidth: 18, flexShrink: 0 }}>{i + 1}.</span>
-                <input value={a} onChange={e => { const u = [...safeAxes]; u[i] = e.target.value; onAxesChange?.(u); }}
-                  style={{ flex: 1, padding: "5px 9px", border: "1px solid #E2E8F0", borderRadius: 7, fontSize: 12, color: "#1E293B" }} />
-                <button onClick={() => onAxesChange?.(safeAxes.filter((_, j) => j !== i))}
-                  style={{ fontSize: 11, color: "#94A3B8", background: "none", border: "none", cursor: "pointer", padding: "0 4px", flexShrink: 0 }}>✕</button>
-              </div>
-            ))}
-            <button onClick={() => onAxesChange?.([...safeAxes, ""])}
-              style={{ fontSize: 11, color: "#2563EB", background: "none", border: "1px dashed #E2E8F0", borderRadius: 7, padding: "5px 12px", cursor: "pointer", textAlign: "left", marginTop: 2 }}>
-              + Ajouter un axe
-            </button>
-          </div>
-          <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end" }}>
-            <button onClick={async () => { if (onSaveAxes) await onSaveAxes(safeAxes); }}
-              style={{ padding: "6px 16px", background: "#1A3C2E", color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-              💾 Sauvegarder les axes
-            </button>
-          </div>
-        </div>
-      </SetupSection>
-
-      {/* ── Configuration marques ── */}
-      <SetupSection icon="🏷️" title="Configuration des marques">
-        <BrandConfigAccordion sites={safeSites} projectId={projectId} />
+      {/* ── Classification des pages ── */}
+      <SetupSection icon="🏷️" title="Classification des pages">
+        <PageTypeClassifier projectId={projectId} sites={safeSites} pageTypes={pageTypes} setPageTypes={setPageTypes} />
       </SetupSection>
 
     </div>
@@ -5989,435 +203,3521 @@ function FanoutSetupPanel({
 }
 
 
-export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes, onSaveProviderKeys, user,
-  // Props setup (nouvelles — passées depuis App.jsx)
-  projects, currentProjectId, setCurrentProjectId, setProjects, ownerEmail,
-  setSites, smData, setSmData,
-  sfData, setSfData, gscData, setGscData, gaData, setGaData, bingData, setBingData,
-  dbHistory, dbLoading, refreshHistory, confirmModal, setConfirmModal,
-  isReadOnly = false,
-  autoStartTour = false,
-  onTourStarted = null,
-}) {
-  const [mainTab, setMainTab]       = useState("analyse"); // "setup" | "analyse"
-  const [subTab, setSubTab]         = useState("keywords"); // keywords | questions | urls
-  const [questionsKey, setQuestionsKey] = useState(0); // incremented to force QuestionsTab reload
-  const [selectedSite, setSelectedSite] = useState(sites[0]?.id || "");
-  // Démarrer le tour automatiquement si demandé
-  useEffect(() => {
-    if (autoStartTour) { setMainTab("analyse"); setShowTour(true); onTourStarted?.(); }
-  }, [autoStartTour]); // eslint-disable-line react-hooks/exhaustive-deps
+// ── Stat card ─────────────────────────────────────────────────────
+// ── Analyse par catégorie de mots-clés ───────────────────────────
+function CategoryAnalysisCard({ siteQuestions, siteResults, keywords, categories, brand, claudeKey }) {
+  const [status, setStatus]   = useState("idle"); // idle | warning | loading | done | error
+  const [analysis, setAnalysis] = useState("");
+  const [open, setOpen]         = useState(false);
 
-  // Sync selectedSite quand le projet change
-  useEffect(() => {
-    setSelectedSite(sites[0]?.id || "");
-  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
-  // Parse persisted settings from project
-  const projectSettings = (() => {
-    try { return project?.settings_json ? JSON.parse(project.settings_json) : {}; } catch { return {}; }
-  })();
+  // Construire la map keyword → category pour enrichir les questions
+  const kwCatMap = useMemo(() => {
+    const m = {};
+    keywords.forEach(k => { if (k.category_id) m[k.id] = k.category_id; });
+    return m;
+  }, [keywords]);
 
-  const [model] = useState(projectSettings.model || "gpt-4o-mini"); // kept for variation generation (OpenAI completions endpoint)
-  const [brand, setBrand]           = useState(null);
-  const [runMode] = useState(projectSettings.runMode || "parallel"); // parallel | sequential
-  const [semrushKeyDec, setSemrushKeyDec] = useState(() => decodeKey(project?.semrush_key_enc || ""));
-  // Sync semrush key when project changes
-  useEffect(() => {
-    const dec = decodeKey(project?.semrush_key_enc || "");
-    if (dec) setSemrushKeyDec(dec);
-  }, [project?.id, project?.semrush_key_enc]); // eslint-disable-line react-hooks/exhaustive-deps
-  const [activeProviders, setActiveProviders] = useState(() => {
-    // 1. Load from saved settings
-    if (projectSettings.activeProviders?.length) return projectSettings.activeProviders;
-    // 2. Fallback: all providers that have keys configured
-    if (project) {
-      const withKeys = PROVIDERS.filter(p => project[p.keyField]).map(p => p.id);
-      if (withKeys.length) return withKeys;
-    }
-    return ["openai"];
-  });
-  // Provider key state: { id → { enc, dec, input, status } }
-  const [providerKeys, setProviderKeys] = useState(() => {
-    // Initialize synchronously from project prop so keys are available immediately
-    const init = {};
-    if (project) {
-      PROVIDERS.forEach(p => {
-        const enc = project[p.keyField] || "";
-        if (enc) {
-          const dec = decodeKey(enc);
-          if (dec) init[p.id] = { enc, dec, input: "", status: "ok" };
-        }
+  // Vérifier si des catégories sont assignées aux mots-clés
+  const kwWithCat   = keywords.filter(k => k.category_id).length;
+  const kwTotal     = keywords.length;
+  const hasCats     = kwWithCat > 0;
+  const catCoverage = kwTotal > 0 ? Math.round(kwWithCat / kwTotal * 100) : 0;
+
+  // Grouper les questions par catégorie via keyword_id → category_id
+  const byCategory = useMemo(() => {
+    const map = {}; // category_id → { cat, questions, results }
+    siteQuestions.forEach(q => {
+      const catId = kwCatMap[q.keyword_id] || "__none__";
+      if (!map[catId]) map[catId] = { questions: [], results: [] };
+      map[catId].questions.push(q);
+    });
+    siteResults.forEach(r => {
+      const q = siteQuestions.find(q => q.id === r.question_id);
+      const catId = (q && kwCatMap[q.keyword_id]) || "__none__";
+      if (!map[catId]) map[catId] = { questions: [], results: [] };
+      map[catId].results.push(r);
+    });
+    return map;
+  }, [siteQuestions, siteResults, kwCatMap]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const catStats = useMemo(() => {
+    return Object.entries(byCategory)
+      .filter(([id]) => id !== "__none__")
+      .map(([id, { questions, results }]) => {
+        const cat = categories.find(c => c.id === id);
+        const total = results.length;
+        const present = results.filter(r => r.brand_mentioned === true || r.brand_mentioned === 1).length;
+        const pct = total > 0 ? Math.round(present / total * 100) : null;
+        return { id, cat, questions: questions.length, results: total, present, pct };
+      })
+      .sort((a, b) => (b.pct ?? -1) - (a.pct ?? -1));
+  }, [byCategory, categories]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const noneStats = byCategory["__none__"] ? (() => {
+    const { questions, results } = byCategory["__none__"];
+    const present = results.filter(r => r.brand_mentioned === true || r.brand_mentioned === 1).length;
+    return { questions: questions.length, results: results.length, present };
+  })() : null;
+
+  const run = async () => {
+    if (!claudeKey) return;
+    setStatus("loading"); setAnalysis(""); setOpen(true);
+    const brandName = brand?.brand_name || "la marque";
+    const rows = catStats.map(s =>
+      `- ${s.cat?.name || s.id} : ${s.pct !== null ? s.pct + "%" : "—"} présence (${s.present}/${s.results} rép., ${s.questions} questions)`
+    ).join("\n");
+    const prompt = `Tu es un expert GEO (Generative Engine Optimization).
+Voici la présence de "${brandName}" dans les réponses LLM, ventilée par catégorie de mots-clés :
+
+${rows || "Aucune donnée de catégorie disponible."}
+
+${noneStats ? `Questions non catégorisées : ${noneStats.results} réponses, ${Math.round((noneStats.present/Math.max(noneStats.results,1))*100)}% de présence.\n` : ""}
+
+Analyse en 3 sections :
+## Forces par catégorie
+Quelles catégories ont la meilleure présence et pourquoi (2-3 phrases max par catégorie forte).
+
+## Axes prioritaires
+Les 3 catégories avec le plus grand potentiel de progression. Pour chacune : diagnostic et action concrète.
+
+## Recommandation transversale
+Une recommandation de contenu ou de stratégie qui s'applique à toutes les catégories faibles.
+
+Sois direct, concis, actionnable. Pas de généralités.`;
+
+    try {
+      const res = await fetch("/api/anthropic", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 900, messages: [{ role: "user", content: prompt }], apiKey: claudeKey }),
       });
+      const data = await res.json();
+      const text = data.content?.[0]?.text || data.error?.message || "Erreur de génération.";
+      setAnalysis(text);
+      setStatus("done");
+    } catch(e) {
+      setAnalysis("Erreur : " + e.message);
+      setStatus("error");
     }
-    return init;
-  });
-  const [apiKeyEnc, setApiKeyEnc]   = useState(project?.openai_key_enc || ""); // legacy for variation gen
+  };
 
-  // Auto-save UI settings when they change
-  useEffect(() => {
-    if (!projectId) return;
-    const timer = setTimeout(() => {
-      const settings = { runMode, activeProviders, model };
-      sbSaveProjectSettings(projectId, settings).catch(() => {});
-    }, 800); // debounce 800ms
-    return () => clearTimeout(timer);
-  }, [runMode, activeProviders, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Sync all provider keys when project prop updates
-  useEffect(() => {
-    if (!project) return;
-    const updates = {};
-    PROVIDERS.forEach(p => {
-      const enc = project[p.keyField] || "";
-      if (enc) {
-        const dec = decodeKey(enc);
-        updates[p.id] = { enc, dec, input: "", status: dec ? "ok" : "error" };
-      }
-    });
-    if (Object.keys(updates).length) setProviderKeys(prev => ({ ...prev, ...updates }));
-    // Sync legacy openai key for variation generation
-    if (project?.openai_key_enc && project.openai_key_enc !== apiKeyEnc) {
-      setApiKeyEnc(project.openai_key_enc);
+  const handleCTA = () => {
+    if (!hasCats) {
+      setStatus("warning");
+    } else {
+      run();
     }
-  }, [project?.id, project?.openai_key_enc, project?.gemini_key_enc, project?.perplexity_key_enc, project?.claude_geo_key_enc, project?.semrush_key_enc]); // eslint-disable-line react-hooks/exhaustive-deps
-  const [apiKeyDec, setApiKeyDec]   = useState("");           // decrypted, only in memory
+  };
 
-  // Sync activeProviders : ajouter automatiquement tout provider dont la clé est configurée
-  // (s'exécute quand les clés changent — ne retire jamais un provider, ajoute seulement)
-  useEffect(() => {
-    if (!project) return;
-    const withKeys = PROVIDERS.filter(p => project[p.keyField]).map(p => p.id);
-    if (!withKeys.length) return;
-    setActiveProviders(prev => {
-      const missing = withKeys.filter(id => !prev.includes(id));
-      if (!missing.length) return prev; // rien à ajouter
-      return [...prev, ...missing];
-    });
-  }, [project?.openai_key_enc, project?.gemini_key_enc, project?.perplexity_key_enc, project?.claude_geo_key_enc]); // eslint-disable-line react-hooks/exhaustive-deps
-  const [allResults, setAllResults] = useState([]);
-  const [keywords, setKeywords]     = useState([]); // lifted from KeywordsTab for cross-tab ordering
-  const [categories, setCategories] = useState([]);
-  const [axes, setAxes]             = useState(Array.isArray(geoAxes) ? geoAxes : DEFAULT_AXES);
-  const [competitors, setCompetitors] = useState([]);
-  const [aliasMap, setAliasMap] = useState({}); // alias(lower) → canonique
-  const [showTour, setShowTour]       = useState(false);
-
-  const site = (Array.isArray(sites) ? sites : []).find(s => s.id === selectedSite) || (Array.isArray(sites) ? sites : [])[0];
-
-  // Sync axes when project changes
-  useEffect(() => {
-    setAxes(Array.isArray(geoAxes) ? geoAxes : DEFAULT_AXES);
-  }, [geoAxes]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Load categories (project-wide, once)
-  useEffect(() => {
-    if (!projectId) return;
-    sbGetCategories(projectId).then(setCategories);
-  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Load brand + results when project or site changes
-  useEffect(() => {
-    if (!projectId || !site?.id) return;
-    sbGetBrand(projectId, site.id).then(b => { setBrand(b); });
-    sbGetGeoResults(projectId, site.id).then(r => { setAllResults(r); }); // keep previous data while loading
-    sbGetKeywords(projectId, site.id).then(kws => { setKeywords(kws || []); });
-    sbGetCompetitors(projectId, site.id).then(c => { setCompetitors(c || []); });
-    sbGetAliases(projectId, site.id).then(rows => {
-      const map = {};
-      (rows || []).forEach(a => { if (a.alias && a.canonical) map[a.alias.toLowerCase().trim()] = a.canonical.trim(); });
-      setAliasMap(map);
-    }).catch(() => {});
-  }, [projectId, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Decode key when enc changes
-  useEffect(() => {
-    if (!apiKeyEnc) return;
-    const k = decodeKey(apiKeyEnc);
-    setApiKeyDec(k);
-  }, [apiKeyEnc]); // eslint-disable-line react-hooks/exhaustive-deps
-
-
-  const GEO_TOUR_STEPS = [
-    {
-      target: "subnav",
-      icon: "🧭",
-      title: "Navigation Fan-outs",
-      desc: "5 onglets pour piloter votre analyse GEO : Mots-clés → génération des questions, Questions → interrogation des LLMs, Concurrents → qualification, Automatisation → planifier les runs, Sources → URLs citées.",
-      tip: "Démarrez toujours par ajouter vos mots-clés cibles.",
-      position: "bottom",
-      onActivate: () => { setMainTab("analyse"); setSubTab("keywords"); },
-    },
-    {
-      target: "keywords-section",
-      icon: "🔑",
-      title: "Mots-clés",
-      desc: "Saisissez vos requêtes cibles (une par ligne) puis cliquez 'Générer toutes les questions'. L'IA crée automatiquement plusieurs questions par axe (meilleur, pistes, avis, objectif…). Import CSV possible.",
-      tip: "5-10 mots-clés suffisent pour commencer. Ajoutez des volumes via Semrush.",
-      position: "bottom",
-      onActivate: () => { setMainTab("analyse"); setSubTab("keywords"); },
-    },
-    {
-      target: "stats-header",
-      icon: "📊",
-      title: "Tableau de bord de présence",
-      desc: "3 métriques clés : Mention (dans un top numéroté LLM), Évocation (dans le corps du texte) et Citation (dans les sources). Se met à jour en temps réel après chaque interrogation.",
-      tip: "Filtrez par provider pour comparer OpenAI, Gemini, Perplexity et Claude.",
-      position: "bottom",
-      onActivate: () => { setMainTab("analyse"); setSubTab("questions"); },
-    },
-    {
-      target: "provider-pills",
-      icon: "🤖",
-      title: "Filtres providers",
-      desc: "Activez ou désactivez chaque provider pour filtrer l'affichage. Les pills sans clé configurée sont grisées. Configurez vos clés dans l'onglet 'Configuration'.",
-      tip: "Perplexity et Gemini ont un accès web en temps réel — utile pour les requêtes récentes.",
-      position: "bottom",
-      onActivate: () => { setMainTab("analyse"); setSubTab("questions"); },
-    },
-    {
-      target: "run-all",
-      icon: "▶",
-      title: "Lancer les interrogations",
-      desc: "Lance toutes les questions non encore interrogées aujourd'hui. Le bouton ▶ individuel force le rechargement pour une question. Un 💡 Hint GEO peut être généré pour chaque question sans présence.",
-      tip: "Les résultats sont sauvegardés automatiquement dans Supabase — consultez l'Audit GEO pour l'historique.",
-      position: "top",
-      onActivate: () => { setMainTab("analyse"); setSubTab("questions"); },
-    },
-    {
-      target: "export-btn",
-      icon: "📤",
-      title: "Export CSV / PDF",
-      desc: "Exportez les questions avec présence marque, les favoris ou toutes les questions. Filtrez par provider. Le PDF génère un rapport mis en page avec chiffres clés, concurrents et hints GEO.",
-      tip: "Générez les 💡 Hints avant le PDF pour un rapport plus actionnable.",
-      position: "top",
-      onActivate: () => { setMainTab("analyse"); setSubTab("questions"); },
-    },
-    {
-      target: "geo-analysis",
-      icon: "✦",
-      title: "Analyse GEO par IA",
-      desc: "Claude analyse vos données de présence et produit 4 sections actionnables : État des lieux, Maillage interne à créer, Pages à adapter, URLs concurrentes à surveiller.",
-      tip: "Relancez l'analyse après chaque série d'interrogations pour des recommandations à jour.",
-      position: "bottom",
-      onActivate: () => { setMainTab("analyse"); setSubTab("questions"); },
-    },
-  ];
+  // Couleur de présence
+  const pctColor = (p) => p === null ? C.textLight : p >= 60 ? "#059669" : p >= 30 ? "#D97706" : "#DC2626";
+  const pctBg    = (p) => p === null ? C.bg : p >= 60 ? "#ECFDF5" : p >= 30 ? "#FFFBEB" : "#FEF2F2";
 
   return (
-    <div style={{ fontFamily: "inherit" }}>
-
-      {showTour && <TourGuide steps={GEO_TOUR_STEPS} onClose={() => setShowTour(false)} />}
-
-      {/* ── Header ── */}
-      <div style={{ marginBottom: 28 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+    <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden", marginBottom: 16 }}>
+      {/* Header */}
+      <div style={{ padding: "14px 20px", borderBottom: `1px solid ${C.border}`, background: C.bg, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 18 }}>📂</span>
           <div>
-            <div style={{ fontSize: 11, fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", color: "#1A3C2E", opacity: 0.5, marginBottom: 4 }}>Fan-outs GEO</div>
-            <div style={{ fontSize: 22, fontWeight: 500, color: "#1A3C2E" }}>Visibilité générative</div>
-          </div>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            {!isReadOnly && (
-              <button onClick={() => { setMainTab("analyse"); setShowTour(true); }}
-                style={{ fontSize: 11, fontWeight: 500, color: "#1A3C2E", background: "#F0EBE0", border: "1px solid #1A3C2E22", borderRadius: 20, padding: "5px 14px", cursor: "pointer" }}>
-                Guide
-              </button>
-            )}
-            {isReadOnly && (
-              <span style={{ fontSize: 11, fontWeight: 500, color: "#D97706", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 20, padding: "4px 12px" }}>
-                Lecture seule
-              </span>
-            )}
+            <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Analyse par catégorie</div>
+            <div style={{ fontSize: 11, color: C.textLight, marginTop: 1 }}>
+              Présence de la marque ventilée par catégorie de mots-clés
+            </div>
           </div>
         </div>
+        <button
+          onClick={handleCTA}
+          disabled={status === "loading" || !claudeKey}
+          style={{ padding: "5px 14px", background: (status === "loading" || !claudeKey) ? "transparent" : "#1A3C2E", color: (status === "loading" || !claudeKey) ? "#1A3C2E44" : "#F0EBE0", border: "0.5px solid #1A3C2E22", borderRadius: 6, fontSize: 11, fontWeight: 500, cursor: (status === "loading" || !claudeKey) ? "default" : "pointer" }}
+          title={!claudeKey ? "Clé Claude manquante dans ⚙️ Providers" : undefined}
+        >
+          {status === "loading" ? "⏳ Analyse…" : "✦ Analyser par catégorie"}
+        </button>
+      </div>
 
-        {/* Nav principale */}
-        {!isReadOnly && (
-          <div style={{ display: "flex", borderBottom: "1px solid #1A3C2E22" }}>
-            {[{ key: "analyse", label: "Analyse" }, { key: "setup", label: "Configuration" }].map(t => {
-              const isActive = t.key === "setup" ? mainTab === "setup" : mainTab !== "setup";
-              return (
-                <button key={t.key}
-                  onClick={() => setMainTab(t.key === "analyse" ? "analyse" : "setup")}
-                  style={{
-                    padding: "8px 20px", fontSize: 13, fontWeight: isActive ? 500 : 400,
-                    color: isActive ? "#1A3C2E" : "#1A3C2E66",
-                    background: "none", border: "none",
-                    borderBottom: isActive ? "1.5px solid #1A3C2E" : "1.5px solid transparent",
-                    marginBottom: -1, cursor: "pointer", transition: "all 0.15s",
-                  }}>
-                  {t.label}
-                </button>
-              );
-            })}
+      {/* Warning — pas de catégories */}
+      {status === "warning" && (
+        <div style={{ padding: "14px 20px", background: "#FFFBEB", borderBottom: `1px solid #FDE68A` }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#92400E", marginBottom: 4 }}>
+            ⚠️ Aucun mot-clé catégorisé ({catCoverage}% des {kwTotal} mots-clés ont une catégorie)
           </div>
+          <div style={{ fontSize: 11, color: "#B45309", marginBottom: 10 }}>
+            Pour une analyse pertinente, catégorisez vos mots-clés dans <strong>Suivi GEO → Mots-clés</strong>.
+            Les catégories s'appliquent aux questions liées au mot-clé.
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={run} style={{ padding: "5px 14px", background: "#D97706", color: "#fff", border: "none", borderRadius: 7, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+              Analyser quand même
+            </button>
+            <button onClick={() => setStatus("idle")} style={{ padding: "5px 14px", background: "none", border: `1px solid #D97706`, color: "#D97706", borderRadius: 7, fontSize: 11, cursor: "pointer" }}>
+              Annuler
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Tableau des catégories — toujours visible */}
+      {catStats.length > 0 && (
+        <div style={{ padding: "14px 20px", borderBottom: status === "done" ? `1px solid ${C.border}` : "none" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: C.bg }}>
+                {["Catégorie", "Questions", "Réponses", "Présence"].map(h => (
+                  <th key={h} style={{ padding: "6px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.5, borderBottom: `1px solid ${C.border}` }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {catStats.map(s => (
+                <tr key={s.id} style={{ borderBottom: `1px solid ${C.borderLight}` }}>
+                  <td style={{ padding: "7px 12px", fontWeight: 600 }}>
+                    <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: s.cat?.color || "#94A3B8", marginRight: 8 }} />
+                    {s.cat?.name || s.id}
+                  </td>
+                  <td style={{ padding: "7px 12px", color: C.textMid }}>{s.questions}</td>
+                  <td style={{ padding: "7px 12px", color: C.textMid }}>{s.results}</td>
+                  <td style={{ padding: "7px 12px" }}>
+                    {s.pct !== null
+                      ? <span style={{ fontWeight: 700, color: pctColor(s.pct), background: pctBg(s.pct), borderRadius: 5, padding: "2px 8px" }}>{s.pct}%</span>
+                      : <span style={{ color: C.textLight, fontSize: 11 }}>—</span>}
+                  </td>
+                </tr>
+              ))}
+              {noneStats && noneStats.questions > 0 && (
+                <tr style={{ borderBottom: `1px solid ${C.borderLight}`, opacity: 0.6 }}>
+                  <td style={{ padding: "7px 12px", fontStyle: "italic", color: C.textLight }}>Non catégorisées</td>
+                  <td style={{ padding: "7px 12px", color: C.textLight }}>{noneStats.questions}</td>
+                  <td style={{ padding: "7px 12px", color: C.textLight }}>{noneStats.results}</td>
+                  <td style={{ padding: "7px 12px", color: C.textLight }}>{noneStats.results > 0 ? Math.round(noneStats.present/noneStats.results*100)+"%" : "—"}</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {catStats.length === 0 && status !== "warning" && (
+        <div style={{ padding: "14px 20px", fontSize: 12, color: C.textLight, fontStyle: "italic" }}>
+          Catégorisez vos mots-clés dans Suivi GEO → Mots-clés pour voir la présence par axe thématique.
+        </div>
+      )}
+
+      {/* Résultat analyse IA */}
+      {status === "done" && analysis && (
+        <div style={{ padding: "16px 20px" }}>
+          <button onClick={() => setOpen(o => !o)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "#1A3C2E55", fontWeight: 500, padding: 0, marginBottom: open ? 10 : 0 }}>
+            {open ? "▲ Masquer l'analyse IA" : "▼ Voir l'analyse IA"}
+          </button>
+          {open && (
+            <div style={{ fontSize: 12, color: C.text, lineHeight: 1.7 }}>
+              {analysis.split("\n").map((line, i) => {
+                if (line.startsWith("## ")) return <div key={i} style={{ fontWeight: 600, fontSize: 11, color: "#1A3C2E", marginTop: 12, marginBottom: 4, letterSpacing: "0.06em", textTransform: "uppercase" }}>{line.slice(3)}</div>;
+                if (line.startsWith("- ")) return <div key={i} style={{ paddingLeft: 14, marginBottom: 3 }}>• {line.slice(2)}</div>;
+                if (!line.trim()) return <div key={i} style={{ height: 6 }} />;
+                return <div key={i} style={{ marginBottom: 3 }}>{line}</div>;
+              })}
+            </div>
+          )}
+        </div>
+      )}
+      {status === "error" && (
+        <div style={{ padding: "12px 20px", fontSize: 11, color: "#DC2626" }}>⚠️ {analysis}</div>
+      )}
+    </div>
+  );
+}
+
+function Section({ icon, title, sub, children }) {
+  return (
+    <div style={{ background: "#fff", border: "0.5px solid #1A3C2E0D", borderRadius: 10, padding: "18px 20px", marginBottom: 12 }}>
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E55" }}>
+          {title}
+        </div>
+        {sub && <div style={{ fontSize: 11, color: "#1A3C2E44", marginTop: 2 }}>{sub}</div>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+// ── Scatter plot concurrents : citations (X) × position moy. (Y) ──
+// ── FavoritesPerformance — met en avant les questions favorites ──
+// 4 buckets : À défendre (#1-3) / À surveiller (#4-10) / Conquête prioritaire / À conquérir
+// ── Mini graphe en barres verticales pour l'audit (style Fan-out) ──
+// data: [{ name, count, kind }] · kind ∈ brand|competitor|other
+function AuditBarChart({ data, accent = "#1A3C2E" }) {
+  const [hover, setHover] = useState(null);
+  const rows = (data || []).slice(0, 14);
+  const max = rows.length ? Math.max(...rows.map(d => d.count)) : 0;
+  const colorFor = (kind) => kind === "brand" ? "#1A7A4A" : kind === "competitor" ? "#C0352A" : "#9AAEA4";
+  if (!rows.length) return <div style={{ fontSize: 11, color: "#1A3C2E44", fontStyle: "italic" }}>Aucune donnée</div>;
+  return (
+    <div>
+      <div style={{ position: "relative", height: 140, display: "flex", alignItems: "flex-end", gap: rows.length > 9 ? 3 : 6, padding: "18px 0 0" }}>
+        {rows.map((d, i) => {
+          const h = max ? Math.max((d.count / max) * 100, 4) : 4;
+          const isHover = hover === i;
+          return (
+            <div key={d.name + i}
+              onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}
+              style={{ flex: 1, minWidth: 0, height: "100%", display: "flex", flexDirection: "column", justifyContent: "flex-end", alignItems: "center", position: "relative" }}>
+              {isHover && (
+                <div style={{ position: "absolute", bottom: "calc(100% + 4px)", left: "50%", transform: "translateX(-50%)", background: "#1A3C2E", color: "#F0EBE0", borderRadius: 6, padding: "5px 9px", fontSize: 11, whiteSpace: "nowrap", zIndex: 5, boxShadow: "0 2px 8px #1A3C2E33", pointerEvents: "none" }}>
+                  <div style={{ fontWeight: 600 }}>{d.name}</div>
+                  <div style={{ opacity: 0.8 }}>{d.count} citation{d.count > 1 ? "s" : ""}</div>
+                </div>
+              )}
+              <div style={{ width: "100%", height: `${h}%`, background: colorFor(d.kind), borderRadius: "3px 3px 0 0", opacity: isHover ? 1 : 0.88, transition: "opacity 0.12s", minHeight: 3 }} />
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ display: "flex", gap: rows.length > 9 ? 3 : 6, marginTop: 6, height: 64 }}>
+        {rows.map((d, i) => (
+          <div key={d.name + i} style={{ flex: 1, minWidth: 0, display: "flex", justifyContent: "center" }}>
+            <span style={{ fontSize: 9, color: hover === i ? "#1A3C2E" : "#1A3C2E66", whiteSpace: "nowrap", transform: "rotate(-45deg)", transformOrigin: "top left", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 80, display: "inline-block", marginTop: 2 }}>{d.name}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── FanoutAnalysisRecap — récupère l'analyse produite dans Fan-out ──
+// Affiche (lecture seule) la dernière analyse "fanout" générée dans l'onglet
+// Fan-outs (GeoAnalysis), pour la retrouver directement dans l'audit.
+function FanoutAnalysisRecap({ projectId, siteId }) {
+  const [sections, setSections] = useState(null);
+  const [savedDate, setSavedDate] = useState(null);
+  const [open, setOpen] = useState(true);
+
+  useEffect(() => {
+    if (!projectId || !siteId) { setSections(null); return; }
+    let cancelled = false;
+    sbGetGeoAnalyses(projectId, siteId, "fanout").then(rows => {
+      if (cancelled || !rows?.length) { setSections(null); return; }
+      const c = rows[0].content;
+      if (c?.sections?.length) { setSections(c.sections); setSavedDate(rows[0].created_at); }
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [projectId, siteId]);
+
+  if (!sections?.length) return null;
+
+  const META = {
+    "ÉTAT DES LIEUX":    { icon: "◎", color: "#1A3C2E" },
+    "MAILLAGE INTERNE":  { icon: "⟶", color: "#1A3C2E" },
+    "PAGES À CRÉER":     { icon: "✦", color: "#C97820" },
+    "URLS CONCURRENTES": { icon: "↗", color: "#1A3C2E77" },
+  };
+  const getMeta = (title) => {
+    const key = Object.keys(META).find(k => (title || "").toUpperCase().includes(k));
+    return META[key] || { icon: "•", color: "#1A3C2E" };
+  };
+
+  return (
+    <div data-tour="audit-fanout-recap" style={{ display: "contents" }}>
+      <Section title="Analyse Fan-out" sub="Recommandations générées dans l'onglet Suivi GEO">
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+          {savedDate && (
+            <span style={{ fontSize: 10, color: "#1A3C2E55" }}>
+              Générée le {new Date(savedDate).toLocaleString("fr-FR", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
+            </span>
+          )}
+          <button onClick={() => setOpen(o => !o)}
+            style={{ marginLeft: "auto", fontSize: 11, padding: "3px 10px", borderRadius: 6, border: "0.5px solid #1A3C2E22", background: "transparent", color: "#1A3C2E77", cursor: "pointer" }}>
+            {open ? "Réduire" : "Déployer"}
+          </button>
+        </div>
+        {open && sections.map((s, i) => {
+          const meta = getMeta(s.title);
+          if (s.title === "Erreur") return null;
+          return (
+            <div key={i} style={{ borderLeft: "2px solid #1A3C2E0D", paddingLeft: 16, paddingBottom: 16, marginBottom: 4 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                <span style={{ fontSize: 12, color: meta.color }}>{meta.icon}</span>
+                <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: meta.color }}>{s.title}</span>
+              </div>
+              <div style={{ fontSize: 12, lineHeight: 1.7, color: "#1A3C2E", whiteSpace: "pre-wrap" }}>{renderBold(s.body || "")}</div>
+            </div>
+          );
+        })}
+      </Section>
+    </div>
+  );
+}
+
+function FavoritesPerformance({ questions, results, projectId = null, siteId = null }) {
+  // Overrides manuels de bucket par question (drag & drop), persistés en localStorage
+  const storageKey = `geoFavBuckets_${projectId || "p"}_${siteId || "s"}`;
+  const [overrides, setOverrides] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(storageKey) || "{}"); } catch { return {}; }
+  });
+  const [dragOverBucket, setDragOverBucket] = useState(null);
+
+  const persistOverrides = useCallback((next) => {
+    setOverrides(next);
+    try { localStorage.setItem(storageKey, JSON.stringify(next)); } catch { /* quota */ }
+  }, [storageKey]);
+
+  const order = ["defend", "watch", "conquest_priority", "conquer"];
+
+  const data = useMemo(() => {
+    const favs = questions.filter(q => q.is_favorite);
+    if (!favs.length) return null;
+    const byQ = {};
+    results.forEach(r => { (byQ[r.question_id] = byQ[r.question_id] || []).push(r); });
+    const posOf = (qId) => {
+      const rs = byQ[qId] || [];
+      const ps = rs.map(r => r.brand_mention_position || r.brand_position).filter(p => p != null && p > 0);
+      return ps.length ? Math.min(...ps) : null;
+    };
+    const mentioned = (qId) => (byQ[qId] || []).some(r => r.brand_mentioned === true || r.brand_mentioned === 1);
+    const computedBucket = (q, pos, ment) => {
+      if (ment && pos != null && pos <= 3) return "defend";
+      if (ment && pos != null && pos >= 4 && pos <= 10) return "watch";
+      if (!ment && q.keyword_id) return "conquest_priority";
+      return "conquer";
+    };
+    const buckets = { defend: [], watch: [], conquest_priority: [], conquer: [] };
+    favs.forEach(q => {
+      const pos = posOf(q.id), ment = mentioned(q.id);
+      const auto = computedBucket(q, pos, ment);
+      const b = overrides[q.id] && order.includes(overrides[q.id]) ? overrides[q.id] : auto;
+      buckets[b].push({ id: q.id, question: q.question, pos, moved: !!overrides[q.id] && overrides[q.id] !== auto });
+    });
+    return { buckets, total: favs.length };
+  }, [questions, results, overrides]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!data) return (
+    <div style={{ fontSize: 12, color: "#1A3C2E44", fontStyle: "italic", padding: "8px 0" }}>
+      Aucune question favorite. Marquez vos questions stratégiques (★) dans l'onglet Suivi GEO pour les suivre ici.
+    </div>
+  );
+
+  const META = {
+    defend:            { label: "À défendre",          color: "#1A7A4A", desc: "La marque lead (#1-3)" },
+    watch:             { label: "À surveiller",         color: "#C97820", desc: "Top 4-10" },
+    conquest_priority: { label: "Conquête prioritaire", color: "#E8541A", desc: "Non positionnée · fort potentiel" },
+    conquer:           { label: "À conquérir",          color: "#1A3C2E77", desc: "Non positionnée" },
+  };
+
+  const moveToBucket = (qId, targetBucket) => {
+    if (!qId || !order.includes(targetBucket)) return;
+    persistOverrides({ ...overrides, [qId]: targetBucket });
+  };
+  const resetOverride = (qId) => {
+    const next = { ...overrides };
+    delete next[qId];
+    persistOverrides(next);
+  };
+
+  const hasOverrides = Object.keys(overrides).length > 0;
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+        <div style={{ fontSize: 11, color: "#1A3C2E66" }}>
+          Glissez-déposez une question d'une colonne à l'autre pour ajuster sa priorité.
+        </div>
+        {hasOverrides && (
+          <button onClick={() => persistOverrides({})}
+            style={{ fontSize: 10, padding: "3px 10px", borderRadius: 6, border: "0.5px solid #1A3C2E22", background: "transparent", color: "#1A3C2E77", cursor: "pointer" }}>
+            ↺ Réinitialiser le classement
+          </button>
         )}
       </div>
 
-      {/* ── Configuration ── */}
-      {mainTab === "setup" && (
-        <FanoutSetupPanel
-          projects={projects}
-          currentProjectId={currentProjectId}
-          setCurrentProjectId={setCurrentProjectId}
-          setProjects={setProjects}
-          ownerEmail={ownerEmail}
-          sites={sites}
-          setSites={setSites}
-          smData={smData}
-          setSmData={setSmData}
-          sfData={sfData}
-          setSfData={setSfData}
-          gscData={gscData}
-          setGscData={setGscData}
-          gaData={gaData}
-          setGaData={setGaData}
-          bingData={bingData}
-          setBingData={setBingData}
-          dbHistory={dbHistory}
-          dbLoading={dbLoading}
-          refreshHistory={refreshHistory}
-          confirmModal={confirmModal}
-          setConfirmModal={setConfirmModal}
-          project={project}
-          projectId={projectId}
-          onSaveProviderKeys={(keyPatch) => {
-            setProjects?.(prev => prev.map(p => p.id === projectId ? { ...p, ...keyPatch } : p));
-            onSaveProviderKeys?.(keyPatch);
-          }}
-          axes={axes}
-          onSaveAxes={onSaveAxes}
-          onAxesChange={(a) => setAxes(a)}
-          onSemrushVolumes={async (siteId, parsedRows) => {
-            const volMap = {};
-            parsedRows.forEach(row => {
-              const kw  = (row.keyword || row.Keyword || "").toLowerCase().trim();
-              const vol = parseInt(row.volume || row.Volume || row["Search Volume"] || 0, 10);
-              if (kw && !isNaN(vol)) volMap[kw] = vol;
-            });
-            if (!Object.keys(volMap).length) return;
-            try {
-              const kws = await sbGetKeywords(projectId, siteId);
-              for (const kw of kws) {
-                const vol = volMap[kw.keyword.toLowerCase().trim()];
-                if (vol !== undefined && vol !== kw.search_volume)
-                  await sbUpdateKeywordVolume(kw.id, vol, "semrush_csv").catch(() => {});
-              }
-              setQuestionsKey(k => k + 1);
-            } catch(e) { console.warn("onSemrushVolumes error:", e); }
-          }}
-        />
-      )}
+      {/* Barre de répartition */}
+      <div style={{ display: "flex", height: 6, borderRadius: 3, overflow: "hidden", background: "#1A3C2E0C", marginBottom: 14 }}>
+        {order.map(b => {
+          const n = data.buckets[b].length;
+          if (!n) return null;
+          return <div key={b} style={{ width: `${n / data.total * 100}%`, background: META[b].color }} title={`${META[b].label} : ${n}`} />;
+        })}
+      </div>
 
-      {/* ── Analyse ── */}
-      {mainTab !== "setup" && (<div>
+      {/* Grille des 4 buckets (drop zones) */}
+      <div className="audit-questions-grid">
+        {order.map(b => {
+          const items = data.buckets[b];
+          const meta = META[b];
+          const isDropTarget = dragOverBucket === b;
+          return (
+            <div key={b}
+              onDragOver={(e) => { e.preventDefault(); if (dragOverBucket !== b) setDragOverBucket(b); }}
+              onDragLeave={(e) => { if (e.currentTarget === e.target) setDragOverBucket(null); }}
+              onDrop={(e) => {
+                e.preventDefault();
+                const qId = e.dataTransfer.getData("text/plain");
+                setDragOverBucket(null);
+                if (qId) moveToBucket(qId, b);
+              }}
+              style={{
+                border: `0.5px solid ${isDropTarget ? meta.color : "#1A3C2E0D"}`,
+                background: isDropTarget ? `${meta.color}0A` : "transparent",
+                borderRadius: 10, padding: "12px 14px", transition: "background 0.15s, border-color 0.15s",
+              }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 8 }}>
+                <span style={{ width: 8, height: 8, borderRadius: "50%", background: meta.color, flexShrink: 0 }} />
+                <span style={{ fontSize: 12, fontWeight: 600, color: meta.color }}>{meta.label}</span>
+                <span style={{ fontSize: 16, fontWeight: 700, color: meta.color, marginLeft: "auto" }}>{items.length}</span>
+              </div>
+              <div style={{ fontSize: 10, color: "#1A3C2E44", marginBottom: 8 }}>{meta.desc}</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 3, minHeight: 30, maxHeight: 200, overflowY: "auto" }}>
+                {items.map((it) => (
+                  <div key={it.id}
+                    draggable
+                    onDragStart={(e) => { e.dataTransfer.setData("text/plain", it.id); e.dataTransfer.effectAllowed = "move"; }}
+                    title={it.moved ? "Déplacée manuellement — double-clic pour rétablir le classement auto" : "Glissez pour déplacer"}
+                    onDoubleClick={() => it.moved && resetOverride(it.id)}
+                    style={{ fontSize: 11, color: "#1A3C2E", lineHeight: 1.4, display: "flex", gap: 6, alignItems: "baseline", cursor: "grab", padding: "3px 4px", borderRadius: 4, background: it.moved ? `${meta.color}0C` : "transparent" }}>
+                    <span style={{ color: "#1A3C2E22", flexShrink: 0, fontSize: 10 }}>⋮⋮</span>
+                    <span style={{ flex: 1 }}>{it.question}{it.moved && <span style={{ color: meta.color, marginLeft: 4 }}>•</span>}</span>
+                    {it.pos != null && <span style={{ fontSize: 10, color: meta.color, flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>#{it.pos}</span>}
+                  </div>
+                ))}
+                {!items.length && <div style={{ fontSize: 10, color: "#1A3C2E22", fontStyle: "italic", padding: "8px 0", textAlign: "center" }}>Déposez ici</div>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
-        {/* Site switcher */}
-        {(Array.isArray(sites) ? sites : []).length > 1 && (
-          <div style={{ display: "flex", gap: 6, marginBottom: 20 }}>
-            {(Array.isArray(sites) ? sites : []).map(s => (
-              <button key={s.id} onClick={() => setSelectedSite(s.id)} style={{
-                padding: "5px 14px", fontSize: 12, fontWeight: 500, cursor: "pointer",
-                border: "none", borderRadius: 20,
-                background: selectedSite === s.id ? "#1A3C2E" : "#F0EBE0",
-                color: selectedSite === s.id ? "#F0EBE0" : "#1A3C2E99",
-                transition: "all 0.15s",
-              }}>{s.label}</button>
+function GeoScoreBanner({ audit, auditFav = null, brand, site }) {
+  const score = audit.presenceRate;
+  const favScore = auditFav ? auditFav.presenceRate : null;
+  const favDelta = favScore != null ? favScore - score : null;
+  const level = score >= 70 ? { label: "Excellente",            color: "#1A7A4A", bar: "#1A7A4A" }
+              : score >= 50 ? { label: "Bonne présence",           color: "#1A3C2E", bar: "#1A3C2E" }
+              : score >= 30 ? { label: "Potentiel à développer",   color: "#C97820", bar: "#C97820" }
+              :               { label: "Potentiel à exploiter",    color: "#C97820", bar: "#C97820" };
+  return (
+    <div style={{ background: "#fff", border: "0.5px solid #1A3C2E0D", borderRadius: 12, padding: "20px 24px", marginBottom: 16 }}>
+      <div className="audit-banner-inner">
+        {/* Score */}
+        <div style={{ minWidth: 100 }}>
+          <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E44", marginBottom: 6 }}>Présence GEO</div>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+            <span style={{ fontSize: 44, fontWeight: 700, color: level.color, lineHeight: 1, letterSpacing: "-0.02em" }}>{score}</span>
+            <span style={{ fontSize: 18, color: level.color, fontWeight: 500 }}>%</span>
+          </div>
+          <div style={{ marginTop: 8, height: 3, background: "#1A3C2E0C", borderRadius: 2, overflow: "hidden" }}>
+            <div style={{ height: "100%", width: `${score}%`, background: level.bar, borderRadius: 2, transition: "width 0.5s" }} />
+          </div>
+          <div style={{ marginTop: 5, fontSize: 11, color: level.color, fontWeight: 500 }}>{level.label}</div>
+          {/* Score favoris en parallèle */}
+          {favScore != null && (
+            <div style={{ marginTop: 12, paddingTop: 10, borderTop: "0.5px solid #1A3C2E0C" }}>
+              <div style={{ fontSize: 9, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#C9782099", marginBottom: 3, display: "flex", alignItems: "center", gap: 4 }}>
+                <span style={{ color: "#C97820" }}>★</span> Favoris
+              </div>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
+                <span style={{ fontSize: 26, fontWeight: 700, color: "#C97820", lineHeight: 1, letterSpacing: "-0.02em" }}>{favScore}</span>
+                <span style={{ fontSize: 13, color: "#C97820", fontWeight: 500 }}>%</span>
+                {favDelta != null && favDelta !== 0 && (
+                  <span style={{ fontSize: 11, fontWeight: 600, color: favDelta > 0 ? "#1A7A4A" : "#C0352A", marginLeft: 2 }}>
+                    {favDelta > 0 ? "▲ +" : "▼ "}{favDelta} pts
+                  </span>
+                )}
+              </div>
+              <div style={{ fontSize: 10, color: "#1A3C2E44", marginTop: 3 }}>{auditFav.withBrand}/{auditFav.total} réponses favorites</div>
+            </div>
+          )}
+        </div>
+
+        {/* Séparateur */}
+        <div className="audit-banner-sep" />
+
+        {/* Barre proportion M/É/C */}
+        <div style={{ flex: "0 0 auto", minWidth: 140 }}>
+          <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E44", marginBottom: 8 }}>Répartition</div>
+          <div style={{ display: "flex", height: 4, borderRadius: 2, overflow: "hidden", background: "#1A3C2E0C", marginBottom: 10 }}>
+            {audit.total > 0 && <>
+              <div style={{ width: `${(audit.withRanked||0)/audit.total*100}%`, background: "#1A7A4A" }} />
+              <div style={{ width: `${(audit.withMentionOnly||0)/audit.total*100}%`, background: "#C97820" }} />
+              <div style={{ width: `${(audit.withSourceOnly||0)/audit.total*100}%`, background: "#1A3C2E55" }} />
+            </>}
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            {[
+              { sym: "◎", label: "Mention",   val: audit.withRanked||0,      color: "#1A7A4A" },
+              { sym: "⟶", label: "Évocation", val: audit.withMentionOnly||0, color: "#C97820" },
+              { sym: "↗",  label: "Citation",  val: audit.withSourceOnly||0,  color: "#1A3C2E77" },
+            ].map(k => (
+              <div key={k.label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 11, color: "#1A3C2E55" }}><span style={{ color: k.color }}>{k.sym}</span> {k.label}</span>
+                <span style={{ fontSize: 12, fontWeight: 600, color: k.color }}>{k.val}</span>
+              </div>
             ))}
           </div>
-        )}
+        </div>
 
-        {/* Sous-nav */}
-        <div data-tour="subnav" className="geo-subnav" style={{ marginBottom: 24 }}>
-          {[
-            { key: "keywords",    label: "Mots-clés" },
-            { key: "questions",   label: "Questions" },
-            { key: "competitors", label: "Concurrents" },
-            { key: "automation",  label: "Automatisation" },
-            { key: "urls",        label: "Sources" },
-          ].map(t => {
-            const active = subTab === t.key;
+        {/* Séparateur */}
+        <div className="audit-banner-sep" />
+
+        {/* KPIs contextuels */}
+        <div style={{ flex: 1, minWidth: 180 }}>
+          <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E44", marginBottom: 8 }}>Contexte</div>
+          <div className="audit-banner-context">
+            {[
+              { label: "Marque",                  val: brand?.brand_name || "—" },
+              { label: "Site",                    val: site?.label || "—" },
+              { label: "Questions",               val: audit.questions },
+              { label: "Résultats",               val: audit.total },
+              { label: "Pos. moy.",               val: audit.avgPos ? `#${audit.avgPos}` : "—" },
+              { label: "Concurrents renseignés",  val: Object.keys(audit.compStats).length },
+            ].map(k => (
+              <div key={k.label} style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
+                <span style={{ fontSize: 10, color: "#1A3C2E44" }}>{k.label}</span>
+                <span style={{ fontSize: 12, fontWeight: 600, color: "#1A3C2E" }}>{k.val}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+// ── Normalise une URL pour comparaison et groupement ─────────────
+function normalizeUrl(raw) {
+  if (!raw) return "";
+  let u = raw.trim();
+  // Supprimer le query string et fragment
+  u = u.replace(/[?#].*$/, "");
+  // Supprimer le slash final
+  u = u.replace(/\/$/, "");
+  // Supprimer https:// http://
+  u = u.replace(/^https?:\/\//i, "");
+  // Supprimer www.
+  u = u.replace(/^www\./i, "");
+  return u.toLowerCase();
+}
+
+function computeAudit(questions, results, urlIndex, brand, site, calendarEntries = [], keywords = [], competitors = [], aliasMap = {}) {
+  // Canonicalisation par alias : un nom A est compté comme son canonique B.
+  const _aliasLut = {};
+  Object.entries(aliasMap || {}).forEach(([a, b]) => { _aliasLut[(a || "").toLowerCase().trim()] = b; });
+  const canonName = (name) => { if (!name) return name; return _aliasLut[name.toLowerCase().trim()] || name; };
+  const brandName = brand?.brand_name || "";
+  const brandAliases = brand?.brand_aliases || [];
+  const total = results.length;
+  const withBrand = results.filter(r => r.brand_mentioned).length;
+  const withSources = results.filter(r => r.brand_in_sources).length;
+  const positions = results.filter(r => r.brand_position).map(r => r.brand_position);
+  const avgPos = positions.length ? (positions.reduce((a, b) => a + b, 0) / positions.length).toFixed(1) : null;
+
+  // ── Positions moyennes par type de présence (Mention / Évocation / Citation) ──
+  // Exploite brand_mention_position / brand_evocation_position / brand_citation_position
+  const avgOf = (vals) => vals.length ? (vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(1) : null;
+  const mentionPositions   = results.map(r => r.brand_mention_position).filter(p => p != null && p > 0);
+  const evocationPositions = results.map(r => r.brand_evocation_position).filter(p => p != null && p > 0);
+  const citationPositions  = results.map(r => r.brand_citation_position).filter(p => p != null && p > 0);
+  const avgMentionPos   = avgOf(mentionPositions);
+  const avgEvocationPos = avgOf(evocationPositions);
+  const avgCitationPos  = avgOf(citationPositions);
+  const mentionCount    = mentionPositions.length;
+  const evocationCount  = evocationPositions.length;
+  const citationCount   = citationPositions.length;
+
+  // ── Breakdown 3 types de présence (mutuellement exclusifs) ───────
+  const getPresType = (r) => {
+    if (!r) return null;
+    if (r.brand_position && (r.brand_mentioned === true || r.brand_mentioned === 1)) return "ranked";
+    if (r.brand_in_sources) return "source";
+    if (r.brand_mentioned === true || r.brand_mentioned === 1) return "mention";
+    return null;
+  };
+  const withRanked      = results.filter(r => getPresType(r) === "ranked").length;
+  const withSourceOnly  = results.filter(r => getPresType(r) === "source").length;
+  const withMentionOnly = results.filter(r => getPresType(r) === "mention").length;
+
+  // ── TrendChart — basé sur les résultats + geo_calendar_dates ─────
+  // Combinaison des deux sources pour toujours avoir une tendance à jour :
+  // 1. calendarEntries : entrées DB détaillées (par test)
+  // 2. results : résultats en mémoire (toujours à jour après un run)
+  const calByDate = {};
+
+  // Source 1 : geo_calendar_dates (données historiques précises)
+  calendarEntries.forEach(e => {
+    const d = e.test_date || (e.created_at || "").slice(0, 10);
+    if (!d) return;
+    if (!calByDate[d]) calByDate[d] = { tested: 0, present: 0, mentions: 0, citations: 0, evocations: 0 };
+    calByDate[d].tested++;
+    if (e.brand_present === true || e.brand_present === 1) calByDate[d].present++;
+    // Ventilation M/É/C depuis les champs étendus si disponibles
+    if (e.brand_mention_position != null) calByDate[d].mentions++;
+    else if (e.brand_in_sources) calByDate[d].citations++;
+    else if (e.brand_present === true || e.brand_present === 1) calByDate[d].evocations++;
+  });
+
+  // Source 2 : résultats en mémoire — TOUJOURS ventiler M/É/C
+  // On crée l'entrée si elle n'existe pas (nouveaux jours sans calendarEntries)
+  // ET on enrichit les entrées existantes avec la ventilation précise
+  const calByDateFromResults = {};
+  results.forEach(r => {
+    const d = (r.created_at || "").slice(0, 10);
+    if (!d) return;
+    if (!calByDateFromResults[d]) calByDateFromResults[d] = { tested: 0, present: 0, mentions: 0, citations: 0, evocations: 0 };
+    calByDateFromResults[d].tested++;
+    if (r.brand_mention_position != null || (r.brand_position != null && r.brand_position > 0)) {
+      calByDateFromResults[d].mentions++;
+      calByDateFromResults[d].present++;
+    } else if (r.brand_in_sources) {
+      calByDateFromResults[d].citations++;
+      calByDateFromResults[d].present++;
+    } else if (r.brand_mentioned === true || r.brand_mentioned === 1) {
+      calByDateFromResults[d].evocations++;
+      calByDateFromResults[d].present++;
+    }
+  });
+  // Fusionner : calendarEntries a priorité pour tested/present (historique précis)
+  // mais les results fournissent toujours la ventilation M/É/C
+  Object.entries(calByDateFromResults).forEach(([d, rv]) => {
+    if (!calByDate[d]) {
+      // Jour non couvert par calendarEntries → utiliser les results directement
+      calByDate[d] = rv;
+    } else {
+      // Enrichir la ventilation M/É/C sans toucher tested/present (déjà calculés)
+      calByDate[d].mentions  = rv.mentions;
+      calByDate[d].citations = rv.citations;
+      calByDate[d].evocations= rv.evocations;
+    }
+  });
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const trendDays = [];
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date(today); d.setDate(d.getDate() - i);
+    const key = dayKey(d);
+    const day = calByDate[key] || { tested: 0, present: 0 };
+    trendDays.push({
+      date: key,
+      tested:    day.tested,
+      present:   day.present,
+      mentions:  day.mentions  || 0,
+      citations: day.citations || 0,
+      evocations:day.evocations|| 0,
+      rate: day.tested > 0 ? pct(day.present, day.tested) : null,
+    });
+  }
+
+  // ── URLs marque — normalisation et cumul ─────────────────────
+  const brandTerms = [brandName, ...brandAliases]
+    .filter(v => typeof v === "string" && v.trim())
+    .map(t => t.toLowerCase());
+  const isBrandTerm = (str) => brandTerms.some(t => t && String(str || "").toLowerCase().includes(t));
+
+  // Pré-calculer les noms de concurrents normalisés (objets ou strings)
+  const competitorNames = competitors
+    .map(c => typeof c === "string" ? c : c?.name)
+    .filter(Boolean)
+    .map(name => name.toLowerCase());
+
+  // Grouper urlIndex par URL normalisée
+  const normGroups = {};
+  urlIndex.forEach(u => {
+    const norm = normalizeUrl(u.url);
+    if (!norm) return;
+    if (!normGroups[norm]) normGroups[norm] = { norm, url: u.url, count_as_source: 0, count_in_answer: 0, domain: null, linkedQs: [], linkedKeywords: [] };
+    normGroups[norm].count_as_source += u.count_as_source || 0;
+    normGroups[norm].count_in_answer += u.count_in_answer || 0;
+    if (!normGroups[norm].domain) normGroups[norm].domain = u.domain;
+  });
+  const mergedUrls = Object.values(normGroups).sort((a, b) => (b.count_as_source + b.count_in_answer) - (a.count_as_source + a.count_in_answer));
+
+  const sortedUrls = mergedUrls;
+  const brandUrls = mergedUrls.filter(u =>
+    isBrandTerm(u.norm) || isBrandTerm(u.domain || "")
+  );
+  const competitorUrls = mergedUrls.filter(u =>
+    !isBrandTerm(u.norm) && competitorNames.some(name => u.norm.includes(name))
+  );
+  const referenceUrls = mergedUrls
+    .filter(u => !brandUrls.includes(u) && !competitorUrls.includes(u))
+    .slice(0, 10);
+
+  // urlDetails — relier les URLs marque aux questions
+  const qMap = {};
+  questions.forEach(q => { qMap[q.id] = q; });
+  const urlDetails = brandUrls.map(u => {
+    const linkedResults = results.filter(r =>
+      (r.sources || []).some(s => normalizeUrl(s) === u.norm) ||
+      (r.answer || "").includes(u.norm)
+    );
+    const linkedQIds = [...new Set(linkedResults.map(r => r.question_id))];
+    const linkedQs = linkedQIds.map(id => qMap[id]).filter(Boolean);
+    const linkedKeywords = [...new Set(linkedQs.map(q => q.keyword_id).filter(Boolean))];
+    return { ...u, linkedQs, linkedKeywords };
+  });
+
+  const topDomains = {};
+  sortedUrls.forEach(u => {
+    if (!topDomains[u.norm]) topDomains[u.norm] = 0;
+    topDomains[u.norm] += u.count_as_source + u.count_in_answer;
+  });
+
+  const urlsToOptimize = brandUrls.filter(u => u.count_as_source < 3).slice(0, 15);
+  const urlsToRework   = brandUrls.filter(u => u.count_as_source === 0 && u.count_in_answer > 0).slice(0, 15);
+  const urlsToInspire  = referenceUrls.filter(u => u.count_as_source >= 3).slice(0, 10);
+
+  const intentCount = {};
+  results.forEach(r => { if (r.intent_type) intentCount[r.intent_type] = (intentCount[r.intent_type] || 0) + 1; });
+  const typeCount = {};
+  results.forEach(r => { if (r.answer_type) typeCount[r.answer_type] = (typeCount[r.answer_type] || 0) + 1; });
+
+  // ── UPGRADE 1 : Segmentation par intention (intent_type) avec perf M/É/C ──
+  // Pour chaque intention, on compte les résultats et la présence de la marque.
+  const intentStats = {};
+  results.forEach(r => {
+    const it = r.intent_type || "non classé";
+    if (!intentStats[it]) intentStats[it] = { intent: it, total: 0, mentions: 0, evocations: 0, citations: 0, positions: [] };
+    const s = intentStats[it];
+    s.total++;
+    const mPos = r.brand_mention_position ?? (r.brand_position > 0 ? r.brand_position : null);
+    if (mPos != null && mPos > 0) { s.mentions++; s.positions.push(mPos); }
+    else if (r.brand_mentioned === true || r.brand_mentioned === 1) s.evocations++;
+    if (r.brand_in_sources === true || r.brand_in_sources === 1) s.citations++;
+  });
+  const intentStatsList = Object.values(intentStats)
+    .map(s => ({ ...s, avgPos: s.positions.length ? (s.positions.reduce((a, b) => a + b, 0) / s.positions.length).toFixed(1) : null,
+      presenceRate: s.total ? Math.round(((s.mentions + s.evocations) / s.total) * 100) : 0 }))
+    .sort((a, b) => b.total - a.total);
+
+  // ── UPGRADE 2 : Classification du type de page citée (via patterns d'URL) ──
+  // produit · blog/article · catégorie · accueil · autre — sur les sources citées.
+  const classifyPage = (url) => {
+    let path = "";
+    try { path = new URL(url).pathname.toLowerCase(); } catch { path = String(url || "").toLowerCase(); }
+    if (path === "" || path === "/" ) return "accueil";
+    if (/\/(blog|article|actualit|news|guide|magazine|ressource|conseil|dossier)s?\//.test(path) || /\.(html?)$/.test(path) && /(blog|article|guide)/.test(path)) return "blog/article";
+    if (/\/(produit|product|offre|service|solution|prestation)s?\//.test(path)) return "produit/service";
+    if (/\/(categorie|category|collection|gamme|univers)s?\//.test(path)) return "catégorie";
+    if (/\/(a-propos|about|qui-sommes|equipe|contact|mentions|cgv|cgu)/.test(path)) return "institutionnel";
+    if (path.split("/").filter(Boolean).length <= 1) return "accueil";
+    return "autre";
+  };
+  const pageTypeStats = {};
+  results.forEach(r => {
+    (r.sources || []).forEach(url => {
+      const t = classifyPage(url);
+      if (!pageTypeStats[t]) pageTypeStats[t] = { type: t, count: 0, brand: 0 };
+      pageTypeStats[t].count++;
+      // est-ce une URL de la marque ?
+      const bd = (brand?.brand_domain || "").toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/$/, "");
+      if (bd && String(url).toLowerCase().includes(bd)) pageTypeStats[t].brand++;
+    });
+  });
+  const pageTypeStatsList = Object.values(pageTypeStats).sort((a, b) => b.count - a.count);
+
+  // ── UPGRADE 3 : Évolution temporelle des MENTIONS sur 30 jours ──
+  // Par jour : nb de mentions (position de marque détectée) parmi les résultats du jour.
+  const mentionByDay = {};
+  results.forEach(r => {
+    if (!r.created_at) return;
+    const key = String(r.created_at).slice(0, 10);
+    if (!mentionByDay[key]) mentionByDay[key] = { mentions: 0, evocations: 0, citations: 0, total: 0 };
+    const d = mentionByDay[key];
+    d.total++;
+    const mPos = r.brand_mention_position ?? (r.brand_position > 0 ? r.brand_position : null);
+    if (mPos != null && mPos > 0) d.mentions++;
+    else if (r.brand_mentioned === true || r.brand_mentioned === 1) d.evocations++;
+    if (r.brand_in_sources === true || r.brand_in_sources === 1) d.citations++;
+  });
+  const mentionTrend = [];
+  for (let i = 29; i >= 0; i--) {
+    const dt = new Date(today); dt.setDate(dt.getDate() - i);
+    const key = dayKey(dt);
+    const d = mentionByDay[key] || { mentions: 0, evocations: 0, citations: 0, total: 0 };
+    mentionTrend.push({ date: key, ...d });
+  }
+  const compStats = {};
+  // 1. Depuis competitors_mentioned (résultats récents)
+  // Chaque entrée concurrent : { name, mentioned, position, in_sources }
+  // → Mention = position numérotée · Évocation = citée sans position · Citation = dans les sources
+  results.forEach(r => (r.competitors_mentioned || []).forEach(c => {
+    if (!c.name) return;
+    const cname = canonName(c.name); // alias → canonique (sommation)
+    if (!compStats[cname]) compStats[cname] = { mentions: 0, evocations: 0, citations: 0, positions: [], category: null, color: null };
+    const st = compStats[cname];
+    // Position de mention fiable (mention_position) avec repli sur position (rétrocompat ancien format)
+    const mPos = c.mention_position != null ? c.mention_position : (c.position != null && c.position > 0 ? c.position : null);
+    if (mPos != null && mPos > 0) { st.mentions++; st.positions.push(mPos); }
+    else if (c.mentioned || c.evocation_position != null) { st.evocations++; }
+    if (c.in_sources || c.citation_position != null) { st.citations++; }
+  }));
+
+  // 2. Enrichir avec les concurrents qualifiés (catégorie + recherche rétroactive)
+  competitors.forEach(comp => {
+    const key = comp.name;
+    if (!compStats[key]) compStats[key] = { mentions: 0, evocations: 0, citations: 0, positions: [], category: null, color: null, enabled: true };
+    // Attacher la catégorie, la couleur et le statut actif depuis geo_competitors
+    compStats[key].category = comp.category || "other";
+    compStats[key].color    = comp.color || "#64748B";
+    compStats[key].enabled  = comp.enabled !== false;
+    // Recherche rétroactive dans les réponses non encore comptées
+    const re = new RegExp(comp.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+    results.forEach(r => {
+      const alreadyCounted = (r.competitors_mentioned || []).some(c => c.name?.toLowerCase() === key.toLowerCase());
+      if (!alreadyCounted && re.test(r.answer || "")) {
+        // Apparition dans le texte sans position structurée → évocation
+        compStats[key].evocations = (compStats[key].evocations || 0) + 1;
+      }
+    });
+  });
+
+  const presenceRate = pct(withBrand, total);
+
+  // ── Questions 25 max — favoris d'abord, puis par volume de keyword ─
+  const kwVolMap = {};
+  keywords.forEach(k => { if (k.search_volume > 0) kwVolMap[k.id] = k.search_volume; });
+
+  // Trier toutes les questions : favoris d'abord, puis par volume desc, puis par création
+  const sortedQuestions = [...questions].sort((a, b) => {
+    if (a.is_favorite && !b.is_favorite) return -1;
+    if (!a.is_favorite && b.is_favorite) return 1;
+    const va = kwVolMap[a.keyword_id] || 0;
+    const vb = kwVolMap[b.keyword_id] || 0;
+    if (vb !== va) return vb - va;
+    return new Date(a.created_at) - new Date(b.created_at);
+  });
+
+  const hasResult = (q) => results.some(r => r.question_id === q.id);
+  // hasMention : présence dans un top numéroté — même logique que getPresType("ranked")
+  const hasMention  = (q) => results.some(r => r.question_id === q.id && (
+    r.brand_mention_position != null ||
+    (r.brand_position != null && r.brand_position > 0 && (r.brand_mentioned === true || r.brand_mentioned === 1))
+  ));
+
+  const withResults = sortedQuestions.filter(hasResult);
+  const withoutRes  = sortedQuestions.filter(q => !hasResult(q));
+
+  // presentBrandQs : questions avec MENTION (top LLM) — max 10
+  const presentBrandQs = withResults
+    .filter(hasMention)
+    .slice(0, 10)
+    .map(q => ({ question: q.question, isFav: !!q.is_favorite, volume: kwVolMap[q.keyword_id] || 0 }));
+
+  // missingBrandQs : "Questions sans mentions" — favoris d'abord, puis par volume — max 10
+  const missingBrandQs = [
+    ...withResults.filter(q => q.is_favorite && !hasMention(q)),
+    ...withResults.filter(q => !q.is_favorite && !hasMention(q))
+      .sort((a, b) => (kwVolMap[b.keyword_id] || 0) - (kwVolMap[a.keyword_id] || 0)),
+    ...withoutRes.filter(q => q.is_favorite),
+  ].slice(0, 10)
+   .map(q => ({ question: q.question, isFav: !!q.is_favorite, volume: kwVolMap[q.keyword_id] || 0 }));
+
+  const hasFavFilter = questions.some(q => q.is_favorite);
+  const favCount = questions.filter(q => q.is_favorite).length;
+
+  const leads = [];
+  if (presenceRate < 30) leads.push({ priority: "🔴 Priorité haute", label: "Présence < 30%", action: "**Créer des contenus de recommandation** spécifiquement ciblés sur les questions sans présence. Structurez avec des listes comparatives explicites." });
+  if (presenceRate >= 30 && presenceRate < 50) leads.push({ priority: "🟠 À améliorer", label: `Présence ${presenceRate}%`, action: "**Enrichir les pages existantes** pour répondre directement aux questions fan-out. Ajoutez des sections dédiées aux comparatifs." });
+  if (avgPos && parseFloat(avgPos) > 3) leads.push({ priority: "🟠 Position", label: `Position moyenne ${avgPos}`, action: "**Optimiser le contenu pour remonter en top 3** des fan-outs. Répondez à la question dès le premier paragraphe et structurez avec des listes." });
+  if (withSources < withBrand) leads.push({ priority: "🟡 Sources", label: "Peu cité en source", action: "**Renforcer l'autorité des pages** via des backlinks depuis les domaines fréquemment cités. Soumettez vos URLs prioritaires à IndexNow." });
+  if (Object.keys(compStats).length > 0) {
+    const topComp = Object.entries(compStats).sort((a, b) => b[1].mentions - a[1].mentions)[0];
+    leads.push({ priority: "🟠 Concurrence", label: `${topComp[0]} dominant`, action: `**Analyser le contenu de ${topComp[0]}** et créer des pages alternatives plus complètes avec données propriétaires et avis d'experts.` });
+  }
+  leads.push({ priority: "📝 Contenu", label: "Volume et structure", action: "**Viser 1 500–2 500 mots** sur les pages à forte intention. Structurez avec H2/H3 clairs, FAQ en bas de page, et schema JSON-LD Organization + FAQ." });
+  leads.push({ priority: "🔗 Maillage", label: "Hubs thématiques", action: "**Créer des hubs de contenu** regroupant toutes les pages liées à chaque axe fan-out. Le maillage interne fort signale l'importance aux LLMs." });
+
+  const providerStats = {};
+  results.forEach(r => {
+    const pid = getProviderId(r.model);
+    if (!providerStats[pid]) providerStats[pid] = { total: 0, withBrand: 0 };
+    providerStats[pid].total++;
+    if (r.brand_mentioned) providerStats[pid].withBrand++;
+  });
+
+
+  // ── Top 5 concurrents depuis les mentions ─────────────────────
+  const competitorsRanked = Object.entries(compStats)
+    .filter(([, s]) => (s.mentions || 0) + (s.evocations || 0) + (s.citations || 0) > 0)
+    .sort((a, b) => {
+      // tri : d'abord par mentions, puis par meilleure position moyenne, puis évocations
+      const ma = a[1].mentions || 0, mb = b[1].mentions || 0;
+      if (mb !== ma) return mb - ma;
+      const pa = a[1].positions?.length ? a[1].positions.reduce((x,y)=>x+y,0)/a[1].positions.length : 999;
+      const pb = b[1].positions?.length ? b[1].positions.reduce((x,y)=>x+y,0)/b[1].positions.length : 999;
+      if (pa !== pb) return pa - pb;
+      return (b[1].evocations||0) - (a[1].evocations||0);
+    });
+  const top5Competitors = competitorsRanked.slice(0, 5);
+
+  // ── Analyse par catégorie des questions ───────────────────────
+  const resultsByQ = {};
+  results.forEach(r => {
+    if (!resultsByQ[r.question_id]) resultsByQ[r.question_id] = [];
+    resultsByQ[r.question_id].push(r);
+  });
+  const byQuestionCategory = {};
+  questions.forEach(q => {
+    const catIds = Array.isArray(q.tags) && q.tags.length > 0
+      ? q.tags : (q.category_id ? [q.category_id] : ["__none__"]);
+    catIds.forEach(catId => {
+      if (!byQuestionCategory[catId]) byQuestionCategory[catId] = { total: 0, withBrand: 0, positions: [], qCount: 0 };
+      const qResults = resultsByQ[q.id] || [];
+      byQuestionCategory[catId].qCount++;
+      byQuestionCategory[catId].total += qResults.length;
+      qResults.forEach(r => {
+        if (r.brand_mentioned === true || r.brand_mentioned === 1) byQuestionCategory[catId].withBrand++;
+        const pos = r.brand_mention_position || r.brand_position;
+        if (pos) byQuestionCategory[catId].positions.push(pos);
+      });
+    });
+  });
+  Object.keys(byQuestionCategory).forEach(catId => {
+    const c = byQuestionCategory[catId];
+    c.presenceRate = c.total ? Math.round(c.withBrand / c.total * 100) : 0;
+    c.avgPos = c.positions.length ? (c.positions.reduce((a, b) => a + b, 0) / c.positions.length).toFixed(1) : null;
+  });
+
+  // ── URLs marque : 2 listes (propres + externes) ───────────────
+  const brandDomainClean = (brand?.brand_domain || "").toLowerCase().replace("www.", "");
+  const allBrandTerms = [brandName, ...brandAliases, brand?.brand_domain || ""].filter(Boolean).map(t => t.toLowerCase());
+  const brandOwnUrls = sortedUrls.filter(u =>
+    brandDomainClean && (u.url || "").toLowerCase().replace("www.", "").includes(brandDomainClean)
+  ).slice(0, 15);
+  const brandExternalUrls = sortedUrls.filter(u => {
+    if (!u.url) return false;
+    try {
+      const parsed = new URL(u.url);
+      const domain = parsed.hostname.replace("www.", "").toLowerCase();
+      if (brandDomainClean && domain.includes(brandDomainClean)) return false;
+      const slug = (parsed.pathname + parsed.search).toLowerCase();
+      return allBrandTerms.some(t => t.length > 2 && slug.includes(t.replace(/\s+/g, "-")));
+    } catch { return false; }
+  }).slice(0, 10);
+
+  return { total, withBrand, withSources, withRanked, withSourceOnly, withMentionOnly, avgPos, avgMentionPos, avgEvocationPos, avgCitationPos, mentionCount, evocationCount, citationCount, presenceRate, trendDays, sortedUrls, brandUrls, brandOwnUrls, brandExternalUrls, urlDetails, competitorUrls, referenceUrls, topDomains, intentCount, typeCount, intentStatsList, pageTypeStatsList, mentionTrend, compStats, top5Competitors, competitorsRanked, byQuestionCategory, urlsToOptimize, urlsToRework, urlsToInspire, leads, questions: questions.length, providerStats, missingBrandQs, presentBrandQs, hasFavFilter, favCount, _rawResults: results };
+}
+
+
+function TrendChart({ trendDays }) {
+  const W = 620, H = 140, PAD = 32, PADT = 12, plotW = W - PAD - 12, plotH = H - PADT - 28;
+  const active = trendDays.filter(d => d.tested > 0);
+  if (!active.length) return (
+    <div style={{ fontSize: 11, color: "#1A3C2E44", fontStyle: "italic", padding: "20px 0" }}>
+      Aucun résultat enregistré ces 30 derniers jours.
+    </div>
+  );
+
+  // ── Normaliser les données ─────────────────────────────────────
+  // Si les données ventilées (M/É/C) ne sont pas encore en base,
+  // on estime à partir de withRanked/withMentionOnly/withSourceOnly du jour
+  // OU on utilise present comme proxy pour les 3 courbes si rien d'autre.
+  const normalized = trendDays.map(d => {
+    const tot = d.mentions + d.citations + d.evocations;
+    if (tot > 0 || d.tested === 0) return d; // données ventilées disponibles
+    // Pas encore de ventilation → estimer depuis present
+    // (tous les présents comptent comme "évocations" au sens large)
+    return {
+      ...d,
+      mentions:   0,
+      citations:  0,
+      evocations: d.present || 0,
+    };
+  });
+
+  // Toujours afficher les 3 séries — les données sont normalisées ci-dessus
+  const SERIES = [
+    { key: "mentions",   label: "Mention",   color: "#1A7A4A" },
+    { key: "evocations", label: "Évocation", color: "#C97820" },
+    { key: "citations",  label: "Citation",  color: "#1A3C2E" },
+  ];
+
+  const yMax = Math.max(
+    ...normalized.flatMap(d => SERIES.map(s => d[s.key] || 0)),
+    ...normalized.map(d => d.tested || 0),
+    2
+  );
+  const toX = (i) => PAD + (i / Math.max(normalized.length - 1, 1)) * plotW;
+  const toY = (v) => PADT + plotH - (v / yMax) * plotH;
+  const ticks = yMax <= 4
+    ? [0, 1, 2, yMax].filter((v, i, a) => a.indexOf(v) === i)
+    : [0, Math.round(yMax / 2), yMax];
+
+  // Courbe tracée uniquement sur les jours avec au moins 1 résultat
+  const makePath = (key) => {
+    const pts = normalized
+      .map((d, i) => ({ x: toX(i), y: toY(d[key] || 0), v: d[key] || 0, tested: d.tested }))
+      .filter(p => p.tested > 0);
+    if (pts.length < 1) return null;
+    if (pts.length === 1) return `M ${pts[0].x.toFixed(1)} ${pts[0].y.toFixed(1)}`; // point isolé
+    return pts.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(" ");
+  };
+
+  // Courbe de volume total (tested) — grisée en fond
+  const makeTestedPath = () => {
+    const pts = normalized
+      .map((d, i) => ({ x: toX(i), y: toY(d.tested || 0), tested: d.tested }))
+      .filter(p => p.tested > 0);
+    if (pts.length < 2) return null;
+    return pts.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(" ");
+  };
+
+  return (
+    <div>
+      {/* Légende */}
+      <div style={{ display: "flex", gap: 16, marginBottom: 8, flexWrap: "wrap" }}>
+        {SERIES.map(s => (
+          <div key={s.key} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10, color: "#1A3C2E55" }}>
+            <span style={{ width: 16, height: 2, background: s.color, display: "inline-block", borderRadius: 1 }} />
+            {s.label}
+          </div>
+        ))}
+        <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10, color: "#1A3C2E33" }}>
+          <span style={{ width: 16, height: 1.5, background: "#1A3C2E22", display: "inline-block", borderRadius: 1, borderTop: "1px dashed #1A3C2E33" }} />
+          Interrogations
+        </div>
+      </div>
+
+      <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: "block", overflow: "visible" }}>
+        {/* Grille */}
+        {ticks.map(v => (
+          <g key={v}>
+            <line x1={PAD} x2={W - 12} y1={toY(v)} y2={toY(v)} stroke="#1A3C2E06" strokeWidth={1} />
+            <text x={PAD - 5} y={toY(v) + 3} fontSize={7} fill="#1A3C2E28" textAnchor="end">{v}</text>
+          </g>
+        ))}
+        {/* Axe X */}
+        <line x1={PAD} x2={W - 12} y1={toY(0)} y2={toY(0)} stroke="#1A3C2E10" strokeWidth={1} />
+        {/* Étiquettes dates */}
+        {[0, 7, 14, 21, 29].map(i => (
+          <text key={i} x={toX(i)} y={H - 6} fontSize={7} fill="#1A3C2E33" textAnchor="middle">
+            {normalized[i]?.date?.slice(5)}
+          </text>
+        ))}
+
+        {/* Courbe interrogations totales (fond) */}
+        {(() => { const d = makeTestedPath(); return d ? <path d={d} fill="none" stroke="#1A3C2E18" strokeWidth={1} strokeDasharray="3,2" /> : null; })()}
+
+        {/* Courbes M/É/C */}
+        {SERIES.map(s => {
+          const d = makePath(s.key);
+          return d ? <path key={s.key} d={d} fill="none" stroke={s.color} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" opacity={0.9} /> : null;
+        })}
+
+        {/* Points par date — 3 points distincts par jour actif */}
+        {normalized.map((day, i) => {
+          if (!day.tested) return null;
+          return (
+            <g key={i}>
+              {SERIES.map((s, si) => {
+                const val = day[s.key] || 0;
+                // Toujours afficher le point sur l'axe si val=0 (marque l'absence)
+                const cy = toY(val);
+                const isZero = val === 0;
+                return (
+                  <g key={s.key}>
+                    {/* Tooltip simple — title SVG */}
+                    <title>{s.label} : {val} · {day.date}</title>
+                    <circle
+                      cx={toX(i)}
+                      cy={cy}
+                      r={isZero ? 1.5 : 3}
+                      fill={isZero ? "#1A3C2E18" : s.color}
+                      stroke={isZero ? "none" : "#fff"}
+                      strokeWidth={isZero ? 0 : 1}
+                      opacity={isZero ? 0.4 : 0.9}
+                    />
+                  </g>
+                );
+              })}
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+function AIAnalysis({ audit, brand, site, questions, onTextReady, projectId = null, siteId = null }) {
+  const [status, setStatus] = useState("idle");
+  const [analysis, setAnalysis] = useState("");
+  const [savedDate, setSavedDate] = useState(null);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+
+  // Recharger la dernière analyse IA persistée au montage
+  useEffect(() => {
+    if (!projectId || !siteId) return;
+    let cancelled = false;
+    sbGetGeoAnalyses(projectId, siteId, "audit-ai").then(rows => {
+      if (cancelled || !rows?.length) return;
+      const latest = rows[0];
+      const txt = typeof latest.content === "string" ? latest.content : latest.content?.text;
+      if (txt) {
+        setAnalysis(txt);
+        setStatus("done");
+        setSavedDate(latest.created_at);
+        onTextReady?.(txt);
+      }
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [projectId, siteId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const generate = useCallback(async () => {
+    setStatus("loading"); setAnalysis("");
+    const summary = {
+      site: site?.label, brand: brand?.brand_name,
+      totalQuestions: audit.questions, totalResults: audit.total,
+      presenceRate: audit.presenceRate + "%", avgPosition: audit.avgPos,
+      topIntents: Object.entries(audit.intentCount).sort((a,b)=>b[1]-a[1]).slice(0,3).map(([k,v])=>`${k}(${v})`).join(", "),
+      competitors: Object.entries(audit.compStats).sort((a,b)=>b[1].mentions-a[1].mentions).slice(0,5).map(([k,v])=>`${k}(${v.mentions}x)`).join(", "),
+      urlsToOptimize: audit.urlsToOptimize.slice(0,5).map(u => u.norm || u.url).join(", "),
+      favorites: (() => {
+        const favs = (questions || []).filter(q => q.is_favorite);
+        if (!favs.length) return "aucune";
+        const byQ = {};
+        (audit._rawResults || []).forEach(r => { (byQ[r.question_id] = byQ[r.question_id] || []).push(r); });
+        const ment = (qId) => (byQ[qId] || []).some(r => r.brand_mentioned);
+        const presentFav = favs.filter(q => ment(q.id)).length;
+        return `${favs.length} questions favorites (périmètre stratégique prioritaire), dont ${presentFav} avec présence marque`;
+      })(),
+    };
+    const prompt = `Tu es un expert senior en SEO et GEO (Generative Engine Optimization). Tu maîtrises les études publiées par Moz, Ahrefs, Search Engine Land, Google, Bing, et les travaux académiques sur les LLMs. Produis un audit GEO expert et rigoureusement sourcé pour ${summary.site} / "${summary.brand}".
+
+DONNÉES D'ANALYSE :
+${JSON.stringify(summary, null, 2)}
+
+CONSIGNES STRICTES :
+- PRIORISE les recommandations qui concernent les questions favorites (périmètre stratégique du client, voir champ "favorites")
+- Chaque recommandation concrète DOIT se terminer par [En savoir plus](URL) avec une vraie source reconnue (2022-2025)
+- Sources autorisées : moz.com, ahrefs.com, searchengineland.com, developers.google.com, bing.com/webmasters, perplexity.ai/blog, etudes HubSpot, Nielsen, Semrush
+- Citer le % ou chiffre exact de l'étude quand disponible
+- Être précis sur les délais et résultats attendus
+
+Sections OBLIGATOIRES (titres ## markdown) :
+
+## 1. Synthèse exécutive
+Présence GEO actuelle : ${summary.presenceRate}%. Diagnostic en 3 phrases. Ce qui fonctionne et ce qui bloque.
+
+## 2. Analyse de la visibilité LLM
+Analyse par provider avec taux de présence. Pourquoi ces providers citent ou ne citent pas la marque. Analyse des ${summary.withRanked} mentions vs ${summary.withMentionOnly} évocations vs ${summary.withSourceOnly} citations.
+
+## 3. Analyse concurrentielle GEO
+Positionnement réel vs concurrents cités. Ce qu'ils font pour être davantage mentionnés. 2-3 actions spécifiques de différenciation.
+
+## 4. Plan d'action priorisé — 10 actions
+Format strict pour chaque action :
+**[HAUTE/MOYENNE/BASE] Titre de l'action**
+Pourquoi : donnée précise justifiant l'action.
+Comment : 2-3 étapes concrètes.
+Résultat attendu : métrique chiffrée et délai.
+[En savoir plus](URL_SOURCE)
+
+## 5. KPIs à suivre
+Cibles à 3 mois et 6 mois basées sur le score actuel de ${summary.presenceRate}%. Métriques GEO spécifiques (taux mention, position moyenne, couverture providers).
+
+Commence DIRECTEMENT par ## 1. Synthèse exécutive.`;
+
+    try {
+      // Le proxy /api/anthropic rassemble le stream SSE côté serveur
+      // et renvoie un JSON standard { content: [{ type:"text", text:"..." }] }
+      const res = await fetch(ANTHROPIC_PROXY, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: AUDIT_AI_MODEL, max_tokens: 4000, messages: [{ role: "user", content: prompt }] }),
+      });
+      if (!res.ok) {
+        const errBody = await res.text().catch(() => "");
+        throw new Error(`HTTP ${res.status} — ${errBody.slice(0, 120)}`);
+      }
+      const data = await res.json();
+      const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("\n").trim();
+      if (!text) throw new Error("Réponse vide du proxy");
+      setAnalysis(text);
+      onTextReady?.(text);
+      setStatus("done");
+      const now = new Date().toISOString();
+      setSavedDate(now);
+      if (projectId && siteId) {
+        sbSaveGeoAnalysis({ project_id: projectId, site_id: siteId, kind: "audit-ai", content: { text, generated_at: now } }).catch(() => {});
+      }
+    } catch(e) { console.error("[AIAnalysis]", e); setStatus("error"); }
+  }, [audit, brand, site, questions, projectId, siteId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Édition manuelle du texte de l'audit
+  const startEdit = () => { setDraft(analysis); setEditing(true); };
+  const cancelEdit = () => { setEditing(false); setDraft(""); };
+  const saveEdit = () => {
+    const text = draft;
+    setAnalysis(text);
+    onTextReady?.(text);
+    const now = new Date().toISOString();
+    setSavedDate(now);
+    setEditing(false);
+    if (projectId && siteId) {
+      sbSaveGeoAnalysis({ project_id: projectId, site_id: siteId, kind: "audit-ai", content: { text, generated_at: now, edited: true } }).catch(() => {});
+    }
+  };
+
+  if (status === "idle") return (
+    <div style={{ textAlign: "center", padding: "24px 0" }}>
+      <div style={{ fontSize: 12, color: C.textLight, marginBottom: 12 }}>L'analyse IA utilise Claude pour interpréter vos données GEO.</div>
+      <button onClick={generate} style={{ padding: "6px 16px", background: "#1A3C2E", color: "#F0EBE0", border: "0.5px solid #1A3C2E22", borderRadius: 6, fontSize: 11, fontWeight: 500, cursor: "pointer" }}>Générer l'analyse IA</button>
+    </div>
+  );
+  if (status === "loading" && !analysis) return <div style={{ textAlign: "center", padding: 24, color: C.textLight, fontSize: 12 }}>✦ Génération en cours…</div>;
+  return (
+    <div>
+      {savedDate && (
+        <div style={{ fontSize: 10, color: "#1A3C2E55", marginBottom: 10 }}>
+          Analyse générée le {new Date(savedDate).toLocaleString("fr-FR", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
+        </div>
+      )}
+      {editing ? (
+        <div>
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            style={{ width: "100%", minHeight: 320, fontSize: 12, lineHeight: 1.7, color: C.text, border: "0.5px solid #1A3C2E22", borderRadius: 8, padding: "12px 14px", fontFamily: "inherit", resize: "vertical", boxSizing: "border-box" }}
+          />
+          <div style={{ fontSize: 10, color: "#1A3C2E44", marginTop: 6 }}>
+            Astuce : « ## Titre » crée un titre de section, « **gras** » met en gras.
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+            <button onClick={saveEdit} style={{ padding: "5px 14px", border: "none", borderRadius: 6, background: "#1A3C2E", color: "#F0EBE0", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Enregistrer</button>
+            <button onClick={cancelEdit} style={{ padding: "5px 14px", border: "0.5px solid #1A3C2E22", borderRadius: 6, background: "transparent", color: "#1A3C2E77", fontSize: 11, cursor: "pointer" }}>Annuler</button>
+          </div>
+        </div>
+      ) : (
+      <div style={{ fontSize: 12, lineHeight: 1.8, color: C.text }}>
+        {analysis.split("\n").map((line, i) => {
+          if (line.startsWith("## ")) return <div key={i} style={{ fontSize: 14, fontWeight: 800, color: C.text, marginTop: 20, marginBottom: 6, borderBottom: `2px solid ${C.border}`, paddingBottom: 4 }}>{line.slice(3)}</div>;
+          if (line.startsWith("- ")) return <div key={i} style={{ paddingLeft: 16, marginBottom: 3 }}>• {renderBold(line.slice(2))}</div>;
+          if (!line.trim()) return <div key={i} style={{ height: 8 }} />;
+          return <div key={i} style={{ marginBottom: 4 }}>{renderBold(line)}</div>;
+        })}
+      </div>
+      )}
+      {status === "done" && !editing && (
+        <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+          <button onClick={generate} style={{ padding: "4px 12px", border: "0.5px solid #1A3C2E18", borderRadius: 6, background: "transparent", fontSize: 11, cursor: "pointer", color: "#1A3C2E55" }}>↺ Regénérer</button>
+          <button onClick={startEdit} style={{ padding: "4px 12px", border: "0.5px solid #1A3C2E18", borderRadius: 6, background: "transparent", fontSize: 11, cursor: "pointer", color: "#1A3C2E55" }}>✎ Éditer</button>
+        </div>
+      )}
+      {status === "error" && <div style={{ color: "#DC2626", fontSize: 11, marginTop: 8 }}>Erreur — réessayez.</div>}
+    </div>
+  );
+}
+
+// ── Matrice de corrélation interactive ───────────────────────────
+// Calcule la corrélation de Pearson entre 2 vecteurs
+function pearson(xs, ys) {
+  const n = xs.length;
+  if (n < 3) return null;
+  const mx = xs.reduce((a,b)=>a+b,0)/n, my = ys.reduce((a,b)=>a+b,0)/n;
+  const num = xs.reduce((s,x,i)=>s+(x-mx)*(ys[i]-my),0);
+  const dx  = Math.sqrt(xs.reduce((s,x)=>s+(x-mx)**2,0));
+  const dy  = Math.sqrt(ys.reduce((s,y)=>s+(y-my)**2,0));
+  if (dx===0||dy===0) return null;
+  return parseFloat((num/(dx*dy)).toFixed(3));
+}
+
+function CorrelationMatrix({ sfRows = [], gscRows = [], gaRows = [], bingData = {}, results, audit, sfCorrFilter, setSfCorrFilter }) {
+  // ── Définitions des sources disponibles ──────────────────────
+  const SOURCES = [
+    { key: "fanout", label: "Fan-outs",       available: results.length > 0 },
+    { key: "sf",     label: "Screaming Frog", available: sfRows.length > 0 },
+    { key: "gsc",    label: "GSC",            available: gscRows.length > 0 },
+    { key: "ga",     label: "Analytics",      available: gaRows.length > 0 },
+    { key: "bing",   label: "Bing",           available: Object.keys(bingData || {}).length > 0 },
+  ];
+
+  const [srcA, setSrcA] = useState("sf");
+  const [srcB, setSrcB] = useState("fanout");
+
+  // ── Calculer la matrice selon les 2 sources choisies ─────────
+  const matrix = useMemo(() => {
+    // ── Présence GEO par URL citée ────────────────────────────────
+    // On rapproche chaque source d'outils avec le GEO PAR LA MÊME CLÉ (URL).
+    // Corréler par index de position (ancien bug) n'avait aucun sens car
+    // les questions GEO et les URLs d'outils sont des entités différentes.
+    //
+    // geoByUrl[urlPath] = taux de citation de cette URL dans les réponses LLM
+    const geoByUrl = {};
+    (results || []).forEach(r => {
+      (r.sources || []).forEach(src => {
+        const u = typeof src === "string" ? src : (src?.url || src?.link || "");
+        const p = urlPath(u);
+        if (!p) return;
+        if (!geoByUrl[p]) geoByUrl[p] = { citations: 0 };
+        geoByUrl[p].citations++;
+      });
+    });
+
+    // Helper : corrélation entre une métrique d'outil (par URL) et les citations GEO (par URL)
+    // sur l'INTERSECTION des URLs présentes dans les deux jeux.
+    const corrByUrl = (toolIdx, metricKey) => {
+      const xs = [], ys = [];
+      Object.entries(toolIdx).forEach(([p, m]) => {
+        if (geoByUrl[p] === undefined) return; // URL absente du GEO → exclue
+        const xv = m[metricKey];
+        if (xv == null || !Number.isFinite(xv)) return;
+        xs.push(xv);
+        ys.push(geoByUrl[p].citations);
+      });
+      return { r: pearson(xs, ys), n: xs.length };
+    };
+
+    // ── Construire les index d'outils par URL ─────────────────────
+    const sfIdx = {}; (sfRows || []).forEach(row => { const s = sfRowMetrics(row); const p = urlPath(s.url); if (p) sfIdx[p] = s; });
+    const gscIdx = {}; (gscRows || []).forEach(row => { const g = gscRowMetrics(row); const p = urlPath(g.url); if (p) gscIdx[p] = g; });
+    const gaIdx  = {}; (gaRows  || []).forEach(row => { const g = gaRowMetrics(row);  const p = urlPath(g.url); if (p) gaIdx[p]  = g; });
+
+    // ── SF × GEO ───────────────────────────────────────────────────
+    if ((srcA === "sf" || srcB === "sf") && (srcA === "fanout" || srcB === "fanout")) {
+      const dims = [
+        { key: "inlinks",    label: "Liens entrants" },
+        { key: "crawlDepth", label: "Profondeur de crawl" },
+        { key: "wordCount",  label: "Nombre de mots" },
+        { key: "titleLen",   label: "Longueur du title" },
+        { key: "metaLen",    label: "Longueur meta desc." },
+        { key: "flesch",     label: "Lisibilité (Flesch)" },
+      ];
+      return dims.map(d => { const { r, n } = corrByUrl(sfIdx, d.key); return { dimA: d.label, dimB: "Citations GEO", r, n }; })
+        .filter(x => x.r !== null).sort((a, b) => Math.abs(b.r) - Math.abs(a.r));
+    }
+
+    // ── GSC × GEO ──────────────────────────────────────────────────
+    if ((srcA === "gsc" || srcB === "gsc") && (srcA === "fanout" || srcB === "fanout")) {
+      const dims = [
+        { key: "clicks",      label: "Clics GSC" },
+        { key: "impressions", label: "Impressions GSC" },
+        { key: "ctr",         label: "CTR GSC" },
+        { key: "position",    label: "Position GSC" },
+      ];
+      return dims.map(d => { const { r, n } = corrByUrl(gscIdx, d.key); return { dimA: d.label, dimB: "Citations GEO", r, n }; })
+        .filter(x => x.r !== null).sort((a, b) => Math.abs(b.r) - Math.abs(a.r));
+    }
+
+    // ── GA × GEO ───────────────────────────────────────────────────
+    if ((srcA === "ga" || srcB === "ga") && (srcA === "fanout" || srcB === "fanout")) {
+      const dims = [
+        { key: "sessions",    label: "Sessions GA" },
+        { key: "views",       label: "Vues GA" },
+        { key: "conversions", label: "Conversions GA" },
+        { key: "revenue",     label: "Revenus GA" },
+      ];
+      return dims.map(d => { const { r, n } = corrByUrl(gaIdx, d.key); return { dimA: d.label, dimB: "Citations GEO", r, n }; })
+        .filter(x => x.r !== null).sort((a, b) => Math.abs(b.r) - Math.abs(a.r));
+    }
+
+    // ── SF × GSC (croisement technique × SEO, par URL) ─────────────
+    if ((srcA === "sf" || srcB === "sf") && (srcA === "gsc" || srcB === "gsc")) {
+      const rows = [];
+      const pairs = [
+        { sf: "wordCount", g: "clicks",      label: "Nb mots × Clics" },
+        { sf: "inlinks",   g: "impressions", label: "Liens entrants × Impressions" },
+        { sf: "crawlDepth",g: "position",    label: "Profondeur × Position" },
+      ];
+      pairs.forEach(pr => {
+        const px = [], py = [];
+        Object.entries(sfIdx).forEach(([p, s]) => {
+          const g = gscIdx[p]; if (!g) return;
+          const xv = s[pr.sf], yv = g[pr.g];
+          if (xv == null || yv == null) return;
+          px.push(xv); py.push(yv);
+        });
+        const r = pearson(px, py);
+        if (r !== null) rows.push({ dimA: pr.label.split(" × ")[0], dimB: pr.label.split(" × ")[1], r, n: px.length });
+      });
+      return rows.sort((a, b) => Math.abs(b.r) - Math.abs(a.r));
+    }
+
+    // ── Bing × GEO : pas d'alignement par URL fiable → afficher un message via tableau vide ──
+    if (srcA === "bing" || srcB === "bing") {
+      return [];
+    }
+
+    return [];
+  }, [srcA, srcB, sfRows, gscRows, gaRows, bingData, results]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const srcADef = SOURCES.find(s=>s.key===srcA);
+  const srcBDef = SOURCES.find(s=>s.key===srcB);
+
+  return (
+    <div>
+      {/* Sélecteur 2 sources */}
+      <div className="audit-corr-sources">
+        <div>
+          <div style={{ fontSize: 10, color: "#1A3C2E44", marginBottom: 5, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase" }}>Source A</div>
+          <div className="audit-corr-source-btns">
+            {SOURCES.map(s => (
+              <button key={s.key} onClick={() => { setSrcA(s.key); if (s.key === srcB) setSrcB(srcA); }}
+                disabled={!s.available}
+                style={{ padding: "4px 12px", borderRadius: 6, fontSize: 11, cursor: s.available ? "pointer" : "not-allowed",
+                  border: "0.5px solid " + (srcA===s.key ? "#1A3C2E" : "#1A3C2E22"),
+                  background: srcA===s.key ? "#1A3C2E" : "transparent",
+                  color: srcA===s.key ? "#F0EBE0" : s.available ? "#1A3C2E77" : "#1A3C2E22",
+                  fontWeight: srcA===s.key ? 500 : 400,
+                }}>
+                {s.label}{!s.available ? " ·" : ""}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div style={{ fontSize: 18, color: "#1A3C2E22", fontWeight: 300 }}>×</div>
+        <div>
+          <div style={{ fontSize: 10, color: "#1A3C2E44", marginBottom: 5, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase" }}>Source B</div>
+          <div style={{ display: "flex", gap: 4 }}>
+            {SOURCES.filter(s => s.key !== srcA).map(s => (
+              <button key={s.key} onClick={() => setSrcB(s.key)}
+                disabled={!s.available}
+                style={{ padding: "4px 12px", borderRadius: 6, fontSize: 11, cursor: s.available ? "pointer" : "not-allowed",
+                  border: "0.5px solid " + (srcB===s.key ? "#1A7A4A" : "#1A3C2E22"),
+                  background: srcB===s.key ? "#1A7A4A" : "transparent",
+                  color: srcB===s.key ? "#F0EBE0" : s.available ? "#1A3C2E77" : "#1A3C2E22",
+                  fontWeight: srcB===s.key ? 500 : 400,
+                }}>
+                {s.label}{!s.available ? " ·" : ""}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Légende */}
+      <div style={{ display: "flex", gap: 16, marginBottom: 14, fontSize: 10, color: "#1A3C2E44" }}>
+        <span><span style={{ fontWeight: 600, color: "#1A7A4A" }}>▲ ≥ 0.4</span> Corrélation forte positive</span>
+        <span><span style={{ fontWeight: 600, color: "#C0352A" }}>▼ ≤ -0.4</span> Corrélation forte négative</span>
+        <span><span style={{ color: "#1A3C2E33" }}>±0.1–0.4</span> Corrélation faible</span>
+      </div>
+
+      {/* Matrice */}
+      {matrix.length === 0 ? (
+        <div style={{ fontSize: 11, color: "#1A3C2E44", fontStyle: "italic", padding: "12px 0" }}>
+          {(srcA === "bing" || srcB === "bing")
+            ? "La corrélation avec Bing n'est pas fiable : les données Bing ne sont pas alignables par URL avec la présence GEO. Croisez plutôt SF, GSC ou GA avec les Fan-outs."
+            : srcADef?.available && srcBDef?.available
+            ? `Aucune URL commune entre ${srcADef.label} et ${srcBDef.label} (corrélation calculée sur l'intersection des URLs). Vérifiez que les exports couvrent les mêmes pages.`
+            : `Importez ${!srcADef?.available ? srcADef?.label : srcBDef?.label} dans Setup pour activer cette corrélation.`}
+        </div>
+      ) : (
+        <div className="audit-corr-table-wrap">
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead>
+              <tr style={{ borderBottom: "0.5px solid #1A3C2E12" }}>
+                <th style={{ padding: "7px 0", textAlign: "left", fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E44" }}>{srcADef?.label}</th>
+                <th style={{ padding: "7px 12px", textAlign: "left", fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A7A4A" }}>{srcBDef?.label}</th>
+                <th style={{ padding: "7px 12px", textAlign: "center", fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E44" }}>Corrélation r</th>
+                <th style={{ padding: "7px 12px", textAlign: "left", fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E44" }}>Intensité</th>
+              </tr>
+            </thead>
+            <tbody>
+              {matrix.map((row, i) => {
+                const r = row.r;
+                const pos = r > 0;
+                const abs = Math.abs(r);
+                const strong = abs >= 0.4;
+                const barW = Math.round(abs * 100);
+                const color = strong ? (pos ? "#1A7A4A" : "#C0352A") : (pos ? "#1A7A4A88" : "#C0352A88");
+                return (
+                  <tr key={i} style={{ borderBottom: "0.5px solid #1A3C2E06" }}>
+                    <td style={{ padding: "7px 0", color: "#1A3C2E", fontSize: 11 }}>{row.dimA}</td>
+                    <td style={{ padding: "7px 12px", color: "#1A3C2E77", fontSize: 11 }}>{row.dimB}</td>
+                    <td style={{ padding: "7px 12px", textAlign: "center" }}>
+                      <span style={{ fontSize: 12, fontWeight: strong ? 700 : 500, color }}>
+                        {pos ? "▲" : "▼"} {r > 0 ? "+" : ""}{r.toFixed(2)}
+                      </span>
+                    </td>
+                    <td style={{ padding: "7px 12px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <div style={{ width: 60, height: 4, background: "#1A3C2E08", borderRadius: 2, overflow: "hidden" }}>
+                          <div style={{ width: `${barW}%`, height: "100%", background: color, borderRadius: 2 }} />
+                        </div>
+                        <span style={{ fontSize: 9, color: "#1A3C2E44" }}>
+                          {abs >= 0.7 ? "Très forte" : abs >= 0.4 ? "Forte" : abs >= 0.2 ? "Modérée" : "Faible"}
+                          {row.n != null && <span style={{ marginLeft: 6, color: row.n < 10 ? "#C0352A88" : "#1A3C2E33" }}>n={row.n}{row.n < 10 ? " ⚠" : ""}</span>}
+                        </span>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ── Analyseur de pages concurrentes ──────────────────────────
+function CompetitorPageAnalyzer({ competitors, audit, claudeKey }) {
+  const [selected, setSelected] = useState(null);  // nom du concurrent sélectionné
+  const [url, setUrl] = useState("");
+  const [status, setStatus] = useState("idle"); // "idle" | "loading" | "done" | "error"
+  const [result, setResult] = useState(null);
+
+  // Pré-remplir l'URL quand on sélectionne un concurrent
+  const handleSelect = (name) => {
+    setSelected(name);
+    setResult(null);
+    setStatus("idle");
+    // Chercher le domaine dans les URL sources du concurrent
+    const comp = competitors.find(c => c.name === name);
+    const guessDomain = comp?.domain || comp?.website ||
+      Object.entries(audit.compStats[name]?.urls || {})
+        .sort((a,b) => b[1]-a[1])[0]?.[0] || "";
+    setUrl(guessDomain ? `https://${guessDomain.replace(/^https?:\/\//, "")}` : "");
+  };
+
+  const analyze = async () => {
+    if (!url || !claudeKey || !selected) return;
+    setStatus("loading"); setResult(null);
+    const compStats = audit.compStats[selected] || {};
+    const prompt = `Tu es expert GEO (Generative Engine Optimization). Analyse cette page concurrente et produis un rapport structuré.
+
+CONCURRENT : ${selected}
+URL analysée : ${url}
+Données de présence LLM :
+- Mentions (tops LLM) : ${compStats.mentions || 0}
+- Évocations (corps texte) : ${compStats.evocations || 0}
+- Citations (sources) : ${compStats.citations || 0}
+- Position moy. : ${compStats.positions?.length ? (compStats.positions.reduce((a,b)=>a+b,0)/compStats.positions.length).toFixed(1) : "—"}
+
+En imaginant que tu analyses la page ${url}, produis exactement 4 sections :
+
+## POURQUOI LES LLM LES CITENT
+[2-3 raisons concrètes basées sur leur présence mesurée : autorité, structure, format des contenus]
+
+## FORCES DE LEUR CONTENU GEO
+[3-4 points forts que tu inféres de leurs performances LLM : exhaustivité, format, données, maillage]
+
+## LACUNES ET ANGLES À EXPLOITER
+[3-4 angles non couverts ou faiblement couverts qu'Altaroc pourrait exploiter pour dépasser ce concurrent]
+
+## ACTIONS PRIORITAIRES
+[3 actions concrètes avec format : "Créer/Optimiser/Publier [X] pour [objectif GEO]"]
+
+Commence DIRECTEMENT par ## POURQUOI LES LLM LES CITENT. Sois précis et actionnable.`;
+
+    try {
+      const res = await fetch("/api/claude-geo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Claude-Key": claudeKey },
+        body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 1000, messages: [{ role: "user", content: prompt }] }),
+      });
+      const raw = await res.text();
+      if (raw.trimStart().startsWith("<")) throw new Error("Proxy claude-geo introuvable");
+      const data = JSON.parse(raw);
+      if (!res.ok) throw new Error(data.error?.message || `Erreur ${res.status}`);
+      const text = (data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n").trim();
+      const sections = text.split(/^## /m).filter(Boolean).map(s => {
+        const nl = s.indexOf("\n");
+        return { title: s.slice(0, nl).trim(), body: s.slice(nl+1).trim() };
+      });
+      setResult(sections);
+      setStatus("done");
+    } catch(e) {
+      setResult([{ title: "Erreur", body: e.message }]);
+      setStatus("error");
+    }
+  };
+
+  const compNames = Object.keys(audit.compStats || {}).filter(k => (audit.compStats[k].mentions||0) + (audit.compStats[k].evocations||0) > 0).slice(0, 10);
+  if (!compNames.length) return (
+    <div style={{ fontSize: 11, color: "#1A3C2E44", fontStyle: "italic", paddingTop: 8 }}>
+      Interrogez des questions pour détecter des concurrents.
+    </div>
+  );
+
+  const SECTION_COLORS = {
+    "POURQUOI LES LLM LES CITENT": "#1A3C2E",
+    "FORCES DE LEUR CONTENU GEO":  "#1A7A4A",
+    "LACUNES ET ANGLES":            "#C97820",
+    "ACTIONS PRIORITAIRES":         "#1A3C2E",
+  };
+  const getSectionColor = (title) => {
+    const key = Object.keys(SECTION_COLORS).find(k => title.includes(k));
+    return SECTION_COLORS[key] || "#1A3C2E77";
+  };
+
+  return (
+    <div style={{ paddingTop: 16, borderTop: "0.5px solid #1A3C2E0C", marginTop: 4 }}>
+      <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E44", marginBottom: 10 }}>Analyser un concurrent</div>
+
+      {/* Sélecteur concurrent */}
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+        {compNames.map(name => (
+          <button key={name} onClick={() => handleSelect(name)} style={{
+            padding: "4px 11px", borderRadius: 6, fontSize: 11, cursor: "pointer", border: "0.5px solid #1A3C2E22",
+            background: selected === name ? "#1A3C2E" : "transparent",
+            color: selected === name ? "#F0EBE0" : "#1A3C2E77",
+            fontWeight: selected === name ? 500 : 400,
+          }}>{name}</button>
+        ))}
+      </div>
+
+      {/* URL + lancer */}
+      {selected && (
+        <div className="audit-comp-analyzer-input">
+          <input
+            type="url"
+            value={url}
+            onChange={e => setUrl(e.target.value)}
+            placeholder={`https://${selected.toLowerCase().replace(/\s+/g,"-")}.com`}
+            style={{ flex: 1, fontSize: 11, padding: "5px 10px", border: "0.5px solid #1A3C2E18", borderRadius: 6, outline: "none", color: "#1A3C2E", background: "#fff" }}
+          />
+          <button onClick={analyze} disabled={!url || !claudeKey || status === "loading"}
+            style={{ padding: "5px 14px", background: (!url||!claudeKey||status==="loading") ? "transparent" : "#1A3C2E", color: (!url||!claudeKey||status==="loading") ? "#1A3C2E44" : "#F0EBE0", border: "0.5px solid #1A3C2E22", borderRadius: 6, fontSize: 11, fontWeight: 500, cursor: (!url||!claudeKey||status==="loading") ? "not-allowed" : "pointer" }}>
+            {status === "loading" ? "Analyse…" : "Analyser"}
+          </button>
+        </div>
+      )}
+
+      {/* Résultats */}
+      {status === "done" && result && (
+        <div style={{ borderTop: "0.5px solid #1A3C2E0C", paddingTop: 14 }}>
+          {result.map((s, i) => (
+            <div key={i} style={{ borderLeft: `2px solid ${getSectionColor(s.title)}22`, paddingLeft: 12, marginBottom: 14 }}>
+              <div style={{ fontSize: 9, fontWeight: 600, letterSpacing: "0.10em", textTransform: "uppercase", color: getSectionColor(s.title), marginBottom: 5 }}>{s.title}</div>
+              <div style={{ fontSize: 12, color: "#1A3C2E", lineHeight: 1.7 }}>
+                {s.body.split("\n").map((line, j) => {
+                  if (!line.trim()) return <div key={j} style={{ height: 4 }} />;
+                  if (line.startsWith("- ") || line.startsWith("• ")) return <div key={j} style={{ paddingLeft: 10, marginBottom: 2 }}>· {renderBold(line.slice(2))}</div>;
+                  return <div key={j} style={{ marginBottom: 2 }}>{renderBold(line)}</div>;
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {status === "error" && result && (
+        <div style={{ fontSize: 11, color: "#C0352A", paddingTop: 8 }}>{result[0]?.body}</div>
+      )}
+    </div>
+  );
+}
+
+
+// ── AuditHintPanel — hint GEO par question dans l'Audit ──────────
+// Reprend le même fonctionnement que HintPanelQuestion dans GeoTab
+function AuditHintPanel({ question, claudeKey, brandName }) {
+  const [status, setStatus] = useState("idle"); // idle | loading | done | error
+  const [hint, setHint]     = useState("");
+  const [open, setOpen]     = useState(false);
+
+  const run = async () => {
+    if (!claudeKey || status === "loading") return;
+    setStatus("loading"); setOpen(false);
+
+    const prompt = `Tu es un expert GEO (Generative Engine Optimization). La marque "${brandName}" n'apparaît pas dans les réponses LLM à la question suivante :
+
+"${question}"
+
+Produis une recommandation GEO courte et directement actionnable (5-7 lignes max) :
+- Identifie pourquoi la marque est absente
+- Suggère 2-3 actions concrètes (type de contenu, format, structure) pour y apparaître
+- Commence directement par la recommandation, sans intro
+
+Sois précis et cite des formats concrets (liste, FAQ, comparatif, données chiffrées, etc.).`;
+
+    try {
+      const res = await fetch("/api/claude-geo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Claude-Key": claudeKey },
+        body: JSON.stringify({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 500,
+          messages: [{ role: "user", content: prompt }],
+        }),
+      });
+      const raw = await res.text();
+      const data = JSON.parse(raw);
+      if (!res.ok) throw new Error(data.error?.message || `Claude ${res.status}`);
+      const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("\n").trim();
+      setHint(text || "Aucune recommandation générée.");
+      setStatus("done");
+      setOpen(true);
+    } catch(e) {
+      setHint(`Erreur : ${e.message}`);
+      setStatus("error");
+      setOpen(true);
+    }
+  };
+
+  return (
+    <div style={{ borderTop: "0.5px solid #1A3C2E06", marginTop: 4, paddingTop: 4 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        {hint ? (
+          <button onClick={() => setOpen(o => !o)}
+            style={{ fontSize: 10, color: "#C97820", background: "none", border: "none", cursor: "pointer", padding: 0, display: "flex", alignItems: "center", gap: 4, letterSpacing: "0.02em" }}>
+            <span>💡</span>
+            <span>{open ? "▲ Masquer le hint" : "▼ Voir le hint"}</span>
+          </button>
+        ) : (
+          <button onClick={run} disabled={!claudeKey || status === "loading"}
+            style={{ fontSize: 10, color: claudeKey ? "#C97820" : "#1A3C2E33", background: "none", border: "none", cursor: claudeKey ? "pointer" : "not-allowed", padding: 0, display: "flex", alignItems: "center", gap: 4, letterSpacing: "0.02em", opacity: status === "loading" ? 0.6 : 1 }}
+            title={!claudeKey ? "Clé Claude manquante" : undefined}>
+            <span>💡</span>
+            <span>{status === "loading" ? "Génération…" : "Générer un hint GEO"}</span>
+          </button>
+        )}
+        {hint && (
+          <button onClick={run} disabled={status === "loading"}
+            style={{ fontSize: 9, color: "#1A3C2E33", background: "none", border: "none", cursor: "pointer", padding: 0 }}
+            title="Regénérer">↺</button>
+        )}
+      </div>
+      {open && hint && (
+        <div style={{ marginTop: 6, padding: "8px 10px", background: "#FFFBEB", border: "0.5px solid #C9782022", borderRadius: 6, fontSize: 11, lineHeight: 1.7, color: status === "error" ? "#C0352A" : "#92400E" }}>
+          {status === "error" ? hint : hint.split("\n").map((line, i) => {
+            if (!line.trim()) return <div key={i} style={{ height: 4 }} />;
+            if (line.startsWith("- ") || line.startsWith("• ")) return <div key={i} style={{ paddingLeft: 10, marginBottom: 2 }}>· {line.slice(2)}</div>;
+            return <div key={i} style={{ marginBottom: 2 }}>{line}</div>;
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+function FanoutAnalysis({ questions, results, brand, claudeKey, projectId = null, siteId = null }) {
+  const [status, setStatus] = useState("idle");
+  const [sections, setSections] = useState([]);
+  const [open, setOpen] = useState(false);
+  const [savedDate, setSavedDate] = useState(null);
+
+  const brandName   = brand?.brand_name   || "";
+  const brandDomain = brand?.brand_domain || "";
+  const brandAliases = brand?.brand_aliases || [];
+
+  // Recharger la dernière analyse fan-out persistée
+  useEffect(() => {
+    if (!projectId || !siteId) return;
+    let cancelled = false;
+    sbGetGeoAnalyses(projectId, siteId, "audit-fanout").then(rows => {
+      if (cancelled || !rows?.length) return;
+      const c = rows[0].content;
+      if (c?.sections?.length) {
+        setSections(c.sections);
+        setStatus("done");
+        setSavedDate(rows[0].created_at);
+      }
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [projectId, siteId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const run = async () => {
+    if (!claudeKey || !results.length) return;
+    setStatus("loading"); setSections([]); setOpen(true);
+
+    const total     = results.length;
+    const withBrand = results.filter(r => r.brand_mentioned === true || r.brand_mentioned === 1).length;
+    const withSrc   = results.filter(r => r.brand_in_sources).length;
+    const positions = results.filter(r => r.brand_position).map(r => r.brand_position);
+    const avgPos    = positions.length ? (positions.reduce((a,b)=>a+b,0)/positions.length).toFixed(1) : null;
+    const presence  = total ? Math.round(withBrand/total*100) : 0;
+
+    const qMap = {}; questions.forEach(q => { qMap[q.id] = q.question; });
+    const missing = [...new Set(results.filter(r=>!(r.brand_mentioned===true||r.brand_mentioned===1)).map(r=>qMap[r.question_id]).filter(Boolean))].slice(0,8);
+    const present = [...new Set(results.filter(r=>r.brand_mentioned===true||r.brand_mentioned===1).map(r=>qMap[r.question_id]).filter(Boolean))].slice(0,5);
+
+    const compCount = {};
+    results.forEach(r => (r.competitors_mentioned||[]).forEach(c=>{ if(c.name) compCount[c.name]=(compCount[c.name]||0)+1; }));
+    const topComps = Object.entries(compCount).sort((a,b)=>b[1]-a[1]).slice(0,5);
+
+    const urlCount = {};
+    results.forEach(r=>(r.sources||[]).forEach(url=>{ urlCount[url]=(urlCount[url]||0)+1; }));
+    const allTerms = [brandName,...brandAliases].filter(Boolean).map(t=>t.toLowerCase());
+    const brandUrls2 = Object.entries(urlCount).filter(([u])=>allTerms.some(t=>u.toLowerCase().includes(t))).sort((a,b)=>b[1]-a[1]).slice(0,8);
+    const competitorUrls2 = Object.entries(urlCount).filter(([u])=>!allTerms.some(t=>u.toLowerCase().includes(t))).sort((a,b)=>b[1]-a[1]).slice(0,10);
+
+    const provStats = {};
+    results.forEach(r=>{
+      const pid = (r.model||"").toLowerCase().includes("openai")||(r.model||"").toLowerCase().includes("gpt")?"OpenAI":(r.model||"").toLowerCase().includes("gemini")?"Gemini":(r.model||"").toLowerCase().includes("perplexity")||(r.model||"").toLowerCase().includes("sonar")?"Perplexity":(r.model||"").toLowerCase().includes("claude")?"Claude":"Autre";
+      if(!provStats[pid]) provStats[pid]={total:0,withBrand:0};
+      provStats[pid].total++;
+      if(r.brand_mentioned===true||r.brand_mentioned===1) provStats[pid].withBrand++;
+    });
+
+    const prompt = `Tu es un expert GEO (Generative Engine Optimization) senior. Analyse la présence de "${brandName}" (${brandDomain||"—"}) dans les LLMs et produis des recommandations précises et actionnables.
+
+DONNÉES DE PRÉSENCE :
+- Présence totale : ${withBrand}/${total} réponses (${presence}%)
+- Citée en source : ${withSrc} fois
+- Position moyenne : ${avgPos ? "#"+avgPos : "non mesurée"}
+
+PAR PROVIDER :
+${Object.entries(provStats).map(([p,s])=>`- ${p}: ${s.withBrand}/${s.total} (${Math.round(s.withBrand/s.total*100)}%)`).join("\n")}
+
+QUESTIONS AVEC PRÉSENCE (${present.length}) :
+${present.map((q,i)=>`${i+1}. ${q}`).join("\n")||"Aucune"}
+
+QUESTIONS SANS PRÉSENCE — PRIORITÉS (${missing.length}) :
+${missing.map((q,i)=>`${i+1}. ${q}`).join("\n")||"Aucune"}
+
+QUESTIONS FAVORITES — PÉRIMÈTRE STRATÉGIQUE (${(questions||[]).filter(q=>q.is_favorite).length}) :
+${(questions||[]).filter(q=>q.is_favorite).map((q,i)=>`${i+1}. ${q.question}`).join("\n")||"Aucune"}
+(Priorise EXPLICITEMENT les recommandations qui concernent ces questions favorites.)
+
+TOP CONCURRENTS CITÉS :
+${topComps.map(([n,c])=>`- ${n}: ${c}×`).join("\n")||"Aucun"}
+
+URLS MARQUE EN SOURCE :
+${brandUrls2.map(([u,c])=>`- ${u} (${c}×)`).join("\n")||"Aucune"}
+
+TOP URLS CONCURRENTES :
+${competitorUrls2.slice(0,8).map(([u,c])=>`- ${u} (${c}×)`).join("\n")||"Aucune"}
+
+---
+
+Produis exactement 4 sections dans ce format :
+
+## ÉTAT DES LIEUX
+[Diagnostic factuel en 4-5 points. Cite les chiffres exacts. Compare les providers.]
+
+## MAILLAGE INTERNE — PAGES À RELIER
+[2-4 recommandations de maillage interne sur ${brandDomain||"le site"} basées sur les thèmes des questions sans présence.]
+
+## PAGES À CRÉER OU ADAPTER
+[3-5 pages à créer/adapter. Pour chaque : H1 suggéré + angle éditorial + question cible.]
+
+## URLS CONCURRENTES — CE QUI FONCTIONNE
+[Pour 3-5 URLs concurrentes les plus citées : pourquoi les LLMs les citent et comment reproduire.]
+
+RÈGLES : Commence DIRECTEMENT par ## ÉTAT DES LIEUX. Recommandations concrètes avec H1 suggérés. Pas de généralités.`;
+
+    try {
+      const res = await fetch("/api/claude-geo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Claude-Key": claudeKey },
+        body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 1800, messages: [{ role: "user", content: prompt }] }),
+      });
+      const raw = await res.text();
+      if (raw.trimStart().startsWith("<")) throw new Error("Proxy claude-geo introuvable");
+      const data = JSON.parse(raw);
+      if (!res.ok) throw new Error(data.error?.message || `Claude ${res.status}`);
+      const text = (data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n").trim();
+      const parsed = text.split(/^## /m).filter(Boolean).map(s => {
+        const idx = s.indexOf("\n");
+        return { title: s.slice(0, idx).trim(), body: s.slice(idx+1).trim() };
+      });
+      setSections(parsed);
+      setStatus("done");
+      const now = new Date().toISOString();
+      setSavedDate(now);
+      if (projectId && siteId) {
+        sbSaveGeoAnalysis({ project_id: projectId, site_id: siteId, kind: "audit-fanout", content: { sections: parsed, generated_at: now } }).catch(() => {});
+      }
+    } catch(e) {
+      setSections([{ title: "Erreur", body: e.message }]);
+      setStatus("error");
+    }
+  };
+
+  const SECTION_META = {
+    "ÉTAT DES LIEUX":    { icon: "◎", color: "#1A3C2E" },
+    "MAILLAGE INTERNE":  { icon: "⟶", color: "#1A3C2E" },
+    "PAGES À CRÉER":     { icon: "✦", color: "#C97820" },
+    "URLS CONCURRENTES": { icon: "↗", color: "#1A3C2E77" },
+  };
+  const getMeta = (title) => {
+    const key = Object.keys(SECTION_META).find(k => title.includes(k));
+    return SECTION_META[key] || { icon: "·", color: "#1A3C2E77" };
+  };
+
+  if (!results.length) return null;
+
+  return (
+    <div style={{ marginBottom: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: open && status === "done" ? 16 : 0 }}>
+        <div>
+          <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E55", marginBottom: 3 }}>Analyse GEO</div>
+          <div style={{ fontSize: 13, color: "#1A3C2E", letterSpacing: "-0.005em" }}>Recommandations actionnables · {results.length} réponses</div>
+          {savedDate && <div style={{ fontSize: 10, color: "#1A3C2E55", marginTop: 2 }}>Dernière analyse : {new Date(savedDate).toLocaleString("fr-FR", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</div>}
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {status === "done" && (
+            <button onClick={() => setOpen(o => !o)}
+              style={{ padding: "4px 12px", border: "0.5px solid #1A3C2E18", borderRadius: 6, background: "transparent", cursor: "pointer", fontSize: 11, color: "#1A3C2E77" }}>
+              {open ? "Masquer" : "Voir l'analyse"}
+            </button>
+          )}
+          <button onClick={run} disabled={status === "loading" || !claudeKey}
+            style={{ padding: "5px 14px", background: (!claudeKey || status === "loading") ? "transparent" : "#1A3C2E", color: (!claudeKey || status === "loading") ? "#1A3C2E44" : "#F0EBE0", border: "0.5px solid #1A3C2E22", borderRadius: 6, fontSize: 11, fontWeight: 500, cursor: (!claudeKey || status === "loading") ? "not-allowed" : "pointer" }}
+            title={!claudeKey ? "Clé Claude manquante" : undefined}>
+            {status === "loading" ? "Analyse…" : status === "done" ? "↺ Relancer" : "Analyser"}
+          </button>
+        </div>
+      </div>
+
+      {open && status === "done" && sections.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 0, borderTop: "0.5px solid #1A3C2E0D", paddingTop: 16 }}>
+          {sections.map((s, i) => {
+            const meta = getMeta(s.title);
+            if (s.title === "Erreur") return <div key={i} style={{ fontSize: 12, color: "#C0352A", padding: "10px 0" }}>{s.body}</div>;
             return (
-              <button key={t.key} onClick={() => setSubTab(t.key)} style={{
-                padding: "6px 16px", fontSize: 12, fontWeight: active ? 500 : 400,
-                color: active ? "#1A3C2E" : "#1A3C2E66",
-                background: active ? "#F0EBE0" : "transparent",
-                border: active ? "1px solid #1A3C2E33" : "1px solid transparent",
-                borderRadius: 20, cursor: "pointer", transition: "all 0.15s",
-              }}>{t.label}</button>
+              <div key={i} style={{ borderLeft: "2px solid #1A3C2E0D", paddingLeft: 16, paddingBottom: 16, marginBottom: 4 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                  <span style={{ fontSize: 12, color: meta.color, fontWeight: 500 }}>{meta.icon}</span>
+                  <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.10em", textTransform: "uppercase", color: meta.color }}>{s.title}</span>
+                </div>
+                <div style={{ fontSize: 12, color: "#1A3C2E", lineHeight: 1.75 }}>
+                  {s.body.split("\n").map((line, j) => {
+                    if (!line.trim()) return <div key={j} style={{ height: 6 }} />;
+                    if (line.startsWith("- ") || line.startsWith("• ")) return <div key={j} style={{ paddingLeft: 12, marginBottom: 3 }}>· {renderBold(line.slice(2))}</div>;
+                    return <div key={j} style={{ marginBottom: 3 }}>{renderBold(line)}</div>;
+                  })}
+                </div>
+              </div>
             );
           })}
         </div>
+      )}
+    </div>
+  );
+}
 
-        {/* ── Mots-clés ── */}
-        {subTab === "keywords" && (
-          <div data-tour="keywords-section"><KeywordsTab
-            site={site} projectId={projectId} apiKey={apiKeyDec} model={model}
-            axes={axes} context={brand?.context || ""} categories={categories}
-            setCategories={setCategories} onAxesChange={(a) => setAxes(a)}
-            semrushKey={semrushKeyDec} providerKeys={providerKeys}
-            onQuestionsGenerated={() => setQuestionsKey(k => k + 1)}
-          /></div>
-        )}
+function exportPDF(audit, brand, site, aiText) {
+  const brandName = brand?.brand_name || "Marque";
+  const dateStr = new Date().toLocaleDateString("fr-FR", { day: "2-digit", month: "long", year: "numeric" });
+  const dateFile = new Date().toLocaleDateString("fr-FR").replace(/\//g, "-");
 
-        {/* ── Questions ── */}
-        <div style={{ display: subTab === "questions" ? "block" : "none" }}>
-          <QuestionsTab
-            site={site} projectId={projectId} apiKey={apiKeyDec} model={model}
-            gscRows={project?.gscData?.[site?.id] || []}
-            brand={brand} categories={categories} setCategories={setCategories}
-            allResults={allResults.filter(r => r.site_id === site?.id)}
-            onResultSaved={() => sbGetGeoResults(projectId, site.id).then(setAllResults)}
-            activeProviders={activeProviders} providerKeys={providerKeys}
-            runMode={runMode} keywordsOrder={keywords.map(k => k.id)}
-            refreshTrigger={questionsKey}
-            competitors={competitors} setCompetitors={setCompetitors}
-            isReadOnly={isReadOnly}
-            onSaveKey={(keyPatch) => {
-              setProviderKeys(prev => {
-                const next = { ...prev };
-                PROVIDERS.forEach(p => {
-                  if (keyPatch[p.keyField]) {
-                    const dec = decodeKey(keyPatch[p.keyField]);
-                    next[p.id] = { enc: keyPatch[p.keyField], dec, input: "", status: dec ? "ok" : "error" };
-                  }
-                });
-                return next;
-              });
-              setProjects?.(prev => prev.map(proj => proj.id === projectId ? { ...proj, ...keyPatch } : proj));
-              onSaveProviderKeys?.(keyPatch);
-            }}
-          />
+  // ── Palette Sonate ────────────────────────────────────────────
+  const S = {
+    green:      "#1A3C2E",
+    greenMid:   "#2D5A42",
+    greenLight: "#4A8C6A",
+    greenPale:  "#EAF2ED",
+    cream:      "#F5F0E8",
+    creamDark:  "#E8E0CE",
+    ink:        "#1C1C1C",
+    inkMid:     "#4A4A4A",
+    inkLight:   "#909090",
+    white:      "#FFFFFF",
+    ok:         "#2D6A4F",   okBg:   "#D8F3DC",
+    warn:       "#92400E",   warnBg: "#FEF3C7",
+    danger:     "#9B2335",   dangerBg:"#FCE4E8",
+    blue:       "#1A4A7A",   blueBg: "#DBEAFE",
+  };
+
+  const scoreColor = audit.presenceRate >= 70 ? S.ok     : audit.presenceRate >= 50 ? S.blue   : audit.presenceRate >= 30 ? S.warn   : S.danger;
+  const scoreBg    = audit.presenceRate >= 70 ? S.okBg   : audit.presenceRate >= 50 ? S.blueBg  : audit.presenceRate >= 30 ? S.warnBg  : S.dangerBg;
+  const scoreLabel = audit.presenceRate >= 70 ? "Excellente présence" : audit.presenceRate >= 50 ? "Bonne présence" : audit.presenceRate >= 30 ? "Potentiel à développer" : "Potentiel à exploiter";
+
+  // ── Helpers HTML ──────────────────────────────────────────────
+  const section = (num, title) =>
+    `<div class="section-hd"><div class="section-num">${num}</div><div class="section-title">${title}</div></div>`;
+
+  const kpi = (val, label, color = S.green, bg = S.white, border = S.creamDark) =>
+    `<div class="kpi" style="background:${bg};border-color:${border}"><div class="kpi-val" style="color:${color}">${val}</div><div class="kpi-label">${label}</div></div>`;
+
+  const bar = (p, color) =>
+    `<div class="bar-track"><div class="bar-fill" style="width:${Math.min(p,100)}%;background:${color}"></div></div>`;
+
+  const pill = (text, color, bg) =>
+    `<span class="pill" style="color:${color};background:${bg}">${text}</span>`;
+
+  const lead = (title, body, color = S.green, bg = S.greenPale) =>
+    `<div class="lead" style="border-color:${color};background:${bg}"><div class="lead-title" style="color:${color}">${title}</div><div class="lead-body">${body}</div></div>`;
+
+  const tbl = (headers, rows) =>
+    `<table><thead><tr>${headers.map(h => `<th>${h}</th>`).join("")}</tr></thead><tbody>${
+      rows.map((r, i) => `<tr${i % 2 ? ' class="alt"' : ""}>${r.map(c => `<td>${c}</td>`).join("")}</tr>`).join("")
+    }</tbody></table>`;
+
+  const urlRow = (url, meta, badge, bColor, bBg) =>
+    `<div class="url-row"><a href="${url}" target="_blank" class="url-link">${url.replace(/^https?:\/\//, "")}</a><span class="url-meta">${meta}</span>${pill(badge, bColor, bBg)}</div>`;
+
+  // ── CSS ───────────────────────────────────────────────────────
+  const css = `
+    @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=DM+Sans:wght@300;400;500;600;700&display=swap');
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { background: ${S.cream}; }
+    body { font-family: 'DM Sans', system-ui, sans-serif; font-weight: 400; max-width: 960px; margin: 0 auto; color: ${S.ink}; line-height: 1.6; background: ${S.cream}; padding: 0 0 60px; }
+
+    /* ── Cover ── */
+    .cover { background: ${S.green}; padding: 48px 56px 40px; position: relative; overflow: hidden; }
+    .cover::after { content: ""; position: absolute; top: -60px; right: -60px; width: 280px; height: 280px; border-radius: 50%; background: rgba(255,255,255,.04); pointer-events: none; }
+    .cover-logo { display: flex; align-items: center; gap: 14px; margin-bottom: 40px; }
+    .cover-logo-mark { width: 40px; height: 40px; background: ${S.greenLight}; border-radius: 8px; display: flex; align-items: center; justify-content: center; }
+    .cover-logo-mark svg { width: 22px; height: 22px; fill: ${S.white}; }
+    .cover-logo-name { font-family: 'DM Sans', sans-serif; font-size: 13px; font-weight: 600; color: rgba(255,255,255,.7); letter-spacing: 2px; text-transform: uppercase; }
+    .cover-eyebrow { font-size: 10px; font-weight: 600; color: ${S.greenLight}; letter-spacing: 2.5px; text-transform: uppercase; margin-bottom: 10px; }
+    .cover-title { font-family: 'Playfair Display', Georgia, serif; font-size: 38px; font-weight: 900; color: ${S.white}; line-height: 1.15; margin-bottom: 6px; }
+    .cover-sub { font-size: 15px; color: rgba(255,255,255,.55); font-weight: 300; margin-bottom: 32px; }
+    .cover-meta { display: flex; gap: 28px; flex-wrap: wrap; }
+    .cover-meta-item { font-size: 11px; }
+    .cover-meta-label { color: rgba(255,255,255,.4); text-transform: uppercase; letter-spacing: 1px; font-size: 9px; display: block; margin-bottom: 2px; }
+    .cover-meta-val { color: ${S.white}; font-weight: 600; }
+
+    /* ── Score banner ── */
+    .score-banner { margin: 32px 40px 0; background: ${S.white}; border-radius: 16px; padding: 28px 32px; display: flex; gap: 36px; align-items: center; flex-wrap: wrap; box-shadow: 0 4px 24px rgba(26,60,46,.1); }
+    .score-circle { text-align: center; min-width: 90px; }
+    .score-pct { font-family: 'Playfair Display', Georgia, serif; font-size: 56px; font-weight: 900; color: ${S.green}; line-height: 1; }
+    .score-label { font-size: 10px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; margin-top: 4px; }
+    .score-sub { font-size: 9px; color: ${S.inkLight}; }
+    .score-bar-wrap { flex: 1; min-width: 220px; }
+    .score-track { height: 8px; background: ${S.creamDark}; border-radius: 4px; overflow: hidden; margin-bottom: 14px; }
+    .score-fill { height: 100%; border-radius: 4px; }
+    .score-facts { display: flex; gap: 20px; flex-wrap: wrap; font-size: 12px; }
+    .score-fact span { color: ${S.inkLight}; font-size: 10px; display: block; margin-bottom: 1px; }
+    .score-kpis { display: flex; flex-direction: column; gap: 4px; min-width: 130px; font-size: 11px; }
+    .score-kpi-row { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; border-bottom: 1px solid ${S.creamDark}; }
+    .score-kpi-row:last-child { border-bottom: none; }
+
+    /* ── Content wrapper ── */
+    .content { padding: 0 40px; margin-top: 32px; }
+
+    /* ── Section header ── */
+    .section-hd { display: flex; align-items: center; gap: 14px; margin: 36px 0 16px; }
+    .section-num { width: 28px; height: 28px; background: ${S.green}; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: ${S.white}; flex-shrink: 0; }
+    .section-title { font-family: 'Playfair Display', Georgia, serif; font-size: 18px; font-weight: 700; color: ${S.green}; border-bottom: 2px solid ${S.creamDark}; padding-bottom: 8px; flex: 1; }
+
+    /* ── KPI grid ── */
+    .kpi-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; margin: 16px 0; }
+    .kpi { border: 1px solid ${S.creamDark}; border-radius: 12px; padding: 14px 12px; text-align: center; }
+    .kpi-val { font-family: 'Playfair Display', Georgia, serif; font-size: 24px; font-weight: 900; }
+    .kpi-label { font-size: 9px; color: ${S.inkLight}; text-transform: uppercase; letter-spacing: .6px; margin-top: 3px; }
+
+    /* ── Tables ── */
+    table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 10px 0; }
+    th { background: ${S.green}; color: ${S.white}; padding: 9px 14px; text-align: left; font-size: 10px; font-weight: 600; letter-spacing: .8px; text-transform: uppercase; }
+    th:first-child { border-radius: 8px 0 0 0; }
+    th:last-child  { border-radius: 0 8px 0 0; }
+    td { padding: 9px 14px; border-bottom: 1px solid ${S.creamDark}; color: ${S.inkMid}; vertical-align: middle; }
+    tr.alt td { background: ${S.cream}; }
+    tr:last-child td { border-bottom: none; }
+
+    /* ── Bars ── */
+    .bar-track { height: 5px; background: ${S.creamDark}; border-radius: 3px; margin-top: 5px; overflow: hidden; }
+    .bar-fill   { height: 100%; border-radius: 3px; }
+
+    /* ── Pills ── */
+    .pill { font-size: 9px; font-weight: 700; border-radius: 20px; padding: 2px 8px; letter-spacing: .4px; text-transform: uppercase; white-space: nowrap; }
+
+    /* ── Leads ── */
+    .lead { border-left: 3px solid ${S.green}; border-radius: 0 10px 10px 0; padding: 10px 16px; margin: 6px 0; }
+    .lead-title { font-size: 12px; font-weight: 700; margin-bottom: 2px; }
+    .lead-body  { font-size: 12px; color: ${S.inkMid}; line-height: 1.5; }
+
+    /* ── 2-col / 3-col ── */
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 16px; }
+    .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-top: 16px; }
+    .col-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .7px; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid ${S.creamDark}; }
+
+    /* ── URL rows ── */
+    .url-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid ${S.creamDark}; flex-wrap: wrap; }
+    .url-link { font-size: 11px; color: ${S.greenMid}; text-decoration: none; flex: 1; min-width: 160px; word-break: break-all; }
+    .url-link:hover { text-decoration: underline; }
+    .url-meta { font-size: 10px; color: ${S.inkLight}; white-space: nowrap; }
+
+    /* ── Q lists ── */
+    .q-list { list-style: none; padding: 0; margin: 0; font-size: 12px; }
+    .q-list li { padding: 5px 0; border-bottom: 1px solid ${S.creamDark}; display: flex; gap: 8px; }
+    .q-list li:last-child { border-bottom: none; }
+
+    /* ── AI block ── */
+    .ai-block { background: ${S.white}; border: 1px solid ${S.creamDark}; border-left: 4px solid ${S.green}; border-radius: 0 12px 12px 0; padding: 20px 24px; font-size: 12px; line-height: 1.85; color: ${S.inkMid}; white-space: pre-wrap; margin-top: 12px; }
+
+    /* ── Footer ── */
+    .footer { margin: 48px 40px 0; padding-top: 20px; border-top: 1px solid ${S.creamDark}; display: flex; justify-content: space-between; align-items: center; font-size: 10px; color: ${S.inkLight}; }
+    .footer-brand { font-family: 'Playfair Display', serif; font-size: 13px; font-weight: 700; color: ${S.green}; }
+
+    @media print {
+      html, body { background: ${S.white}; }
+      .cover { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .score-banner { box-shadow: none; }
+      .section-hd { break-before: auto; }
+    }
+  `;
+
+  // ── COVER ─────────────────────────────────────────────────────
+  const cover = `
+<div class="cover">
+  <div class="cover-logo">
+    <div class="cover-logo-mark">
+      <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/></svg>
+    </div>
+    <div class="cover-logo-name">Sonate · GEO Monitor</div>
+  </div>
+  <div class="cover-eyebrow">Rapport d'audit</div>
+  <div class="cover-title">Audit GEO<br>${brandName}</div>
+  <div class="cover-sub">Analyse de visibilité générative — IA & LLMs</div>
+  <div class="cover-meta">
+    <div class="cover-meta-item"><span class="cover-meta-label">Site analysé</span><span class="cover-meta-val">${site?.label || "—"}</span></div>
+    <div class="cover-meta-item"><span class="cover-meta-label">Date de génération</span><span class="cover-meta-val">${dateStr}</span></div>
+    <div class="cover-meta-item"><span class="cover-meta-label">Questions testées</span><span class="cover-meta-val">${audit.questions}</span></div>
+    <div class="cover-meta-item"><span class="cover-meta-label">Résultats analysés</span><span class="cover-meta-val">${audit.total}</span></div>
+  </div>
+</div>
+
+<div class="score-banner">
+  <div class="score-circle">
+    <div class="score-pct" style="color:${scoreColor}">${audit.presenceRate}%</div>
+    <div class="score-label" style="color:${scoreColor}">${scoreLabel}</div>
+    <div class="score-sub">Présence GEO</div>
+  </div>
+  <div class="score-bar-wrap">
+    <div class="score-track"><div class="score-fill" style="width:${audit.presenceRate}%;background:${scoreColor}"></div></div>
+    <div class="score-facts">
+      <div class="score-fact"><span>Marque</span><strong>${brandName}</strong></div>
+      <div class="score-fact"><span>Questions</span><strong>${audit.questions}</strong></div>
+      <div class="score-fact"><span>Résultats</span><strong>${audit.total}</strong></div>
+      <div class="score-fact"><span>Concurrents</span><strong>${Object.keys(audit.compStats).length}</strong></div>
+    </div>
+  </div>
+  <div class="score-kpis">
+    ${[
+      ["Présence marque", audit.withBrand + "/" + audit.total, scoreColor],
+      ["Position moy.",   audit.avgPos ? "#" + audit.avgPos : "—", S.ink],
+      ["Cité en source",  String(audit.withSources), S.blue],
+      ["Concurrents",     String(Object.keys(audit.compStats).length), S.warn],
+    ].map(([l, v, c]) => `<div class="score-kpi-row"><span style="color:${S.inkLight};font-size:10px">${l}</span><strong style="color:${c}">${v}</strong></div>`).join("")}
+  </div>
+</div>`;
+
+  // ── BLOC 1 : KPIs ─────────────────────────────────────────────
+  const bloc1 = `
+${section("01", "Indicateurs clés")}
+<div class="kpi-grid">
+  ${kpi(audit.presenceRate + "%", "Présence marque",  scoreColor, scoreBg)}
+  ${kpi(audit.avgPos ? "#" + audit.avgPos : "—", "Position moy.", S.ink)}
+  ${kpi(audit.withSources, "Cité en source", S.blue, S.blueBg)}
+  ${kpi(audit.withBrand + "/" + audit.total, "Avec mention", S.ink)}
+  ${kpi(audit.questions, "Questions testées", S.green, S.greenPale)}
+  ${kpi(Object.keys(audit.compStats).length, "Concurrents", S.warn, S.warnBg)}
+</div>`;
+
+  // ── BLOC 2 : Visibilité ───────────────────────────────────────
+  const providerRows = Object.entries(audit.providerStats).map(([pid, s]) => {
+    const rate = pct(s.withBrand, s.total);
+    const c = rate >= 50 ? S.ok : rate > 0 ? S.warn : S.danger;
+    return [`<strong>${pid}</strong>`, `<span style="color:${c};font-weight:700">${rate}%</span>`, `${s.withBrand}/${s.total}`, bar(rate, c)];
+  });
+
+  const presentList = audit.presentBrandQs.map(q =>
+    `<li><span style="color:${S.ok};font-weight:700">✓</span>${q.isFav ? "⭐ " : ""}${q.question}${q.volume > 0 ? ` <span style="color:#2563EB;font-size:10px">(🔍${q.volume >= 1000 ? (q.volume/1000).toFixed(1)+"k" : q.volume})</span>` : ""}</li>`).join("");
+  const missingList = audit.missingBrandQs.map(q =>
+    `<li><span style="color:${S.danger};font-weight:700">✗</span>${q.isFav ? "⭐ " : ""}${q.question}${q.volume > 0 ? ` <span style="color:#2563EB;font-size:10px">(🔍${q.volume >= 1000 ? (q.volume/1000).toFixed(1)+"k" : q.volume})</span>` : ""}</li>`).join("");
+
+  const bloc2 = `
+${section("02", "Visibilité marque")}
+${tbl(["Provider", "Présence", "Ratio", ""], providerRows)}
+<div class="grid-2">
+  <div>
+    <div class="col-label" style="color:${S.ok}">✓ Questions avec présence (${audit.presentBrandQs.length})</div>
+    <ul class="q-list">${presentList || `<li style="color:${S.inkLight};font-style:italic">Aucune présence</li>`}</ul>
+  </div>
+  <div>
+    <div class="col-label" style="color:${S.danger}">✗ Questions sans présence (${audit.missingBrandQs.length})</div>
+    <ul class="q-list">${missingList || `<li style="color:${S.inkLight};font-style:italic">Toutes les questions ont une présence !</li>`}</ul>
+  </div>
+</div>`;
+
+  // ── BLOC 3 : Concurrentiel ────────────────────────────────────
+  const compRows = Object.entries(audit.compStats).sort((a, b) => b[1].mentions - a[1].mentions).map(([name, s]) => [
+    `<strong>${name}</strong>`,
+    s.mentions,
+    `<span style="color:${S.warn}">${pct(s.mentions, audit.total)}%</span>`,
+    (s.positions && s.positions.length) ? (s.positions.reduce((a, b) => a + b, 0) / s.positions.length).toFixed(1) : "—",
+  ]);
+  const intentRows = Object.entries(audit.intentCount).sort((a, b) => b[1] - a[1]).map(([k, v]) => [
+    k, v, `<span style="color:${S.green}">${pct(v, audit.total)}%</span>`, bar(pct(v, audit.total), S.green),
+  ]);
+  const typeRows = Object.entries(audit.typeCount).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([k, v]) => [
+    k, v, `<span style="color:${S.blue}">${pct(v, audit.total)}%</span>`, bar(pct(v, audit.total), S.blue),
+  ]);
+
+  const bloc3 = `
+${section("03", "Paysage concurrentiel")}
+${compRows.length ? tbl(["Concurrent", "Mentions", "% résultats", "Pos. moy."], compRows) : `<p style="color:${S.inkLight};font-style:italic;font-size:12px">Aucun concurrent détecté dans les réponses LLM</p>`}
+<div class="grid-2">
+  <div>
+    <div class="col-label">Répartition par intention</div>
+    ${intentRows.length ? tbl(["Intention", "Count", "%", ""], intentRows) : `<p style="color:${S.inkLight};font-style:italic;font-size:11px">—</p>`}
+  </div>
+  <div>
+    <div class="col-label">Types de réponses LLM</div>
+    ${typeRows.length ? tbl(["Type", "Count", "%", ""], typeRows) : `<p style="color:${S.inkLight};font-style:italic;font-size:11px">—</p>`}
+  </div>
+</div>`;
+
+  // ── BLOC 4 : Sources & URLs ───────────────────────────────────
+  const domainRows = Object.entries(audit.topDomains).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([d, cnt], i) => {
+    const isBrand = audit.brandUrls.some(u => u.domain === d);
+    const isComp  = audit.competitorUrls.some(u => u.domain === d);
+    const badge   = isBrand ? pill("marque",     S.ok,     S.okBg)
+                  : isComp  ? pill("concurrent", S.danger, S.dangerBg) : "";
+    return [
+      `<span style="color:${S.inkLight};font-weight:700">#${i+1}</span>`,
+      `<strong style="color:${isBrand ? S.ok : isComp ? S.danger : S.ink}">${d}</strong> ${badge}`,
+      `<strong>${cnt}×</strong>`,
+    ];
+  });
+
+  const urlsOpt     = audit.urlsToOptimize.slice(0, 8).map(u  => urlRow(u.norm || u.url, `${u.count_as_source} src · ${u.count_in_answer} rép`, "À booster",  S.warn,   S.warnBg)).join("");
+  const urlsRework  = audit.urlsToRework.slice(0, 8).map(u    => urlRow(u.norm || u.url, `${u.count_as_source} src · ${u.count_in_answer} rép`, "À refaire",  S.danger, S.dangerBg)).join("");
+  const urlsInspire = audit.urlsToInspire.slice(0, 8).map(u   => urlRow(u.norm || u.url, `${getDomain(u.url)} · ${u.count_as_source} cit.`,     "Inspiration", S.blue,   S.blueBg)).join("");
+
+  const bloc4 = `
+${section("04", "Sources & URLs")}
+${domainRows.length ? tbl(["#", "Domaine", "Citations"], domainRows) : `<p style="color:${S.inkLight};font-style:italic;font-size:12px">Aucun domaine indexé</p>`}
+<div class="grid-3">
+  <div>
+    <div class="col-label" style="color:${S.warn}">⚡ À optimiser</div>
+    ${urlsOpt || `<p style="color:${S.inkLight};font-style:italic;font-size:11px">Aucune</p>`}
+  </div>
+  <div>
+    <div class="col-label" style="color:${S.danger}">🔄 À reprendre</div>
+    ${urlsRework || `<p style="color:${S.inkLight};font-style:italic;font-size:11px">Aucune</p>`}
+  </div>
+  <div>
+    <div class="col-label" style="color:${S.blue}">💡 Référence</div>
+    ${urlsInspire || `<p style="color:${S.inkLight};font-style:italic;font-size:11px">Aucune</p>`}
+  </div>
+</div>`;
+
+  // ── BLOC 5 : Plan d'action ────────────────────────────────────
+  const leadsHtml = audit.leads.map(l => lead(
+    l.priority + " — " + l.label, l.action,
+    l.priority.includes("🔴") ? S.danger : l.priority.includes("🟠") ? S.warn : l.priority.includes("🟡") ? "#856404" : S.green,
+    l.priority.includes("🔴") ? S.dangerBg : l.priority.includes("🟠") ? S.warnBg : l.priority.includes("🟡") ? "#FFF9E6" : S.greenPale,
+  )).join("");
+
+  const bloc5 = `
+${section("05", "Plan d'action")}
+${leadsHtml || `<p style="color:${S.inkLight};font-style:italic;font-size:12px">Aucune piste générée</p>`}
+${aiText ? `${section("06", "Analyse IA détaillée")}<div class="ai-block">${aiText}</div>` : ""}`;
+
+  // ── Footer ────────────────────────────────────────────────────
+  const footer = `
+<div class="footer">
+  <div><div class="footer-brand">Sonate</div><div>Rapport généré le ${dateStr}</div></div>
+  <div style="text-align:right">${brandName} · ${site?.label || "—"}</div>
+</div>`;
+
+  // ── Assemblage final ──────────────────────────────────────────
+  const html = `<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Audit GEO — ${brandName} — ${dateStr}</title>
+<style>${css}</style>
+</head>
+<body>
+${cover}
+<div class="content">
+${bloc1}
+${bloc2}
+${bloc3}
+${bloc4}
+${bloc5}
+</div>
+${footer}
+</body>
+</html>`;
+
+  const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `audit-geo-${brandName.toLowerCase().replace(/\s+/g, "-")}-${dateFile}.html`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+
+
+// ── Analyse concurrentielle IA (forces/faiblesses) — pour l'export ──
+// Appelle Claude pour qualifier chaque concurrent détecté. Best-effort.
+async function generateCompetitorAnalysis(audit, brand, claudeKey) {
+  if (!claudeKey || !audit.top5Competitors?.length) return null;
+  const brandName = brand?.brand_name || "la marque";
+  const compLines = audit.top5Competitors.map(([name, s]) => {
+    const avgP = s.positions?.length ? (s.positions.reduce((a,b)=>a+b,0)/s.positions.length).toFixed(1) : "—";
+    return `- ${name} : ${s.mentions} mentions, position moy. #${avgP}`;
+  }).join("\n");
+
+  const prompt = `Tu es un expert GEO. Voici les concurrents de "${brandName}" détectés dans les réponses des IA génératives :
+
+${compLines}
+
+Pour CHAQUE concurrent, produis une analyse courte de ses forces et de son angle (pourquoi les LLM le citent). Réponds UNIQUEMENT en JSON valide, sans markdown :
+{
+  "competitors": [
+    { "name": "nom exact", "strengths": "2-3 forces concrètes (formats de contenu, positionnement)", "angle": "angle de différenciation pour rivaliser" }
+  ]
+}
+Ordre identique à la liste. Réponds en français, concis.`;
+
+  try {
+    const res = await fetch("/api/claude-geo", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Claude-Key": claudeKey },
+      body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 1400, messages: [{ role: "user", content: prompt }] }),
+    });
+    const raw = await res.text();
+    if (raw.trimStart().startsWith("<")) return null;
+    const data = JSON.parse(raw);
+    if (!res.ok) return null;
+    const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("\n").trim();
+    const cleaned = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();
+    let parsed;
+    try { parsed = JSON.parse(cleaned); }
+    catch { const s = cleaned.indexOf("{"), e = cleaned.lastIndexOf("}"); parsed = JSON.parse(cleaned.slice(s, e + 1)); }
+    return parsed?.competitors || null;
+  } catch { return null; }
+}
+
+// ── Export PRÉSENTATION — restitution client structurée ──────────
+// Synthèse des structures Silvera (deck pro) × audit ICE.
+// Sections : Cover · Sommaire · État des lieux · Forces/Opportunités par catégorie ·
+//            Sources & URLs · Concurrents (data + IA) · Roadmap ICE · Synthèse
+async function exportPresentation(audit, brand, site, questions, results, roadmapData, claudeKey, categories = []) {
+  const brandName = brand?.brand_name || "Marque";
+  const dateStr   = new Date().toLocaleDateString("fr-FR", { day: "2-digit", month: "long", year: "numeric" });
+  const dateFile  = new Date().toLocaleDateString("fr-FR").replace(/\//g, "-");
+
+  const S = {
+    green: "#1A3C2E", greenMid: "#2D5A42", greenLight: "#4A8C6A", greenPale: "#EAF2ED",
+    cream: "#F5F0E8", creamDark: "#E8E0CE", ink: "#1C1C1C", inkMid: "#4A4A4A", inkLight: "#909090",
+    white: "#FFFFFF", ok: "#2D6A4F", okBg: "#D8F3DC", warn: "#92400E", warnBg: "#FEF3C7",
+    danger: "#9B2335", dangerBg: "#FCE4E8", accent: "#E8541A", accentBg: "#FCEBE3",
+  };
+
+  const scoreColor = audit.presenceRate >= 70 ? S.ok : audit.presenceRate >= 50 ? S.green : audit.presenceRate >= 30 ? S.warn : S.danger;
+  const scoreLabel = audit.presenceRate >= 70 ? "Excellente présence" : audit.presenceRate >= 50 ? "Bonne présence" : audit.presenceRate >= 30 ? "Potentiel à développer" : "Potentiel à exploiter";
+
+  // Map catégories id -> nom
+  const catName = {};
+  (categories || []).forEach(c => { catName[c.id] = c.name; });
+
+  // ── Analyse concurrentielle IA (async, best-effort) ──
+  const compAI = await generateCompetitorAnalysis(audit, brand, claudeKey);
+  const compAIMap = {};
+  (compAI || []).forEach(c => { compAIMap[(c.name || "").toLowerCase()] = c; });
+
+  // ── Catégories : forces (marque domine) vs opportunités (faible présence) ──
+  const catRows = Object.entries(audit.byQuestionCategory || {})
+    .filter(([cid]) => cid !== "__none__")
+    .map(([cid, s]) => {
+      const rate = s.total ? Math.round((s.withBrand / s.total) * 100) : 0;
+      return { name: catName[cid] || "Sans catégorie", rate, qCount: s.qCount, withBrand: s.withBrand, total: s.total };
+    })
+    .sort((a, b) => b.rate - a.rate);
+  const catForces = catRows.filter(c => c.rate >= 50);
+  const catOpportunities = catRows.filter(c => c.rate < 50);
+
+  // ── Forces & faiblesses ──
+  const forces = [];
+  const faiblesses = [];
+  if (audit.presenceRate >= 50) forces.push(`Présence GEO solide : ${audit.presenceRate}% des réponses LLM citent la marque.`);
+  if (audit.avgMentionPos && parseFloat(audit.avgMentionPos) <= 3) forces.push(`Excellent positionnement : #${audit.avgMentionPos} en moyenne dans les tops.`);
+  if (audit.withRanked > 0) forces.push(`${audit.withRanked} réponses placent la marque dans un top numéroté.`);
+  if (catForces.length) forces.push(`Autorité sur ${catForces.length} catégorie${catForces.length > 1 ? "s" : ""} : ${catForces.slice(0,3).map(c=>c.name).join(", ")}.`);
+  if (audit.brandOwnUrls?.length > 0) forces.push(`${audit.brandOwnUrls.length} URLs du domaine propre citées comme sources.`);
+
+  if (audit.presenceRate < 30) faiblesses.push(`Présence GEO faible : seulement ${audit.presenceRate}% des réponses citent la marque.`);
+  if (audit.missingBrandQs?.length > 0) faiblesses.push(`${audit.missingBrandQs.length} questions sans aucune mention de la marque.`);
+  if (catOpportunities.length) faiblesses.push(`${catOpportunities.length} catégorie${catOpportunities.length > 1 ? "s" : ""} à conquérir : ${catOpportunities.slice(0,3).map(c=>c.name).join(", ")}.`);
+  const topComp = audit.top5Competitors?.[0];
+  if (topComp) faiblesses.push(`Concurrent dominant : ${topComp[0]} (${topComp[1]?.mentions || 0}× mentions).`);
+  if (audit.urlsToOptimize?.length > 0) faiblesses.push(`${audit.urlsToOptimize.length} URLs à optimiser (citées sans être en source).`);
+  if (!forces.length) forces.push("Données en cours de constitution — relancez des interrogations.");
+  if (!faiblesses.length) faiblesses.push("Aucune faiblesse majeure sur le périmètre actuel.");
+
+  // ── Roadmap ICE ──
+  let roadmap = [];
+  if (roadmapData?.roadmap?.length) {
+    roadmap = roadmapData.roadmap.map(r => ({ action: r.action, category: r.category || "—", impact: r.impact || 0, confidence: r.confidence || 0, ease: r.ease || 0 }));
+  } else if (audit.leads?.length) {
+    roadmap = audit.leads.map(l => {
+      const high = l.priority?.includes("🔴"), mid = l.priority?.includes("🟠") || l.priority?.includes("🟡");
+      return { action: (l.action || l.label || "").replace(/\*\*/g, ""), category: l.label || "—", impact: high ? 9 : mid ? 6 : 4, confidence: 7, ease: high ? 5 : 6 };
+    });
+  }
+  roadmap.sort((a, b) => (b.impact + b.confidence + b.ease) - (a.impact + a.confidence + a.ease));
+  const iceColor = (s) => s >= 24 ? S.ok : s >= 18 ? S.warn : S.inkLight;
+
+  // ── Analyse « Et maintenant ? » (générée dans Suivi GEO) : constats + opportunités ──
+  const hasNextSteps = !!(roadmapData && (roadmapData.brandAnalysis || roadmapData.categoryAnalysis?.length || roadmapData.summary));
+  const nsConstats = roadmapData?.summary || roadmapData?.brandAnalysis || "";
+  const nsBrand = (roadmapData?.brandAnalysis && roadmapData.brandAnalysis !== nsConstats) ? roadmapData.brandAnalysis : "";
+  const nsCats = Array.isArray(roadmapData?.categoryAnalysis) ? roadmapData.categoryAnalysis : [];
+  const esc2 = (t) => String(t || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+  // ── Favoris catégorisés (logique NextStepsAnalysis) ──
+  const resultsByQ = {};
+  results.forEach(r => { (resultsByQ[r.question_id] = resultsByQ[r.question_id] || []).push(r); });
+  const brandPosOf = (qId) => { const rs = resultsByQ[qId] || []; const ps = rs.map(r => r.brand_mention_position || r.brand_position).filter(p => p != null && p > 0); return ps.length ? Math.min(...ps) : null; };
+  const isMentioned = (qId) => (resultsByQ[qId] || []).some(r => r.brand_mentioned === true || r.brand_mentioned === 1);
+  const favs = questions.filter(q => q.is_favorite);
+  const BUCKET_LABELS = { defend: "À défendre", watch: "À surveiller", conquest_priority: "Conquête prioritaire", conquer: "À conquérir" };
+  const bucketOf = (q) => { const pos = brandPosOf(q.id), ment = isMentioned(q.id), kw = q.keyword_id; if (ment && pos != null && pos <= 3) return "defend"; if (ment && pos != null && pos >= 4 && pos <= 10) return "watch"; if (!ment && kw) return "conquest_priority"; return "conquer"; };
+  const favByBucket = { defend: [], watch: [], conquest_priority: [], conquer: [] };
+  favs.forEach(q => { favByBucket[bucketOf(q)].push({ q: q.question, pos: brandPosOf(q.id) }); });
+
+  // ── Sources par type de page (depuis urlDetails / topDomains) ──
+  const topDomainsRows = Object.entries(audit.topDomains || {}).sort((a, b) => b[1] - a[1]).slice(0, 8);
+
+  // ── Concurrents : data réelle + IA ──
+  const compRows = (audit.top5Competitors || []).map(([name, s]) => {
+    const avgP = s.positions?.length ? "#" + (s.positions.reduce((a,b)=>a+b,0)/s.positions.length).toFixed(1) : "—";
+    const ai = compAIMap[name.toLowerCase()];
+    return { name, mentions: s.mentions, avgP, strengths: ai?.strengths || "", angle: ai?.angle || "" };
+  });
+
+  // ── CSS ──
+  const css = `
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; color:${S.ink}; background:${S.white}; line-height:1.5; }
+    .cover { background:${S.green}; color:${S.cream}; padding:72px 64px 56px; display:flex; flex-direction:column; gap:36px; }
+    .cover-tag { font-size:11px; letter-spacing:0.2em; text-transform:uppercase; opacity:0.65; }
+    .cover h1 { font-family:Georgia,serif; font-size:48px; font-weight:400; letter-spacing:-0.01em; margin-top:6px; }
+    .cover-sub { font-size:15px; opacity:0.85; margin-top:4px; }
+    .cover-kpis { display:flex; gap:18px; flex-wrap:wrap; }
+    .cover-kpi { flex:1; min-width:120px; border-left:2px solid ${S.greenLight}; padding-left:14px; }
+    .cover-kpi-val { font-size:30px; font-weight:700; letter-spacing:-0.01em; }
+    .cover-kpi-lbl { font-size:11px; opacity:0.7; text-transform:uppercase; letter-spacing:0.05em; margin-top:2px; }
+    .cover-meta { font-size:12px; opacity:0.55; }
+    .toc { padding:40px 64px; background:${S.cream}; }
+    .toc-title { font-size:11px; letter-spacing:0.18em; text-transform:uppercase; color:${S.inkLight}; margin-bottom:18px; }
+    .toc-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px 40px; }
+    .toc-item { display:flex; gap:12px; align-items:baseline; font-size:14px; }
+    .toc-num { font-family:Georgia,serif; color:${S.greenLight}; font-weight:700; min-width:24px; }
+    .content { padding:48px 64px 56px; }
+    .section-hd { display:flex; align-items:center; gap:14px; margin:48px 0 22px; }
+    .section-hd:first-child { margin-top:0; }
+    .section-num { width:34px; height:34px; border-radius:50%; background:${S.green}; color:${S.cream}; font-size:14px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+    .section-title { font-family:Georgia,serif; font-size:24px; font-weight:400; color:${S.green}; }
+    .scorecard { display:flex; align-items:center; gap:22px; padding:26px; border-radius:14px; background:${S.greenPale}; margin-bottom:22px; }
+    .score-big { font-size:54px; font-weight:800; letter-spacing:-0.02em; line-height:1; }
+    .score-label { font-size:16px; font-weight:600; }
+    .score-sub { font-size:12px; color:${S.inkMid}; margin-top:3px; }
+    .kpi-row { display:flex; gap:14px; flex-wrap:wrap; }
+    .kpi { flex:1; min-width:120px; padding:16px 18px; border:1px solid ${S.creamDark}; border-radius:12px; }
+    .kpi-val { font-size:26px; font-weight:700; letter-spacing:-0.01em; }
+    .kpi-label { font-size:10px; color:${S.inkLight}; text-transform:uppercase; letter-spacing:0.05em; margin-top:4px; }
+    table { width:100%; border-collapse:collapse; margin:12px 0; font-size:13px; }
+    th { text-align:left; padding:9px 12px; background:${S.green}; color:${S.cream}; font-size:11px; text-transform:uppercase; letter-spacing:0.05em; font-weight:600; }
+    th.c, td.c { text-align:center; }
+    td { padding:9px 12px; border-bottom:1px solid ${S.cream}; vertical-align:top; }
+    tr:nth-child(even) td { background:#FBF9F5; }
+    .ice-badge { display:inline-block; min-width:30px; padding:2px 8px; border-radius:10px; font-weight:700; font-size:12px; color:${S.white}; }
+    .cat-pill { display:inline-block; padding:1px 9px; border-radius:10px; font-size:11px; font-weight:600; background:${S.greenPale}; color:${S.green}; }
+    .cat-pill.brand { background:${S.green}; color:${S.cream}; }
+    .twocol { display:flex; gap:18px; }
+    .twocol > div { flex:1; }
+    .card-list { padding:18px 20px; border-radius:12px; }
+    .card-list.forces { background:${S.okBg}; } .card-list.opp { background:${S.accentBg}; }
+    .card-list h3 { font-size:12px; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:12px; }
+    .card-list.forces h3 { color:${S.ok}; } .card-list.opp h3 { color:${S.accent}; }
+    .card-list .row { display:flex; justify-content:space-between; gap:10px; font-size:13px; margin-bottom:7px; }
+    .card-list .row b { font-variant-numeric:tabular-nums; }
+    .fw-grid { display:flex; gap:18px; }
+    .fw-col { flex:1; padding:20px 22px; border-radius:12px; }
+    .fw-col.forces { background:${S.okBg}; } .fw-col.faib { background:${S.dangerBg}; }
+    .fw-col h3 { font-size:13px; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:12px; }
+    .fw-col.forces h3 { color:${S.ok}; } .fw-col.faib h3 { color:${S.danger}; }
+    .fw-col li { font-size:13px; margin-bottom:9px; padding-left:18px; position:relative; list-style:none; }
+    .fw-col.forces li:before { content:"✓"; position:absolute; left:0; color:${S.ok}; font-weight:700; }
+    .fw-col.faib li:before { content:"!"; position:absolute; left:0; color:${S.danger}; font-weight:700; }
+    .bucket { margin-bottom:14px; } .bucket-hd { font-size:12px; font-weight:700; margin-bottom:5px; display:flex; align-items:center; gap:7px; }
+    .bucket-dot { width:8px; height:8px; border-radius:50%; } .bucket li { font-size:12px; color:${S.inkMid}; margin-bottom:3px; padding-left:16px; list-style:none; }
+    .synthese { background:${S.green}; color:${S.cream}; padding:40px 64px; }
+    .synthese h2 { font-family:Georgia,serif; font-size:28px; font-weight:400; margin-bottom:16px; }
+    .synthese li { font-size:14px; margin-bottom:8px; list-style:none; padding-left:22px; position:relative; }
+    .synthese li:before { content:"→"; position:absolute; left:0; opacity:0.6; }
+    .footer { padding:22px 64px; border-top:1px solid ${S.creamDark}; font-size:11px; color:${S.inkLight}; display:flex; justify-content:space-between; }
+    @media print { .section-hd { page-break-after:avoid; } table, .fw-grid, .twocol, .scorecard { page-break-inside:avoid; } }
+  `;
+
+  const TOC = [
+    "État des lieux", "Forces & opportunités par sujet", "Sources & URLs citées",
+    "Analyse concurrentielle",
+    ...(hasNextSteps ? ["Analyse — Et maintenant ?"] : []),
+    "Plan d'action priorisé — Roadmap ICE", "Synthèse",
+  ];
+
+  const cover = `<div class="cover">
+    <div><div class="cover-tag">Audit GEO · Generative Engine Optimization</div>
+      <h1>${brandName}</h1>
+      <div class="cover-sub">${site?.label || ""}${site?.domain ? " · " + site.domain : ""}</div></div>
+    <div class="cover-kpis">
+      <div class="cover-kpi"><div class="cover-kpi-val" style="color:${audit.presenceRate >= 50 ? "#A8E6C0" : "#F0C8A0"}">${audit.presenceRate}%</div><div class="cover-kpi-lbl">Présence IA</div></div>
+      <div class="cover-kpi"><div class="cover-kpi-val">${audit.withBrand}</div><div class="cover-kpi-lbl">Réponses avec marque</div></div>
+      <div class="cover-kpi"><div class="cover-kpi-val">${(audit.brandUrls?.length || 0)}</div><div class="cover-kpi-lbl">URLs citées</div></div>
+      <div class="cover-kpi"><div class="cover-kpi-val">${audit.total}</div><div class="cover-kpi-lbl">Réponses analysées</div></div>
+    </div>
+    <div class="cover-meta">${dateStr} · Sonate</div>
+  </div>`;
+
+  const toc = `<div class="toc"><div class="toc-title">Sommaire</div><div class="toc-grid">${
+    TOC.map((t, i) => `<div class="toc-item"><span class="toc-num">0${i+1}</span><span>${t}</span></div>`).join("")
+  }</div></div>`;
+
+  // BLOC 1 — État des lieux
+  const providersRows = Object.entries(audit.providerStats || {}).map(([pid, s]) => [pid, `${s.withBrand}/${s.total}`, `${pct(s.withBrand, s.total)}%`]);
+  const bloc1 = `
+    <div class="section-hd"><div class="section-num">1</div><div class="section-title">État des lieux</div></div>
+    <div class="scorecard"><div class="score-big" style="color:${scoreColor}">${audit.presenceRate}%</div>
+      <div><div class="score-label" style="color:${scoreColor}">${scoreLabel}</div>
+      <div class="score-sub">${audit.withBrand} réponses sur ${audit.total} citent ${brandName}</div></div></div>
+    <div class="kpi-row">
+      <div class="kpi"><div class="kpi-val" style="color:${S.green}">${audit.mentionCount || 0}</div><div class="kpi-label">Mentions · #${audit.avgMentionPos || "—"} moy.</div></div>
+      <div class="kpi"><div class="kpi-val" style="color:${S.warn}">${audit.evocationCount || 0}</div><div class="kpi-label">Évocations</div></div>
+      <div class="kpi"><div class="kpi-val" style="color:${S.green}">${audit.citationCount || 0}</div><div class="kpi-label">Citations · #${audit.avgCitationPos || "—"} moy.</div></div>
+      <div class="kpi"><div class="kpi-val" style="color:${S.green}">${Object.keys(audit.providerStats || {}).length}</div><div class="kpi-label">Providers</div></div>
+    </div>
+    ${providersRows.length ? `<table><thead><tr><th>Provider</th><th class="c">Présence</th><th class="c">Taux</th></tr></thead><tbody>${providersRows.map(r => `<tr><td>${r[0]}</td><td class="c">${r[1]}</td><td class="c">${r[2]}</td></tr>`).join("")}</tbody></table>` : ""}
+  `;
+
+  // BLOC 2 — Forces & opportunités par sujet
+  const bloc2 = `
+    <div class="section-hd"><div class="section-num">2</div><div class="section-title">Forces &amp; opportunités par sujet</div></div>
+    <div class="twocol">
+      <div class="card-list forces"><h3>✓ Sujets maîtrisés (≥ 50% présence)</h3>${
+        catForces.length ? catForces.slice(0,8).map(c => `<div class="row"><span>${c.name}</span><b>${c.rate}% · ${c.qCount} Q</b></div>`).join("") : `<div style="font-size:12px;color:${S.inkMid}">Aucune catégorie dominée pour l'instant.</div>`
+      }</div>
+      <div class="card-list opp"><h3>◷ Opportunités (&lt; 50% présence)</h3>${
+        catOpportunities.length ? catOpportunities.slice(0,8).map(c => `<div class="row"><span>${c.name}</span><b>${c.rate}% · ${c.qCount} Q</b></div>`).join("") : `<div style="font-size:12px;color:${S.inkMid}">Toutes les catégories sont bien couvertes.</div>`
+      }</div>
+    </div>
+  `;
+
+  // BLOC 3 — Sources & URLs
+  const bloc3 = `
+    <div class="section-hd"><div class="section-num">3</div><div class="section-title">Sources &amp; URLs citées</div></div>
+    <div class="kpi-row" style="margin-bottom:14px;">
+      <div class="kpi"><div class="kpi-val">${audit.brandOwnUrls?.length || 0}</div><div class="kpi-label">URLs domaine propre</div></div>
+      <div class="kpi"><div class="kpi-val">${audit.brandExternalUrls?.length || 0}</div><div class="kpi-label">URLs externes (marque)</div></div>
+      <div class="kpi"><div class="kpi-val">${audit.competitorUrls?.length || 0}</div><div class="kpi-label">URLs concurrentes</div></div>
+      <div class="kpi"><div class="kpi-val">${audit.referenceUrls?.length || 0}</div><div class="kpi-label">URLs de référence</div></div>
+    </div>
+    ${topDomainsRows.length ? `<table><thead><tr><th>Domaine le plus cité</th><th class="c">Citations</th></tr></thead><tbody>${
+      topDomainsRows.map(([d, c]) => `<tr><td>${d}</td><td class="c">${c}×</td></tr>`).join("")
+    }</tbody></table>` : ""}
+  `;
+
+  // BLOC 4 — Concurrents
+  const bloc4 = `
+    <div class="section-hd"><div class="section-num">4</div><div class="section-title">Analyse concurrentielle</div></div>
+    ${compRows.length ? `<table><thead><tr><th>Concurrent</th><th class="c">Mentions</th><th class="c">Pos. moy.</th><th>Forces &amp; angle (IA)</th></tr></thead><tbody>${
+      compRows.map(c => `<tr><td><b>${c.name}</b></td><td class="c">${c.mentions}×</td><td class="c">${c.avgP}</td><td>${
+        c.strengths ? `${c.strengths}${c.angle ? `<br><span style="color:${S.accent}">→ ${c.angle}</span>` : ""}` : `<span style="color:${S.inkLight}">—</span>`
+      }</td></tr>`).join("")
+    }</tbody></table>` : `<div style="font-size:13px;color:${S.inkLight};padding:12px 0;">Aucun concurrent détecté dans les réponses analysées.</div>`}
+  `;
+
+  // BLOC ANALYSE — « Et maintenant ? » (récupérée de Suivi GEO) : constats + opportunités
+  const blocAnalyse = hasNextSteps ? `
+    <div class="section-hd"><div class="section-num">5</div><div class="section-title">Analyse — Et maintenant&nbsp;?</div></div>
+    <div style="font-size:13px;color:${S.inkMid};margin-bottom:18px;">Synthèse stratégique issue de l'analyse « Et maintenant&nbsp;? » générée dans Suivi GEO.</div>
+
+    <div style="margin-bottom:22px;">
+      <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:${S.green};margin-bottom:8px;">1 · Constats sur l'état GEO</div>
+      <div style="font-size:13px;line-height:1.7;color:${S.ink};">${esc2(nsConstats) || "—"}</div>
+      ${nsBrand ? `<div style="font-size:13px;line-height:1.7;color:${S.inkMid};margin-top:8px;">${esc2(nsBrand)}</div>` : ""}
+    </div>
+
+    <div style="margin-bottom:8px;">
+      <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:${S.accent};margin-bottom:8px;">2 · Pistes non exploitées &amp; opportunités</div>
+      ${nsCats.length ? `<table><thead><tr><th>Sujet</th><th>Constat</th><th>Recommandation</th></tr></thead><tbody>${
+        nsCats.map(c => `<tr><td><b>${esc2(c.category)}</b></td><td>${esc2(c.synthesis)}</td><td style="color:${S.accent}">${esc2(c.recommendation)}</td></tr>`).join("")
+      }</tbody></table>` : `<div style="font-size:13px;color:${S.inkMid};">Aucune piste par sujet dans l'analyse. Les opportunités par catégorie figurent en section « Forces &amp; opportunités ».</div>`}
+    </div>
+  ` : "";
+
+  // BLOC 5 — Roadmap ICE
+  const roadmapRows = roadmap.map(r => {
+    const ice = r.impact + r.confidence + r.ease;
+    const isBrand = (r.category || "").toLowerCase() === "marque";
+    return `<tr><td>${r.action}</td><td><span class="cat-pill${isBrand ? " brand" : ""}">${r.category}</span></td><td class="c">${r.impact}</td><td class="c">${r.confidence}</td><td class="c">${r.ease}</td><td class="c"><span class="ice-badge" style="background:${iceColor(ice)}">${ice}</span></td></tr>`;
+  }).join("");
+  const bucketDots = { defend: S.ok, watch: S.warn, conquest_priority: S.accent, conquer: S.inkLight };
+  const favHtml = ["defend", "watch", "conquest_priority", "conquer"].map(b => {
+    const items = favByBucket[b]; if (!items.length) return "";
+    return `<div class="bucket"><div class="bucket-hd"><span class="bucket-dot" style="background:${bucketDots[b]}"></span>${BUCKET_LABELS[b]} · ${items.length}</div><ul>${items.map(it => `<li>${it.q}${it.pos ? ` (#${it.pos})` : ""}</li>`).join("")}</ul></div>`;
+  }).join("");
+  const bloc5 = `
+    <div class="section-hd"><div class="section-num">6</div><div class="section-title">3 · Plan d'action priorisé — Roadmap ICE</div></div>
+    <div style="font-size:13px; color:${S.inkMid}; margin-bottom:6px;">Priorisation par matrice ICE (Impact · Confidence · Ease). Score sur 30.</div>
+    ${roadmap.length ? `<table><thead><tr><th>Action</th><th>Catégorie</th><th class="c">I</th><th class="c">C</th><th class="c">E</th><th class="c">ICE</th></tr></thead><tbody>${roadmapRows}</tbody></table>` : `<div style="font-size:13px;color:${S.inkLight};padding:12px 0;">Générez l'analyse « Et maintenant ? » dans l'onglet Suivi GEO pour une roadmap ICE détaillée.</div>`}
+    ${favHtml ? `<div style="margin-top:24px;"><div style="font-size:13px;font-weight:600;color:${S.green};margin-bottom:10px;">Questions favorites par priorité</div>${favHtml}</div>` : ""}
+  `;
+
+  // BLOC 6 — Synthèse
+  const synthese = `<div class="synthese">
+    <div class="cover-tag" style="opacity:0.6;margin-bottom:10px;">En résumé</div>
+    <h2>${audit.presenceRate >= 50 ? `${brandName} a une présence IA solide.` : `${brandName} a du potentiel à exploiter.`}</h2>
+    <ul>
+      <li>Score de présence : <b>${audit.presenceRate}%</b> sur ${audit.total} réponses analysées.</li>
+      ${catForces.length ? `<li>Autorité établie sur : ${catForces.slice(0,3).map(c=>c.name).join(", ")}.</li>` : ""}
+      ${catOpportunities.length ? `<li>${catOpportunities.length} sujets à conquérir où les concurrents sont mieux placés.</li>` : ""}
+      ${topComp ? `<li>Concurrent à surveiller : ${topComp[0]}.</li>` : ""}
+      <li>${roadmap.length} actions priorisées dans la roadmap ICE.</li>
+    </ul>
+  </div>`;
+
+  const footer = `<div class="footer"><span>Audit GEO — ${brandName}</span><span>Sonate · ${dateStr}</span></div>`;
+
+  const html = `<!DOCTYPE html>
+<html lang="fr"><head><meta charset="UTF-8"><title>Audit GEO — ${brandName} — ${dateStr}</title><style>${css}</style></head>
+<body>${cover}${toc}<div class="content">${bloc1}${bloc2}${bloc3}${bloc4}${blocAnalyse}${bloc5}</div>${synthese}${footer}</body></html>`;
+
+  const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+  const el = document.createElement("a");
+  el.href = URL.createObjectURL(blob);
+  el.download = `presentation-geo-${brandName.toLowerCase().replace(/\s+/g, "-")}-${dateFile}.html`;
+  el.click();
+  URL.revokeObjectURL(el.href);
+}
+
+
+// ── Section MODULES OUTILS — exploite SF/GSC/GA/Bing ─────────────
+// Chaque module a un switch on/off et un export CSV contextuel.
+function ToolModuleCard({ title, tier, icon, available, enabled, onToggle, count, children, onExport, exportLabel = "Exporter le lot" }) {
+  const tierColor = tier === 1 ? "#1A7A4A" : tier === 2 ? "#C97820" : "#1A3C2E77";
+  return (
+    <div style={{ border: "0.5px solid #1A3C2E12", borderRadius: 10, marginBottom: 12, background: "#fff", overflow: "hidden" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 16px", borderBottom: enabled && available ? "0.5px solid #1A3C2E0C" : "none" }}>
+        <span style={{ fontSize: 15 }}>{icon}</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: "#1A3C2E" }}>{title}</span>
+            <span style={{ fontSize: 9, fontWeight: 600, letterSpacing: "0.05em", color: tierColor, background: `${tierColor}14`, borderRadius: 8, padding: "1px 6px" }}>TIER {tier}</span>
+            {available && count != null && <span style={{ fontSize: 10, color: "#1A3C2E44" }}>{count} résultat{count > 1 ? "s" : ""}</span>}
+          </div>
+          {!available && <div style={{ fontSize: 10, color: "#C0352A88", marginTop: 2 }}>Données manquantes — importez la source requise dans Setup</div>}
         </div>
+        {/* Switch on/off */}
+        <button
+          onClick={() => available && onToggle()}
+          disabled={!available}
+          title={available ? (enabled ? "Désactiver ce module" : "Activer ce module") : "Source non importée"}
+          style={{
+            width: 38, height: 22, borderRadius: 11, border: "none", flexShrink: 0,
+            background: !available ? "#1A3C2E11" : enabled ? "#1A7A4A" : "#1A3C2E22",
+            position: "relative", cursor: available ? "pointer" : "not-allowed", transition: "background 0.15s",
+          }}>
+          <span style={{ position: "absolute", top: 2, left: enabled && available ? 18 : 2, width: 18, height: 18, borderRadius: "50%", background: "#fff", transition: "left 0.15s", boxShadow: "0 1px 2px #0002" }} />
+        </button>
+      </div>
+      {enabled && available && (
+        <div style={{ padding: "12px 16px" }}>
+          {children}
+          {onExport && count > 0 && (
+            <button onClick={onExport} className="gt-btn gt-btn--ghost" style={{ fontSize: 10, padding: "4px 12px", marginTop: 10 }}>
+              ↓ {exportLabel} ({count})
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
-        {/* ── Concurrents ── */}
-        {subTab === "competitors" && (
-          <div style={{ background: "#fff", border: "1px solid #1A3C2E11", borderRadius: 14, padding: "20px 24px" }}>
-            <div style={{ fontSize: 11, fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", color: "#1A3C2E55", marginBottom: 4 }}>Paysage concurrentiel</div>
-            <div style={{ fontSize: 16, fontWeight: 500, color: "#1A3C2E", marginBottom: 4 }}>Concurrents</div>
-            <div style={{ fontSize: 12, color: "#1A3C2E77", marginBottom: 20 }}>
-              Qualifiez les marques détectées dans les réponses LLM. Elles apparaissent dans les analyses et sont mises en valeur dans les réponses.
-            </div>
-            <CompetitorManager
-              projectId={projectId} siteId={site?.id}
-              allResults={allResults.filter(r => r.site_id === site?.id)}
-              competitors={competitors} setCompetitors={setCompetitors}
-            />
+// Mini-tableau compact réutilisable pour les modules
+function ModuleTable({ columns, rows, limit = 8 }) {
+  if (!rows?.length) return <div style={{ fontSize: 11, color: "#1A3C2E44", fontStyle: "italic" }}>Aucun résultat.</div>;
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, minWidth: 420 }}>
+        <thead>
+          <tr style={{ borderBottom: "1px solid #1A3C2E18" }}>
+            {columns.map(c => <th key={c.key} style={{ textAlign: c.num ? "center" : "left", padding: "5px 8px", fontWeight: 600, color: "#1A3C2E77", fontSize: 9, textTransform: "uppercase", letterSpacing: "0.05em", whiteSpace: "nowrap" }}>{c.label}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.slice(0, limit).map((r, i) => (
+            <tr key={i} style={{ borderBottom: "0.5px solid #1A3C2E0A" }}>
+              {columns.map(c => (
+                <td key={c.key} style={{ padding: "5px 8px", textAlign: c.num ? "center" : "left", color: c.accent ? "#C97820" : "#1A3C2E", fontVariantNumeric: c.num ? "tabular-nums" : "normal", maxWidth: c.key === "url" ? 220 : "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: c.key === "url" ? "nowrap" : "normal" }}>
+                  {c.fmt ? c.fmt(r[c.key], r) : (typeof r[c.key] === "boolean" ? (r[c.key] ? "Oui" : "Non") : r[c.key])}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {rows.length > limit && <div style={{ fontSize: 10, color: "#1A3C2E44", marginTop: 6 }}>+ {rows.length - limit} autres (export complet ci-dessous)</div>}
+    </div>
+  );
+}
+
+function ToolModulesSection({ audit, sfRows, gscRows, gaRows, bingData, brand, competitors = [], claudeKey = "" }) {
+  // État d'activation des modules (tous off par défaut sauf Tier 1)
+  const [enabled, setEnabled] = useState({
+    seoGap: true, unblock: true, business: true,       // Tier 1
+    citability: false, orphan: false,                   // Tier 2
+    aiTraffic: false, cannibal: false, bing: false,     // Tier 3
+  });
+  const toggle = (k) => setEnabled(e => ({ ...e, [k]: !e[k] }));
+
+  const brandName = (brand?.brand_name || "marque").toLowerCase().replace(/\s+/g, "-");
+  const dateF = new Date().toISOString().slice(0, 10);
+  const citedSet = useMemo(() => new Set((audit.brandOwnUrls || audit.brandUrls || []).map(u => urlPath(typeof u === "string" ? u : (u.url || u.address || "")))), [audit]);
+
+  // Calculs (mémoïsés, seulement si la source existe)
+  const seoGap     = useMemo(() => gscRows?.length ? computeSeoGeoGap(audit, gscRows) : [], [audit, gscRows]);
+  const unblock    = useMemo(() => sfRows?.length ? computePagesToUnblock(audit, sfRows) : [], [audit, sfRows]);
+  const business   = useMemo(() => gaRows?.length ? computeBusinessValue(audit, gaRows) : null, [audit, gaRows]);
+  const citability = useMemo(() => sfRows?.length ? computeCitabilityScores(sfRows, citedSet) : [], [sfRows, citedSet]);
+  const orphan     = useMemo(() => sfRows?.length ? computeOrphanCited(audit, sfRows) : [], [audit, sfRows]);
+  const aiTraffic  = useMemo(() => gaRows?.length ? computeAITraffic(gaRows) : null, [gaRows]);
+  const cannibal   = useMemo(() => gscRows?.length ? computeReverseCannibalization(gscRows) : [], [gscRows]);
+  const bingGap    = useMemo(() => Object.keys(bingData || {}).length ? computeBingGap(audit, bingData) : [], [audit, bingData]);
+
+  const exp = (cols, rows, name) => downloadCSV(buildCSV(cols, rows), `${name}-${brandName}-${dateF}.csv`);
+
+  const hasSF   = sfRows?.length > 0;
+  const hasGSC  = gscRows?.length > 0;
+  const hasGA   = gaRows?.length > 0;
+  const hasBing = Object.keys(bingData || {}).length > 0;
+
+  return (
+    <div>
+      <div style={{ fontSize: 11, color: "#1A3C2E66", marginBottom: 14, lineHeight: 1.5 }}>
+        Croisez vos imports d'outils (Screaming Frog, Search Console, Analytics, Bing) avec la présence GEO. Activez les modules pertinents · chaque lot est exportable en CSV avec ses métriques.
+      </div>
+
+      {/* ── TIER 1 ── */}
+      <div style={{ fontSize: 9, fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase", color: "#1A7A4A", marginBottom: 8 }}>Tier 1 · Quick wins</div>
+
+      <ToolModuleCard title="Écart SEO ↔ GEO" tier={1} icon="🔍" available={hasGSC} enabled={enabled.seoGap} onToggle={() => toggle("seoGap")} count={seoGap.length}
+        onExport={() => exp(CSV_COLUMNS.seoGap, seoGap, "ecart-seo-geo")} exportLabel="Exporter les URLs">
+        <div style={{ fontSize: 11, color: "#1A3C2E88", marginBottom: 8 }}>Pages performantes sur Google mais <strong>absentes des réponses IA</strong> — le contenu existe, il faut le rendre citable.</div>
+        <ModuleTable columns={[{ key: "url", label: "URL" }, { key: "clicks", label: "Clics", num: true }, { key: "impressions", label: "Impr.", num: true }, { key: "position", label: "Pos.", num: true, fmt: v => v ? "#" + v.toFixed(0) : "—" }]} rows={seoGap} />
+      </ToolModuleCard>
+
+      <ToolModuleCard title="Pages citées à débloquer" tier={1} icon="🔧" available={hasSF} enabled={enabled.unblock} onToggle={() => toggle("unblock")} count={unblock.length}
+        onExport={() => exp(CSV_COLUMNS.unblock, unblock, "pages-a-debloquer")} exportLabel="Exporter les URLs">
+        <div style={{ fontSize: 11, color: "#1A3C2E88", marginBottom: 8 }}>URLs <strong>citées par l'IA</strong> mais freinées techniquement (indexabilité, profondeur, contenu court).</div>
+        <ModuleTable columns={[{ key: "url", label: "URL" }, { key: "citations", label: "Cit. IA", num: true }, { key: "issues", label: "Freins", accent: true }]} rows={unblock} />
+      </ToolModuleCard>
+
+      <ToolModuleCard title="Valeur business des pages (GA)" tier={1} icon="💰" available={hasGA} enabled={enabled.business} onToggle={() => toggle("business")} count={business?.highValueNotCited?.length || 0}
+        onExport={() => exp(CSV_COLUMNS.business, business?.highValueNotCited || [], "pages-valeur-non-citees")} exportLabel="Exporter les URLs">
+        <div style={{ fontSize: 11, color: "#1A3C2E88", marginBottom: 8 }}>Pages à <strong>forte valeur business</strong> (sessions/revenus GA) mais non citées par l'IA — priorité absolue.</div>
+        <ModuleTable columns={[{ key: "url", label: "URL" }, { key: "sessions", label: "Sessions", num: true }, business?.hasRevenue ? { key: "revenue", label: "Revenus", num: true } : { key: "views", label: "Vues", num: true }]} rows={business?.highValueNotCited || []} />
+      </ToolModuleCard>
+
+      {/* ── TIER 2 ── */}
+      <div style={{ fontSize: 9, fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase", color: "#C97820", margin: "18px 0 8px" }}>Tier 2 · Fort impact</div>
+
+      <ToolModuleCard title="Score de citabilité (SF)" tier={2} icon="📐" available={hasSF} enabled={enabled.citability} onToggle={() => toggle("citability")} count={citability.length}
+        onExport={() => exp(CSV_COLUMNS.citability, citability, "score-citabilite")} exportLabel="Exporter le lot">
+        <div style={{ fontSize: 11, color: "#1A3C2E88", marginBottom: 8 }}>Note d'extractibilité par les LLM (structure, longueur, lisibilité). Les <strong>scores faibles</strong> sont vos quick wins.</div>
+        <ModuleTable columns={[{ key: "url", label: "URL" }, { key: "score", label: "Score", num: true, fmt: v => v + "/100" }, { key: "wordCount", label: "Mots", num: true }, { key: "cited", label: "Citée", num: true, fmt: v => v ? "✓" : "—" }]} rows={citability} />
+      </ToolModuleCard>
+
+      <ToolModuleCard title="Contenus orphelins citables" tier={2} icon="🔗" available={hasSF} enabled={enabled.orphan} onToggle={() => toggle("orphan")} count={orphan.length}
+        onExport={() => exp(CSV_COLUMNS.orphan, orphan, "contenus-orphelins")} exportLabel="Exporter les URLs">
+        <div style={{ fontSize: 11, color: "#1A3C2E88", marginBottom: 8 }}>Pages citées par l'IA mais <strong>peu maillées</strong> en interne — renforcer les liens entrants.</div>
+        <ModuleTable columns={[{ key: "url", label: "URL" }, { key: "inlinks", label: "Liens entrants", num: true }, { key: "crawlDepth", label: "Profondeur", num: true }]} rows={orphan} />
+      </ToolModuleCard>
+
+      {/* ── TIER 3 ── */}
+      <div style={{ fontSize: 9, fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase", color: "#1A3C2E77", margin: "18px 0 8px" }}>Tier 3 · Différenciants</div>
+
+      <ToolModuleCard title="Trafic IA entrant (GA4)" tier={3} icon="📈" available={hasGA} enabled={enabled.aiTraffic} onToggle={() => toggle("aiTraffic")} count={aiTraffic?.rows?.length || 0}
+        onExport={() => exp(CSV_COLUMNS.aiTraffic, aiTraffic?.rows || [], "trafic-ia-entrant")} exportLabel="Exporter le détail">
+        <div style={{ fontSize: 11, color: "#1A3C2E88", marginBottom: 8 }}>Sessions réellement référées par les moteurs IA (ChatGPT, Perplexity, Gemini…). {!aiTraffic?.detected && <em>Aucune session IA détectée dans l'export GA actuel.</em>}</div>
+        {aiTraffic?.detected && (
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
+            {Object.entries(aiTraffic.byEngine).map(([eng, s]) => (
+              <div key={eng} style={{ fontSize: 11, padding: "4px 10px", border: "0.5px solid #1A3C2E12", borderRadius: 8 }}>{eng} · <strong>{s}</strong></div>
+            ))}
           </div>
         )}
+      </ToolModuleCard>
 
-        {/* ── Automatisation ── */}
-        {subTab === "automation" && (
-          <AutomationTab projectId={projectId} site={site} user={user} providerKeys={providerKeys} />
-        )}
+      <ToolModuleCard title="Cannibalisation inverse (GSC)" tier={3} icon="⚠️" available={hasGSC} enabled={enabled.cannibal} onToggle={() => toggle("cannibal")} count={cannibal.length}
+        onExport={() => exp(CSV_COLUMNS.cannibal, cannibal, "cannibalisation-inverse")} exportLabel="Exporter les URLs">
+        <div style={{ fontSize: 11, color: "#1A3C2E88", marginBottom: 8 }}>Pages bien positionnées mais <strong>faible CTR</strong> — l'IA capte probablement le clic. GEO défensif.</div>
+        <ModuleTable columns={[{ key: "url", label: "URL" }, { key: "impressions", label: "Impr.", num: true }, { key: "ctr", label: "CTR %", num: true, fmt: v => v.toFixed(1) }, { key: "position", label: "Pos.", num: true, fmt: v => "#" + v.toFixed(0) }]} rows={cannibal} />
+      </ToolModuleCard>
 
-        {/* ── Sources ── */}
-        {subTab === "urls" && (
-          <UrlsTab projectId={projectId} categories={categories} brand={brand}
-            allResults={allResults.filter(r => r.site_id === site?.id)}
-            qualifiedCompetitors={competitors} />
-        )}
+      <ToolModuleCard title="Comparatif Bing / Copilot" tier={3} icon="🅑" available={hasBing} enabled={enabled.bing} onToggle={() => toggle("bing")} count={bingGap.length}
+        onExport={() => exp(CSV_COLUMNS.bing, bingGap, "comparatif-bing")} exportLabel="Exporter le lot">
+        <div style={{ fontSize: 11, color: "#1A3C2E88", marginBottom: 8 }}>Présence Bing (alimente Copilot &amp; ChatGPT Search). Un écart fort signale un problème d'indexation Bing spécifique.</div>
+        <ModuleTable columns={[{ key: "topic", label: "Sujet / URL" }, { key: "bingValue", label: "Présence Bing", num: true }]} rows={bingGap} />
+      </ToolModuleCard>
+    </div>
+  );
+}
 
-      </div>)}
+// ── Main export ───────────────────────────────────────────────────
+export default function GeoAuditTab({
+  sites, projectId, project = null, corrMatrix = [], metrics = [], resultVals = [], bingData = {},
+  // Props setup depuis App.jsx
+  projects, currentProjectId, setCurrentProjectId, setProjects, ownerEmail,
+  setSites, sfData, setSfData, gscData, setGscData, gaData, setGaData,
+  setBingData, dbHistory, dbLoading, refreshHistory,
+  confirmModal, setConfirmModal, pageTypes, setPageTypes,
+  isReadOnly = false, autoStartTour = false, onTourStarted = null,
+}) {
+  const [mainTab, setMainTab]           = useState("audit");
+  const [selectedSite, setSelectedSite] = useState(sites?.[0]?.id || "");
+  // Sync selectedSite quand le projet change
+  useEffect(() => {
+    setSelectedSite(sites?.[0]?.id || "");
+  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [aiText, setAiText]             = useState("");
+  const [roadmapData, setRoadmapData]   = useState(null);
+  const [exporting, setExporting]       = useState(false);
+  const [showTour, setShowTour]         = useState(false);
+  const [sfCorrFilter, setSfCorrFilter] = useState("all"); // "all" | "gsc" | "bing" | "fanout"
+  const [showAllComp, setShowAllComp]   = useState(false); // tableau Paysage concurrentiel : voir toutes les marques
+  const [brand, setBrand]               = useState(null);
+  const [questions, setQuestions]       = useState([]);
+  const [results, setResults]           = useState([]);
+  const [urlIndex, setUrlIndex]         = useState([]);
+  const [calendarEntries, setCalendarEntries] = useState([]); // geo_calendar_dates — 30 derniers jours
+  const [keywords, setKeywords]         = useState([]); // pour tri par volume
+  const [categories, setCategories]     = useState([]); // catégories de mots-clés
+  const [competitors, setCompetitors]   = useState([]); // concurrents qualifiés
+  const [loading, setLoading]           = useState(true);
+  const [aliasMap, setAliasMap]         = useState({}); // alias(lower) → canonique
+
+  const site = (Array.isArray(sites) ? sites : []).find(s => s.id === selectedSite) || (Array.isArray(sites) ? sites : [])[0];
+  const claudeKey = decodeKey(project?.claude_geo_key_enc || "");
+
+  const refreshData = useCallback(() => {
+    if (!projectId || !site?.id) return;
+    setLoading(true);
+    Promise.all([sbGetBrand(projectId, site.id), sbGetQuestions(projectId, site.id), sbGetGeoResults(projectId, site.id), sbGetUrlIndex(projectId), sbGetCalendarEntriesBatch(projectId, site.id), sbGetKeywords(projectId, site.id), sbGetCategories(projectId), sbGetCompetitors(projectId, site.id), sbGetAliases(projectId, site.id)])
+      .then(([b, q, r, u, cal, kws, cats, comps, aliasRows]) => {
+        setBrand(b); setQuestions(q); setResults(r); setUrlIndex(u);
+        setCalendarEntries(cal || []); setKeywords(kws || []); setCategories(cats || []);
+        const amap = {};
+        (aliasRows || []).forEach(a => { if (a.alias && a.canonical) amap[a.alias.toLowerCase().trim()] = a.canonical.trim(); });
+        setAliasMap(amap);
+        // Init enabled : top-5 par mentions, le reste désactivé (seulement si aucun n'a été configuré)
+        const compList = comps || [];
+        const hasAnyConfig = compList.some(c => c.enabled === true || c.enabled === false);
+        if (!hasAnyConfig && compList.length > 5) {
+          // Top-5 par meilleure position moyenne (avgPos la plus basse = mieux placé)
+          const sorted = [...compList].sort((a, b) => {
+            const posA = (a.avg_position != null) ? a.avg_position : 9999;
+            const posB = (b.avg_position != null) ? b.avg_position : 9999;
+            return posA - posB;
+          });
+          const top5ids = new Set(sorted.slice(0, 5).map(c => c.id));
+          setCompetitors(compList.map(c => ({ ...c, enabled: top5ids.has(c.id) })));
+        } else {
+          setCompetitors(compList);
+        }
+        setLoading(false);
+      });
+  }, [projectId, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => { refreshData(); }, [projectId, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Charger l'analyse roadmap "Et maintenant ?" (générée dans Fan-outs) pour l'export présentation
+  useEffect(() => {
+    if (!projectId || !site?.id) return;
+    let cancelled = false;
+    sbGetGeoAnalyses(projectId, site.id, "roadmap").then(rows => {
+      if (!cancelled && rows?.length) setRoadmapData(rows[0].content);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [projectId, site?.id]);
+
+  // Période de suivi (jours) — défaut 30 = 1 mois coulant. 0 = tout l'historique.
+  const [periodDays, setPeriodDays] = useState(30);
+  const siteResultsAll = useMemo(() => results.filter(r => r.site_id === site?.id), [results, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const siteResults   = useMemo(() => {
+    if (!periodDays) return siteResultsAll;
+    const since = Date.now() - periodDays * 86400000;
+    const filtered = siteResultsAll.filter(r => {
+      const t = r.created_at ? new Date(r.created_at).getTime() : null;
+      return t == null ? true : t >= since;
+    });
+    return filtered.length ? filtered : siteResultsAll; // repli si la période ne retient rien
+  }, [siteResultsAll, periodDays]);
+  const siteQuestions = useMemo(() => questions.filter(q => q.site_id === site?.id), [questions, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const siteUrls      = useMemo(() => urlIndex.filter(u => u.project_id === projectId), [urlIndex, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const audit         = useMemo(() => computeAudit(siteQuestions, siteResults, siteUrls, brand, site, calendarEntries, keywords, competitors, aliasMap), [siteQuestions, siteResults, siteUrls, brand, site, calendarEntries, keywords, competitors, aliasMap]);
+  // ── Audit recalculé sur le sous-ensemble FAVORIS (affichage parallèle) ──
+  const favQuestions  = useMemo(() => siteQuestions.filter(q => q.is_favorite), [siteQuestions]);
+  const favQIds       = useMemo(() => new Set(favQuestions.map(q => q.id)), [favQuestions]);
+  const favResults    = useMemo(() => siteResults.filter(r => favQIds.has(r.question_id)), [siteResults, favQIds]);
+  const auditFav      = useMemo(() => favQuestions.length ? computeAudit(favQuestions, favResults, siteUrls, brand, site, calendarEntries, keywords, competitors) : null, [favQuestions, favResults, siteUrls, brand, site, calendarEntries, keywords, competitors]); // eslint-disable-line react-hooks/exhaustive-deps
+  const noData        = !siteResults.length;
+
+
+  // Démarrer le tour automatiquement si demandé (depuis HomeTab) — après loading et noData
+  useEffect(() => {
+    if (autoStartTour && !loading && !noData) { setShowTour(true); onTourStarted?.(); }
+  }, [autoStartTour, loading, noData]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const AUDIT_TOUR_STEPS = [
+    {
+      target: "audit-score",
+      icon: "📊",
+      title: "Présence GEO",
+      desc: "Le score de présence GEO indique le % de réponses LLM où votre marque est citée. 3 types sont mesurés : Mention (dans un top numéroté), Évocation (corps du texte) et Citation (dans les sources). Visez > 50%.",
+      tip: "Un score < 30% indique un fort potentiel à exploiter — consultez le Plan d'action.",
+      position: "bottom",
+      onActivate: () => setMainTab("audit"),
+    },
+    {
+      target: "audit-visibility",
+      icon: "📡",
+      title: "Visibilité marque",
+      desc: "Détaille la présence par provider LLM (OpenAI, Gemini, Perplexity, Claude) avec leur taux respectif. La tendance 30 jours montre l'évolution avec 3 courbes distinctes (Mention, Évocation, Citation). Les questions avec et sans présence sont listées.",
+      tip: "Les questions sans mentions (✗) sont vos priorités — utilisez le 💡 Hint GEO pour chacune.",
+      position: "bottom",
+      onActivate: () => setMainTab("audit"),
+    },
+    {
+      target: "audit-fanout",
+      icon: "✦",
+      title: "Analyse Fan-out IA",
+      desc: "Claude analyse vos données de présence et produit 4 recommandations actionnables : État des lieux, Maillage interne à relier, Pages à créer ou adapter, URLs concurrentes à surveiller. Relancez après chaque batch d'interrogations.",
+      tip: "Cette analyse est basée sur vos données réelles — plus vous interrogez de questions, plus elle est précise.",
+      position: "top",
+      onActivate: () => setMainTab("audit"),
+    },
+    {
+      target: "audit-competitors",
+      icon: "⚔️",
+      title: "Paysage concurrentiel",
+      desc: "Tableau Marque × Mention/Évocation/Citation pour votre marque (REF) et les 5 principaux concurrents détectés dans les réponses LLM. L'analyseur de pages permet de décrypter pourquoi un concurrent est plus cité.",
+      tip: "Qualifiez vos concurrents dans Suivi GEO → Concurrents pour enrichir cette section.",
+      position: "top",
+      onActivate: () => setMainTab("audit"),
+    },
+    {
+      target: "audit-corr",
+      icon: "🔀",
+      title: "Matrice de corrélation",
+      desc: "Croisez 2 sources de données (Screaming Frog, GSC, Bing, Fan-outs) pour découvrir des corrélations entre vos métriques SEO/techniques et votre présence GEO. Le coefficient r va de -1 (corrélation négative) à +1 (positive).",
+      tip: "Une corrélation forte SF × Fan-outs révèle quel critère technique influence le plus votre visibilité LLM.",
+      position: "top",
+      onActivate: () => setMainTab("audit"),
+    },
+    {
+      target: "audit-sources",
+      icon: "🔗",
+      title: "Sources & URLs",
+      desc: "Top domaines cités dans les réponses LLM, liste des URLs de votre marque (domaine propre) et présences externes (slug contenant la marque). Identifiez les pages performantes à renforcer et celles à créer.",
+      tip: "Les URLs 'À booster' ont des mentions dans les réponses mais pas dans les sources — optimisez leur référencement externe.",
+      position: "top",
+      onActivate: () => setMainTab("audit"),
+    },
+    {
+      target: "audit-plan",
+      icon: "🎯",
+      title: "Plan d'action",
+      desc: "Pistes prioritaires générées automatiquement depuis vos données : présence par provider, questions sans mention, URLs à optimiser. L'analyse IA détaillée de Claude fournit un rapport complet avec des recommandations sourcées.",
+      tip: "Générez l'analyse IA avant d'exporter le PDF pour un rapport plus riche.",
+      position: "top",
+      onActivate: () => setMainTab("audit"),
+    },
+    {
+      target: "audit-export",
+      icon: "⬇",
+      title: "Export PDF",
+      desc: "Génère un rapport PDF complet au design Sonate : cover verte, score GEO, KPIs, concurrents, URLs, plan d'action et analyse IA. Partagez-le directement avec votre client ou équipe.",
+      tip: "Le PDF reflète l'état des données au moment de la génération — exportez après chaque session d'interrogation.",
+      position: "top",
+      onActivate: () => setMainTab("audit"),
+    },
+  ];
+  return (
+    <div>
+      {showTour && (
+        <TourGuide steps={AUDIT_TOUR_STEPS} onClose={() => setShowTour(false)} />
+      )}
+      {/* ── Header compact : titre + onglets + actions sur une ligne ── */}
+      <div className="audit-header">
+        {/* Gauche : titre + onglets */}
+        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          <div style={{ fontSize: 16, fontWeight: 700, color: "#1A3C2E", letterSpacing: "-0.01em" }}>Audit GEO</div>
+          <div style={{ display: "inline-flex", gap: 1, background: "#1A3C2E0C", borderRadius: 7, padding: "2px" }}>
+            {[{ key: "setup", label: "Setup" }, { key: "audit", label: "Génération" }].map(t => (
+              <button key={t.key} onClick={() => setMainTab(t.key)} style={{
+                padding: "4px 14px", borderRadius: 5, fontSize: 12, fontWeight: 500, border: "none", cursor: "pointer", transition: "all 0.12s",
+                background: mainTab === t.key ? "#1A3C2E" : "transparent",
+                color: mainTab === t.key ? "#F0EBE0" : "#1A3C2E55",
+              }}>{t.label}</button>
+            ))}
+          </div>
+        </div>
+        {/* Droite : actions */}
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <button onClick={refreshData} disabled={loading}
+            style={{ fontSize: 11, color: "#1A3C2E55", background: "transparent", border: "0.5px solid #1A3C2E18", borderRadius: 6, padding: "4px 10px", cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.4 : 1 }}>
+            {loading ? "⏳" : "↺"}
+          </button>
+          <button onClick={() => setShowTour(true)} disabled={noData || loading}
+            style={{ fontSize: 11, color: "#1A3C2E55", background: "transparent", border: "0.5px solid #1A3C2E18", borderRadius: 6, padding: "4px 10px", cursor: noData || loading ? "not-allowed" : "pointer", opacity: noData || loading ? 0.4 : 1 }}>
+            Guide
+          </button>
+        </div>
+      </div>
+
+      {/* ── Setup ── */}
+      {mainTab === "setup" && (
+        <AuditSetupPanel
+          projects={projects} currentProjectId={currentProjectId} setCurrentProjectId={setCurrentProjectId}
+          setProjects={setProjects} ownerEmail={ownerEmail} sites={sites} setSites={setSites}
+          sfData={sfData} setSfData={setSfData} gscData={gscData} setGscData={setGscData}
+          gaData={gaData} setGaData={setGaData} bingData={bingData} setBingData={setBingData}
+          dbHistory={dbHistory} dbLoading={dbLoading} refreshHistory={refreshHistory}
+          confirmModal={confirmModal} setConfirmModal={setConfirmModal}
+          pageTypes={pageTypes} setPageTypes={setPageTypes} project={project} projectId={projectId}
+        />
+      )}
+
+      {/* ── Génération Audit GEO ── */}
+      {mainTab === "audit" && (
+        <div>
+          {/* Sélecteur de site + Export — barre fine */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, gap: 8 }}>
+            <div style={{ display: "flex", gap: 6 }}>
+              {(Array.isArray(sites) ? sites : []).length > 1 && (Array.isArray(sites) ? sites : []).map(s => (
+                <button key={s.id} onClick={() => setSelectedSite(s.id)} style={{ padding: "3px 10px", borderRadius: 5, fontSize: 11, fontWeight: 500, cursor: "pointer", border: `1px solid ${s.color}33`, background: selectedSite === s.id ? s.color : "transparent", color: selectedSite === s.id ? "#fff" : s.color }}>{s.label}</button>
+              ))}
+            </div>
+            <span data-tour="audit-export" style={{ display: "inline-flex", gap: 8 }}>
+              <button onClick={async () => { setExporting(true); try { await exportPresentation(audit, brand, site, siteQuestions, siteResults, roadmapData, claudeKey, categories); } catch(e) { console.error(e); } setExporting(false); }}
+                disabled={noData || exporting}
+                title="Présentation client : état des lieux, forces/faiblesses, roadmap ICE"
+                style={{ padding: "4px 12px", background: noData ? "transparent" : "#1A3C2E", color: noData ? "#1A3C2E44" : "#F0EBE0", border: "0.5px solid #1A3C2E22", borderRadius: 5, fontSize: 11, fontWeight: 500, cursor: noData ? "not-allowed" : "pointer" }}>
+                {exporting ? "…" : "⬇ Présentation"}
+              </button>
+              <button onClick={() => { setExporting(true); exportPDF(audit, brand, site, aiText); setTimeout(() => setExporting(false), 1000); }}
+                disabled={noData || exporting}
+                title="Rapport complet détaillé"
+                style={{ padding: "4px 12px", background: "transparent", color: noData ? "#1A3C2E44" : "#1A3C2E", border: "0.5px solid #1A3C2E22", borderRadius: 5, fontSize: 11, fontWeight: 500, cursor: noData ? "not-allowed" : "pointer" }}>
+                {exporting ? "…" : "⬇ Rapport complet"}
+              </button>
+            </span>
+          </div>
+
+          {loading ? (
+            <div style={{ textAlign: "center", padding: 60, color: "#1A3C2E44", fontSize: 12 }}>Chargement des données…</div>
+          ) : noData ? (
+            <div style={{ textAlign: "center", padding: 60, color: "#1A3C2E44" }}>
+              <div style={{ fontSize: 32, marginBottom: 12 }}>📊</div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: "#1A3C2E", marginBottom: 6 }}>Aucun résultat disponible</div>
+              <div style={{ fontSize: 12 }}>Interrogez des questions dans l'onglet Suivi GEO pour générer des données d'audit</div>
+            </div>
+          ) : (<>
+
+            {/* ══════════════════════════════════════════════════════
+                BLOC 1 — SYNTHÈSE EXÉCUTIVE
+                Présence GEO + KPIs clés en un coup d'œil
+            ══════════════════════════════════════════════════════ */}
+            {/* Sélecteur de période de suivi (défaut : 1 mois coulant) */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8, marginBottom: 10 }}>
+              <span style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.06em", textTransform: "uppercase", color: "#1A3C2E55" }}>Période de suivi</span>
+              <select value={periodDays} onChange={e => setPeriodDays(parseInt(e.target.value, 10))}
+                style={{ padding: "5px 10px", borderRadius: 7, border: "0.5px solid #1A3C2E22", fontSize: 12, background: "#fff", color: "#1A3C2E", cursor: "pointer" }}>
+                <option value={7}>7 derniers jours</option>
+                <option value={30}>1 mois coulant</option>
+                <option value={90}>3 mois</option>
+                <option value={180}>6 mois</option>
+                <option value={365}>12 mois</option>
+                <option value={0}>Tout l'historique</option>
+              </select>
+            </div>
+            <div data-tour="audit-score"><GeoScoreBanner audit={audit} auditFav={auditFav} brand={brand} site={site} /></div>
+
+            {/* ══════════════════════════════════════════════════════
+                BLOC 2 — VISIBILITÉ MARQUE
+                Présence par provider + tendance 30j + questions
+            ══════════════════════════════════════════════════════ */}
+            <div data-tour="audit-visibility" style={{ display: "contents" }}><Section title="Visibilité marque" sub="Présence dans les réponses LLM par provider et dans le temps">
+
+              {/* Providers — ligne épurée */}
+              {Object.keys(audit.providerStats).length > 0 && (
+                <div className="audit-providers-row">
+                  {Object.entries(audit.providerStats).map(([pid, s]) => {
+                    const rate = pct(s.withBrand, s.total);
+                    const color = rate >= 50 ? "#1A7A4A" : rate > 0 ? "#C97820" : "#1A3C2E33";
+                    return (
+                      <div key={pid} style={{ padding: "7px 14px", border: "0.5px solid #1A3C2E12", borderRadius: 8, background: "#fff", minWidth: 90 }}>
+                        <div style={{ fontSize: 9, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E44", marginBottom: 3 }}>{pid}</div>
+                        <div style={{ fontSize: 18, fontWeight: 700, color, lineHeight: 1, letterSpacing: "-0.01em" }}>{rate}<span style={{ fontSize: 11, fontWeight: 400 }}>%</span></div>
+                        <div style={{ fontSize: 10, color: "#1A3C2E33", marginTop: 1 }}>{s.withBrand}/{s.total}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Positions moyennes par type de présence (Mention / Évocation / Citation) */}
+              {(audit.mentionCount > 0 || audit.evocationCount > 0 || audit.citationCount > 0) && (
+                <div style={{ display: "flex", gap: 10, marginBottom: 18, flexWrap: "wrap" }}>
+                  {[
+                    { label: "Mention",   icon: "◎", color: "#1A7A4A", pos: audit.avgMentionPos,   count: audit.mentionCount,   hint: "Position moyenne dans les tops numérotés" },
+                    { label: "Évocation", icon: "⟶", color: "#C97820", pos: audit.avgEvocationPos, count: audit.evocationCount, hint: "Rang moyen d'apparition dans le corps du texte" },
+                    { label: "Citation",  icon: "↗", color: "#1A3C2E", pos: audit.avgCitationPos,  count: audit.citationCount,  hint: "Rang moyen dans les sources citées" },
+                  ].map(m => (
+                    <div key={m.label} title={m.hint} style={{ flex: "1 1 140px", minWidth: 130, padding: "9px 14px", border: "0.5px solid #1A3C2E12", borderRadius: 8, background: "#fff" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 4 }}>
+                        <span style={{ fontSize: 11, color: m.color }}>{m.icon}</span>
+                        <span style={{ fontSize: 9, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E44" }}>{m.label}</span>
+                      </div>
+                      <div style={{ fontSize: 18, fontWeight: 700, color: m.pos ? m.color : "#1A3C2E22", lineHeight: 1, letterSpacing: "-0.01em" }}>
+                        {m.pos ? <>#{m.pos}<span style={{ fontSize: 10, fontWeight: 400, color: "#1A3C2E33" }}> moy.</span></> : "—"}
+                      </div>
+                      <div style={{ fontSize: 10, color: "#1A3C2E33", marginTop: 2 }}>{m.count} occurrence{m.count > 1 ? "s" : ""}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Tendance 30 jours — mentions / évocations / citations (depuis les résultats) */}
+              <div className="audit-trend-wrap" style={{ marginBottom: 18 }}>
+                <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E44", marginBottom: 8 }}>Évolution des mentions — 30 jours</div>
+                <TrendChart trendDays={(audit.mentionTrend && audit.mentionTrend.some(d => d.total > 0)) ? audit.mentionTrend.map(d => ({ date: d.date, tested: d.total, present: d.mentions + d.evocations, mentions: d.mentions, evocations: d.evocations, citations: d.citations })) : audit.trendDays} />
+              </div>
+
+              {/* ── Segmentation par intention ── */}
+              {(audit.intentStatsList || []).length > 0 && (
+                <div style={{ marginBottom: 18 }}>
+                  <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E44", marginBottom: 8 }}>Performance par intention de recherche</div>
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                      <thead>
+                        <tr style={{ textAlign: "left", color: "#1A3C2E66", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                          <th style={{ padding: "6px 8px" }}>Intention</th>
+                          <th style={{ padding: "6px 8px", textAlign: "right" }}>Résultats</th>
+                          <th style={{ padding: "6px 8px", textAlign: "right", color: "#1A7A4A" }}>◎ Mentions</th>
+                          <th style={{ padding: "6px 8px", textAlign: "right", color: "#C97820" }}>⟶ Évoc.</th>
+                          <th style={{ padding: "6px 8px", textAlign: "right", color: "#1A3C2E" }}>↗ Cit.</th>
+                          <th style={{ padding: "6px 8px", textAlign: "right" }}>Pos. moy.</th>
+                          <th style={{ padding: "6px 8px", textAlign: "right" }}>Présence</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {audit.intentStatsList.map(s => (
+                          <tr key={s.intent} style={{ borderTop: "0.5px solid #1A3C2E0D" }}>
+                            <td style={{ padding: "6px 8px", fontWeight: 600, color: "#1A3C2E" }}>{s.intent}</td>
+                            <td style={{ padding: "6px 8px", textAlign: "right", color: "#1A3C2E99" }}>{s.total}</td>
+                            <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 700, color: "#1A7A4A" }}>{s.mentions}</td>
+                            <td style={{ padding: "6px 8px", textAlign: "right", color: "#C97820" }}>{s.evocations}</td>
+                            <td style={{ padding: "6px 8px", textAlign: "right", color: "#1A3C2E" }}>{s.citations}</td>
+                            <td style={{ padding: "6px 8px", textAlign: "right", color: "#1A3C2E99", fontVariantNumeric: "tabular-nums" }}>{s.avgPos ? `#${s.avgPos}` : "—"}</td>
+                            <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 600, color: s.presenceRate >= 50 ? "#1A7A4A" : s.presenceRate >= 20 ? "#C97820" : "#C0352A" }}>{s.presenceRate}%</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* ── Type de page citée ── */}
+              {(audit.pageTypeStatsList || []).length > 0 && (
+                <div style={{ marginBottom: 18 }}>
+                  <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E44", marginBottom: 8 }}>Type de page citée en source</div>
+                  <div style={{ fontSize: 11, color: "#1A3C2E66", marginBottom: 10 }}>Nature des URLs citées par les IA (toutes marques). Le compteur « dont marque » indique vos propres pages.</div>
+                  {(() => {
+                    const max = Math.max(...audit.pageTypeStatsList.map(p => p.count), 1);
+                    const COLORS = { "accueil": "#1A3C2E", "produit/service": "#1A7A4A", "blog/article": "#C97820", "catégorie": "#7C3AED", "institutionnel": "#64748B", "autre": "#9AAEA4" };
+                    return (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                        {audit.pageTypeStatsList.map(p => (
+                          <div key={p.type} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                            <span style={{ fontSize: 12, color: "#1A3C2E", minWidth: 120 }}>{p.type}</span>
+                            <div style={{ flex: 1, height: 16, background: "#1A3C2E08", borderRadius: 4, overflow: "hidden", position: "relative" }}>
+                              <div style={{ width: `${(p.count / max) * 100}%`, height: "100%", background: COLORS[p.type] || "#9AAEA4", borderRadius: 4 }} />
+                            </div>
+                            <span style={{ fontSize: 12, fontWeight: 700, color: "#1A3C2E", minWidth: 36, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{p.count}</span>
+                            {p.brand > 0 && <span style={{ fontSize: 10, color: "#1A7A4A", minWidth: 70 }}>dont {p.brand} marque</span>}
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+
+              {/* Questions ◎ mention / ✗ favorites sans mention */}
+              <div className="audit-questions-grid">
+                <div>
+                  <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A7A4A", marginBottom: 8 }}>◎ Avec mention · {audit.presentBrandQs.length}</div>
+                  {audit.presentBrandQs.length ? audit.presentBrandQs.map((q, i) => (
+                    <div key={i} style={{ fontSize: 12, padding: "5px 0", borderBottom: "0.5px solid #1A3C2E08", display: "flex", gap: 6, alignItems: "baseline" }}>
+                      <span style={{ color: "#1A7A4A", flexShrink: 0, fontSize: 10 }}>◎</span>
+                      {q.isFav && <span style={{ flexShrink: 0, fontSize: 10, color: "#C97820" }}>★</span>}
+                      <span style={{ flex: 1, color: "#1A3C2E", lineHeight: 1.5 }}>{q.question}</span>
+                      {q.volume > 0 && <span style={{ fontSize: 10, color: "#1A3C2E33", flexShrink: 0 }}>{q.volume >= 1000 ? (q.volume/1000).toFixed(1)+"k" : q.volume}</span>}
+                    </div>
+                  )) : <div style={{ fontSize: 11, color: "#1A3C2E33", fontStyle: "italic" }}>Aucune mention dans un top LLM</div>}
+                </div>
+                <div>
+                  <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#C0352A", marginBottom: 8 }}>Questions sans mentions · {audit.missingBrandQs.length}</div>
+                  {audit.missingBrandQs.length ? audit.missingBrandQs.map((q, i) => (
+                    <div key={i} style={{ padding: "5px 0", borderBottom: "0.5px solid #1A3C2E08" }}>
+                      <div style={{ fontSize: 12, display: "flex", gap: 6, alignItems: "baseline" }}>
+                        <span style={{ color: "#C0352A", flexShrink: 0, fontSize: 10 }}>✗</span>
+                        {q.isFav && <span style={{ flexShrink: 0, fontSize: 10, color: "#C97820" }}>★</span>}
+                        <span style={{ flex: 1, color: "#1A3C2E", lineHeight: 1.5 }}>{q.question}</span>
+                        {q.volume > 0 && <span style={{ fontSize: 10, color: "#1A3C2E33", flexShrink: 0 }}>{q.volume >= 1000 ? (q.volume/1000).toFixed(1)+"k" : q.volume}</span>}
+                      </div>
+                      <AuditHintPanel
+                        question={q.question}
+                        claudeKey={claudeKey}
+                        brandName={brand?.brand_name || ""}
+                      />
+                    </div>
+                  )) : <div style={{ fontSize: 11, color: "#1A3C2E33", fontStyle: "italic" }}>Toutes les questions ont une mention !</div>}
+                </div>
+              </div>
+
+              {/* Analyse Fan-out */}
+              <div data-tour="audit-fanout" style={{ marginTop: 18, paddingTop: 16, borderTop: "0.5px solid #1A3C2E0C" }}>
+                <FanoutAnalysis questions={siteQuestions} results={siteResults} brand={brand} claudeKey={claudeKey} projectId={projectId} siteId={site?.id} />
+              </div>
+            </Section>
+
+            </div>{/* ══════════════════════════════════════════════════════
+                BLOC 2B — ANALYSE PAR CATÉGORIE
+            ══════════════════════════════════════════════════════ */}
+            <CategoryAnalysisCard
+              siteQuestions={siteQuestions}
+              siteResults={siteResults}
+              keywords={keywords}
+              categories={categories}
+              brand={brand}
+              claudeKey={claudeKey}
+            />
+
+            {/* ══════════════════════════════════════════════════════
+                BLOC 2bis — PERFORMANCE DES FAVORIS
+                Met en avant le périmètre stratégique (questions ★)
+            ══════════════════════════════════════════════════════ */}
+            <div data-tour="audit-favorites" style={{ display: "contents" }}><Section title="Performance des favoris" sub="Vos questions stratégiques (★) classées par niveau de maîtrise">
+              <FavoritesPerformance questions={siteQuestions} results={siteResults} projectId={projectId} siteId={site?.id} />
+            </Section></div>
+
+            {/* ══════════════════════════════════════════════════════
+                BLOC 3 — ANALYSE CONCURRENTIELLE
+                Concurrents + intentions + types de réponses
+            ══════════════════════════════════════════════════════ */}
+            <div data-tour="audit-competitors" style={{ display: "contents" }}><Section title="Paysage concurrentiel" sub="Concurrents détectés dans les réponses LLM — analysez leurs pages">
+
+              {/* Tableau M/É/C top 5 concurrents */}
+              {(() => {
+                const brandName = brand?.brand_name || "Marque";
+                const ranked = audit.competitorsRanked?.length ? audit.competitorsRanked : (audit.top5Competitors || []);
+                const shown = showAllComp ? ranked : ranked.slice(0, 8);
+                const allRows = [
+                  { name: brandName, stats: { mentions: audit.withRanked||0, evocations: audit.withMentionOnly||0, citations: audit.withSourceOnly||0, positions: audit.avgMentionPos ? [parseFloat(audit.avgMentionPos)] : [] }, isRef: true },
+                  ...shown.map(([name, s]) => ({ name, stats: s, isRef: false })),
+                ];
+                return (
+                  <div className="audit-comp-table-wrap">
+                    <table className="audit-comp-table">
+                      <thead>
+                        <tr style={{ borderBottom: "0.5px solid #1A3C2E12" }}>
+                          <th style={{ padding: "7px 0", textAlign: "left", fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E44" }}>Marque</th>
+                          <th style={{ padding: "7px 10px", textAlign: "center", fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A7A4A" }}>◎ Mention</th>
+                          <th style={{ padding: "7px 10px", textAlign: "center", fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#C97820" }}>⟶ Évocation</th>
+                          <th style={{ padding: "7px 10px", textAlign: "center", fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E77" }}>↗ Citation</th>
+                          <th style={{ padding: "7px 10px", textAlign: "center", fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E44" }}>Pos.</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {allRows.map((row, i) => {
+                          const s = row.stats;
+                          const pos = (s.positions || []);
+                          const avgPos = pos.length ? (pos.reduce((a, b) => a + b, 0) / pos.length).toFixed(1) : null;
+                          return (
+                            <tr key={i} style={{ borderBottom: "0.5px solid #1A3C2E06", background: row.isRef ? "#F0EBE018" : "transparent" }}>
+                              <td style={{ padding: "8px 0" }}>
+                                <span style={{ fontSize: 12, fontWeight: row.isRef ? 600 : 400, color: "#1A3C2E" }}>{row.name}</span>
+                                {row.isRef && <span style={{ marginLeft: 6, fontSize: 8, background: "#1A3C2E", color: "#F0EBE0", borderRadius: 3, padding: "1px 5px", letterSpacing: "0.06em" }}>REF</span>}
+                              </td>
+                              <td style={{ padding: "8px 10px", textAlign: "center", fontSize: 14, fontWeight: 600, color: (s.mentions||0) > 0 ? "#1A7A4A" : "#1A3C2E18" }}>{s.mentions || 0}</td>
+                              <td style={{ padding: "8px 10px", textAlign: "center", fontSize: 14, fontWeight: 600, color: (s.evocations||0) > 0 ? "#C97820" : "#1A3C2E18" }}>{s.evocations || 0}</td>
+                              <td style={{ padding: "8px 10px", textAlign: "center", fontSize: 14, fontWeight: 600, color: (s.citations||0) > 0 ? "#1A3C2E77" : "#1A3C2E18" }}>{s.citations || 0}</td>
+                              <td style={{ padding: "8px 10px", textAlign: "center", fontSize: 12, color: "#1A3C2E44" }}>{avgPos ? `#${avgPos}` : "—"}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })()}
+
+              {/* Voir toutes les marques détectées */}
+              {(audit.competitorsRanked?.length || 0) > 8 && (
+                <button onClick={() => setShowAllComp(v => !v)}
+                  style={{ marginTop: 10, fontSize: 11, padding: "5px 12px", borderRadius: 6, border: "0.5px solid #1A3C2E22", background: "transparent", color: "#1A3C2E88", cursor: "pointer" }}>
+                  {showAllComp ? "▲ Afficher moins" : `▼ Voir toutes les marques (${audit.competitorsRanked.length})`}
+                </button>
+              )}
+
+              {/* Analyseur de pages concurrentes */}
+              <CompetitorPageAnalyzer
+                competitors={competitors}
+                audit={audit}
+                claudeKey={claudeKey}
+              />
+            </Section>
+            </div>{/* ══════════════════════════════════════════════════════
+                BLOC 4 — ANALYSE DES SOURCES & URLS
+                Top domaines + URLs marque catégorisées
+            ══════════════════════════════════════════════════════ */}
+            <div data-tour="audit-sources" style={{ display: "contents" }}><Section title="Sources & URLs" sub="URLs de la marque citées dans les réponses LLM">
+
+              {/* Top domaines — graphe en barres (style Fan-out) */}
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ fontSize: 11, fontWeight: 500, color: "#1A3C2E44", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>Top domaines cités</div>
+                <AuditBarChart
+                  accent="#1A3C2E"
+                  data={Object.entries(audit.topDomains).sort((a,b)=>b[1]-a[1]).slice(0,14).map(([d, cnt]) => {
+                    const isComp  = audit.competitorUrls.some(u => u.domain === d);
+                    const isBrand = audit.brandUrls.some(u => u.domain === d);
+                    return { name: d, count: cnt, kind: isBrand ? "brand" : isComp ? "competitor" : "other" };
+                  })}
+                />
+                {/* Légende */}
+                <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 8 }}>
+                  {[["#1A7A4A","Votre marque"],["#C0352A","Concurrent"],["#9AAEA4","Autre"]].map(([c,l]) => (
+                    <span key={l} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10, color: "#1A3C2E77" }}>
+                      <span style={{ width: 9, height: 9, borderRadius: 2, background: c }} />{l}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              {/* Tableau URLs marque */}
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 500, color: "#1A3C2E44", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>URLs de la marque citées</div>
+                {audit.brandUrls.length === 0 ? (
+                  <div style={{ fontSize: 11, color: "#1A3C2E44", fontStyle: "italic" }}>Aucune URL de la marque détectée dans les sources</div>
+                ) : (
+                  <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 480 }}>
+                    <thead>
+                      <tr style={{ background: "#FAFAF8" }}>
+                        {["URL", "Citations src", "Mentions rép.", "Questions liées", "Statut"].map(h => (
+                          <th key={h} style={{ padding: "8px 12px", textAlign: "left", fontWeight: 600, fontSize: 10, color: "#1A3C2E44", textTransform: "uppercase", letterSpacing: 0.5, borderBottom: `1px solid ${C.border}` }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {audit.brandUrls.slice(0, 20).map((u, i) => {
+                        const src = u.count_as_source || 0;
+                        const rep = u.count_in_answer || 0;
+                        const detail = (audit.urlDetails || []).find(d => d.norm === u.norm);
+                        const qCount = detail?.linkedQs?.length || 0;
+                        const status = src >= 3 ? { label: "✓ Performante", color: "#1A7A4A", bg: "#F0F7F3" }
+                                     : rep > 0 && src === 0 ? { label: "⚠ À sourcer", color: "#DC2626", bg: "#FEF2F2" }
+                                     : src > 0 ? { label: "↑ À booster", color: "#D97706", bg: "#FFFBEB" }
+                                     : { label: "— Peu citée", color: "#1A3C2E44", bg: C.bg };
+                        // Afficher la version normalisée (sans https, www, slash final)
+                        const displayUrl = u.norm || u.url.replace(/^https?:\/\//, "");
+                        return (
+                          <tr key={i} style={{ borderBottom: `1px solid ${C.borderLight}` }}>
+                            <td style={{ padding: "8px 12px", maxWidth: 260, wordBreak: "break-all" }}>
+                              <a href={u.url} target="_blank" rel="noreferrer" style={{ color: "#1A3C2E", fontSize: 11, textDecoration: "none" }}>{displayUrl}</a>
+                            </td>
+                            <td style={{ padding: "8px 12px", textAlign: "center", fontWeight: 700, color: src > 0 ? "#1A7A4A" : C.textLight }}>{src}</td>
+                            <td style={{ padding: "8px 12px", textAlign: "center", fontWeight: 700, color: rep > 0 ? "#1A3C2E" : C.textLight }}>{rep}</td>
+                            <td style={{ padding: "8px 12px", textAlign: "center", color: qCount > 0 ? C.text : C.textLight }}>
+                              {qCount > 0 ? `${qCount} question${qCount > 1 ? "s" : ""}` : "—"}
+                            </td>
+                            <td style={{ padding: "8px 12px" }}>
+                              <span style={{ fontSize: 10, fontWeight: 700, color: status.color, background: status.bg, borderRadius: 6, padding: "2px 8px" }}>{status.label}</span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  </div>
+                )}
+              </div>
+            </Section>
+            </div>
+
+            {/* ══════════════════════════════════════════════════════
+                 BLOC 4ter — ANALYSE FAN-OUT (récupérée de l'onglet Suivi GEO)
+            ══════════════════════════════════════════════════════ */}
+            <FanoutAnalysisRecap projectId={projectId} siteId={site?.id} />
+
+            {/* ══════════════════════════════════════════════════════
+                 BLOC 4bis — MODULES OUTILS (SF / GSC / GA / Bing)
+                 Croisements actionnables + export CSV par lot
+            ══════════════════════════════════════════════════════ */}
+            <div data-tour="audit-tools" style={{ display: "contents" }}><Section title="Modules d'analyse outils" sub="Exploitez vos imports SF · GSC · GA · Bing — activez les modules pertinents, exportez chaque lot">
+              <ToolModulesSection
+                audit={audit}
+                brand={brand}
+                competitors={competitors}
+                claudeKey={claudeKey}
+                sfRows={(sfData && site) ? (sfData[site.id] || []) : []}
+                gscRows={(gscData && site) ? (gscData[site.id] || []) : []}
+                gaRows={(gaData && site) ? (gaData[site.id] || []) : []}
+                bingData={(bingData && site) ? (bingData[site.id] || {}) : {}}
+              />
+            </Section></div>
+
+            {/* ══════════════════════════════════════════════════════
+                 BLOC 5 — MATRICE DE CORRÉLATION INTERACTIVE
+                 Croisement 2 sources parmi SF / GSC / Bing / Fan-outs
+            ══════════════════════════════════════════════════════ */}
+            <div data-tour="audit-corr" style={{ display: "contents" }}><Section title="Matrice de corrélation" sub="Croisez 2 sources de données pour identifier les corrélations avec votre présence GEO">
+              <CorrelationMatrix
+                sfRows={(sfData && site) ? (sfData[site.id] || []) : []}
+                gscRows={(gscData && site) ? (gscData[site.id] || []) : []}
+                gaRows={(gaData && site) ? (gaData[site.id] || []) : []}
+                bingData={(bingData && site) ? (bingData[site.id] || {}) : {}}
+                results={siteResults}
+                audit={audit}
+                sfCorrFilter={sfCorrFilter}
+                setSfCorrFilter={setSfCorrFilter}
+              />
+            </Section>
+            </div>
+
+            {/* ══════════════════════════════════════════════════════
+                BLOC 6 — PLAN D'ACTION
+                Pistes prioritaires + analyse Fan-out IA
+            ══════════════════════════════════════════════════════ */}
+            {/* ══════════════════════════════════════════════════════
+                BLOC 6 — PLAN D'ACTION
+            ══════════════════════════════════════════════════════ */}
+            <div data-tour="audit-plan" style={{ display: "contents" }}><Section title="Plan d'action" sub="Recommandations prioritaires et analyse IA">
+
+              {/* Pistes prioritaires — style épuré */}
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E44", marginBottom: 10 }}>Pistes prioritaires</div>
+                {audit.leads.map((l, i) => {
+                  const accentColor = l.priority.includes("🔴") ? "#C0352A" : l.priority.includes("🟠") ? "#C97820" : l.priority.includes("🟡") ? "#C97820" : "#1A7A4A";
+                  return (
+                    <div key={i} style={{ paddingLeft: 12, borderLeft: `2px solid ${accentColor}22`, marginBottom: 10 }}>
+                      <div style={{ fontSize: 10, fontWeight: 600, color: accentColor, marginBottom: 2, letterSpacing: "0.04em" }}>{l.label}</div>
+                      <div style={{ fontSize: 12, color: "#1A3C2E", lineHeight: 1.65 }}>{renderBold(l.action)}</div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Analyse IA */}
+              <div style={{ paddingTop: 16, borderTop: "0.5px solid #1A3C2E0C" }}>
+                <AIAnalysis audit={audit} brand={brand} site={site} questions={siteQuestions} onTextReady={setAiText} projectId={projectId} siteId={site?.id} />
+              </div>
+            </Section>
+            </div>
+
+          </>)}
+        </div>
+      )}
     </div>
   );
 }
