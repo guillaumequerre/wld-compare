@@ -3,7 +3,7 @@ import { C, SF_DIMS, RES_KPIS, RADAR_DIMS, DEFAULT_SITES, SEMRUSH_DIMS } from ".
 import { emptyDataMap, makeInitialProject, parseCSV, parseSemrushCSV } from "./lib/helpers";
 import { extractSF, extractGSC, extractGA, extractBing, extractSemrush, parseSemrush, filterByMode } from "./lib/parsers";
 import { buildUrlMaps, buildSfPageVectors, intraCorrFast, smIntraCorr } from "./lib/correlations";
-import { sbSaveProject, sbGetHistory, sbGetLatest, sbDownload, sbGetPageTypes, sbSaveGeoAxes, sbGetGeoResultsAll, sbGetUrlIndex } from "./lib/supabase";
+import { sbSaveProject, sbDeleteProject, sbGetHistory, sbGetLatest, sbDownload, sbGetPageTypes, sbSaveGeoAxes, sbGetGeoResultsAll, sbGetUrlIndex } from "./lib/supabase";
 
 import AnalyseTab from "./tabs/AnalyseTab";
 import ImportTab from "./tabs/ImportTab";
@@ -717,6 +717,15 @@ export default function App() {
                 setCurrentProjectId(p.id);
                 sbSaveProject(p).catch(() => {});
                 goTo("import");
+              }}
+              onDeleteProject={async (id) => {
+                const proj = projects.find(p => p.id === id);
+                if (!proj) return;
+                if (!window.confirm(`Supprimer définitivement le projet « ${proj.name} » ?\nCette action est irréversible et retire le projet pour tous ses membres.`)) return;
+                try { await sbDeleteProject(id); } catch (e) { console.warn("Suppression du projet échouée:", e); }
+                const remaining = projects.filter(p => p.id !== id);
+                setProjects(remaining);
+                if (currentProjectId === id) setCurrentProjectId(remaining[0]?.id || null);
               }}
             />
           )}

@@ -201,26 +201,26 @@ export function ProviderConfigPanel({ project, projectId, sites, onSaveProviderK
                         {/* Ligne modèle + mode */}
                         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                           <label style={{ flex: "1 1 140px", minWidth: 0 }}>
-                            <span style={{ fontSize: 9, color: "#1A3C2E66", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Modèle</span>
+                            <span style={{ fontSize: 9, color: "#1A3C2E", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Modèle</span>
                             <select value={modelId} onChange={e => updateCfg(p.id, { model: e.target.value })}
                               style={{ width: "100%", marginTop: 3, padding: "5px 8px", borderRadius: 6, border: "0.5px solid #1A3C2E22", fontSize: 12, background: "#fff", color: "#1A3C2E", cursor: "pointer" }}>
                               {models.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
                             </select>
                           </label>
                           <label style={{ flex: "1 1 140px", minWidth: 0 }}>
-                            <span style={{ fontSize: 9, color: "#1A3C2E66", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Mode d'interrogation</span>
+                            <span style={{ fontSize: 9, color: "#1A3C2E", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Mode d'interrogation</span>
                             <select value={modeId} onChange={e => updateCfg(p.id, { mode: e.target.value })}
                               style={{ width: "100%", marginTop: 3, padding: "5px 8px", borderRadius: 6, border: "0.5px solid #1A3C2E22", fontSize: 12, background: "#fff", color: "#1A3C2E", cursor: "pointer" }}>
                               {Object.values(QUERY_MODES).map(mo => <option key={mo.id} value={mo.id}>{mo.icon} {mo.label}</option>)}
                             </select>
                           </label>
                         </div>
-                        <div style={{ fontSize: 10, color: "#1A3C2E66", lineHeight: 1.4 }}>{mode.desc}</div>
+                        <div style={{ fontSize: 10, color: "#1A3C2E", lineHeight: 1.4 }}>{mode.desc}</div>
                         {/* Estimation de coût */}
                         <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 14px", fontSize: 11, color: "#1A3C2E", alignItems: "baseline", paddingTop: 6, borderTop: "0.5px solid #1A3C2E0D" }}>
-                          <span><span style={{ color: "#1A3C2E66" }}>≈ </span><strong>{tokPerResp}</strong> tok/réponse</span>
-                          <span><span style={{ color: "#1A3C2E66" }}>×</span> <strong>{nQuestions}</strong> question{nQuestions > 1 ? "s" : ""}</span>
-                          <span><span style={{ color: "#1A3C2E66" }}>·</span> ${costPer1k.toFixed(5)}/1k tok</span>
+                          <span><span style={{ color: "#1A3C2E" }}>≈ </span><strong>{tokPerResp}</strong> tok/réponse</span>
+                          <span><span style={{ color: "#1A3C2E" }}>×</span> <strong>{nQuestions}</strong> question{nQuestions > 1 ? "s" : ""}</span>
+                          <span><span style={{ color: "#1A3C2E" }}>·</span> ${costPer1k.toFixed(5)}/1k tok</span>
                           <span style={{ marginLeft: "auto", fontWeight: 700, color: p.color }}>≈ ${totalCost.toFixed(totalCost < 0.01 ? 4 : totalCost < 1 ? 3 : 2)}</span>
                         </div>
                       </div>
@@ -240,7 +240,7 @@ export function ProviderConfigPanel({ project, projectId, sites, onSaveProviderK
                 <input type="range" min="1" max="200" value={nQuestions}
                   onChange={e => setNQuestions(parseInt(e.target.value, 10))}
                   style={{ width: "100%", accentColor: "#1A3C2E", cursor: "pointer" }} />
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: "#1A3C2E44", marginTop: 2 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: "#1A3C2E", marginTop: 2 }}>
                   <span>1</span><span>Total estimé pour l'ensemble des providers actifs ci-dessus</span><span>200</span>
                 </div>
                 {(() => {
@@ -251,7 +251,7 @@ export function ProviderConfigPanel({ project, projectId, sites, onSaveProviderK
                   }, 0);
                   return (
                     <div style={{ marginTop: 8, paddingTop: 8, borderTop: "0.5px solid #1A3C2E12", display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-                      <span style={{ fontSize: 11, color: "#1A3C2E77" }}>Coût total estimé (tous providers)</span>
+                      <span style={{ fontSize: 11, color: "#1A3C2E" }}>Coût total estimé (tous providers)</span>
                       <span style={{ fontSize: 16, fontWeight: 800, color: "#1A3C2E" }}>≈ ${grand.toFixed(grand < 1 ? 3 : 2)}</span>
                     </div>
                   );

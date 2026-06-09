@@ -329,7 +329,7 @@ Sois direct, concis, actionnable. Pas de généralités.`;
         <button
           onClick={handleCTA}
           disabled={status === "loading" || !claudeKey}
-          style={{ padding: "5px 14px", background: (status === "loading" || !claudeKey) ? "transparent" : "#1A3C2E", color: (status === "loading" || !claudeKey) ? "#1A3C2E44" : "#F0EBE0", border: "0.5px solid #1A3C2E22", borderRadius: 6, fontSize: 11, fontWeight: 500, cursor: (status === "loading" || !claudeKey) ? "default" : "pointer" }}
+          style={{ padding: "5px 14px", background: (status === "loading" || !claudeKey) ? "transparent" : "#1A3C2E", color: (status === "loading" || !claudeKey) ? "#1A3C2E" : "#F0EBE0", border: "0.5px solid #1A3C2E22", borderRadius: 6, fontSize: 11, fontWeight: 500, cursor: (status === "loading" || !claudeKey) ? "default" : "pointer" }}
           title={!claudeKey ? "Clé Claude manquante dans ⚙️ Providers" : undefined}
         >
           {status === "loading" ? "⏳ Analyse…" : "✦ Analyser par catégorie"}
@@ -405,7 +405,7 @@ Sois direct, concis, actionnable. Pas de généralités.`;
       {/* Résultat analyse IA */}
       {status === "done" && analysis && (
         <div style={{ padding: "16px 20px" }}>
-          <button onClick={() => setOpen(o => !o)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "#1A3C2E55", fontWeight: 500, padding: 0, marginBottom: open ? 10 : 0 }}>
+          <button onClick={() => setOpen(o => !o)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "#1A3C2E", fontWeight: 500, padding: 0, marginBottom: open ? 10 : 0 }}>
             {open ? "▲ Masquer l'analyse IA" : "▼ Voir l'analyse IA"}
           </button>
           {open && (
@@ -431,10 +431,10 @@ function Section({ icon, title, sub, children }) {
   return (
     <div style={{ background: "#fff", border: "0.5px solid #1A3C2E0D", borderRadius: 10, padding: "18px 20px", marginBottom: 12 }}>
       <div style={{ marginBottom: 14 }}>
-        <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E55" }}>
+        <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E" }}>
           {title}
         </div>
-        {sub && <div style={{ fontSize: 11, color: "#1A3C2E44", marginTop: 2 }}>{sub}</div>}
+        {sub && <div style={{ fontSize: 11, color: "#1A3C2E", marginTop: 2 }}>{sub}</div>}
       </div>
       {children}
     </div>
@@ -451,7 +451,7 @@ function AuditBarChart({ data, accent = "#1A3C2E" }) {
   const rows = (data || []).slice(0, 14);
   const max = rows.length ? Math.max(...rows.map(d => d.count)) : 0;
   const colorFor = (kind) => kind === "brand" ? "#1A7A4A" : kind === "competitor" ? "#C0352A" : "#9AAEA4";
-  if (!rows.length) return <div style={{ fontSize: 11, color: "#1A3C2E44", fontStyle: "italic" }}>Aucune donnée</div>;
+  if (!rows.length) return <div style={{ fontSize: 11, color: "#1A3C2E", fontStyle: "italic" }}>Aucune donnée</div>;
   return (
     <div>
       <div style={{ position: "relative", height: 140, display: "flex", alignItems: "flex-end", gap: rows.length > 9 ? 3 : 6, padding: "18px 0 0" }}>
@@ -476,7 +476,7 @@ function AuditBarChart({ data, accent = "#1A3C2E" }) {
       <div style={{ display: "flex", gap: rows.length > 9 ? 3 : 6, marginTop: 6, height: 64 }}>
         {rows.map((d, i) => (
           <div key={d.name + i} style={{ flex: 1, minWidth: 0, display: "flex", justifyContent: "center" }}>
-            <span style={{ fontSize: 9, color: hover === i ? "#1A3C2E" : "#1A3C2E66", whiteSpace: "nowrap", transform: "rotate(-45deg)", transformOrigin: "top left", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 80, display: "inline-block", marginTop: 2 }}>{d.name}</span>
+            <span style={{ fontSize: 9, color: hover === i ? "#1A3C2E" : "#1A3C2E", whiteSpace: "nowrap", transform: "rotate(-45deg)", transformOrigin: "top left", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 80, display: "inline-block", marginTop: 2 }}>{d.name}</span>
           </div>
         ))}
       </div>
@@ -509,7 +509,7 @@ function FanoutAnalysisRecap({ projectId, siteId }) {
     "ÉTAT DES LIEUX":    { icon: "◎", color: "#1A3C2E" },
     "MAILLAGE INTERNE":  { icon: "⟶", color: "#1A3C2E" },
     "PAGES À CRÉER":     { icon: "✦", color: "#C97820" },
-    "URLS CONCURRENTES": { icon: "↗", color: "#1A3C2E77" },
+    "URLS CONCURRENTES": { icon: "↗", color: "#1A3C2E" },
   };
   const getMeta = (title) => {
     const key = Object.keys(META).find(k => (title || "").toUpperCase().includes(k));
@@ -521,12 +521,12 @@ function FanoutAnalysisRecap({ projectId, siteId }) {
       <Section title="Analyse Fan-out" sub="Recommandations générées dans l'onglet Suivi GEO">
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
           {savedDate && (
-            <span style={{ fontSize: 10, color: "#1A3C2E55" }}>
+            <span style={{ fontSize: 10, color: "#1A3C2E" }}>
               Générée le {new Date(savedDate).toLocaleString("fr-FR", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
             </span>
           )}
           <button onClick={() => setOpen(o => !o)}
-            style={{ marginLeft: "auto", fontSize: 11, padding: "3px 10px", borderRadius: 6, border: "0.5px solid #1A3C2E22", background: "transparent", color: "#1A3C2E77", cursor: "pointer" }}>
+            style={{ marginLeft: "auto", fontSize: 11, padding: "3px 10px", borderRadius: 6, border: "0.5px solid #1A3C2E22", background: "transparent", color: "#1A3C2E", cursor: "pointer" }}>
             {open ? "Réduire" : "Déployer"}
           </button>
         </div>
@@ -591,7 +591,7 @@ function FavoritesPerformance({ questions, results, projectId = null, siteId = n
   }, [questions, results, overrides]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!data) return (
-    <div style={{ fontSize: 12, color: "#1A3C2E44", fontStyle: "italic", padding: "8px 0" }}>
+    <div style={{ fontSize: 12, color: "#1A3C2E", fontStyle: "italic", padding: "8px 0" }}>
       Aucune question favorite. Marquez vos questions stratégiques (★) dans l'onglet Suivi GEO pour les suivre ici.
     </div>
   );
@@ -600,7 +600,7 @@ function FavoritesPerformance({ questions, results, projectId = null, siteId = n
     defend:            { label: "À défendre",          color: "#1A7A4A", desc: "La marque lead (#1-3)" },
     watch:             { label: "À surveiller",         color: "#C97820", desc: "Top 4-10" },
     conquest_priority: { label: "Conquête prioritaire", color: "#E8541A", desc: "Non positionnée · fort potentiel" },
-    conquer:           { label: "À conquérir",          color: "#1A3C2E77", desc: "Non positionnée" },
+    conquer:           { label: "À conquérir",          color: "#1A3C2E", desc: "Non positionnée" },
   };
 
   const moveToBucket = (qId, targetBucket) => {
@@ -618,12 +618,12 @@ function FavoritesPerformance({ questions, results, projectId = null, siteId = n
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-        <div style={{ fontSize: 11, color: "#1A3C2E66" }}>
+        <div style={{ fontSize: 11, color: "#1A3C2E" }}>
           Glissez-déposez une question d'une colonne à l'autre pour ajuster sa priorité.
         </div>
         {hasOverrides && (
           <button onClick={() => persistOverrides({})}
-            style={{ fontSize: 10, padding: "3px 10px", borderRadius: 6, border: "0.5px solid #1A3C2E22", background: "transparent", color: "#1A3C2E77", cursor: "pointer" }}>
+            style={{ fontSize: 10, padding: "3px 10px", borderRadius: 6, border: "0.5px solid #1A3C2E22", background: "transparent", color: "#1A3C2E", cursor: "pointer" }}>
             ↺ Réinitialiser le classement
           </button>
         )}
@@ -655,7 +655,7 @@ function FavoritesPerformance({ questions, results, projectId = null, siteId = n
                 if (qId) moveToBucket(qId, b);
               }}
               style={{
-                border: `0.5px solid ${isDropTarget ? meta.color : "#1A3C2E0D"}`,
+                border: `0.5px solid ${isDropTarget ? meta.color : "#1A3C2E"}`,
                 background: isDropTarget ? `${meta.color}0A` : "transparent",
                 borderRadius: 10, padding: "12px 14px", transition: "background 0.15s, border-color 0.15s",
               }}>
@@ -664,7 +664,7 @@ function FavoritesPerformance({ questions, results, projectId = null, siteId = n
                 <span style={{ fontSize: 12, fontWeight: 600, color: meta.color }}>{meta.label}</span>
                 <span style={{ fontSize: 16, fontWeight: 700, color: meta.color, marginLeft: "auto" }}>{items.length}</span>
               </div>
-              <div style={{ fontSize: 10, color: "#1A3C2E44", marginBottom: 8 }}>{meta.desc}</div>
+              <div style={{ fontSize: 10, color: "#1A3C2E", marginBottom: 8 }}>{meta.desc}</div>
               <div style={{ display: "flex", flexDirection: "column", gap: 3, minHeight: 30, maxHeight: 200, overflowY: "auto" }}>
                 {items.map((it) => (
                   <div key={it.id}
@@ -673,12 +673,12 @@ function FavoritesPerformance({ questions, results, projectId = null, siteId = n
                     title={it.moved ? "Déplacée manuellement — double-clic pour rétablir le classement auto" : "Glissez pour déplacer"}
                     onDoubleClick={() => it.moved && resetOverride(it.id)}
                     style={{ fontSize: 11, color: "#1A3C2E", lineHeight: 1.4, display: "flex", gap: 6, alignItems: "baseline", cursor: "grab", padding: "3px 4px", borderRadius: 4, background: it.moved ? `${meta.color}0C` : "transparent" }}>
-                    <span style={{ color: "#1A3C2E22", flexShrink: 0, fontSize: 10 }}>⋮⋮</span>
+                    <span style={{ color: "#1A3C2E", flexShrink: 0, fontSize: 10 }}>⋮⋮</span>
                     <span style={{ flex: 1 }}>{it.question}{it.moved && <span style={{ color: meta.color, marginLeft: 4 }}>•</span>}</span>
                     {it.pos != null && <span style={{ fontSize: 10, color: meta.color, flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>#{it.pos}</span>}
                   </div>
                 ))}
-                {!items.length && <div style={{ fontSize: 10, color: "#1A3C2E22", fontStyle: "italic", padding: "8px 0", textAlign: "center" }}>Déposez ici</div>}
+                {!items.length && <div style={{ fontSize: 10, color: "#1A3C2E", fontStyle: "italic", padding: "8px 0", textAlign: "center" }}>Déposez ici</div>}
               </div>
             </div>
           );
@@ -701,7 +701,7 @@ function GeoScoreBanner({ audit, auditFav = null, brand, site }) {
       <div className="audit-banner-inner">
         {/* Score */}
         <div style={{ minWidth: 100 }}>
-          <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E44", marginBottom: 6 }}>Présence GEO</div>
+          <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E", marginBottom: 6 }}>Présence GEO</div>
           <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
             <span style={{ fontSize: 44, fontWeight: 700, color: level.color, lineHeight: 1, letterSpacing: "-0.02em" }}>{score}</span>
             <span style={{ fontSize: 18, color: level.color, fontWeight: 500 }}>%</span>
@@ -713,7 +713,7 @@ function GeoScoreBanner({ audit, auditFav = null, brand, site }) {
           {/* Score favoris en parallèle */}
           {favScore != null && (
             <div style={{ marginTop: 12, paddingTop: 10, borderTop: "0.5px solid #1A3C2E0C" }}>
-              <div style={{ fontSize: 9, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#C9782099", marginBottom: 3, display: "flex", alignItems: "center", gap: 4 }}>
+              <div style={{ fontSize: 9, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#C97820", marginBottom: 3, display: "flex", alignItems: "center", gap: 4 }}>
                 <span style={{ color: "#C97820" }}>★</span> Favoris
               </div>
               <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
@@ -725,7 +725,7 @@ function GeoScoreBanner({ audit, auditFav = null, brand, site }) {
                   </span>
                 )}
               </div>
-              <div style={{ fontSize: 10, color: "#1A3C2E44", marginTop: 3 }}>{auditFav.withBrand}/{auditFav.total} réponses favorites</div>
+              <div style={{ fontSize: 10, color: "#1A3C2E", marginTop: 3 }}>{auditFav.withBrand}/{auditFav.total} réponses favorites</div>
             </div>
           )}
         </div>
@@ -735,7 +735,7 @@ function GeoScoreBanner({ audit, auditFav = null, brand, site }) {
 
         {/* Barre proportion M/É/C */}
         <div style={{ flex: "0 0 auto", minWidth: 140 }}>
-          <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E44", marginBottom: 8 }}>Répartition</div>
+          <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E", marginBottom: 8 }}>Répartition</div>
           <div style={{ display: "flex", height: 4, borderRadius: 2, overflow: "hidden", background: "#1A3C2E0C", marginBottom: 10 }}>
             {audit.total > 0 && <>
               <div style={{ width: `${(audit.withRanked||0)/audit.total*100}%`, background: "#1A7A4A" }} />
@@ -747,10 +747,10 @@ function GeoScoreBanner({ audit, auditFav = null, brand, site }) {
             {[
               { sym: "◎", label: "Mention",   val: audit.withRanked||0,      color: "#1A7A4A" },
               { sym: "⟶", label: "Évocation", val: audit.withMentionOnly||0, color: "#C97820" },
-              { sym: "↗",  label: "Citation",  val: audit.withSourceOnly||0,  color: "#1A3C2E77" },
+              { sym: "↗",  label: "Citation",  val: audit.withSourceOnly||0,  color: "#1A3C2E" },
             ].map(k => (
               <div key={k.label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
-                <span style={{ fontSize: 11, color: "#1A3C2E55" }}><span style={{ color: k.color }}>{k.sym}</span> {k.label}</span>
+                <span style={{ fontSize: 11, color: "#1A3C2E" }}><span style={{ color: k.color }}>{k.sym}</span> {k.label}</span>
                 <span style={{ fontSize: 12, fontWeight: 600, color: k.color }}>{k.val}</span>
               </div>
             ))}
@@ -762,7 +762,7 @@ function GeoScoreBanner({ audit, auditFav = null, brand, site }) {
 
         {/* KPIs contextuels */}
         <div style={{ flex: 1, minWidth: 180 }}>
-          <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E44", marginBottom: 8 }}>Contexte</div>
+          <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E", marginBottom: 8 }}>Contexte</div>
           <div className="audit-banner-context">
             {[
               { label: "Marque",                  val: brand?.brand_name || "—" },
@@ -773,7 +773,7 @@ function GeoScoreBanner({ audit, auditFav = null, brand, site }) {
               { label: "Concurrents renseignés",  val: Object.keys(audit.compStats).length },
             ].map(k => (
               <div key={k.label} style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
-                <span style={{ fontSize: 10, color: "#1A3C2E44" }}>{k.label}</span>
+                <span style={{ fontSize: 10, color: "#1A3C2E" }}>{k.label}</span>
                 <span style={{ fontSize: 12, fontWeight: 600, color: "#1A3C2E" }}>{k.val}</span>
               </div>
             ))}
@@ -1203,7 +1203,7 @@ function TrendChart({ trendDays }) {
   const W = 620, H = 140, PAD = 32, PADT = 12, plotW = W - PAD - 12, plotH = H - PADT - 28;
   const active = trendDays.filter(d => d.tested > 0);
   if (!active.length) return (
-    <div style={{ fontSize: 11, color: "#1A3C2E44", fontStyle: "italic", padding: "20px 0" }}>
+    <div style={{ fontSize: 11, color: "#1A3C2E", fontStyle: "italic", padding: "20px 0" }}>
       Aucun résultat enregistré ces 30 derniers jours.
     </div>
   );
@@ -1267,12 +1267,12 @@ function TrendChart({ trendDays }) {
       {/* Légende */}
       <div style={{ display: "flex", gap: 16, marginBottom: 8, flexWrap: "wrap" }}>
         {SERIES.map(s => (
-          <div key={s.key} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10, color: "#1A3C2E55" }}>
+          <div key={s.key} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10, color: "#1A3C2E" }}>
             <span style={{ width: 16, height: 2, background: s.color, display: "inline-block", borderRadius: 1 }} />
             {s.label}
           </div>
         ))}
-        <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10, color: "#1A3C2E33" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10, color: "#1A3C2E" }}>
           <span style={{ width: 16, height: 1.5, background: "#1A3C2E22", display: "inline-block", borderRadius: 1, borderTop: "1px dashed #1A3C2E33" }} />
           Interrogations
         </div>
@@ -1469,7 +1469,7 @@ Commence DIRECTEMENT par ## 1. Synthèse exécutive.`;
   return (
     <div>
       {savedDate && (
-        <div style={{ fontSize: 10, color: "#1A3C2E55", marginBottom: 10 }}>
+        <div style={{ fontSize: 10, color: "#1A3C2E", marginBottom: 10 }}>
           Analyse générée le {new Date(savedDate).toLocaleString("fr-FR", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
         </div>
       )}
@@ -1480,12 +1480,12 @@ Commence DIRECTEMENT par ## 1. Synthèse exécutive.`;
             onChange={(e) => setDraft(e.target.value)}
             style={{ width: "100%", minHeight: 320, fontSize: 12, lineHeight: 1.7, color: C.text, border: "0.5px solid #1A3C2E22", borderRadius: 8, padding: "12px 14px", fontFamily: "inherit", resize: "vertical", boxSizing: "border-box" }}
           />
-          <div style={{ fontSize: 10, color: "#1A3C2E44", marginTop: 6 }}>
+          <div style={{ fontSize: 10, color: "#1A3C2E", marginTop: 6 }}>
             Astuce : « ## Titre » crée un titre de section, « **gras** » met en gras.
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
             <button onClick={saveEdit} style={{ padding: "5px 14px", border: "none", borderRadius: 6, background: "#1A3C2E", color: "#F0EBE0", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Enregistrer</button>
-            <button onClick={cancelEdit} style={{ padding: "5px 14px", border: "0.5px solid #1A3C2E22", borderRadius: 6, background: "transparent", color: "#1A3C2E77", fontSize: 11, cursor: "pointer" }}>Annuler</button>
+            <button onClick={cancelEdit} style={{ padding: "5px 14px", border: "0.5px solid #1A3C2E22", borderRadius: 6, background: "transparent", color: "#1A3C2E", fontSize: 11, cursor: "pointer" }}>Annuler</button>
           </div>
         </div>
       ) : (
@@ -1500,8 +1500,8 @@ Commence DIRECTEMENT par ## 1. Synthèse exécutive.`;
       )}
       {status === "done" && !editing && (
         <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-          <button onClick={generate} style={{ padding: "4px 12px", border: "0.5px solid #1A3C2E18", borderRadius: 6, background: "transparent", fontSize: 11, cursor: "pointer", color: "#1A3C2E55" }}>↺ Regénérer</button>
-          <button onClick={startEdit} style={{ padding: "4px 12px", border: "0.5px solid #1A3C2E18", borderRadius: 6, background: "transparent", fontSize: 11, cursor: "pointer", color: "#1A3C2E55" }}>✎ Éditer</button>
+          <button onClick={generate} style={{ padding: "4px 12px", border: "0.5px solid #1A3C2E18", borderRadius: 6, background: "transparent", fontSize: 11, cursor: "pointer", color: "#1A3C2E" }}>↺ Regénérer</button>
+          <button onClick={startEdit} style={{ padding: "4px 12px", border: "0.5px solid #1A3C2E18", borderRadius: 6, background: "transparent", fontSize: 11, cursor: "pointer", color: "#1A3C2E" }}>✎ Éditer</button>
         </div>
       )}
       {status === "error" && <div style={{ color: "#DC2626", fontSize: 11, marginTop: 8 }}>Erreur — réessayez.</div>}
@@ -1649,7 +1649,7 @@ function CorrelationMatrix({ sfRows = [], gscRows = [], gaRows = [], bingData = 
       {/* Sélecteur 2 sources */}
       <div className="audit-corr-sources">
         <div>
-          <div style={{ fontSize: 10, color: "#1A3C2E44", marginBottom: 5, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase" }}>Source A</div>
+          <div style={{ fontSize: 10, color: "#1A3C2E", marginBottom: 5, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase" }}>Source A</div>
           <div className="audit-corr-source-btns">
             {SOURCES.map(s => (
               <button key={s.key} onClick={() => { setSrcA(s.key); if (s.key === srcB) setSrcB(srcA); }}
@@ -1657,7 +1657,7 @@ function CorrelationMatrix({ sfRows = [], gscRows = [], gaRows = [], bingData = 
                 style={{ padding: "4px 12px", borderRadius: 6, fontSize: 11, cursor: s.available ? "pointer" : "not-allowed",
                   border: "0.5px solid " + (srcA===s.key ? "#1A3C2E" : "#1A3C2E22"),
                   background: srcA===s.key ? "#1A3C2E" : "transparent",
-                  color: srcA===s.key ? "#F0EBE0" : s.available ? "#1A3C2E77" : "#1A3C2E22",
+                  color: srcA===s.key ? "#F0EBE0" : s.available ? "#1A3C2E" : "#1A3C2E",
                   fontWeight: srcA===s.key ? 500 : 400,
                 }}>
                 {s.label}{!s.available ? " ·" : ""}
@@ -1665,9 +1665,9 @@ function CorrelationMatrix({ sfRows = [], gscRows = [], gaRows = [], bingData = 
             ))}
           </div>
         </div>
-        <div style={{ fontSize: 18, color: "#1A3C2E22", fontWeight: 300 }}>×</div>
+        <div style={{ fontSize: 18, color: "#1A3C2E", fontWeight: 300 }}>×</div>
         <div>
-          <div style={{ fontSize: 10, color: "#1A3C2E44", marginBottom: 5, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase" }}>Source B</div>
+          <div style={{ fontSize: 10, color: "#1A3C2E", marginBottom: 5, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase" }}>Source B</div>
           <div style={{ display: "flex", gap: 4 }}>
             {SOURCES.filter(s => s.key !== srcA).map(s => (
               <button key={s.key} onClick={() => setSrcB(s.key)}
@@ -1675,7 +1675,7 @@ function CorrelationMatrix({ sfRows = [], gscRows = [], gaRows = [], bingData = 
                 style={{ padding: "4px 12px", borderRadius: 6, fontSize: 11, cursor: s.available ? "pointer" : "not-allowed",
                   border: "0.5px solid " + (srcB===s.key ? "#1A7A4A" : "#1A3C2E22"),
                   background: srcB===s.key ? "#1A7A4A" : "transparent",
-                  color: srcB===s.key ? "#F0EBE0" : s.available ? "#1A3C2E77" : "#1A3C2E22",
+                  color: srcB===s.key ? "#F0EBE0" : s.available ? "#1A3C2E" : "#1A3C2E",
                   fontWeight: srcB===s.key ? 500 : 400,
                 }}>
                 {s.label}{!s.available ? " ·" : ""}
@@ -1686,15 +1686,15 @@ function CorrelationMatrix({ sfRows = [], gscRows = [], gaRows = [], bingData = 
       </div>
 
       {/* Légende */}
-      <div style={{ display: "flex", gap: 16, marginBottom: 14, fontSize: 10, color: "#1A3C2E44" }}>
+      <div style={{ display: "flex", gap: 16, marginBottom: 14, fontSize: 10, color: "#1A3C2E" }}>
         <span><span style={{ fontWeight: 600, color: "#1A7A4A" }}>▲ ≥ 0.4</span> Corrélation forte positive</span>
         <span><span style={{ fontWeight: 600, color: "#C0352A" }}>▼ ≤ -0.4</span> Corrélation forte négative</span>
-        <span><span style={{ color: "#1A3C2E33" }}>±0.1–0.4</span> Corrélation faible</span>
+        <span><span style={{ color: "#1A3C2E" }}>±0.1–0.4</span> Corrélation faible</span>
       </div>
 
       {/* Matrice */}
       {matrix.length === 0 ? (
-        <div style={{ fontSize: 11, color: "#1A3C2E44", fontStyle: "italic", padding: "12px 0" }}>
+        <div style={{ fontSize: 11, color: "#1A3C2E", fontStyle: "italic", padding: "12px 0" }}>
           {(srcA === "bing" || srcB === "bing")
             ? "La corrélation avec Bing n'est pas fiable : les données Bing ne sont pas alignables par URL avec la présence GEO. Croisez plutôt SF, GSC ou GA avec les Fan-outs."
             : srcADef?.available && srcBDef?.available
@@ -1706,10 +1706,10 @@ function CorrelationMatrix({ sfRows = [], gscRows = [], gaRows = [], bingData = 
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
             <thead>
               <tr style={{ borderBottom: "0.5px solid #1A3C2E12" }}>
-                <th style={{ padding: "7px 0", textAlign: "left", fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E44" }}>{srcADef?.label}</th>
+                <th style={{ padding: "7px 0", textAlign: "left", fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E" }}>{srcADef?.label}</th>
                 <th style={{ padding: "7px 12px", textAlign: "left", fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A7A4A" }}>{srcBDef?.label}</th>
-                <th style={{ padding: "7px 12px", textAlign: "center", fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E44" }}>Corrélation r</th>
-                <th style={{ padding: "7px 12px", textAlign: "left", fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E44" }}>Intensité</th>
+                <th style={{ padding: "7px 12px", textAlign: "center", fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E" }}>Corrélation r</th>
+                <th style={{ padding: "7px 12px", textAlign: "left", fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E" }}>Intensité</th>
               </tr>
             </thead>
             <tbody>
@@ -1723,7 +1723,7 @@ function CorrelationMatrix({ sfRows = [], gscRows = [], gaRows = [], bingData = 
                 return (
                   <tr key={i} style={{ borderBottom: "0.5px solid #1A3C2E06" }}>
                     <td style={{ padding: "7px 0", color: "#1A3C2E", fontSize: 11 }}>{row.dimA}</td>
-                    <td style={{ padding: "7px 12px", color: "#1A3C2E77", fontSize: 11 }}>{row.dimB}</td>
+                    <td style={{ padding: "7px 12px", color: "#1A3C2E", fontSize: 11 }}>{row.dimB}</td>
                     <td style={{ padding: "7px 12px", textAlign: "center" }}>
                       <span style={{ fontSize: 12, fontWeight: strong ? 700 : 500, color }}>
                         {pos ? "▲" : "▼"} {r > 0 ? "+" : ""}{r.toFixed(2)}
@@ -1734,9 +1734,9 @@ function CorrelationMatrix({ sfRows = [], gscRows = [], gaRows = [], bingData = 
                         <div style={{ width: 60, height: 4, background: "#1A3C2E08", borderRadius: 2, overflow: "hidden" }}>
                           <div style={{ width: `${barW}%`, height: "100%", background: color, borderRadius: 2 }} />
                         </div>
-                        <span style={{ fontSize: 9, color: "#1A3C2E44" }}>
+                        <span style={{ fontSize: 9, color: "#1A3C2E" }}>
                           {abs >= 0.7 ? "Très forte" : abs >= 0.4 ? "Forte" : abs >= 0.2 ? "Modérée" : "Faible"}
-                          {row.n != null && <span style={{ marginLeft: 6, color: row.n < 10 ? "#C0352A88" : "#1A3C2E33" }}>n={row.n}{row.n < 10 ? " ⚠" : ""}</span>}
+                          {row.n != null && <span style={{ marginLeft: 6, color: row.n < 10 ? "#C0352A" : "#1A3C2E" }}>n={row.n}{row.n < 10 ? " ⚠" : ""}</span>}
                         </span>
                       </div>
                     </td>
@@ -1827,7 +1827,7 @@ Commence DIRECTEMENT par ## POURQUOI LES LLM LES CITENT. Sois précis et actionn
 
   const compNames = Object.keys(audit.compStats || {}).filter(k => (audit.compStats[k].mentions||0) + (audit.compStats[k].evocations||0) > 0).slice(0, 10);
   if (!compNames.length) return (
-    <div style={{ fontSize: 11, color: "#1A3C2E44", fontStyle: "italic", paddingTop: 8 }}>
+    <div style={{ fontSize: 11, color: "#1A3C2E", fontStyle: "italic", paddingTop: 8 }}>
       Interrogez des questions pour détecter des concurrents.
     </div>
   );
@@ -1845,7 +1845,7 @@ Commence DIRECTEMENT par ## POURQUOI LES LLM LES CITENT. Sois précis et actionn
 
   return (
     <div style={{ paddingTop: 16, borderTop: "0.5px solid #1A3C2E0C", marginTop: 4 }}>
-      <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E44", marginBottom: 10 }}>Analyser un concurrent</div>
+      <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E", marginBottom: 10 }}>Analyser un concurrent</div>
 
       {/* Sélecteur concurrent */}
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
@@ -1853,7 +1853,7 @@ Commence DIRECTEMENT par ## POURQUOI LES LLM LES CITENT. Sois précis et actionn
           <button key={name} onClick={() => handleSelect(name)} style={{
             padding: "4px 11px", borderRadius: 6, fontSize: 11, cursor: "pointer", border: "0.5px solid #1A3C2E22",
             background: selected === name ? "#1A3C2E" : "transparent",
-            color: selected === name ? "#F0EBE0" : "#1A3C2E77",
+            color: selected === name ? "#F0EBE0" : "#1A3C2E",
             fontWeight: selected === name ? 500 : 400,
           }}>{name}</button>
         ))}
@@ -1870,7 +1870,7 @@ Commence DIRECTEMENT par ## POURQUOI LES LLM LES CITENT. Sois précis et actionn
             style={{ flex: 1, fontSize: 11, padding: "5px 10px", border: "0.5px solid #1A3C2E18", borderRadius: 6, outline: "none", color: "#1A3C2E", background: "#fff" }}
           />
           <button onClick={analyze} disabled={!url || !claudeKey || status === "loading"}
-            style={{ padding: "5px 14px", background: (!url||!claudeKey||status==="loading") ? "transparent" : "#1A3C2E", color: (!url||!claudeKey||status==="loading") ? "#1A3C2E44" : "#F0EBE0", border: "0.5px solid #1A3C2E22", borderRadius: 6, fontSize: 11, fontWeight: 500, cursor: (!url||!claudeKey||status==="loading") ? "not-allowed" : "pointer" }}>
+            style={{ padding: "5px 14px", background: (!url||!claudeKey||status==="loading") ? "transparent" : "#1A3C2E", color: (!url||!claudeKey||status==="loading") ? "#1A3C2E" : "#F0EBE0", border: "0.5px solid #1A3C2E22", borderRadius: 6, fontSize: 11, fontWeight: 500, cursor: (!url||!claudeKey||status==="loading") ? "not-allowed" : "pointer" }}>
             {status === "loading" ? "Analyse…" : "Analyser"}
           </button>
         </div>
@@ -1958,7 +1958,7 @@ Sois précis et cite des formats concrets (liste, FAQ, comparatif, données chif
           </button>
         ) : (
           <button onClick={run} disabled={!claudeKey || status === "loading"}
-            style={{ fontSize: 10, color: claudeKey ? "#C97820" : "#1A3C2E33", background: "none", border: "none", cursor: claudeKey ? "pointer" : "not-allowed", padding: 0, display: "flex", alignItems: "center", gap: 4, letterSpacing: "0.02em", opacity: status === "loading" ? 0.6 : 1 }}
+            style={{ fontSize: 10, color: claudeKey ? "#C97820" : "#1A3C2E", background: "none", border: "none", cursor: claudeKey ? "pointer" : "not-allowed", padding: 0, display: "flex", alignItems: "center", gap: 4, letterSpacing: "0.02em", opacity: status === "loading" ? 0.6 : 1 }}
             title={!claudeKey ? "Clé Claude manquante" : undefined}>
             <span>💡</span>
             <span>{status === "loading" ? "Génération…" : "Générer un hint GEO"}</span>
@@ -1966,7 +1966,7 @@ Sois précis et cite des formats concrets (liste, FAQ, comparatif, données chif
         )}
         {hint && (
           <button onClick={run} disabled={status === "loading"}
-            style={{ fontSize: 9, color: "#1A3C2E33", background: "none", border: "none", cursor: "pointer", padding: 0 }}
+            style={{ fontSize: 9, color: "#1A3C2E", background: "none", border: "none", cursor: "pointer", padding: 0 }}
             title="Regénérer">↺</button>
         )}
       </div>
@@ -2122,11 +2122,11 @@ RÈGLES : Commence DIRECTEMENT par ## ÉTAT DES LIEUX. Recommandations concrète
     "ÉTAT DES LIEUX":    { icon: "◎", color: "#1A3C2E" },
     "MAILLAGE INTERNE":  { icon: "⟶", color: "#1A3C2E" },
     "PAGES À CRÉER":     { icon: "✦", color: "#C97820" },
-    "URLS CONCURRENTES": { icon: "↗", color: "#1A3C2E77" },
+    "URLS CONCURRENTES": { icon: "↗", color: "#1A3C2E" },
   };
   const getMeta = (title) => {
     const key = Object.keys(SECTION_META).find(k => title.includes(k));
-    return SECTION_META[key] || { icon: "·", color: "#1A3C2E77" };
+    return SECTION_META[key] || { icon: "·", color: "#1A3C2E" };
   };
 
   if (!results.length) return null;
@@ -2135,19 +2135,19 @@ RÈGLES : Commence DIRECTEMENT par ## ÉTAT DES LIEUX. Recommandations concrète
     <div style={{ marginBottom: 8 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: open && status === "done" ? 16 : 0 }}>
         <div>
-          <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E55", marginBottom: 3 }}>Analyse GEO</div>
+          <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E", marginBottom: 3 }}>Analyse GEO</div>
           <div style={{ fontSize: 13, color: "#1A3C2E", letterSpacing: "-0.005em" }}>Recommandations actionnables · {results.length} réponses</div>
-          {savedDate && <div style={{ fontSize: 10, color: "#1A3C2E55", marginTop: 2 }}>Dernière analyse : {new Date(savedDate).toLocaleString("fr-FR", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</div>}
+          {savedDate && <div style={{ fontSize: 10, color: "#1A3C2E", marginTop: 2 }}>Dernière analyse : {new Date(savedDate).toLocaleString("fr-FR", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</div>}
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           {status === "done" && (
             <button onClick={() => setOpen(o => !o)}
-              style={{ padding: "4px 12px", border: "0.5px solid #1A3C2E18", borderRadius: 6, background: "transparent", cursor: "pointer", fontSize: 11, color: "#1A3C2E77" }}>
+              style={{ padding: "4px 12px", border: "0.5px solid #1A3C2E18", borderRadius: 6, background: "transparent", cursor: "pointer", fontSize: 11, color: "#1A3C2E" }}>
               {open ? "Masquer" : "Voir l'analyse"}
             </button>
           )}
           <button onClick={run} disabled={status === "loading" || !claudeKey}
-            style={{ padding: "5px 14px", background: (!claudeKey || status === "loading") ? "transparent" : "#1A3C2E", color: (!claudeKey || status === "loading") ? "#1A3C2E44" : "#F0EBE0", border: "0.5px solid #1A3C2E22", borderRadius: 6, fontSize: 11, fontWeight: 500, cursor: (!claudeKey || status === "loading") ? "not-allowed" : "pointer" }}
+            style={{ padding: "5px 14px", background: (!claudeKey || status === "loading") ? "transparent" : "#1A3C2E", color: (!claudeKey || status === "loading") ? "#1A3C2E" : "#F0EBE0", border: "0.5px solid #1A3C2E22", borderRadius: 6, fontSize: 11, fontWeight: 500, cursor: (!claudeKey || status === "loading") ? "not-allowed" : "pointer" }}
             title={!claudeKey ? "Clé Claude manquante" : undefined}>
             {status === "loading" ? "Analyse…" : status === "done" ? "↺ Relancer" : "Analyser"}
           </button>
@@ -2889,9 +2889,9 @@ function ToolModuleCard({ title, tier, icon, available, enabled, onToggle, count
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span style={{ fontSize: 13, fontWeight: 600, color: "#1A3C2E" }}>{title}</span>
             <span style={{ fontSize: 9, fontWeight: 600, letterSpacing: "0.05em", color: tierColor, background: `${tierColor}14`, borderRadius: 8, padding: "1px 6px" }}>TIER {tier}</span>
-            {available && count != null && <span style={{ fontSize: 10, color: "#1A3C2E44" }}>{count} résultat{count > 1 ? "s" : ""}</span>}
+            {available && count != null && <span style={{ fontSize: 10, color: "#1A3C2E" }}>{count} résultat{count > 1 ? "s" : ""}</span>}
           </div>
-          {!available && <div style={{ fontSize: 10, color: "#C0352A88", marginTop: 2 }}>Données manquantes — importez la source requise dans Setup</div>}
+          {!available && <div style={{ fontSize: 10, color: "#C0352A", marginTop: 2 }}>Données manquantes — importez la source requise dans Setup</div>}
         </div>
         {/* Switch on/off */}
         <button
@@ -2922,13 +2922,13 @@ function ToolModuleCard({ title, tier, icon, available, enabled, onToggle, count
 
 // Mini-tableau compact réutilisable pour les modules
 function ModuleTable({ columns, rows, limit = 8 }) {
-  if (!rows?.length) return <div style={{ fontSize: 11, color: "#1A3C2E44", fontStyle: "italic" }}>Aucun résultat.</div>;
+  if (!rows?.length) return <div style={{ fontSize: 11, color: "#1A3C2E", fontStyle: "italic" }}>Aucun résultat.</div>;
   return (
     <div style={{ overflowX: "auto" }}>
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, minWidth: 420 }}>
         <thead>
           <tr style={{ borderBottom: "1px solid #1A3C2E18" }}>
-            {columns.map(c => <th key={c.key} style={{ textAlign: c.num ? "center" : "left", padding: "5px 8px", fontWeight: 600, color: "#1A3C2E77", fontSize: 9, textTransform: "uppercase", letterSpacing: "0.05em", whiteSpace: "nowrap" }}>{c.label}</th>)}
+            {columns.map(c => <th key={c.key} style={{ textAlign: c.num ? "center" : "left", padding: "5px 8px", fontWeight: 600, color: "#1A3C2E", fontSize: 9, textTransform: "uppercase", letterSpacing: "0.05em", whiteSpace: "nowrap" }}>{c.label}</th>)}
           </tr>
         </thead>
         <tbody>
@@ -2943,7 +2943,7 @@ function ModuleTable({ columns, rows, limit = 8 }) {
           ))}
         </tbody>
       </table>
-      {rows.length > limit && <div style={{ fontSize: 10, color: "#1A3C2E44", marginTop: 6 }}>+ {rows.length - limit} autres (export complet ci-dessous)</div>}
+      {rows.length > limit && <div style={{ fontSize: 10, color: "#1A3C2E", marginTop: 6 }}>+ {rows.length - limit} autres (export complet ci-dessous)</div>}
     </div>
   );
 }
@@ -2980,7 +2980,7 @@ function ToolModulesSection({ audit, sfRows, gscRows, gaRows, bingData, brand, c
 
   return (
     <div>
-      <div style={{ fontSize: 11, color: "#1A3C2E66", marginBottom: 14, lineHeight: 1.5 }}>
+      <div style={{ fontSize: 11, color: "#1A3C2E", marginBottom: 14, lineHeight: 1.5 }}>
         Croisez vos imports d'outils (Screaming Frog, Search Console, Analytics, Bing) avec la présence GEO. Activez les modules pertinents · chaque lot est exportable en CSV avec ses métriques.
       </div>
 
@@ -2989,19 +2989,19 @@ function ToolModulesSection({ audit, sfRows, gscRows, gaRows, bingData, brand, c
 
       <ToolModuleCard title="Écart SEO ↔ GEO" tier={1} icon="🔍" available={hasGSC} enabled={enabled.seoGap} onToggle={() => toggle("seoGap")} count={seoGap.length}
         onExport={() => exp(CSV_COLUMNS.seoGap, seoGap, "ecart-seo-geo")} exportLabel="Exporter les URLs">
-        <div style={{ fontSize: 11, color: "#1A3C2E88", marginBottom: 8 }}>Pages performantes sur Google mais <strong>absentes des réponses IA</strong> — le contenu existe, il faut le rendre citable.</div>
+        <div style={{ fontSize: 11, color: "#1A3C2E", marginBottom: 8 }}>Pages performantes sur Google mais <strong>absentes des réponses IA</strong> — le contenu existe, il faut le rendre citable.</div>
         <ModuleTable columns={[{ key: "url", label: "URL" }, { key: "clicks", label: "Clics", num: true }, { key: "impressions", label: "Impr.", num: true }, { key: "position", label: "Pos.", num: true, fmt: v => v ? "#" + v.toFixed(0) : "—" }]} rows={seoGap} />
       </ToolModuleCard>
 
       <ToolModuleCard title="Pages citées à débloquer" tier={1} icon="🔧" available={hasSF} enabled={enabled.unblock} onToggle={() => toggle("unblock")} count={unblock.length}
         onExport={() => exp(CSV_COLUMNS.unblock, unblock, "pages-a-debloquer")} exportLabel="Exporter les URLs">
-        <div style={{ fontSize: 11, color: "#1A3C2E88", marginBottom: 8 }}>URLs <strong>citées par l'IA</strong> mais freinées techniquement (indexabilité, profondeur, contenu court).</div>
+        <div style={{ fontSize: 11, color: "#1A3C2E", marginBottom: 8 }}>URLs <strong>citées par l'IA</strong> mais freinées techniquement (indexabilité, profondeur, contenu court).</div>
         <ModuleTable columns={[{ key: "url", label: "URL" }, { key: "citations", label: "Cit. IA", num: true }, { key: "issues", label: "Freins", accent: true }]} rows={unblock} />
       </ToolModuleCard>
 
       <ToolModuleCard title="Valeur business des pages (GA)" tier={1} icon="💰" available={hasGA} enabled={enabled.business} onToggle={() => toggle("business")} count={business?.highValueNotCited?.length || 0}
         onExport={() => exp(CSV_COLUMNS.business, business?.highValueNotCited || [], "pages-valeur-non-citees")} exportLabel="Exporter les URLs">
-        <div style={{ fontSize: 11, color: "#1A3C2E88", marginBottom: 8 }}>Pages à <strong>forte valeur business</strong> (sessions/revenus GA) mais non citées par l'IA — priorité absolue.</div>
+        <div style={{ fontSize: 11, color: "#1A3C2E", marginBottom: 8 }}>Pages à <strong>forte valeur business</strong> (sessions/revenus GA) mais non citées par l'IA — priorité absolue.</div>
         <ModuleTable columns={[{ key: "url", label: "URL" }, { key: "sessions", label: "Sessions", num: true }, business?.hasRevenue ? { key: "revenue", label: "Revenus", num: true } : { key: "views", label: "Vues", num: true }]} rows={business?.highValueNotCited || []} />
       </ToolModuleCard>
 
@@ -3010,22 +3010,22 @@ function ToolModulesSection({ audit, sfRows, gscRows, gaRows, bingData, brand, c
 
       <ToolModuleCard title="Score de citabilité (SF)" tier={2} icon="📐" available={hasSF} enabled={enabled.citability} onToggle={() => toggle("citability")} count={citability.length}
         onExport={() => exp(CSV_COLUMNS.citability, citability, "score-citabilite")} exportLabel="Exporter le lot">
-        <div style={{ fontSize: 11, color: "#1A3C2E88", marginBottom: 8 }}>Note d'extractibilité par les LLM (structure, longueur, lisibilité). Les <strong>scores faibles</strong> sont vos quick wins.</div>
+        <div style={{ fontSize: 11, color: "#1A3C2E", marginBottom: 8 }}>Note d'extractibilité par les LLM (structure, longueur, lisibilité). Les <strong>scores faibles</strong> sont vos quick wins.</div>
         <ModuleTable columns={[{ key: "url", label: "URL" }, { key: "score", label: "Score", num: true, fmt: v => v + "/100" }, { key: "wordCount", label: "Mots", num: true }, { key: "cited", label: "Citée", num: true, fmt: v => v ? "✓" : "—" }]} rows={citability} />
       </ToolModuleCard>
 
       <ToolModuleCard title="Contenus orphelins citables" tier={2} icon="🔗" available={hasSF} enabled={enabled.orphan} onToggle={() => toggle("orphan")} count={orphan.length}
         onExport={() => exp(CSV_COLUMNS.orphan, orphan, "contenus-orphelins")} exportLabel="Exporter les URLs">
-        <div style={{ fontSize: 11, color: "#1A3C2E88", marginBottom: 8 }}>Pages citées par l'IA mais <strong>peu maillées</strong> en interne — renforcer les liens entrants.</div>
+        <div style={{ fontSize: 11, color: "#1A3C2E", marginBottom: 8 }}>Pages citées par l'IA mais <strong>peu maillées</strong> en interne — renforcer les liens entrants.</div>
         <ModuleTable columns={[{ key: "url", label: "URL" }, { key: "inlinks", label: "Liens entrants", num: true }, { key: "crawlDepth", label: "Profondeur", num: true }]} rows={orphan} />
       </ToolModuleCard>
 
       {/* ── TIER 3 ── */}
-      <div style={{ fontSize: 9, fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase", color: "#1A3C2E77", margin: "18px 0 8px" }}>Tier 3 · Différenciants</div>
+      <div style={{ fontSize: 9, fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase", color: "#1A3C2E", margin: "18px 0 8px" }}>Tier 3 · Différenciants</div>
 
       <ToolModuleCard title="Trafic IA entrant (GA4)" tier={3} icon="📈" available={hasGA} enabled={enabled.aiTraffic} onToggle={() => toggle("aiTraffic")} count={aiTraffic?.rows?.length || 0}
         onExport={() => exp(CSV_COLUMNS.aiTraffic, aiTraffic?.rows || [], "trafic-ia-entrant")} exportLabel="Exporter le détail">
-        <div style={{ fontSize: 11, color: "#1A3C2E88", marginBottom: 8 }}>Sessions réellement référées par les moteurs IA (ChatGPT, Perplexity, Gemini…). {!aiTraffic?.detected && <em>Aucune session IA détectée dans l'export GA actuel.</em>}</div>
+        <div style={{ fontSize: 11, color: "#1A3C2E", marginBottom: 8 }}>Sessions réellement référées par les moteurs IA (ChatGPT, Perplexity, Gemini…). {!aiTraffic?.detected && <em>Aucune session IA détectée dans l'export GA actuel.</em>}</div>
         {aiTraffic?.detected && (
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
             {Object.entries(aiTraffic.byEngine).map(([eng, s]) => (
@@ -3037,13 +3037,13 @@ function ToolModulesSection({ audit, sfRows, gscRows, gaRows, bingData, brand, c
 
       <ToolModuleCard title="Cannibalisation inverse (GSC)" tier={3} icon="⚠️" available={hasGSC} enabled={enabled.cannibal} onToggle={() => toggle("cannibal")} count={cannibal.length}
         onExport={() => exp(CSV_COLUMNS.cannibal, cannibal, "cannibalisation-inverse")} exportLabel="Exporter les URLs">
-        <div style={{ fontSize: 11, color: "#1A3C2E88", marginBottom: 8 }}>Pages bien positionnées mais <strong>faible CTR</strong> — l'IA capte probablement le clic. GEO défensif.</div>
+        <div style={{ fontSize: 11, color: "#1A3C2E", marginBottom: 8 }}>Pages bien positionnées mais <strong>faible CTR</strong> — l'IA capte probablement le clic. GEO défensif.</div>
         <ModuleTable columns={[{ key: "url", label: "URL" }, { key: "impressions", label: "Impr.", num: true }, { key: "ctr", label: "CTR %", num: true, fmt: v => v.toFixed(1) }, { key: "position", label: "Pos.", num: true, fmt: v => "#" + v.toFixed(0) }]} rows={cannibal} />
       </ToolModuleCard>
 
       <ToolModuleCard title="Comparatif Bing / Copilot" tier={3} icon="🅑" available={hasBing} enabled={enabled.bing} onToggle={() => toggle("bing")} count={bingGap.length}
         onExport={() => exp(CSV_COLUMNS.bing, bingGap, "comparatif-bing")} exportLabel="Exporter le lot">
-        <div style={{ fontSize: 11, color: "#1A3C2E88", marginBottom: 8 }}>Présence Bing (alimente Copilot &amp; ChatGPT Search). Un écart fort signale un problème d'indexation Bing spécifique.</div>
+        <div style={{ fontSize: 11, color: "#1A3C2E", marginBottom: 8 }}>Présence Bing (alimente Copilot &amp; ChatGPT Search). Un écart fort signale un problème d'indexation Bing spécifique.</div>
         <ModuleTable columns={[{ key: "topic", label: "Sujet / URL" }, { key: "bingValue", label: "Présence Bing", num: true }]} rows={bingGap} />
       </ToolModuleCard>
     </div>
@@ -3244,7 +3244,7 @@ export default function GeoAuditTab({
               <button key={t.key} onClick={() => setMainTab(t.key)} style={{
                 padding: "4px 14px", borderRadius: 5, fontSize: 12, fontWeight: 500, border: "none", cursor: "pointer", transition: "all 0.12s",
                 background: mainTab === t.key ? "#1A3C2E" : "transparent",
-                color: mainTab === t.key ? "#F0EBE0" : "#1A3C2E55",
+                color: mainTab === t.key ? "#F0EBE0" : "#1A3C2E",
               }}>{t.label}</button>
             ))}
           </div>
@@ -3252,11 +3252,11 @@ export default function GeoAuditTab({
         {/* Droite : actions */}
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
           <button onClick={refreshData} disabled={loading}
-            style={{ fontSize: 11, color: "#1A3C2E55", background: "transparent", border: "0.5px solid #1A3C2E18", borderRadius: 6, padding: "4px 10px", cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.4 : 1 }}>
+            style={{ fontSize: 11, color: "#1A3C2E", background: "transparent", border: "0.5px solid #1A3C2E18", borderRadius: 6, padding: "4px 10px", cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.4 : 1 }}>
             {loading ? "⏳" : "↺"}
           </button>
           <button onClick={() => setShowTour(true)} disabled={noData || loading}
-            style={{ fontSize: 11, color: "#1A3C2E55", background: "transparent", border: "0.5px solid #1A3C2E18", borderRadius: 6, padding: "4px 10px", cursor: noData || loading ? "not-allowed" : "pointer", opacity: noData || loading ? 0.4 : 1 }}>
+            style={{ fontSize: 11, color: "#1A3C2E", background: "transparent", border: "0.5px solid #1A3C2E18", borderRadius: 6, padding: "4px 10px", cursor: noData || loading ? "not-allowed" : "pointer", opacity: noData || loading ? 0.4 : 1 }}>
             Guide
           </button>
         </div>
@@ -3289,22 +3289,22 @@ export default function GeoAuditTab({
               <button onClick={async () => { setExporting(true); try { await exportPresentation(audit, brand, site, siteQuestions, siteResults, roadmapData, claudeKey, categories); } catch(e) { console.error(e); } setExporting(false); }}
                 disabled={noData || exporting}
                 title="Présentation client : état des lieux, forces/faiblesses, roadmap ICE"
-                style={{ padding: "4px 12px", background: noData ? "transparent" : "#1A3C2E", color: noData ? "#1A3C2E44" : "#F0EBE0", border: "0.5px solid #1A3C2E22", borderRadius: 5, fontSize: 11, fontWeight: 500, cursor: noData ? "not-allowed" : "pointer" }}>
+                style={{ padding: "4px 12px", background: noData ? "transparent" : "#1A3C2E", color: noData ? "#1A3C2E" : "#F0EBE0", border: "0.5px solid #1A3C2E22", borderRadius: 5, fontSize: 11, fontWeight: 500, cursor: noData ? "not-allowed" : "pointer" }}>
                 {exporting ? "…" : "⬇ Présentation"}
               </button>
               <button onClick={() => { setExporting(true); exportPDF(audit, brand, site, aiText); setTimeout(() => setExporting(false), 1000); }}
                 disabled={noData || exporting}
                 title="Rapport complet détaillé"
-                style={{ padding: "4px 12px", background: "transparent", color: noData ? "#1A3C2E44" : "#1A3C2E", border: "0.5px solid #1A3C2E22", borderRadius: 5, fontSize: 11, fontWeight: 500, cursor: noData ? "not-allowed" : "pointer" }}>
+                style={{ padding: "4px 12px", background: "transparent", color: noData ? "#1A3C2E" : "#1A3C2E", border: "0.5px solid #1A3C2E22", borderRadius: 5, fontSize: 11, fontWeight: 500, cursor: noData ? "not-allowed" : "pointer" }}>
                 {exporting ? "…" : "⬇ Rapport complet"}
               </button>
             </span>
           </div>
 
           {loading ? (
-            <div style={{ textAlign: "center", padding: 60, color: "#1A3C2E44", fontSize: 12 }}>Chargement des données…</div>
+            <div style={{ textAlign: "center", padding: 60, color: "#1A3C2E", fontSize: 12 }}>Chargement des données…</div>
           ) : noData ? (
-            <div style={{ textAlign: "center", padding: 60, color: "#1A3C2E44" }}>
+            <div style={{ textAlign: "center", padding: 60, color: "#1A3C2E" }}>
               <div style={{ fontSize: 32, marginBottom: 12 }}>📊</div>
               <div style={{ fontSize: 14, fontWeight: 600, color: "#1A3C2E", marginBottom: 6 }}>Aucun résultat disponible</div>
               <div style={{ fontSize: 12 }}>Interrogez des questions dans l'onglet Suivi GEO pour générer des données d'audit</div>
@@ -3317,7 +3317,7 @@ export default function GeoAuditTab({
             ══════════════════════════════════════════════════════ */}
             {/* Sélecteur de période de suivi (défaut : 1 mois coulant) */}
             <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8, marginBottom: 10 }}>
-              <span style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.06em", textTransform: "uppercase", color: "#1A3C2E55" }}>Période de suivi</span>
+              <span style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.06em", textTransform: "uppercase", color: "#1A3C2E" }}>Période de suivi</span>
               <select value={periodDays} onChange={e => setPeriodDays(parseInt(e.target.value, 10))}
                 style={{ padding: "5px 10px", borderRadius: 7, border: "0.5px solid #1A3C2E22", fontSize: 12, background: "#fff", color: "#1A3C2E", cursor: "pointer" }}>
                 <option value={7}>7 derniers jours</option>
@@ -3344,9 +3344,9 @@ export default function GeoAuditTab({
                     const color = rate >= 50 ? "#1A7A4A" : rate > 0 ? "#C97820" : "#1A3C2E33";
                     return (
                       <div key={pid} style={{ padding: "7px 14px", border: "0.5px solid #1A3C2E12", borderRadius: 8, background: "#fff", minWidth: 90 }}>
-                        <div style={{ fontSize: 9, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E44", marginBottom: 3 }}>{pid}</div>
+                        <div style={{ fontSize: 9, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E", marginBottom: 3 }}>{pid}</div>
                         <div style={{ fontSize: 18, fontWeight: 700, color, lineHeight: 1, letterSpacing: "-0.01em" }}>{rate}<span style={{ fontSize: 11, fontWeight: 400 }}>%</span></div>
-                        <div style={{ fontSize: 10, color: "#1A3C2E33", marginTop: 1 }}>{s.withBrand}/{s.total}</div>
+                        <div style={{ fontSize: 10, color: "#1A3C2E", marginTop: 1 }}>{s.withBrand}/{s.total}</div>
                       </div>
                     );
                   })}
@@ -3364,12 +3364,12 @@ export default function GeoAuditTab({
                     <div key={m.label} title={m.hint} style={{ flex: "1 1 140px", minWidth: 130, padding: "9px 14px", border: "0.5px solid #1A3C2E12", borderRadius: 8, background: "#fff" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 4 }}>
                         <span style={{ fontSize: 11, color: m.color }}>{m.icon}</span>
-                        <span style={{ fontSize: 9, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E44" }}>{m.label}</span>
+                        <span style={{ fontSize: 9, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E" }}>{m.label}</span>
                       </div>
-                      <div style={{ fontSize: 18, fontWeight: 700, color: m.pos ? m.color : "#1A3C2E22", lineHeight: 1, letterSpacing: "-0.01em" }}>
-                        {m.pos ? <>#{m.pos}<span style={{ fontSize: 10, fontWeight: 400, color: "#1A3C2E33" }}> moy.</span></> : "—"}
+                      <div style={{ fontSize: 18, fontWeight: 700, color: m.pos ? m.color : "#1A3C2E", lineHeight: 1, letterSpacing: "-0.01em" }}>
+                        {m.pos ? <>#{m.pos}<span style={{ fontSize: 10, fontWeight: 400, color: "#1A3C2E" }}> moy.</span></> : "—"}
                       </div>
-                      <div style={{ fontSize: 10, color: "#1A3C2E33", marginTop: 2 }}>{m.count} occurrence{m.count > 1 ? "s" : ""}</div>
+                      <div style={{ fontSize: 10, color: "#1A3C2E", marginTop: 2 }}>{m.count} occurrence{m.count > 1 ? "s" : ""}</div>
                     </div>
                   ))}
                 </div>
@@ -3377,18 +3377,18 @@ export default function GeoAuditTab({
 
               {/* Tendance 30 jours — mentions / évocations / citations (depuis les résultats) */}
               <div className="audit-trend-wrap" style={{ marginBottom: 18 }}>
-                <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E44", marginBottom: 8 }}>Évolution des mentions — 30 jours</div>
+                <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E", marginBottom: 8 }}>Évolution des mentions — 30 jours</div>
                 <TrendChart trendDays={(audit.mentionTrend && audit.mentionTrend.some(d => d.total > 0)) ? audit.mentionTrend.map(d => ({ date: d.date, tested: d.total, present: d.mentions + d.evocations, mentions: d.mentions, evocations: d.evocations, citations: d.citations })) : audit.trendDays} />
               </div>
 
               {/* ── Segmentation par intention ── */}
               {(audit.intentStatsList || []).length > 0 && (
                 <div style={{ marginBottom: 18 }}>
-                  <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E44", marginBottom: 8 }}>Performance par intention de recherche</div>
+                  <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E", marginBottom: 8 }}>Performance par intention de recherche</div>
                   <div style={{ overflowX: "auto" }}>
                     <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                       <thead>
-                        <tr style={{ textAlign: "left", color: "#1A3C2E66", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                        <tr style={{ textAlign: "left", color: "#1A3C2E", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5 }}>
                           <th style={{ padding: "6px 8px" }}>Intention</th>
                           <th style={{ padding: "6px 8px", textAlign: "right" }}>Résultats</th>
                           <th style={{ padding: "6px 8px", textAlign: "right", color: "#1A7A4A" }}>◎ Mentions</th>
@@ -3402,11 +3402,11 @@ export default function GeoAuditTab({
                         {audit.intentStatsList.map(s => (
                           <tr key={s.intent} style={{ borderTop: "0.5px solid #1A3C2E0D" }}>
                             <td style={{ padding: "6px 8px", fontWeight: 600, color: "#1A3C2E" }}>{s.intent}</td>
-                            <td style={{ padding: "6px 8px", textAlign: "right", color: "#1A3C2E99" }}>{s.total}</td>
+                            <td style={{ padding: "6px 8px", textAlign: "right", color: "#1A3C2E" }}>{s.total}</td>
                             <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 700, color: "#1A7A4A" }}>{s.mentions}</td>
                             <td style={{ padding: "6px 8px", textAlign: "right", color: "#C97820" }}>{s.evocations}</td>
                             <td style={{ padding: "6px 8px", textAlign: "right", color: "#1A3C2E" }}>{s.citations}</td>
-                            <td style={{ padding: "6px 8px", textAlign: "right", color: "#1A3C2E99", fontVariantNumeric: "tabular-nums" }}>{s.avgPos ? `#${s.avgPos}` : "—"}</td>
+                            <td style={{ padding: "6px 8px", textAlign: "right", color: "#1A3C2E", fontVariantNumeric: "tabular-nums" }}>{s.avgPos ? `#${s.avgPos}` : "—"}</td>
                             <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 600, color: s.presenceRate >= 50 ? "#1A7A4A" : s.presenceRate >= 20 ? "#C97820" : "#C0352A" }}>{s.presenceRate}%</td>
                           </tr>
                         ))}
@@ -3419,8 +3419,8 @@ export default function GeoAuditTab({
               {/* ── Type de page citée ── */}
               {(audit.pageTypeStatsList || []).length > 0 && (
                 <div style={{ marginBottom: 18 }}>
-                  <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E44", marginBottom: 8 }}>Type de page citée en source</div>
-                  <div style={{ fontSize: 11, color: "#1A3C2E66", marginBottom: 10 }}>Nature des URLs citées par les IA (toutes marques). Le compteur « dont marque » indique vos propres pages.</div>
+                  <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E", marginBottom: 8 }}>Type de page citée en source</div>
+                  <div style={{ fontSize: 11, color: "#1A3C2E", marginBottom: 10 }}>Nature des URLs citées par les IA (toutes marques). Le compteur « dont marque » indique vos propres pages.</div>
                   {(() => {
                     const max = Math.max(...audit.pageTypeStatsList.map(p => p.count), 1);
                     const COLORS = { "accueil": "#1A3C2E", "produit/service": "#1A7A4A", "blog/article": "#C97820", "catégorie": "#7C3AED", "institutionnel": "#64748B", "autre": "#9AAEA4" };
@@ -3451,9 +3451,9 @@ export default function GeoAuditTab({
                       <span style={{ color: "#1A7A4A", flexShrink: 0, fontSize: 10 }}>◎</span>
                       {q.isFav && <span style={{ flexShrink: 0, fontSize: 10, color: "#C97820" }}>★</span>}
                       <span style={{ flex: 1, color: "#1A3C2E", lineHeight: 1.5 }}>{q.question}</span>
-                      {q.volume > 0 && <span style={{ fontSize: 10, color: "#1A3C2E33", flexShrink: 0 }}>{q.volume >= 1000 ? (q.volume/1000).toFixed(1)+"k" : q.volume}</span>}
+                      {q.volume > 0 && <span style={{ fontSize: 10, color: "#1A3C2E", flexShrink: 0 }}>{q.volume >= 1000 ? (q.volume/1000).toFixed(1)+"k" : q.volume}</span>}
                     </div>
-                  )) : <div style={{ fontSize: 11, color: "#1A3C2E33", fontStyle: "italic" }}>Aucune mention dans un top LLM</div>}
+                  )) : <div style={{ fontSize: 11, color: "#1A3C2E", fontStyle: "italic" }}>Aucune mention dans un top LLM</div>}
                 </div>
                 <div>
                   <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#C0352A", marginBottom: 8 }}>Questions sans mentions · {audit.missingBrandQs.length}</div>
@@ -3463,7 +3463,7 @@ export default function GeoAuditTab({
                         <span style={{ color: "#C0352A", flexShrink: 0, fontSize: 10 }}>✗</span>
                         {q.isFav && <span style={{ flexShrink: 0, fontSize: 10, color: "#C97820" }}>★</span>}
                         <span style={{ flex: 1, color: "#1A3C2E", lineHeight: 1.5 }}>{q.question}</span>
-                        {q.volume > 0 && <span style={{ fontSize: 10, color: "#1A3C2E33", flexShrink: 0 }}>{q.volume >= 1000 ? (q.volume/1000).toFixed(1)+"k" : q.volume}</span>}
+                        {q.volume > 0 && <span style={{ fontSize: 10, color: "#1A3C2E", flexShrink: 0 }}>{q.volume >= 1000 ? (q.volume/1000).toFixed(1)+"k" : q.volume}</span>}
                       </div>
                       <AuditHintPanel
                         question={q.question}
@@ -3471,7 +3471,7 @@ export default function GeoAuditTab({
                         brandName={brand?.brand_name || ""}
                       />
                     </div>
-                  )) : <div style={{ fontSize: 11, color: "#1A3C2E33", fontStyle: "italic" }}>Toutes les questions ont une mention !</div>}
+                  )) : <div style={{ fontSize: 11, color: "#1A3C2E", fontStyle: "italic" }}>Toutes les questions ont une mention !</div>}
                 </div>
               </div>
 
@@ -3521,11 +3521,11 @@ export default function GeoAuditTab({
                     <table className="audit-comp-table">
                       <thead>
                         <tr style={{ borderBottom: "0.5px solid #1A3C2E12" }}>
-                          <th style={{ padding: "7px 0", textAlign: "left", fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E44" }}>Marque</th>
+                          <th style={{ padding: "7px 0", textAlign: "left", fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E" }}>Marque</th>
                           <th style={{ padding: "7px 10px", textAlign: "center", fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A7A4A" }}>◎ Mention</th>
                           <th style={{ padding: "7px 10px", textAlign: "center", fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#C97820" }}>⟶ Évocation</th>
-                          <th style={{ padding: "7px 10px", textAlign: "center", fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E77" }}>↗ Citation</th>
-                          <th style={{ padding: "7px 10px", textAlign: "center", fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E44" }}>Pos.</th>
+                          <th style={{ padding: "7px 10px", textAlign: "center", fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E" }}>↗ Citation</th>
+                          <th style={{ padding: "7px 10px", textAlign: "center", fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E" }}>Pos.</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -3539,10 +3539,10 @@ export default function GeoAuditTab({
                                 <span style={{ fontSize: 12, fontWeight: row.isRef ? 600 : 400, color: "#1A3C2E" }}>{row.name}</span>
                                 {row.isRef && <span style={{ marginLeft: 6, fontSize: 8, background: "#1A3C2E", color: "#F0EBE0", borderRadius: 3, padding: "1px 5px", letterSpacing: "0.06em" }}>REF</span>}
                               </td>
-                              <td style={{ padding: "8px 10px", textAlign: "center", fontSize: 14, fontWeight: 600, color: (s.mentions||0) > 0 ? "#1A7A4A" : "#1A3C2E18" }}>{s.mentions || 0}</td>
-                              <td style={{ padding: "8px 10px", textAlign: "center", fontSize: 14, fontWeight: 600, color: (s.evocations||0) > 0 ? "#C97820" : "#1A3C2E18" }}>{s.evocations || 0}</td>
-                              <td style={{ padding: "8px 10px", textAlign: "center", fontSize: 14, fontWeight: 600, color: (s.citations||0) > 0 ? "#1A3C2E77" : "#1A3C2E18" }}>{s.citations || 0}</td>
-                              <td style={{ padding: "8px 10px", textAlign: "center", fontSize: 12, color: "#1A3C2E44" }}>{avgPos ? `#${avgPos}` : "—"}</td>
+                              <td style={{ padding: "8px 10px", textAlign: "center", fontSize: 14, fontWeight: 600, color: (s.mentions||0) > 0 ? "#1A7A4A" : "#1A3C2E" }}>{s.mentions || 0}</td>
+                              <td style={{ padding: "8px 10px", textAlign: "center", fontSize: 14, fontWeight: 600, color: (s.evocations||0) > 0 ? "#C97820" : "#1A3C2E" }}>{s.evocations || 0}</td>
+                              <td style={{ padding: "8px 10px", textAlign: "center", fontSize: 14, fontWeight: 600, color: (s.citations||0) > 0 ? "#1A3C2E" : "#1A3C2E" }}>{s.citations || 0}</td>
+                              <td style={{ padding: "8px 10px", textAlign: "center", fontSize: 12, color: "#1A3C2E" }}>{avgPos ? `#${avgPos}` : "—"}</td>
                             </tr>
                           );
                         })}
@@ -3555,7 +3555,7 @@ export default function GeoAuditTab({
               {/* Voir toutes les marques détectées */}
               {(audit.competitorsRanked?.length || 0) > 8 && (
                 <button onClick={() => setShowAllComp(v => !v)}
-                  style={{ marginTop: 10, fontSize: 11, padding: "5px 12px", borderRadius: 6, border: "0.5px solid #1A3C2E22", background: "transparent", color: "#1A3C2E88", cursor: "pointer" }}>
+                  style={{ marginTop: 10, fontSize: 11, padding: "5px 12px", borderRadius: 6, border: "0.5px solid #1A3C2E22", background: "transparent", color: "#1A3C2E", cursor: "pointer" }}>
                   {showAllComp ? "▲ Afficher moins" : `▼ Voir toutes les marques (${audit.competitorsRanked.length})`}
                 </button>
               )}
@@ -3575,7 +3575,7 @@ export default function GeoAuditTab({
 
               {/* Top domaines — graphe en barres (style Fan-out) */}
               <div style={{ marginBottom: 20 }}>
-                <div style={{ fontSize: 11, fontWeight: 500, color: "#1A3C2E44", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>Top domaines cités</div>
+                <div style={{ fontSize: 11, fontWeight: 500, color: "#1A3C2E", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>Top domaines cités</div>
                 <AuditBarChart
                   accent="#1A3C2E"
                   data={Object.entries(audit.topDomains).sort((a,b)=>b[1]-a[1]).slice(0,14).map(([d, cnt]) => {
@@ -3587,7 +3587,7 @@ export default function GeoAuditTab({
                 {/* Légende */}
                 <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 8 }}>
                   {[["#1A7A4A","Votre marque"],["#C0352A","Concurrent"],["#9AAEA4","Autre"]].map(([c,l]) => (
-                    <span key={l} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10, color: "#1A3C2E77" }}>
+                    <span key={l} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10, color: "#1A3C2E" }}>
                       <span style={{ width: 9, height: 9, borderRadius: 2, background: c }} />{l}
                     </span>
                   ))}
@@ -3596,16 +3596,16 @@ export default function GeoAuditTab({
 
               {/* Tableau URLs marque */}
               <div>
-                <div style={{ fontSize: 11, fontWeight: 500, color: "#1A3C2E44", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>URLs de la marque citées</div>
+                <div style={{ fontSize: 11, fontWeight: 500, color: "#1A3C2E", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>URLs de la marque citées</div>
                 {audit.brandUrls.length === 0 ? (
-                  <div style={{ fontSize: 11, color: "#1A3C2E44", fontStyle: "italic" }}>Aucune URL de la marque détectée dans les sources</div>
+                  <div style={{ fontSize: 11, color: "#1A3C2E", fontStyle: "italic" }}>Aucune URL de la marque détectée dans les sources</div>
                 ) : (
                   <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 480 }}>
                     <thead>
                       <tr style={{ background: "#FAFAF8" }}>
                         {["URL", "Citations src", "Mentions rép.", "Questions liées", "Statut"].map(h => (
-                          <th key={h} style={{ padding: "8px 12px", textAlign: "left", fontWeight: 600, fontSize: 10, color: "#1A3C2E44", textTransform: "uppercase", letterSpacing: 0.5, borderBottom: `1px solid ${C.border}` }}>{h}</th>
+                          <th key={h} style={{ padding: "8px 12px", textAlign: "left", fontWeight: 600, fontSize: 10, color: "#1A3C2E", textTransform: "uppercase", letterSpacing: 0.5, borderBottom: `1px solid ${C.border}` }}>{h}</th>
                         ))}
                       </tr>
                     </thead>
@@ -3618,7 +3618,7 @@ export default function GeoAuditTab({
                         const status = src >= 3 ? { label: "✓ Performante", color: "#1A7A4A", bg: "#F0F7F3" }
                                      : rep > 0 && src === 0 ? { label: "⚠ À sourcer", color: "#DC2626", bg: "#FEF2F2" }
                                      : src > 0 ? { label: "↑ À booster", color: "#D97706", bg: "#FFFBEB" }
-                                     : { label: "— Peu citée", color: "#1A3C2E44", bg: C.bg };
+                                     : { label: "— Peu citée", color: "#1A3C2E", bg: C.bg };
                         // Afficher la version normalisée (sans https, www, slash final)
                         const displayUrl = u.norm || u.url.replace(/^https?:\/\//, "");
                         return (
@@ -3696,7 +3696,7 @@ export default function GeoAuditTab({
 
               {/* Pistes prioritaires — style épuré */}
               <div style={{ marginBottom: 20 }}>
-                <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E44", marginBottom: 10 }}>Pistes prioritaires</div>
+                <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E", marginBottom: 10 }}>Pistes prioritaires</div>
                 {audit.leads.map((l, i) => {
                   const accentColor = l.priority.includes("🔴") ? "#C0352A" : l.priority.includes("🟠") ? "#C97820" : l.priority.includes("🟡") ? "#C97820" : "#1A7A4A";
                   return (

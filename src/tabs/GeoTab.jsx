@@ -167,7 +167,7 @@ function renderMarkdown(text) {
     }
     if (bullet) {
       // Détail (Site web / Description…) : indenté sous l'item, une seule puce
-      return <div key={li} style={{ paddingLeft: 26, marginBottom: 2, display: "flex", gap: 6 }}><span style={{ flexShrink: 0, color: "#1A3C2E55" }}>·</span><span>{renderInline(bullet[1])}</span></div>;
+      return <div key={li} style={{ paddingLeft: 26, marginBottom: 2, display: "flex", gap: 6 }}><span style={{ flexShrink: 0, color: "#1A3C2E" }}>·</span><span>{renderInline(bullet[1])}</span></div>;
     }
     if (!line.trim()) return <div key={li} style={{ height: 6 }} />;
     return <div key={li} style={{ marginBottom: 2 }}>{parts}</div>;
@@ -874,7 +874,7 @@ function ChatAnswer({ providerId, modelLabel, answerNode }) {
       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderBottom: `0.5px solid ${t.accent}18`, background: `${t.accent}0A` }}>
         <span style={{ width: 20, height: 20, borderRadius: 6, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: t.avatarFg, ...avatarStyle }}>{t.glyph}</span>
         <span style={{ fontSize: 12, fontWeight: 600, color: t.accent }}>{t.name}</span>
-        {modelLabel && <span style={{ fontSize: 10, color: "#1A3C2E55", marginLeft: "auto", fontFamily: "monospace" }}>{modelLabel}</span>}
+        {modelLabel && <span style={{ fontSize: 10, color: "#1A3C2E", marginLeft: "auto", fontFamily: "monospace" }}>{modelLabel}</span>}
       </div>
 
       <div style={{ padding: "14px 14px 16px" }}>
@@ -1316,7 +1316,7 @@ function Btn({ children, onClick, disabled, color, variant = "solid", small, tit
 
 function StatusBadge({ status }) {
   const map = {
-    pending:       { label: "Prêt",       color: "#1A3C2E55" },
+    pending:       { label: "Prêt",       color: "#1A3C2E" },
     generating_q:  { label: "Génération…", color: "#E8541A" },
     done_q:        { label: "Généré",      color: "#1A7A4A" },
     generating_r:  { label: "LLM…",       color: "#E8541A" },
@@ -1360,7 +1360,7 @@ function TopBarChart({ title, glyph, data, accent = "#1A3C2E", onBarClick = null
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
         <span style={{ width: 22, height: 22, borderRadius: 6, background: `${accent}14`, color: accent, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 12, flexShrink: 0 }}>{glyph}</span>
         <span className="gt-kpi-label" style={{ marginBottom: 0 }}>{title}</span>
-        <span style={{ marginLeft: "auto", fontSize: 11, color: "#1A3C2E55", fontVariantNumeric: "tabular-nums" }}>{total}</span>
+        <span style={{ marginLeft: "auto", fontSize: 11, color: "#1A3C2E", fontVariantNumeric: "tabular-nums" }}>{total}</span>
       </div>
 
       {rows.length === 0 ? (
@@ -1402,7 +1402,7 @@ function TopBarChart({ title, glyph, data, accent = "#1A3C2E", onBarClick = null
           <div style={{ display: "flex", gap, marginTop: 5, paddingTop: 5, borderTop: "0.5px solid #1A3C2E0C" }}>
             {rows.map((d, i) => (
               <div key={d.name + i} style={{ flex: 1, minWidth: 0, display: "flex", justifyContent: "center" }}>
-                <span style={{ fontSize: 8, color: hover === i ? accent : "#1A3C2E44", fontVariantNumeric: "tabular-nums", fontWeight: hover === i ? 700 : 500 }}>{i + 1}</span>
+                <span style={{ fontSize: 8, color: hover === i ? accent : "#1A3C2E", fontVariantNumeric: "tabular-nums", fontWeight: hover === i ? 700 : 500 }}>{i + 1}</span>
               </div>
             ))}
           </div>
@@ -1667,7 +1667,7 @@ function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [],
       {/* Légende code couleur */}
       <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginTop: 12, paddingTop: 10, borderTop: "0.5px solid #1A3C2E0C" }}>
         {Object.entries(TOP_COLORS).map(([k, v]) => (
-          <span key={k} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10, color: "#1A3C2E77" }}>
+          <span key={k} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10, color: "#1A3C2E" }}>
             <span style={{ width: 9, height: 9, borderRadius: 2, background: v.color, flexShrink: 0 }} />
             {v.label}
           </span>
@@ -1680,9 +1680,9 @@ function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [],
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
             <span style={{ width: 22, height: 22, borderRadius: 6, background: "#C978201A", color: "#C97820", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 12, flexShrink: 0 }}>?</span>
             <span className="gt-kpi-label" style={{ marginBottom: 0 }}>Autres marques à identifier</span>
-            <span style={{ marginLeft: "auto", fontSize: 11, color: "#1A3C2E55" }}>{unknownEntitiesList.length}</span>
+            <span style={{ marginLeft: "auto", fontSize: 11, color: "#1A3C2E" }}>{unknownEntitiesList.length}</span>
           </div>
-          <div style={{ fontSize: 11, color: "#1A3C2E66", marginBottom: 10 }}>
+          <div style={{ fontSize: 11, color: "#1A3C2E", marginBottom: 10 }}>
             Entités présentes dans les tops LLM qui ne sont ni votre marque ni un concurrent renseigné. Ajoutez-les comme concurrents pour les suivre.
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
@@ -1691,10 +1691,10 @@ function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [],
                 style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "4px 10px", borderRadius: 14, border: "0.5px solid #1A3C2E18", background: "#fff", fontSize: 11, color: "#1A3C2E" }}>
                 {e.bestPos && <span style={{ fontSize: 9, fontWeight: 700, color: "#C97820", fontVariantNumeric: "tabular-nums" }}>#{e.bestPos}</span>}
                 {e.name}
-                <span style={{ fontSize: 9, color: "#1A3C2E44" }}>×{e.count}</span>
+                <span style={{ fontSize: 9, color: "#1A3C2E" }}>×{e.count}</span>
               </span>
             ))}
-            {unknownEntitiesList.length > 30 && <span style={{ fontSize: 10, color: "#1A3C2E44", alignSelf: "center" }}>+ {unknownEntitiesList.length - 30} autres</span>}
+            {unknownEntitiesList.length > 30 && <span style={{ fontSize: 10, color: "#1A3C2E", alignSelf: "center" }}>+ {unknownEntitiesList.length - 30} autres</span>}
           </div>
         </div>
       )}
@@ -1848,7 +1848,7 @@ function CompetitorManager({ projectId, siteId, allResults, competitors, setComp
     <div>
       {/* Formulaire ajout */}
       <div style={{ background: "transparent", border: "none", borderBottom: "0.5px solid #1A3C2E0D", padding: "0 0 16px 0", marginBottom: 16 }}>
-        <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.12em", textTransform: "uppercase", color: "#1A3C2E44", marginBottom: 10 }}>Ajouter un concurrent</div>
+        <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.12em", textTransform: "uppercase", color: "#1A3C2E", marginBottom: 10 }}>Ajouter un concurrent</div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
           <input value={newName} onChange={e => setNewName(e.target.value)} placeholder="Nom du concurrent…"
             onKeyDown={e => e.key === "Enter" && save()}
@@ -2570,7 +2570,7 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
                     title={(!apiKey && !providerKeys?.openai?.dec) ? "Clé OpenAI manquante" : undefined}>
                     {busy[kw.id] === "q" ? "…" : kw.status === "done_q" ? "↺" : "▶"}
                   </button>
-                  <button onClick={() => deleteKw(kw.id)} style={{ padding: "3px 8px", border: "none", background: "transparent", color: "#1A3C2E22", fontSize: 12, cursor: "pointer", transition: "color 0.15s" }}>✕</button>
+                  <button onClick={() => deleteKw(kw.id)} style={{ padding: "3px 8px", border: "none", background: "transparent", color: "#1A3C2E", fontSize: 12, cursor: "pointer", transition: "color 0.15s" }}>✕</button>
                 </div>
               </div>
             );
@@ -2818,7 +2818,7 @@ function ProviderRow({ provider, results, brandName, brandAliases, brandDomain =
                   <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 5, marginBottom: 4, minWidth: 0 }}>
                     <span className="gt-caption" style={{ minWidth: 18, flexShrink: 0, paddingTop: 1 }}>[{i+1}]</span>
                     <a href={url} target="_blank" rel="noreferrer"
-                      style={{ fontSize: 11, color: ib ? "#1A7A4A" : "#1A3C2E88", wordBreak: "break-all", flex: 1, minWidth: 0 }}>
+                      style={{ fontSize: 11, color: ib ? "#1A7A4A" : "#1A3C2E", wordBreak: "break-all", flex: 1, minWidth: 0 }}>
                       {stripQuery(url)}
                     </a>
                     </div>
@@ -2997,11 +2997,11 @@ RÈGLES :
     "ÉTAT DES LIEUX":                 { icon: "◎", color: "#1A3C2E",   border: "#1A3C2E18" },
     "MAILLAGE INTERNE":               { icon: "⟶", color: "#1A3C2E",   border: "#1A3C2E11" },
     "PAGES À CRÉER OU ADAPTER":       { icon: "✦", color: "#C97820",   border: "#C9782018" },
-    "URLS CONCURRENTES":              { icon: "↗", color: "#1A3C2E77", border: "#1A3C2E0D" },
+    "URLS CONCURRENTES":              { icon: "↗", color: "#1A3C2E", border: "#1A3C2E0D" },
   };
   const getMeta = (title) => {
     const key = Object.keys(SECTION_META).find(k => title.includes(k));
-    return SECTION_META[key] || { icon: "·", color: "#1A3C2E77", border: "#1A3C2E0D" };
+    return SECTION_META[key] || { icon: "·", color: "#1A3C2E", border: "#1A3C2E0D" };
   };
 
   if (!results.length) return null;
@@ -3016,7 +3016,7 @@ RÈGLES :
             Recommandations actionnables — {results.length} réponses analysées
           </div>
           {savedDate && (
-            <div style={{ fontSize: 10, color: "#1A3C2E55", marginTop: 2 }}>
+            <div style={{ fontSize: 10, color: "#1A3C2E", marginTop: 2 }}>
               Dernière analyse : {new Date(savedDate).toLocaleString("fr-FR", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
             </div>
           )}
@@ -3462,7 +3462,7 @@ RÈGLES :
     defend:            { label: "À défendre",          color: "#1A7A4A", desc: "La marque lead (#1-3)" },
     watch:             { label: "À surveiller",         color: "#C97820", desc: "Top 4-10" },
     conquest_priority: { label: "Conquête prioritaire", color: "#E8541A", desc: "Non positionnée, fort potentiel" },
-    conquer:           { label: "À conquérir",          color: "#1A3C2E77", desc: "Non positionnée" },
+    conquer:           { label: "À conquérir",          color: "#1A3C2E", desc: "Non positionnée" },
   };
 
   return (
@@ -3475,12 +3475,12 @@ RÈGLES :
             {mode === "url" ? "Plan d'action priorisé — roadmap ICE & favoris catégorisés" : "Actions à mener par type — ICE & pages concernées (favoris)"}
           </div>
           {mode === "url" && savedDate && (
-            <div style={{ fontSize: 10, color: "#1A3C2E55", marginTop: 2 }}>
+            <div style={{ fontSize: 10, color: "#1A3C2E", marginTop: 2 }}>
               Dernière génération : {new Date(savedDate).toLocaleString("fr-FR", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
             </div>
           )}
           {mode === "action" && actionSavedDate && (
-            <div style={{ fontSize: 10, color: "#1A3C2E55", marginTop: 2 }}>
+            <div style={{ fontSize: 10, color: "#1A3C2E", marginTop: 2 }}>
               Dernière génération : {new Date(actionSavedDate).toLocaleString("fr-FR", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
             </div>
           )}
@@ -3491,7 +3491,7 @@ RÈGLES :
             {[["url", "Par URL"], ["action", "Par action"]].map(([m, lbl]) => (
               <button key={m} onClick={() => { setMode(m); setOpen(true); }}
                 style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 6, cursor: "pointer",
-                  background: mode === m ? "#fff" : "transparent", color: mode === m ? "#1A3C2E" : "#1A3C2E66",
+                  background: mode === m ? "#fff" : "transparent", color: mode === m ? "#1A3C2E" : "#1A3C2E",
                   boxShadow: mode === m ? "0 1px 3px #1A3C2E1A" : "none" }}>
                 {lbl}
               </button>
@@ -3540,7 +3540,7 @@ RÈGLES :
       {mode === "action" && open && (
         <div style={{ borderTop: "0.5px solid #1A3C2E0D", paddingTop: 16 }}>
           {actionStatus === "loading" && (
-            <div style={{ fontSize: 12, color: "#1A3C2E77", padding: "12px 0" }}>Analyse des actions en cours… (présence, pages GSC, classification)</div>
+            <div style={{ fontSize: 12, color: "#1A3C2E", padding: "12px 0" }}>Analyse des actions en cours… (présence, pages GSC, classification)</div>
           )}
           {actionStatus === "error" && actionData?.error && (
             <div style={{ fontSize: 12, color: "#C0352A", background: "#FEF2F2", border: "1px solid #FCA5A5", borderRadius: 8, padding: "10px 12px" }}>{actionData.error}</div>
@@ -3549,10 +3549,10 @@ RÈGLES :
             <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
               {/* Constat de présence */}
               <div style={{ display: "flex", gap: 20, flexWrap: "wrap", padding: "12px 16px", background: "#1A3C2E08", borderRadius: 10 }}>
-                <div><div style={{ fontSize: 10, color: "#1A3C2E66", textTransform: "uppercase", letterSpacing: 0.5 }}>Favoris analysés</div><div style={{ fontSize: 20, fontWeight: 800, color: "#1A3C2E" }}>{actionData.presence.total}</div></div>
-                <div><div style={{ fontSize: 10, color: "#1A3C2E66", textTransform: "uppercase", letterSpacing: 0.5 }}>Marque présente</div><div style={{ fontSize: 20, fontWeight: 800, color: "#1A7A4A" }}>{actionData.presence.present}</div></div>
-                <div><div style={{ fontSize: 10, color: "#1A3C2E66", textTransform: "uppercase", letterSpacing: 0.5 }}>Marque absente</div><div style={{ fontSize: 20, fontWeight: 800, color: "#C0352A" }}>{actionData.presence.absent}</div></div>
-                <div><div style={{ fontSize: 10, color: "#1A3C2E66", textTransform: "uppercase", letterSpacing: 0.5 }}>Page GSC trouvée</div><div style={{ fontSize: 20, fontWeight: 800, color: "#1A3C2E" }}>{actionData.presence.withPage}</div></div>
+                <div><div style={{ fontSize: 10, color: "#1A3C2E", textTransform: "uppercase", letterSpacing: 0.5 }}>Favoris analysés</div><div style={{ fontSize: 20, fontWeight: 800, color: "#1A3C2E" }}>{actionData.presence.total}</div></div>
+                <div><div style={{ fontSize: 10, color: "#1A3C2E", textTransform: "uppercase", letterSpacing: 0.5 }}>Marque présente</div><div style={{ fontSize: 20, fontWeight: 800, color: "#1A7A4A" }}>{actionData.presence.present}</div></div>
+                <div><div style={{ fontSize: 10, color: "#1A3C2E", textTransform: "uppercase", letterSpacing: 0.5 }}>Marque absente</div><div style={{ fontSize: 20, fontWeight: 800, color: "#C0352A" }}>{actionData.presence.absent}</div></div>
+                <div><div style={{ fontSize: 10, color: "#1A3C2E", textTransform: "uppercase", letterSpacing: 0.5 }}>Page GSC trouvée</div><div style={{ fontSize: 20, fontWeight: 800, color: "#1A3C2E" }}>{actionData.presence.withPage}</div></div>
               </div>
 
               {!actionData.hasGsc && (
@@ -3573,13 +3573,13 @@ RÈGLES :
                         <span style={{ width: 26, height: 26, borderRadius: 7, background: meta.color, color: "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700, flexShrink: 0 }}>{meta.icon}</span>
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ fontSize: 13, fontWeight: 700, color: "#1A3C2E" }}>{g.label}</div>
-                          {g.summary && <div style={{ fontSize: 11, color: "#1A3C2E88", marginTop: 1 }}>{g.summary}</div>}
+                          {g.summary && <div style={{ fontSize: 11, color: "#1A3C2E", marginTop: 1 }}>{g.summary}</div>}
                         </div>
                         {/* Matrice ICE */}
                         <div style={{ display: "flex", gap: 10, flexShrink: 0 }}>
                           {[["Impact", g.impact], ["Confiance", g.confidence], ["Facilité", g.ease]].map(([lbl, v]) => (
                             <div key={lbl} style={{ textAlign: "center" }}>
-                              <div style={{ fontSize: 9, color: "#1A3C2E66", textTransform: "uppercase" }}>{lbl}</div>
+                              <div style={{ fontSize: 9, color: "#1A3C2E", textTransform: "uppercase" }}>{lbl}</div>
                               <div style={{ fontSize: 14, fontWeight: 700, color: "#1A3C2E", fontVariantNumeric: "tabular-nums" }}>{v}</div>
                             </div>
                           ))}
@@ -3591,7 +3591,7 @@ RÈGLES :
                       </div>
                       {/* Accordéon URLs / questions */}
                       <button onClick={() => setOpenActionTypes(p => ({ ...p, [g.type]: !p[g.type] }))}
-                        style={{ width: "100%", textAlign: "left", padding: "8px 14px", border: "none", borderTop: "0.5px solid #1A3C2E0D", background: "#fff", cursor: "pointer", fontSize: 11, color: "#1A3C2E88", display: "flex", alignItems: "center", gap: 6 }}>
+                        style={{ width: "100%", textAlign: "left", padding: "8px 14px", border: "none", borderTop: "0.5px solid #1A3C2E0D", background: "#fff", cursor: "pointer", fontSize: 11, color: "#1A3C2E", display: "flex", alignItems: "center", gap: 6 }}>
                         <span style={{ transform: isOpen ? "rotate(90deg)" : "none", transition: "transform 0.15s" }}>▸</span>
                         {g.count} question{g.count > 1 ? "s" : ""} concernée{g.count > 1 ? "s" : ""}{g.urlCount > 0 ? ` · ${g.urlCount} URL${g.urlCount > 1 ? "s" : ""}` : ""}
                       </button>
@@ -3600,12 +3600,12 @@ RÈGLES :
                           {g.items.map((it, i) => (
                             <div key={i} style={{ paddingTop: 8, borderTop: i ? "0.5px solid #1A3C2E08" : "none" }}>
                               <div style={{ fontSize: 12, color: "#1A3C2E", fontWeight: 500 }}>{it.question}</div>
-                              <div style={{ fontSize: 11, color: "#1A3C2E77", marginTop: 2, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                              <div style={{ fontSize: 11, color: "#1A3C2E", marginTop: 2, display: "flex", gap: 10, flexWrap: "wrap" }}>
                                 <span style={{ color: it.present ? "#1A7A4A" : "#C0352A" }}>{it.present ? `Présente${it.brandPos ? ` #${it.brandPos}` : ""}` : "Absente"}</span>
                                 {it.url && <span>↳ <a href={it.url} target="_blank" rel="noopener noreferrer" style={{ color: meta.color, textDecoration: "none" }}>{it.url.replace(/^https?:\/\//, "").slice(0, 60)}</a>{it.gscPos ? ` (GSC #${Math.round(it.gscPos)})` : ""}</span>}
                                 {!it.url && <span style={{ fontStyle: "italic" }}>aucune page existante</span>}
                               </div>
-                              {it.reason && <div style={{ fontSize: 11, color: "#1A3C2E99", marginTop: 2 }}>{it.reason}</div>}
+                              {it.reason && <div style={{ fontSize: 11, color: "#1A3C2E", marginTop: 2 }}>{it.reason}</div>}
                             </div>
                           ))}
                         </div>
@@ -3617,7 +3617,7 @@ RÈGLES :
             </div>
           )}
           {actionStatus === "idle" && (
-            <div style={{ fontSize: 12, color: "#1A3C2E77", padding: "12px 0" }}>
+            <div style={{ fontSize: 12, color: "#1A3C2E", padding: "12px 0" }}>
               Lancez l'analyse pour identifier, par question favorite, l'action prioritaire (optimiser, créer, enrichir…) et le récapitulatif par type d'action avec matrice ICE.
             </div>
           )}
@@ -3644,7 +3644,7 @@ RÈGLES :
                     </span>
                   ))}
                 </div>
-                <div style={{ fontSize: 11, color: "#1A3C2E66", marginTop: 6 }}>
+                <div style={{ fontSize: 11, color: "#1A3C2E", marginTop: 6 }}>
                   Les recommandations ci-dessous priorisent ces questions (★ dans la roadmap).
                 </div>
               </div>
@@ -3673,7 +3673,7 @@ RÈGLES :
                 {data.categoryAnalysis.map((c, i) => (
                   <div key={i} style={{ paddingBottom: 10, borderBottom: i < data.categoryAnalysis.length - 1 ? "0.5px solid #1A3C2E08" : "none" }}>
                     <div style={{ fontSize: 12, fontWeight: 600, color: "#1A3C2E", marginBottom: 2 }}>{c.category}</div>
-                    <div style={{ fontSize: 11, color: "#1A3C2E99", lineHeight: 1.6, marginBottom: 4 }}>{c.synthesis}</div>
+                    <div style={{ fontSize: 11, color: "#1A3C2E", lineHeight: 1.6, marginBottom: 4 }}>{c.synthesis}</div>
                     <div style={{ fontSize: 11, color: "#1A7A4A", lineHeight: 1.6 }}>→ {c.recommendation}</div>
                   </div>
                 ))}
@@ -3696,12 +3696,12 @@ RÈGLES :
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, minWidth: 540 }}>
                   <thead>
                     <tr style={{ borderBottom: "1px solid #1A3C2E22" }}>
-                      <th style={{ textAlign: "left", padding: "6px 8px", fontWeight: 600, color: "#1A3C2E77", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em" }}>Action</th>
-                      <th style={{ textAlign: "left", padding: "6px 8px", fontWeight: 600, color: "#1A3C2E77", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em" }}>Catégorie</th>
-                      <th style={{ textAlign: "center", padding: "6px 8px", fontWeight: 600, color: "#1A3C2E77", fontSize: 10 }} title="Impact">I</th>
-                      <th style={{ textAlign: "center", padding: "6px 8px", fontWeight: 600, color: "#1A3C2E77", fontSize: 10 }} title="Confidence">C</th>
-                      <th style={{ textAlign: "center", padding: "6px 8px", fontWeight: 600, color: "#1A3C2E77", fontSize: 10 }} title="Ease">E</th>
-                      <th style={{ textAlign: "center", padding: "6px 8px", fontWeight: 600, color: "#1A3C2E77", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em" }}>Score</th>
+                      <th style={{ textAlign: "left", padding: "6px 8px", fontWeight: 600, color: "#1A3C2E", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em" }}>Action</th>
+                      <th style={{ textAlign: "left", padding: "6px 8px", fontWeight: 600, color: "#1A3C2E", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em" }}>Catégorie</th>
+                      <th style={{ textAlign: "center", padding: "6px 8px", fontWeight: 600, color: "#1A3C2E", fontSize: 10 }} title="Impact">I</th>
+                      <th style={{ textAlign: "center", padding: "6px 8px", fontWeight: 600, color: "#1A3C2E", fontSize: 10 }} title="Confidence">C</th>
+                      <th style={{ textAlign: "center", padding: "6px 8px", fontWeight: 600, color: "#1A3C2E", fontSize: 10 }} title="Ease">E</th>
+                      <th style={{ textAlign: "center", padding: "6px 8px", fontWeight: 600, color: "#1A3C2E", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em" }}>Score</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -3718,13 +3718,13 @@ RÈGLES :
                             {r.action}
                           </td>
                           <td style={{ padding: "8px" }}>
-                            <span style={{ fontSize: 10, fontWeight: 600, color: isBrand ? "#1A3C2E" : "#1A3C2E77", background: isBrand ? "#1A3C2E11" : "transparent", border: `0.5px solid ${isBrand ? "#1A3C2E33" : "#1A3C2E11"}`, borderRadius: 10, padding: "1px 8px", whiteSpace: "nowrap" }}>
+                            <span style={{ fontSize: 10, fontWeight: 600, color: isBrand ? "#1A3C2E" : "#1A3C2E", background: isBrand ? "#1A3C2E11" : "transparent", border: `0.5px solid ${isBrand ? "#1A3C2E33" : "#1A3C2E11"}`, borderRadius: 10, padding: "1px 8px", whiteSpace: "nowrap" }}>
                               {r.category || "—"}
                             </span>
                           </td>
-                          <td style={{ padding: "8px", textAlign: "center", color: "#1A3C2E99", fontVariantNumeric: "tabular-nums" }}>{r.impact}</td>
-                          <td style={{ padding: "8px", textAlign: "center", color: "#1A3C2E99", fontVariantNumeric: "tabular-nums" }}>{r.confidence}</td>
-                          <td style={{ padding: "8px", textAlign: "center", color: "#1A3C2E99", fontVariantNumeric: "tabular-nums" }}>{r.ease}</td>
+                          <td style={{ padding: "8px", textAlign: "center", color: "#1A3C2E", fontVariantNumeric: "tabular-nums" }}>{r.impact}</td>
+                          <td style={{ padding: "8px", textAlign: "center", color: "#1A3C2E", fontVariantNumeric: "tabular-nums" }}>{r.confidence}</td>
+                          <td style={{ padding: "8px", textAlign: "center", color: "#1A3C2E", fontVariantNumeric: "tabular-nums" }}>{r.ease}</td>
                           <td style={{ padding: "8px", textAlign: "center", fontWeight: 700, color: iceColor(ice), fontVariantNumeric: "tabular-nums" }}>{ice}</td>
                         </tr>
                       );
@@ -3756,7 +3756,7 @@ RÈGLES :
                       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
                         <span style={{ width: 8, height: 8, borderRadius: "50%", background: meta.color, flexShrink: 0 }} />
                         <span style={{ fontSize: 11, fontWeight: 600, color: meta.color }}>{meta.label}</span>
-                        <span style={{ fontSize: 10, color: "#1A3C2E44" }}>{meta.desc} · {items.length}</span>
+                        <span style={{ fontSize: 10, color: "#1A3C2E" }}>{meta.desc} · {items.length}</span>
                       </div>
                       <div style={{ display: "flex", flexDirection: "column", gap: 3, paddingLeft: 16 }}>
                         {items.map((f, i) => (
@@ -3789,7 +3789,7 @@ RÈGLES :
                 ].filter(row => data.comparison[row.k]).map(row => (
                   <div key={row.k}>
                     <div style={{ fontSize: 10, fontWeight: 600, color: row.color, marginBottom: 2 }}>{row.label}</div>
-                    <div style={{ fontSize: 11, color: "#1A3C2E99", lineHeight: 1.6 }}>{data.comparison[row.k]}</div>
+                    <div style={{ fontSize: 11, color: "#1A3C2E", lineHeight: 1.6 }}>{data.comparison[row.k]}</div>
                   </div>
                 ))}
               </div>
@@ -3797,7 +3797,7 @@ RÈGLES :
           )}
 
           {/* 4. Rappel hint */}
-          <div style={{ fontSize: 11, color: "#1A3C2E77", fontStyle: "italic", background: "#FFFBEB", border: "0.5px solid #C9782022", borderRadius: 6, padding: "10px 12px" }}>
+          <div style={{ fontSize: 11, color: "#1A3C2E", fontStyle: "italic", background: "#FFFBEB", border: "0.5px solid #C9782022", borderRadius: 6, padding: "10px 12px" }}>
             💡 Pour des recommandations plus précises sur une question donnée, cliquez sur « Générer une recommandation » sous chaque question.
           </div>
         </div>
@@ -4716,7 +4716,7 @@ ${question}`;
               padding: "4px 10px", borderRadius: 20, fontSize: 11, fontWeight: 500, cursor: "pointer",
               border: `0.5px solid ${sortByResult ? "#1A7A4A" : "#1A3C2E22"}`,
               background: sortByResult ? "#1A7A4A" : "transparent",
-              color: sortByResult ? "#fff" : "#1A3C2E77",
+              color: sortByResult ? "#fff" : "#1A3C2E",
             }}>
             <span style={{ fontSize: 12 }}>⇅</span> Trier par résultat
           </button>
@@ -4727,7 +4727,7 @@ ${question}`;
               onClick={() => { setFilterSearch(""); setFilterCat(""); setFilterKeyword(""); setFilterFav(false); setFilterPositioned(false); setFilterLost(false); setFilterProviders([]); setSortByResult(false); }}
               className="gt-btn-icon"
               title="Effacer tous les filtres"
-              style={{ fontSize: 12, color: "#1A3C2E44" }}>
+              style={{ fontSize: 12, color: "#1A3C2E" }}>
               ✕
             </button>
           )}
@@ -4766,13 +4766,13 @@ ${question}`;
             onClick={() => setSelected(new Set(filtered.map(q => q.id)))}
             className="gt-btn-icon"
             title="Tout sélectionner"
-            style={{ fontSize: 11, color: "#1A3C2E55", padding: "3px 8px" }}>
+            style={{ fontSize: 11, color: "#1A3C2E", padding: "3px 8px" }}>
             Tout
           </button>
           {selected.size > 0 && (
             <>
-              <button onClick={() => setSelected(new Set())} className="gt-btn-icon" style={{ fontSize: 11, color: "#1A3C2E55", padding: "3px 8px" }}>Aucun</button>
-              <span className="gt-caption" style={{ color: "#1A3C2E77" }}>{selected.size} sél.</span>
+              <button onClick={() => setSelected(new Set())} className="gt-btn-icon" style={{ fontSize: 11, color: "#1A3C2E", padding: "3px 8px" }}>Aucun</button>
+              <span className="gt-caption" style={{ color: "#1A3C2E" }}>{selected.size} sél.</span>
               <CatSelect value={bulkCat} categories={categories} onChange={setBulkCat} placeholder="Catégoriser…" />
               {bulkCat && (
                 <button onClick={applyBulkCat} className="gt-btn" style={{ padding: "3px 12px" }}>Appliquer</button>
@@ -4839,7 +4839,7 @@ ${question}`;
       {urlGenOpen && !isReadOnly && (
         <div style={{ margin: "0 0 16px", padding: "14px 16px", background: "#F6F8F7", border: "0.5px solid #1A3C2E14", borderRadius: 10 }}>
           <div style={{ fontSize: 12, fontWeight: 700, color: "#1A3C2E", marginBottom: 4 }}>Générer des questions depuis une URL</div>
-          <div style={{ fontSize: 11, color: "#1A3C2E77", marginBottom: 12 }}>
+          <div style={{ fontSize: 11, color: "#1A3C2E", marginBottom: 12 }}>
             La page est crawlée légèrement, puis l'IA en déduit des questions de recherche. Les questions sont rattachées au site (sans mot-clé).
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
@@ -4850,7 +4850,7 @@ ${question}`;
               placeholder="https://exemple.fr/page…"
               style={{ flex: "1 1 260px", padding: "7px 11px", border: "1px solid #E2E8F0", borderRadius: 8, fontSize: 12 }} />
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-              <span style={{ fontSize: 11, color: "#1A3C2E77" }}>Nombre</span>
+              <span style={{ fontSize: 11, color: "#1A3C2E" }}>Nombre</span>
               <input type="range" min="10" max="25" value={urlGenCount}
                 onChange={e => setUrlGenCount(parseInt(e.target.value, 10))}
                 style={{ accentColor: "#1A3C2E", cursor: "pointer", width: 110 }} />
@@ -4897,7 +4897,7 @@ ${question}`;
               borderRadius: 0,
             }}>
                 <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
-                  <span style={{ flexShrink: 0, marginTop: 1, minWidth: 22, textAlign: "right", fontSize: 11, fontWeight: 600, color: "#1A3C2E33", fontVariantNumeric: "tabular-nums", userSelect: "none" }}>{idx + 1}</span>
+                  <span style={{ flexShrink: 0, marginTop: 1, minWidth: 22, textAlign: "right", fontSize: 11, fontWeight: 600, color: "#1A3C2E", fontVariantNumeric: "tabular-nums", userSelect: "none" }}>{idx + 1}</span>
                   <input type="checkbox" checked={isSel} onChange={() => { setSelected(prev => { const n = new Set(prev); n.has(q.id) ? n.delete(q.id) : n.add(q.id); return n; }); }} style={{ cursor: "pointer", flexShrink: 0, marginTop: 2 }} />
                   <button onClick={() => toggleFav(q.id, q.is_favorite)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, flexShrink: 0, opacity: q.is_favorite ? 0.9 : 0.2, transition: "opacity 0.2s" }}>⭐</button>
                   <div style={{ flex: 1, minWidth: 0 }}>
@@ -4942,20 +4942,20 @@ ${question}`;
                           {kwTag && (
                             <button onClick={() => assignKeyword(q, "")}
                               title="Retirer le mot-clé"
-                              style={{ fontSize: 10, padding: "2px 5px", background: "none", border: "0.5px solid #C0352A22", borderRadius: 5, color: "#C0352A55", cursor: "pointer" }}>✕</button>
+                              style={{ fontSize: 10, padding: "2px 5px", background: "none", border: "0.5px solid #C0352A22", borderRadius: 5, color: "#C0352A", cursor: "pointer" }}>✕</button>
                           )}
                           <button onClick={() => { setEditingKw(null); setKwInput(""); }}
-                            style={{ fontSize: 10, color: "#1A3C2E33", background: "none", border: "none", cursor: "pointer" }}>annuler</button>
+                            style={{ fontSize: 10, color: "#1A3C2E", background: "none", border: "none", cursor: "pointer" }}>annuler</button>
                         </span>
                       ) : (
                         /* Mode affichage : badge cliquable */
                         <span
                           onClick={() => { setEditingKw(q.id); setKwInput(kwTag?.keyword || ""); }}
                           title="Cliquer pour assigner un mot-clé"
-                          style={{ fontSize: 10, color: kwTag ? "#1A3C2E77" : "#1A3C2E33", background: kwTag ? "#FAFAF8" : "transparent", border: `0.5px solid ${kwTag ? "#1A3C2E0D" : "#1A3C2E11"}`, borderRadius: 10, padding: "1px 7px", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 3 }}>
+                          style={{ fontSize: 10, color: kwTag ? "#1A3C2E" : "#1A3C2E", background: kwTag ? "#FAFAF8" : "transparent", border: `0.5px solid ${kwTag ? "#1A3C2E0D" : "#1A3C2E11"}`, borderRadius: 10, padding: "1px 7px", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 3 }}>
                           🔑 {kwTag ? kwTag.keyword : <em style={{ fontStyle: "italic" }}>ajouter un mot-clé</em>}
                           {kwTag?.search_volume > 0 && (
-                            <span style={{ color: "#1A3C2E33", marginLeft: 3 }}>
+                            <span style={{ color: "#1A3C2E", marginLeft: 3 }}>
                               {kwTag.search_volume >= 1000 ? (kwTag.search_volume / 1000).toFixed(1) + "k" : kwTag.search_volume}
                             </span>
                           )}
@@ -4971,9 +4971,9 @@ ${question}`;
                       </span>
                     ) : null;
                   })}
-                      {q.is_manual && <span style={{ fontSize: 10, color: "#1A3C2E33", fontWeight: 400, fontStyle: "italic" }}>manuel</span>}
+                      {q.is_manual && <span style={{ fontSize: 10, color: "#1A3C2E", fontWeight: 400, fontStyle: "italic" }}>manuel</span>}
                       {hasBrand && <span style={{ fontSize: 10, color: "#1A7A4A", fontWeight: 500, letterSpacing: "0.01em" }}>✓ {brand_name}</span>}
-                      {qResults.length > 0 && <span style={{ fontSize: 10, color: "#1A3C2E33" }}>{qResults.length} réponse{qResults.length > 1 ? "s" : ""}</span>}
+                      {qResults.length > 0 && <span style={{ fontSize: 10, color: "#1A3C2E" }}>{qResults.length} réponse{qResults.length > 1 ? "s" : ""}</span>}
                     </div>
                     {/* Per-provider 30-day calendar */}
 
@@ -4991,7 +4991,7 @@ ${question}`;
                       placeholder="Catégories…"
                     />
                     <button onClick={() => setEditingQ(editingQ?.id === q.id ? null : { id: q.id, text: q.question })}
-                      style={{ padding: "3px 8px", border: "0.5px solid #1A3C2E18", borderRadius: 20, background: "transparent", color: "#1A3C2E55", fontSize: 12, cursor: "pointer", fontWeight: 400 }}
+                      style={{ padding: "3px 8px", border: "0.5px solid #1A3C2E18", borderRadius: 20, background: "transparent", color: "#1A3C2E", fontSize: 12, cursor: "pointer", fontWeight: 400 }}
                       title="Modifier">✎</button>
                     <button
                       onClick={() => {
@@ -5006,7 +5006,7 @@ ${question}`;
                       style={{ padding: "4px 16px", border: "0.5px solid #1A3C2E33", borderRadius: 20, background: "transparent", color: "#1A3C2E", fontSize: 11, fontWeight: 500, cursor: isRunning ? "wait" : "pointer", opacity: isRunning ? 0.35 : 1, letterSpacing: "0.02em", transition: "opacity 0.2s" }}>
                       {isRunning ? "…" : "▶"}
                     </button>
-                    <button onClick={() => deleteQ(q.id)} style={{ padding: "3px 8px", border: "none", background: "transparent", color: "#1A3C2E22", fontSize: 12, cursor: "pointer", transition: "color 0.15s" }}>✕</button>
+                    <button onClick={() => deleteQ(q.id)} style={{ padding: "3px 8px", border: "none", background: "transparent", color: "#1A3C2E", fontSize: 12, cursor: "pointer", transition: "color 0.15s" }}>✕</button>
                   </div>
                 </div>
                 {/* One row per provider — calendar + info + accordion + run */}
@@ -5453,7 +5453,7 @@ function UrlsTab({ projectId, categories, brand, allResults }) {
                         disabled={!!analyzingPage[u.id]}
                         title="Analyser le contenu GEO de la page"
                         className="gt-btn-icon"
-                        style={{ fontSize: 11, color: pageAnalysis[u.id] ? "#1A3C2E" : "#1A3C2E55" }}>
+                        style={{ fontSize: 11, color: pageAnalysis[u.id] ? "#1A3C2E" : "#1A3C2E" }}>
                         {analyzingPage[u.id] ? "…" : pageAnalysis[u.id] ? "✦ ▲" : "✦"}
                       </button>
                     )}
@@ -5462,7 +5462,7 @@ function UrlsTab({ projectId, categories, brand, allResults }) {
                 {/* Crawl sections */}
                 {isOpen && hasSections && (
                   <div style={{ borderTop: `1px solid ${meta.border}33`, background: "#FAFAF8", padding: "10px 14px" }}>
-                    <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E55", marginBottom: 8 }}>Sections · {u.crawl_sections.length}</div>
+                    <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E", marginBottom: 8 }}>Sections · {u.crawl_sections.length}</div>
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 7 }}>
                       {u.crawl_sections.map((sec, i) => (
                         <div key={i} style={{ background: "#fff", border: `1px solid ${sec.used_in_llm ? "#059669" : C.border}`, borderRadius: 7, padding: "8px 10px", borderLeft: `3px solid ${sec.used_in_llm ? "#059669" : C.border}` }}>
@@ -5509,7 +5509,7 @@ function UrlsTab({ projectId, categories, brand, allResults }) {
                       </div>
                       {/* Score GEO */}
                       {pageAnalysis[u.id].seo_score && (
-                        <div style={{ fontSize: 10, color: "#1A3C2E44" }}>
+                        <div style={{ fontSize: 10, color: "#1A3C2E" }}>
                           Score GEO estimé : {pageAnalysis[u.id].seo_score}/10
                           {pageAnalysis[u.id].content_type && ` · ${pageAnalysis[u.id].content_type}`}
                         </div>
@@ -5639,7 +5639,7 @@ function AutomationTab({ projectId, site, user, providerKeys }) {
   const fmtDate = (d) => d ? new Date(d).toLocaleString("fr-FR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "—";
 
   if (loading) return (
-    <div style={{ padding: 32, textAlign: "center", color: "#1A3C2E55", fontSize: 13 }}>Chargement…</div>
+    <div style={{ padding: 32, textAlign: "center", color: "#1A3C2E", fontSize: 13 }}>Chargement…</div>
   );
 
   return (
@@ -5706,7 +5706,7 @@ function AutomationTab({ projectId, site, user, providerKeys }) {
                   transition: "all 0.15s",
                 }}>
                 <div className={`gt-body ${active ? "" : "gt-dimmed"}`} style={{ fontWeight: 500, fontSize: 12, color: active ? "#F0EBE0" : undefined, marginBottom: 3 }}>{f.label}</div>
-                <div style={{ fontSize: 10, color: active ? "#F0EBE077" : "#1A3C2E33" }}>{f.desc}</div>
+                <div style={{ fontSize: 10, color: active ? "#F0EBE0" : "#1A3C2E" }}>{f.desc}</div>
               </button>
             );
           })}
@@ -6288,7 +6288,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
                   onClick={() => setMainTab(t.key === "analyse" ? "analyse" : "setup")}
                   style={{
                     padding: "8px 20px", fontSize: 13, fontWeight: isActive ? 500 : 400,
-                    color: isActive ? "#1A3C2E" : "#1A3C2E66",
+                    color: isActive ? "#1A3C2E" : "#1A3C2E",
                     background: "none", border: "none",
                     borderBottom: isActive ? "1.5px solid #1A3C2E" : "1.5px solid transparent",
                     marginBottom: -1, cursor: "pointer", transition: "all 0.15s",
@@ -6367,7 +6367,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
                 padding: "5px 14px", fontSize: 12, fontWeight: 500, cursor: "pointer",
                 border: "none", borderRadius: 20,
                 background: selectedSite === s.id ? "#1A3C2E" : "#F0EBE0",
-                color: selectedSite === s.id ? "#F0EBE0" : "#1A3C2E99",
+                color: selectedSite === s.id ? "#F0EBE0" : "#1A3C2E",
                 transition: "all 0.15s",
               }}>{s.label}</button>
             ))}
@@ -6387,7 +6387,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
             return (
               <button key={t.key} onClick={() => setSubTab(t.key)} style={{
                 padding: "6px 16px", fontSize: 12, fontWeight: active ? 500 : 400,
-                color: active ? "#1A3C2E" : "#1A3C2E66",
+                color: active ? "#1A3C2E" : "#1A3C2E",
                 background: active ? "#F0EBE0" : "transparent",
                 border: active ? "1px solid #1A3C2E33" : "1px solid transparent",
                 borderRadius: 20, cursor: "pointer", transition: "all 0.15s",
@@ -6441,9 +6441,9 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
         {/* ── Concurrents ── */}
         {subTab === "competitors" && (
           <div style={{ background: "#fff", border: "1px solid #1A3C2E11", borderRadius: 14, padding: "20px 24px" }}>
-            <div style={{ fontSize: 11, fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", color: "#1A3C2E55", marginBottom: 4 }}>Paysage concurrentiel</div>
+            <div style={{ fontSize: 11, fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", color: "#1A3C2E", marginBottom: 4 }}>Paysage concurrentiel</div>
             <div style={{ fontSize: 16, fontWeight: 500, color: "#1A3C2E", marginBottom: 4 }}>Concurrents</div>
-            <div style={{ fontSize: 12, color: "#1A3C2E77", marginBottom: 20 }}>
+            <div style={{ fontSize: 12, color: "#1A3C2E", marginBottom: 20 }}>
               Qualifiez les marques détectées dans les réponses LLM. Elles apparaissent dans les analyses et sont mises en valeur dans les réponses.
             </div>
             <CompetitorManager
