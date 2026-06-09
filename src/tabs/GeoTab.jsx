@@ -4038,15 +4038,26 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, setCa
 
       // 2) Génération des questions via OpenAI
       setUrlGenStatus("gen");
-      const prompt = `Tu es un expert GEO (Generative Engine Optimization). À partir du CONTENU ci-dessous (extrait d'une page web), génère exactement ${n} questions de recherche que des utilisateurs poseraient à un moteur IA (ChatGPT, Gemini, Perplexity) sur ce sujet.
+      const aliasList = Array.isArray(brand?.brand_aliases) ? brand.brand_aliases : [];
+      const forbiddenNames = [brandName, ...aliasList].map(s => (s || "").trim()).filter(Boolean);
+      const forbiddenLine = forbiddenNames.length
+        ? `\n- INTERDICTION ABSOLUE : ne mentionne JAMAIS « ${forbiddenNames.join(" », « ")} » (ni aucune variante orthographique) dans les questions. Les questions restent neutres, sans citer la marque du site analysé.`
+        : "";
+      const prompt = `Tu es un expert GEO (Generative Engine Optimization). À partir du CONTENU ci-dessous (extrait d'une page web), génère exactement ${n} questions de recherche que des utilisateurs poseraient à un moteur IA (ChatGPT, Gemini, Perplexity).
 
-OBJECTIF : chaque question doit naturellement amener l'IA à citer des noms de marques, d'enseignes, de sites ou d'entreprises concrètes — jamais une réponse purement générique.
+OBJECTIF : chaque question est de TYPE COMPARATIF / CLASSEMENT — sa réponse attendue est un TOP, un palmarès ou une liste de marques, enseignes, sites ou prestataires concrets du secteur. La marque du site analysé ne doit PAS apparaître dans la question : le but est de voir si elle (ou ses concurrents) ressort spontanément dans la réponse de l'IA.
+
+EXEMPLES de bonnes questions (cas d'un site de pergolas) :
+- « Quel est le meilleur site pour acheter une pergola ? »
+- « Quel prestataire choisir pour installer une pergola ? »
+- « Où acheter une pergola bioclimatique de qualité ? »
 
 CONTRAINTES :
+- Questions neutres et génériques sur le secteur / les produits / services du contenu${forbiddenLine}
+- Formule des questions qui appellent une réponse en LISTE d'acteurs (meilleur, top, quel prestataire, où acheter, quelle enseigne, comparatif…)
 - Couvre les différents thèmes/produits/services présents dans le contenu
 - Maximum 14 mots par question
 - Ton naturel, comme une vraie requête de recherche
-- Commence de préférence par "Quelles", "Quel", "Qui", "Lesquels"
 - Pas de doublons
 
 CONTENU DE LA PAGE :
@@ -4073,9 +4084,15 @@ Réponds UNIQUEMENT avec les ${n} questions séparées par des points-virgules (
         .split(/[;\n]/)
         .map(s => s.replace(/^\s*\d+[.)\s]+/, "").trim())
         .filter(s => s.length > 5 && s.length < 250);
+      // Filet de sécurité : retirer toute question contenant encore la marque ou un alias
+      const normQ = (s) => (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      const bannedRe = [brandName, ...(Array.isArray(brand?.brand_aliases) ? brand.brand_aliases : [])]
+        .map(normQ).filter(b => b && b.length >= 2)
+        .map(b => new RegExp(`(^|[^\\p{L}\\p{N}])${b.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^\\p{L}\\p{N}]|$)`, "u"));
+      const qsClean = qs.filter(q => { const nq = normQ(q); return !bannedRe.some(re => re.test(nq)); });
       // Dédoublonnage vs questions existantes
       const existing = new Set(questions.map(q => (q.question || "").toLowerCase().trim()));
-      const fresh = qs.filter(q => !existing.has(q.toLowerCase().trim()));
+      const fresh = qsClean.filter(q => !existing.has(q.toLowerCase().trim()));
       if (!fresh.length) throw new Error("Aucune nouvelle question générée");
 
       // 3) Sauvegarde — questions libres rattachées au site (sans mot-clé)
