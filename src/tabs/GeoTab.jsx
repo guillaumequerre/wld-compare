@@ -4010,6 +4010,7 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, setCa
   // Génère des questions GEO à partir du contenu d'une URL (crawl léger → IA)
   const generateFromUrl = async () => {
     const resolvedKey = providerKeys?.openai?.dec || apiKey;
+    const brandName = (brand?.brand_name || "").trim();
     let url = (urlGenUrl || "").trim();
     if (!url) return;
     if (!/^https?:\/\//i.test(url)) url = "https://" + url;
