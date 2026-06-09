@@ -133,7 +133,7 @@ export function matchGscForQuestion(question, gscRows, siteDomain = "") {
     const g = gscRowFull(raw);
     const hayText = g.query || g.url || "";
     if (!hayText) return;
-    const hWords = sigWords(g.query ? g.query : urlPath(g.url).replace(/[\-_/]/g, " "));
+    const hWords = sigWords(g.query ? g.query : urlPath(g.url).replace(/[-_/]/g, " "));
     if (!hWords.length) return;
     // recouvrement de mots
     let overlap = 0;

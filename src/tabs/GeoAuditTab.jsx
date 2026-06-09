@@ -995,7 +995,7 @@ function computeAudit(questions, results, urlIndex, brand, site, calendarEntries
     let path = "";
     try { path = new URL(url).pathname.toLowerCase(); } catch { path = String(url || "").toLowerCase(); }
     if (path === "" || path === "/" ) return "accueil";
-    if (/\/(blog|article|actualit|news|guide|magazine|ressource|conseil|dossier)s?\//.test(path) || /\.(html?)$/.test(path) && /(blog|article|guide)/.test(path)) return "blog/article";
+    if (/\/(blog|article|actualit|news|guide|magazine|ressource|conseil|dossier)s?\//.test(path) || (/\.(html?)$/.test(path) && /(blog|article|guide)/.test(path))) return "blog/article";
     if (/\/(produit|product|offre|service|solution|prestation)s?\//.test(path)) return "produit/service";
     if (/\/(categorie|category|collection|gamme|univers)s?\//.test(path)) return "catégorie";
     if (/\/(a-propos|about|qui-sommes|equipe|contact|mentions|cgv|cgu)/.test(path)) return "institutionnel";
