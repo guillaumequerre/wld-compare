@@ -3818,6 +3818,8 @@ RÈGLES :
 function QuestionsTab({ site, projectId, apiKey, model, brand, categories, setCategories, allResults, gscRows = [], aliasMap = {}, onResultSaved, activeProviders = ["openai"], providerKeys = {}, runMode = "parallel", keywordsOrder = [], refreshTrigger = 0, competitors = [], setCompetitors = null, onSaveKey = null, isReadOnly = false }) {
   const [questions, setQuestions]   = useState([]);
   const [results, setResults]       = useState(allResults || []);
+  const [recomputing, setRecomputing]   = useState(false);
+  const [recomputeMsg, setRecomputeMsg] = useState("");
   // Sort: favorites first, then by keyword order, then by creation date
   const sortedQuestions = useMemo(() => {
     const kwIndexMap = {};
@@ -4229,7 +4231,7 @@ Réponds UNIQUEMENT avec les ${n} questions séparées par des points-virgules (
     const pk = providerKeysRef.current[provider.id];
     if (!pk?.dec) { console.warn("No key for provider", provider.id); return; }
     setRunning(r => ({ ...r, [`${q.id}-${provider.id}`]: true }));
-    const { brand_name = "", brand_aliases = [], competitors = [], context = "" } = brand || {};
+    const { brand_name = "", brand_aliases = [], context = "" } = brand || {}; // competitors vient du PROP (liste chargée), pas de brand
     const baseContext = context ? `Contexte : "${context}"\n` : "";
     const question = `Question : ${q.question}`;
     const promptForClaude = `${baseContext}Tu es un expert en recommandation d'entreprises et prestataires. Réponds à la question suivante en te basant sur tes connaissances pour donner une liste de vrais acteurs, entreprises ou prestataires du marché.
@@ -4541,6 +4543,44 @@ ${question}`;
     }).length;
   }, [filtered, resultsByQ, activeProviders, providerKeys]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Recalcul de la détection sur l'historique (sans re-interroger les modèles) ──
+  // Re-passe detectBrand sur les réponses déjà stockées avec la liste de concurrents
+  // actuelle, et met à jour competitors_mentioned / unknown_entities / positions.
+  const recomputeDetection = async () => {
+    if (recomputing) return;
+    const rows = (results && results.length ? results : allResults) || [];
+    const real = rows.filter(r => r && r.id && !String(r.id).startsWith("tmp-") && r.answer);
+    if (!real.length) { setRecomputeMsg("Aucun résultat à recalculer."); return; }
+    const { brand_name = "", brand_aliases = [] } = brand || {};
+    const comps = (competitors || []);
+    setRecomputing(true);
+    setRecomputeMsg(`Recalcul… 0/${real.length}`);
+    let done = 0, errs = 0;
+    for (const r of real) {
+      try {
+        const d = detectBrand(r.answer || "", r.sources || [], brand_name, brand_aliases, comps);
+        await sbSaveGeoResult({
+          question_id: r.question_id, project_id: projectId, site_id: site.id,
+          model: r.model,
+          answer: r.answer, answer_type: r.answer_type, intent_type: r.intent_type,
+          sources: r.sources || [], source_types: r.source_types || [],
+          brand_mentioned: d.brandMentioned, brand_position: d.brandPosition, brand_in_sources: d.brandInSources,
+          competitors_mentioned: d.competitorsMentioned, unknown_entities: d.unknownEntities || [],
+          brand_mention_position:   d.mention?.position   || null,
+          brand_evocation_position: d.evocation?.position || null,
+          brand_citation_position:  d.citation?.position  || null,
+          input_tokens: r.input_tokens, output_tokens: r.output_tokens,
+          created_at: r.created_at, // préserve la date d'origine
+        });
+        done++;
+      } catch (e) { errs++; console.error("recomputeDetection:", e); }
+      setRecomputeMsg(`Recalcul… ${done + errs}/${real.length}`);
+    }
+    setRecomputing(false);
+    setRecomputeMsg(`Terminé : ${done} résultat(s) recalculé(s)${errs ? `, ${errs} erreur(s)` : ""}.`);
+    onResultSaved?.(); // recharge les résultats → les tops se mettent à jour
+  };
+
   return (
     <div>
       {/* ── GEO Analysis ── */}
@@ -4566,6 +4606,14 @@ ${question}`;
       />
 
       {/* ── Stats header (filtered) ── */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 10, marginBottom: 6 }}>
+        {recomputeMsg && <span style={{ fontSize: 11, color: recomputing ? "#C97820" : "#1A7A4A" }}>{recomputeMsg}</span>}
+        <button onClick={recomputeDetection} disabled={recomputing}
+          className="gt-btn gt-btn--ghost" style={{ fontSize: 11, opacity: recomputing ? 0.5 : 1 }}
+          title="Re-détecte marque et concurrents sur les réponses déjà enregistrées (sans ré-interroger les modèles, donc sans coût)">
+          {recomputing ? "Recalcul…" : "↻ Recalculer la détection"}
+        </button>
+      </div>
       <div data-tour="stats-header"><StatsHeader questions={filtered} results={filteredResults} brandName={brand_name} qualifiedCompetitors={competitors.filter(c => c.enabled !== false)} aliasMap={aliasMap}
             onTopClick={(field, name) => { setSearchField(field); setFilterSearch(name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")); }} /></div>
 
