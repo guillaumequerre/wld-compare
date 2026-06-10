@@ -1150,3 +1150,36 @@ export async function sbDeleteCompetitor(id) {
   );
   return res.ok;
 }
+
+// ── Alias de marques (table geo_aliases) ─────────────────────────
+// Restaurées : ces fonctions étaient perdues lors d'une reprise de supabase.js.
+export async function sbGetAliases(project_id, site_id) {
+  const res = await fetch(
+    `${PROXY}/rest/v1/geo_aliases?project_id=eq.${encodeURIComponent(project_id)}&site_id=eq.${encodeURIComponent(site_id)}&order=alias.asc`,
+    { headers: authHeaders() }
+  );
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function sbSaveAlias({ project_id, site_id, alias, canonical }) {
+  const res = await fetchSupabase(`${PROXY}/rest/v1/geo_aliases`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json", "Prefer": "return=representation,resolution=merge-duplicates" }),
+    body: JSON.stringify({ project_id, site_id, alias, canonical }),
+  });
+  if (!res.ok) {
+    const err = await res.text().catch(() => "");
+    throw new Error(`sbSaveAlias: ${res.status} — ${err.slice(0, 120)}`);
+  }
+  const rows = await res.json();
+  return Array.isArray(rows) ? rows[0] : rows;
+}
+
+export async function sbDeleteAlias(id) {
+  const res = await fetch(
+    `${PROXY}/rest/v1/geo_aliases?id=eq.${encodeURIComponent(id)}`,
+    { method: "DELETE", headers: authHeaders() }
+  );
+  return res.ok;
+}
