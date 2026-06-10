@@ -198,14 +198,17 @@ function ProjectCosts({ project }) {
   );
 }
 
-function ProjectMembers({ project, ownerEmail, myRole = "owner" }) {
+function ProjectMembers({ project, ownerEmail, myRole = "owner", isSuper = false }) {
   const [members, setMembers] = useState([]);
   const [newEmail, setNewEmail] = useState("");
-  const [newRole, setNewRole]   = useState("member"); // "member" | "reader"
+  const [newRole, setNewRole]   = useState("member"); // "member" | "admin" | "reader"
   const [loading, setLoading]   = useState(false);
   const [saving,  setSaving]    = useState(false);
   const [error,   setError]     = useState("");
-  const canManage = myRole === "owner" || myRole === "member";
+  // Seuls le propriétaire, les administrateurs et les super admins peuvent inviter/retirer.
+  const canManage   = isSuper || myRole === "owner" || myRole === "admin";
+  // Les coûts en tokens ne sont visibles que par owner / admin / superadmin.
+  const canSeeCosts = isSuper || myRole === "owner" || myRole === "admin";
 
   useEffect(() => {
     if (!project?.id) return;
@@ -251,6 +254,8 @@ function ProjectMembers({ project, ownerEmail, myRole = "owner" }) {
 
   const roleBadge = (role) => {
     if (role === "reader") return { label: "👁 Lecture", color: "#D97706", bg: "#FFFBEB" };
+    if (role === "admin")  return { label: "🛡 Admin",  color: "#1A3C2E", bg: "#EAF0EC" };
+    if (role === "owner")  return { label: "★ Propriétaire", color: "#059669", bg: "#ECFDF5" };
     return { label: "✏️ Membre", color: "#7C3AED", bg: "#F5F3FF" };
   };
 
@@ -312,6 +317,7 @@ function ProjectMembers({ project, ownerEmail, myRole = "owner" }) {
             <select value={newRole} onChange={e => setNewRole(e.target.value)}
               style={{ padding: "8px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, cursor: "pointer" }}>
               <option value="member">✏️ Membre — accès complet</option>
+              <option value="admin">🛡 Administrateur — accès complet + invitations + coûts</option>
               <option value="reader">👁 Lecture seule — Fan-outs & Audit uniquement</option>
             </select>
             <button onClick={add} disabled={saving || !newEmail.includes("@")}
@@ -320,8 +326,8 @@ function ProjectMembers({ project, ownerEmail, myRole = "owner" }) {
             </button>
           </div>
           <div style={{ fontSize: 11, color: C.textLight, marginTop: 6 }}>
-            <strong>Membre</strong> : accès complet (Setup, Fan-outs, Audit). <strong>Lecture seule</strong> : Fan-outs et Audit GEO uniquement, aucun appel LLM.
-            Si l'adresse n'a pas de compte, un email d'invitation sera envoyé automatiquement.
+            <strong>Administrateur</strong> : accès complet + peut inviter et gérer les accès + voit les coûts en tokens. <strong>Membre</strong> : accès complet (Setup, Fan-outs, Audit). <strong>Lecture seule</strong> : Fan-outs et Audit GEO uniquement, aucun appel LLM.
+            Si l'adresse n'a pas de compte, un email d'invitation à créer un compte est préparé.
           </div>
         </>
       )}
@@ -329,11 +335,13 @@ function ProjectMembers({ project, ownerEmail, myRole = "owner" }) {
         <div style={{ fontSize: 12, color: C.textLight, fontStyle: "italic" }}>Vous avez un accès lecture seule sur ce projet.</div>
       )}
 
-      {/* ── Coûts du projet (tokens réels × tarifs) ── */}
-      <div style={{ marginTop: 22, paddingTop: 18, borderTop: `1px solid ${C.border}` }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>💸 Coûts du projet</div>
-        <ProjectCosts project={project} />
-      </div>
+      {/* ── Coûts du projet (tokens réels × tarifs) — owner / admin / superadmin uniquement ── */}
+      {canSeeCosts && (
+        <div style={{ marginTop: 22, paddingTop: 18, borderTop: `1px solid ${C.border}` }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.textLight, textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 10 }}>💸 Coûts du projet</div>
+          <ProjectCosts project={project} />
+        </div>
+      )}
     </div>
   );
 }
@@ -390,10 +398,16 @@ function AccountForm({ user, onLogout, isAdmin }) {
   );
 }
 
-export default function ManageTab({ user, projects, currentProjectId, setCurrentProjectId, onLogin, onLogout, myRole = "owner" }) {
+export default function ManageTab({ user, projects, currentProjectId, setCurrentProjectId, onLogin, onLogout }) {
   const [selectedProjectId, setSelectedProjectId] = useState(currentProjectId);
   const selectedProject = projects.find(p => p.id === selectedProjectId) || projects[0];
   const isAdmin = user && isSuperAdmin(user);
+  // Rôle effectif de l'utilisateur courant sur le projet sélectionné
+  const myProjectRole = isAdmin
+    ? "owner"
+    : (selectedProject?.owner_email?.toLowerCase() === user?.email?.toLowerCase()
+        ? "owner"
+        : (selectedProject?._myRole || "member"));
 
   if (!user) return (
     <div style={{ maxWidth: 480, margin: "0 auto", paddingTop: 40 }}>
@@ -428,7 +442,7 @@ export default function ManageTab({ user, projects, currentProjectId, setCurrent
           </div>
         </div>
 
-        <ProjectMembers project={selectedProject} ownerEmail={user.email} myRole={myRole} />
+        <ProjectMembers project={selectedProject} ownerEmail={user.email} myRole={myProjectRole} isSuper={isAdmin} />
       </Section>
 
       {/* Superadmin info */}

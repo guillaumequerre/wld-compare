@@ -187,16 +187,18 @@ export async function sbLoadAccessibleProjects(userEmail) {
     if (admin) {
       const res = await fetch(`/api/supabase/rest/v1/projects?select=*&order=updated_at.desc`, { headers: authH });
       if (!res.ok) return [];
-      return (await res.json()).map(parseProject);
+      return (await res.json()).map(p => { const proj = parseProject(p); proj._myRole = "owner"; return proj; });
     }
 
     const [ownedRes, memberRes] = await Promise.all([
       fetch(`/api/supabase/rest/v1/projects?owner_email=eq.${encodeURIComponent(email)}&select=*&order=updated_at.desc`, { headers: authH }),
-      fetch(`/api/supabase/rest/v1/project_members?user_email=eq.${encodeURIComponent(email)}&select=project_id`, { headers: authH }),
+      fetch(`/api/supabase/rest/v1/project_members?user_email=eq.${encodeURIComponent(email)}&select=project_id,role`, { headers: authH }),
     ]);
     const owned = ownedRes.ok ? await ownedRes.json() : [];
     const memberships = memberRes.ok ? await memberRes.json() : [];
-    const memberIds = memberships.map(m => m.project_id).filter(Boolean);
+    const roleByProject = {};
+    memberships.forEach(m => { if (m.project_id) roleByProject[m.project_id] = m.role || "member"; });
+    const memberIds = Object.keys(roleByProject);
 
     let memberProjects = [];
     if (memberIds.length > 0) {
@@ -205,10 +207,16 @@ export async function sbLoadAccessibleProjects(userEmail) {
       if (res.ok) memberProjects = await res.json();
     }
 
+    const ownedIds = new Set(owned.map(p => p.id));
     const seen = new Set();
     return [...owned, ...memberProjects]
       .filter(p => { if (seen.has(p.id)) return false; seen.add(p.id); return true; })
-      .map(parseProject);
+      .map(p => {
+        const proj = parseProject(p);
+        // Rôle de l'utilisateur courant sur ce projet (pour les permissions UI)
+        proj._myRole = ownedIds.has(p.id) ? "owner" : (roleByProject[p.id] || "member");
+        return proj;
+      });
   } catch(e) {
     console.error("sbLoadAccessibleProjects error:", e);
     return [];

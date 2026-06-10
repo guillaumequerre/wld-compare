@@ -1572,7 +1572,7 @@ function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [],
   // Top mentions : tri par meilleure position puis count
   const topMentions = aggList.filter(e => e.ment.count > 0)
     .map(e => ({ name: e.name, count: e.ment.count, bestPos: e.ment.bestPos, kind: e.kind }))
-    .sort((a, b) => { const pa = a.bestPos ?? 9999, pb = b.bestPos ?? 9999; return pa !== pb ? pa - pb : b.count - a.count; });
+    .sort((a, b) => { if (b.count !== a.count) return b.count - a.count; return (a.bestPos ?? 9999) - (b.bestPos ?? 9999); });
   // Top évocations : tri par count
   const topEvocations = aggList.filter(e => e.evoc.count > 0)
     .map(e => ({ name: e.name, count: e.evoc.count, kind: e.kind }))
