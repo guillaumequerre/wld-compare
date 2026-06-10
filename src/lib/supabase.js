@@ -885,6 +885,54 @@ export async function sbAddCalendarEntry(question_id, provider_id, brand_present
   }
 }
 
+// Upsert d'une entrée calendrier pour une DATE donnée (utilisé par le recalcul de
+// détection, qui doit mettre à jour le carré à la date d'origine du résultat, pas
+// à aujourd'hui). DELETE + INSERT pour garantir une seule ligne par (question, provider, date).
+export async function sbUpsertCalendarEntry(question_id, provider_id, test_date, brand_present, presType, mentionPos = null) {
+  if (!question_id || !provider_id || !test_date) return null;
+  const present = brand_present === true || brand_present === 1;
+  const fullBody = {
+    question_id,
+    provider_id,
+    brand_present: present,
+    brand_mention:   presType === "mention"   ? 1 : 0,
+    brand_citation:  presType === "citation"  ? 1 : 0,
+    brand_evocation: presType === "evocation" ? 1 : 0,
+    mention_position: presType === "mention" && mentionPos != null ? mentionPos : null,
+    test_date,
+  };
+  const baseBody = { question_id, provider_id, brand_present: present, test_date };
+
+  const post = async (body) => fetchSupabase(`${PROXY}/rest/v1/geo_calendar_dates`, {
+    method: "POST",
+    headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "return=representation" },
+    body: JSON.stringify(body),
+  });
+
+  try {
+    // 1) Supprimer l'éventuelle entrée existante pour cette (question, provider, date)
+    await fetchSupabase(
+      `${PROXY}/rest/v1/geo_calendar_dates?question_id=eq.${encodeURIComponent(question_id)}&provider_id=eq.${encodeURIComponent(provider_id)}&test_date=eq.${encodeURIComponent(test_date)}`,
+      { method: "DELETE", headers: authHeaders() }
+    );
+    // 2) Réinsérer avec la détection à jour (payload complet, fallback colonnes de base)
+    let res = await post(fullBody);
+    if (!res.ok && (res.status === 400 || res.status === 404 || res.status === 422)) {
+      res = await post(baseBody);
+    }
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "");
+      console.error("[sbUpsertCalendarEntry] failed:", res.status, errText.slice(0, 200));
+      return null;
+    }
+    const data = await res.json();
+    return Array.isArray(data) ? data[0] : data;
+  } catch (e) {
+    console.error("[sbUpsertCalendarEntry] error:", e.message);
+    return null;
+  }
+}
+
 // Par question (utilisé par PresenceCalendar)
 export async function sbGetCalendarEntries(question_id) {
   try {
@@ -1098,39 +1146,6 @@ export async function sbUpdateCompetitor(id, patch) {
 export async function sbDeleteCompetitor(id) {
   const res = await fetch(
     `${PROXY}/rest/v1/geo_competitors?id=eq.${encodeURIComponent(id)}`,
-    { method: "DELETE", headers: authHeaders() }
-  );
-  return res.ok;
-}
-
-// ── Aliases (geo_aliases) ─────────────────────────────────────────
-// alias A → canonical B : les occurrences de A sont comptées comme B.
-export async function sbGetAliases(project_id, site_id) {
-  const res = await fetch(
-    `${PROXY}/rest/v1/geo_aliases?project_id=eq.${encodeURIComponent(project_id)}&site_id=eq.${encodeURIComponent(site_id)}&order=canonical.asc`,
-    { headers: authHeaders() }
-  );
-  if (!res.ok) return [];
-  return res.json();
-}
-
-export async function sbSaveAlias({ project_id, site_id, alias, canonical }) {
-  const res = await fetchSupabase(`${PROXY}/rest/v1/geo_aliases`, {
-    method: "POST",
-    headers: authHeaders({ "Content-Type": "application/json", "Prefer": "return=representation,resolution=merge-duplicates" }),
-    body: JSON.stringify({ project_id, site_id, alias: alias.trim(), canonical: canonical.trim() }),
-  });
-  if (!res.ok) {
-    const err = await res.text().catch(() => "");
-    throw new Error(`sbSaveAlias: ${res.status} — ${err.slice(0, 120)}`);
-  }
-  const rows = await res.json();
-  return Array.isArray(rows) ? rows[0] : rows;
-}
-
-export async function sbDeleteAlias(id) {
-  const res = await fetch(
-    `${PROXY}/rest/v1/geo_aliases?id=eq.${encodeURIComponent(id)}`,
     { method: "DELETE", headers: authHeaders() }
   );
   return res.ok;

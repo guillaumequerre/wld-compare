@@ -14,7 +14,7 @@ import {
   sbSetQuestionCategory,
   sbBulkSetKeywordCategory, sbBulkSetQuestionCategory,
   sbGetUrlIndex, sbUpdateUrlMeta, sbIncrementUrlCounts,
-  sbAddCalendarEntry, sbGetCalendarEntriesBatch,
+  sbAddCalendarEntry, sbUpsertCalendarEntry, sbGetCalendarEntriesBatch,
   sbDownload, sbSaveProject, sbDeleteProject,
   sbGetCompetitors,
   sbGetAliases,
@@ -890,29 +890,36 @@ function ChatAnswer({ providerId, modelLabel, answerNode }) {
   );
 }
 
+// Une fois la Responses API (web_search) constatée indisponible pour ce compte,
+// on évite de la rappeler à chaque interrogation (sinon 500 répétée et inutile).
+let openaiResponsesDisabled = false;
+
 async function callProvider(provider, apiKey, prompt, maxTokens = 2000) {
   if (provider.id === "openai") {
-    // Tentative 1 : Responses API avec web_search (Tier 1+)
-    const resA = await fetch("/api/openai", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Openai-Key": apiKey, "X-Openai-Endpoint": "responses" },
-      body: JSON.stringify({
-        model: provider.model,
-        input: prompt,
-        tools: [{ type: "web_search_preview", search_context_size: "high" }],
-        max_output_tokens: Math.max(maxTokens * 4, 2000),
-      }),
-    });
-    const rawA = await resA.text();
-    // Si proxy manquant ou réponse HTML → fallback direct
-    if (!rawA.trimStart().startsWith("<") && resA.ok) {
+    // Tentative 1 : Responses API avec web_search (Tier 1+).
+    // Sautée si elle a déjà échoué dans cette session.
+    if (!openaiResponsesDisabled) {
       try {
-        const dataA = JSON.parse(rawA);
-        return parseOpenAIResponse(dataA, "responses");
-      } catch {}
+        const resA = await fetch("/api/openai", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Openai-Key": apiKey, "X-Openai-Endpoint": "responses" },
+          body: JSON.stringify({
+            model: provider.model,
+            input: prompt,
+            tools: [{ type: "web_search_preview", search_context_size: "high" }],
+            max_output_tokens: Math.max(maxTokens * 4, 2000),
+          }),
+        });
+        const rawA = await resA.text();
+        if (resA.ok && !rawA.trimStart().startsWith("<")) {
+          try { return parseOpenAIResponse(JSON.parse(rawA), "responses"); } catch {}
+        }
+        // Échec (souvent web_search non dispo selon le tier) → on désactive pour la session.
+        openaiResponsesDisabled = true;
+      } catch { openaiResponsesDisabled = true; }
     }
-    // Tentative 2 : fallback Chat Completions (Tier 0, toujours disponible)
-    const errStatusA = resA.status;
+
+    // Tentative 2 : Chat Completions (toujours disponible).
     const res = await fetch("/api/openai", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Openai-Key": apiKey, "X-Openai-Endpoint": "completions" },
@@ -924,11 +931,15 @@ async function callProvider(provider, apiKey, prompt, maxTokens = 2000) {
       }),
     });
     const raw = await res.text();
-    if (raw.trimStart().startsWith("<")) throw new Error(`Proxy /api/openai introuvable (responses: ${errStatusA})`);
-    const data = JSON.parse(raw);
+    if (raw.trimStart().startsWith("<")) throw new Error("Proxy /api/openai introuvable (réponse HTML)");
+    let data;
+    try { data = JSON.parse(raw); }
+    catch { throw new Error(`Réponse OpenAI illisible (${res.status}) : ${raw.slice(0, 120)}`); }
     if (!res.ok) {
-      const msg = data?.error?.message || `OpenAI ${res.status}`;
-      const hint = res.status === 429 ? " — quota dépassé, vérifiez votre plan" : res.status === 401 ? " — clé invalide" : "";
+      const msg = data?.error?.message || data?.error || `OpenAI ${res.status}`;
+      const hint = res.status === 429 ? " — quota dépassé, vérifiez votre plan/facturation OpenAI"
+                 : res.status === 401 ? " — clé invalide"
+                 : res.status >= 500 ? " — erreur serveur OpenAI, réessayez dans un instant" : "";
       throw new Error(msg + hint);
     }
     return parseOpenAIResponse(data, "completions");
@@ -4592,10 +4603,23 @@ ${question}`;
           input_tokens: r.input_tokens, output_tokens: r.output_tokens,
           created_at: r.created_at, // préserve la date d'origine
         });
+        // Met aussi à jour le « petit carré » (calendrier de présence) à la DATE d'origine
+        const provId   = getProviderId(r.model);
+        const presType = (d.mention?.position != null) ? "mention"
+                       : d.brandMentioned ? "evocation"
+                       : d.brandInSources ? "citation"
+                       : null;
+        const mentionPos = d.mention?.position != null ? d.mention.position : null;
+        const calDate = (r.created_at || new Date().toISOString()).slice(0, 10);
+        await sbUpsertCalendarEntry(r.question_id, provId, calDate, d.brandMentioned, presType, mentionPos);
+        // Rafraîchissement optimiste immédiat du carré
+        setNewCalEntries(prev => ({ ...prev, [`${r.question_id}|${provId}`]: { provider_id: provId, brand_present: d.brandMentioned, presType, mentionPos } }));
         done++;
       } catch (e) { errs++; console.error("recomputeDetection:", e); }
       setRecomputeMsg(`Recalcul… ${done + errs}/${real.length}`);
     }
+    // Recharge le calendrier depuis la base → les carrés reflètent la détection à jour
+    try { const fresh = await sbGetCalendarEntriesBatch(projectId, site.id); setCalendarEntries(fresh || []); } catch { /* best effort */ }
     setRecomputing(false);
     setRecomputeMsg(`Terminé : ${done} résultat(s) recalculé(s)${errs ? `, ${errs} erreur(s)` : ""}.`);
     onResultSaved?.(); // recharge les résultats → les tops se mettent à jour
