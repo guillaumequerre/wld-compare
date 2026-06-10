@@ -97,8 +97,19 @@ export default async function handler(req) {
         }),
       });
 
-      // Supabase retourne toujours 200 (sécurité anti-enumeration)
-      // On retourne toujours un succès côté client
+      // Lire la réponse Supabase pour distinguer un vrai échec d'un succès silencieux.
+      const recoverData = await res.json().catch(() => ({}));
+
+      // Un email INEXISTANT renvoie tout de même 200 (anti-enumeration) → succès silencieux, OK.
+      // Mais une vraie erreur SYSTÈME (SMTP non configuré, rate limit, URL de redirection
+      // non autorisée…) renvoie un statut non-2xx : on la fait remonter pour diagnostic,
+      // car cela ne divulgue PAS l'existence du compte.
+      if (!res.ok) {
+        const msg = recoverData.msg || recoverData.error_description || recoverData.message || recoverData.error || `Échec de l'envoi (HTTP ${res.status})`;
+        console.error("[forgot_password] recover failed:", res.status, JSON.stringify(recoverData).slice(0, 300));
+        return json({ error: `Envoi du mail impossible : ${msg}`, status: res.status }, 502);
+      }
+
       return json({ success: true, message: "Si ce compte existe, un email de réinitialisation a été envoyé." });
     }
 
