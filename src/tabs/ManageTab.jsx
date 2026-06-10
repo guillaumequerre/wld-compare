@@ -230,15 +230,13 @@ function ProjectMembers({ project, ownerEmail, myRole = "owner" }) {
       });
       setNewEmail(""); setNewRole("member");
 
-      if (result.accountCreated) {
-        // Nouveau compte → Supabase a envoyé l'email "définir votre mot de passe" automatiquement
-        setInviteMsg(`✉️ Nouveau compte créé pour ${email}. Un email a été envoyé automatiquement avec un lien pour définir son mot de passe.`);
-      } else if (result.existed && result.emailPayload) {
-        // Compte existant → préparer le mailto pour l'inviteur
-        setEmailPayload(result.emailPayload);
-        setInviteMsg(`✓ ${email} a été ajouté au projet (compte existant).`);
+      // Le compte n'est jamais pré-créé : l'invité s'inscrit lui-même.
+      // Un email (mailto) est préparé dans tous les cas pour que l'inviteur l'envoie.
+      if (result.emailPayload) setEmailPayload(result.emailPayload);
+      if (result.existed) {
+        setInviteMsg(`✓ ${email} a été ajouté au projet (compte existant). Un email de notification est prêt à envoyer.`);
       } else {
-        setInviteMsg(`✓ ${email} a été ajouté au projet.`);
+        setInviteMsg(`✓ ${email} a été ajouté au projet. Un email d'invitation à créer un compte est prêt à envoyer — il accédera au projet dès sa connexion.`);
       }
     } else {
       setError(result.error || "Erreur lors de l'invitation");

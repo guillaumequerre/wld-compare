@@ -85,7 +85,7 @@ export default async function handler(req) {
 
       const redirectTo = body.redirect_url || `${url.origin}/reset-password`;
 
-      const res = await fetch(`${SUPABASE_URL}/auth/v1/recover`, {
+      const res = await fetch(`${SUPABASE_URL}/auth/v1/recover?redirect_to=${encodeURIComponent(redirectTo)}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -177,47 +177,34 @@ export default async function handler(req) {
       if (!email || !projectId) return json({ error: "email et projectId requis" }, 400);
       if (!SUPABASE_SERVICE_KEY) return json({ error: "SUPABASE_SERVICE_KEY manquante" }, 500);
 
-      const emailClean  = email.toLowerCase().trim();
-      const roleClean   = memberRole || "member";
+      const emailClean   = email.toLowerCase().trim();
+      const roleClean    = memberRole || "member";
       const projectLabel = projectName || "le projet";
       const inviterEmail = invitedBy || "";
+      const appUrl       = "https://correledash.netlify.app";
 
-      // ── Étape 1 : nouveau compte via Supabase Admin "invite" ────────────
-      // L'endpoint /invite crée le compte (si absent) ET envoie automatiquement
-      // un email Supabase "Vous avez été invité" avec un lien pour définir le mdp.
-      // Si le compte existe déjà → Supabase renvoie l'user existant + envoie quand même un lien magic.
-      let accountCreated = false;
-      let supabaseUserId = null;
-
-      const inviteRes = await fetch(`${SUPABASE_URL}/auth/v1/invite`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "apikey": SUPABASE_SERVICE_KEY,
-          "Authorization": `Bearer ${SUPABASE_SERVICE_KEY}`,
-        },
-        body: JSON.stringify({
-          email: emailClean,
-          data: {
-            invited_by:   inviterEmail,
-            project_name: projectLabel,
-          },
-        }),
-      });
-      const inviteData = await inviteRes.json();
-
-      if (inviteRes.ok) {
-        supabaseUserId = inviteData.id;
-        // Supabase renvoie confirmed_at = null → compte tout juste créé
-        accountCreated = !inviteData.confirmed_at || inviteData.confirmation_sent_at === inviteData.created_at;
-      } else {
-        // Fallback : si l'invite échoue (ex: compte déjà confirmé), on passe à la création manuelle
-        // pour au moins ajouter au projet même sans email
-        console.warn("[invite_member] /invite warn:", inviteData.msg || inviteData.error_description || JSON.stringify(inviteData));
-        accountCreated = false;
+      // ── Étape 1 : l'email correspond-il déjà à un compte ? ──────────────
+      // On NE crée PAS le compte. On vérifie seulement son existence pour
+      // adapter le message d'invitation (créer un compte vs se connecter).
+      // L'accès au projet passe par project_members (clé = email) : dès que la
+      // personne s'inscrit avec cet email et se connecte, le projet apparaît.
+      let existed = false;
+      try {
+        const lookupRes = await fetch(
+          `${SUPABASE_URL}/auth/v1/admin/users?per_page=1000&email=${encodeURIComponent(emailClean)}`,
+          { headers: { "apikey": SUPABASE_SERVICE_KEY, "Authorization": `Bearer ${SUPABASE_SERVICE_KEY}` } }
+        );
+        if (lookupRes.ok) {
+          const lookupData = await lookupRes.json();
+          const users = Array.isArray(lookupData) ? lookupData : (lookupData.users || []);
+          existed = users.some(u => (u.email || "").toLowerCase() === emailClean);
+        }
+      } catch (e) {
+        console.warn("[invite_member] lookup warn:", e.message);
       }
 
       // ── Étape 2 : insérer dans project_members (bypass RLS via SERVICE_KEY) ──
+      // Idempotent (ignore-duplicates) : l'appartenance est portée par l'email.
       const memberRes = await fetch(`${SUPABASE_URL}/rest/v1/project_members`, {
         method: "POST",
         headers: {
@@ -237,46 +224,52 @@ export default async function handler(req) {
       if (!memberRes.ok) {
         const err = await memberRes.text().catch(() => "");
         console.error("[invite_member] project_members insert failed:", memberRes.status, err.slice(0, 200));
-        return json({
-          error: accountCreated
-            ? "Compte créé mais erreur d'ajout au projet — vérifiez la table project_members"
-            : "Erreur d'ajout au projet",
-          detail: err.slice(0, 200),
-          status: memberRes.status,
-        }, 500);
+        return json({ error: "Erreur d'ajout au projet", detail: err.slice(0, 200), status: memberRes.status }, 500);
       }
 
-      // ── Étape 3 : pour les comptes existants, composer l'email de notification ──
-      // (Supabase envoie déjà un mail pour les nouveaux comptes via /invite)
-      // Pour les existants, on retourne le corps d'email pré-composé pour mailto:
-      let emailPayload = null;
-      if (!accountCreated) {
-        const appUrl = "https://correledash.netlify.app"; // URL de l'app
-        const roleLabel = roleClean === "reader" ? "Lecture seule" : "Membre";
-        emailPayload = {
-          to:      emailClean,
-          subject: `[CorrelDash] Accès ajouté — ${projectLabel}`,
-          body: `Bonjour,
+      // ── Étape 3 : composer l'email (mailto) — adapté selon compte existant ou non ──
+      const roleLabel = roleClean === "reader" ? "Lecture seule" : "Membre";
+      const emailPayload = existed
+        ? {
+            to:      emailClean,
+            subject: `[CorrelDash] Accès ajouté — ${projectLabel}`,
+            body: `Bonjour,
 
-${inviterEmail || "Un administrateur"} vous a ajouté à "${projectLabel}" sur CorrelDash GEO par Sonate.
+${inviterEmail || "Un administrateur"} vous a donné accès à « ${projectLabel} » sur CorrelDash GEO par Sonate.
 
 Votre rôle : ${roleLabel}
 
-Vous pouvez accéder au projet en vous connectant à :
+Connectez-vous avec votre compte pour accéder au projet :
 ${appUrl}
 
 Bonne analyse,
 ${inviterEmail || "L'équipe CorrelDash"}`,
-        };
-      }
+          }
+        : {
+            to:      emailClean,
+            subject: `[CorrelDash] Invitation — ${projectLabel}`,
+            body: `Bonjour,
+
+${inviterEmail || "Un administrateur"} vous invite à rejoindre « ${projectLabel} » sur CorrelDash GEO par Sonate.
+
+Votre rôle : ${roleLabel}
+
+Pour accéder au projet, créez votre compte (avec CETTE adresse email) ici :
+${appUrl}
+
+Une fois votre compte créé et connecté, le projet « ${projectLabel} » apparaîtra automatiquement dans vos projets.
+
+À bientôt,
+${inviterEmail || "L'équipe CorrelDash"}`,
+          };
 
       return json({
         ok:            true,
-        accountCreated,           // true = nouveau compte, email "définir mdp" envoyé par Supabase
-        existed:       !accountCreated, // true = compte existant
+        accountCreated: false,      // on ne crée jamais le compte : l'utilisateur s'inscrit lui-même
+        existed,                    // true = un compte existe déjà pour cet email
         email:         emailClean,
-        emailSent:     accountCreated,  // Supabase a envoyé l'email automatiquement
-        emailPayload,              // non-null si compte existant → frontend ouvre mailto:
+        emailSent:     false,       // l'email part via le client (mailto)
+        emailPayload,               // toujours non-null → le frontend ouvre le mailto
         role:          roleClean,
       });
     }
