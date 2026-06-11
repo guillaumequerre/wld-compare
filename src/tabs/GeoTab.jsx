@@ -117,28 +117,8 @@ function renderMarkdown(text) {
   if (!text) return null;
   const lines = text.split("\n");
   return lines.map((line, li) => {
-    // Transformer **bold** et *italic* dans chaque ligne
-    const parts = [];
-    let remaining = line;
-    let key = 0;
-    while (remaining.length > 0) {
-      const boldMatch = remaining.match(/^(.*?)\*\*(.+?)\*\*/s);
-      const italicMatch = remaining.match(/^(.*?)\*(.+?)\*/s);
-      // Choisir le match le plus proche
-      const useBold = boldMatch && (!italicMatch || boldMatch[1].length <= italicMatch[1].length);
-      if (useBold) {
-        if (boldMatch[1]) parts.push(<span key={key++}>{boldMatch[1]}</span>);
-        parts.push(<strong key={key++}>{boldMatch[2]}</strong>);
-        remaining = remaining.slice(boldMatch[0].length);
-      } else if (italicMatch) {
-        if (italicMatch[1]) parts.push(<span key={key++}>{italicMatch[1]}</span>);
-        parts.push(<em key={key++}>{italicMatch[2]}</em>);
-        remaining = remaining.slice(italicMatch[0].length);
-      } else {
-        parts.push(<span key={key++}>{remaining}</span>);
-        remaining = "";
-      }
-    }
+    // Rendu inline complet (gras, italique * et _, liens markdown) — délégué à renderInline
+    const parts = renderInline(line);
     const trimmed = line.trimStart();
     // ── Titres Markdown : # (titre) · ## / ### (sous-titre). On masque les dièses. ──
     const h1 = trimmed.match(/^#\s+(.*)$/);          // un seul dièse → titre principal
@@ -174,28 +154,44 @@ function renderMarkdown(text) {
   });
 }
 
-// Rendu inline (gras/italique) d'un fragment de texte déjà débarrassé de son marqueur
+// Rendu inline d'un fragment : gras **…**, italique *…* et _…_, et liens [label](url).
+// Tokenizer "plus proche d'abord" ; le lien est résolu AVANT l'italique underscore
+// pour que les _ présents dans les URLs (ex. utm_source) ne soient pas pris pour de
+// l'italique. Le contenu du gras/italique est rendu récursivement (lien dans du gras…).
 function renderInline(text) {
-  const parts = [];
-  let remaining = text, key = 0;
-  while (remaining.length > 0) {
-    const boldMatch = remaining.match(/^(.*?)\*\*(.+?)\*\*/s);
-    const italicMatch = remaining.match(/^(.*?)\*(.+?)\*/s);
-    const useBold = boldMatch && (!italicMatch || boldMatch[1].length <= italicMatch[1].length);
-    if (useBold) {
-      if (boldMatch[1]) parts.push(<span key={key++}>{boldMatch[1]}</span>);
-      parts.push(<strong key={key++}>{boldMatch[2]}</strong>);
-      remaining = remaining.slice(boldMatch[0].length);
-    } else if (italicMatch) {
-      if (italicMatch[1]) parts.push(<span key={key++}>{italicMatch[1]}</span>);
-      parts.push(<em key={key++}>{italicMatch[2]}</em>);
-      remaining = remaining.slice(italicMatch[0].length);
+  if (text == null) return null;
+  const out = [];
+  let rest = String(text), key = 0;
+  const reLink  = /\[([^\]]+)\]\(([^)\s]+)\)/;                       // [label](url)
+  const reBold  = /\*\*([\s\S]+?)\*\*/;                              // **gras**
+  const reItalS = /\*([\s\S]+?)\*/;                                  // *italique*
+  const reItalU = /(^|[\s(.,;:!?])_([^_\n]+?)_(?=[\s).,;:!?]|$)/;    // _italique_ borné
+  while (rest.length) {
+    const cands = [];
+    let m;
+    if ((m = rest.match(reLink)))  cands.push({ i: m.index, len: m[0].length, type: "link", prio: 0, a: m[1], b: m[2] });
+    if ((m = rest.match(reBold)))  cands.push({ i: m.index, len: m[0].length, type: "bold", prio: 1, a: m[1] });
+    if ((m = rest.match(reItalS))) cands.push({ i: m.index, len: m[0].length, type: "em",   prio: 2, a: m[1] });
+    if ((m = rest.match(reItalU))) cands.push({ i: m.index + m[1].length, len: m[0].length - m[1].length, type: "em", prio: 2, a: m[2] });
+    if (!cands.length) { out.push(<span key={key++}>{rest}</span>); break; }
+    cands.sort((x, y) => x.i - y.i || x.prio - y.prio);
+    const c = cands[0];
+    if (c.i > 0) out.push(<span key={key++}>{rest.slice(0, c.i)}</span>);
+    if (c.type === "link") {
+      out.push(
+        <a key={key++} href={c.b} target="_blank" rel="noopener noreferrer"
+           style={{ color: "#1A3C2E", textDecoration: "underline", textUnderlineOffset: 2, wordBreak: "break-word" }}>
+          {c.a}
+        </a>
+      );
+    } else if (c.type === "bold") {
+      out.push(<strong key={key++}>{renderInline(c.a)}</strong>);
     } else {
-      parts.push(<span key={key++}>{remaining}</span>);
-      remaining = "";
+      out.push(<em key={key++}>{renderInline(c.a)}</em>);
     }
+    rest = rest.slice(c.i + c.len);
   }
-  return parts;
+  return out;
 }
 
 // ── renderMarkdownHighlighted — surligne marque (vert) et concurrents ──
@@ -1141,10 +1137,14 @@ function detectBrand(answer, sources, brandName, brandAliases = [], competitors 
   const headingLinkRe = /^\s*(?:[•\-*]\s*)?\*{0,2}\[([^\]]{2,90})\]\([^)]*\)\*{0,2}\s*(?:[—:-].*)?$/;
   const headingBoldRe = /^\s*(?:#{1,4}\s*)?\*\*([^*\n]{2,90})\*\*\s*:?\s*$/;
   const headingPlainRe = /^\s*#{1,4}\s*([^\n]{2,90})$/;
+  // Lignes de méta-données (statut + note d'avis) renvoyées par ChatGPT pour les
+  // listes de lieux : "Actuellement ouvert · ... · 4.2 (29 avis)". Ce ne sont PAS
+  // des titres d'items : il ne faut pas les compter comme un rang du Top.
+  const metaLineRe = /\(\s*\d+\s*avis\s*\)|actuellement\s+(?:ouvert|ferm)/i;
   const matchHeading = (s) => {
     let m = s.match(headingLinkRe); if (m) return m[1].replace(/\*/g, "").trim();
-    m = s.match(headingBoldRe);    if (m) return m[1].trim();
-    m = s.match(headingPlainRe);   if (m) return m[1].replace(/[[\]]|\(.*\)/g, "").replace(/\*/g, "").trim();
+    m = s.match(headingBoldRe);    if (m && !metaLineRe.test(m[1])) return m[1].trim();
+    m = s.match(headingPlainRe);   if (m && !metaLineRe.test(m[1])) return m[1].replace(/[[\]]|\(.*\)/g, "").replace(/\*/g, "").trim();
     return null;
   };
   const isDetailLine = (s) => {
