@@ -1136,29 +1136,51 @@ function detectBrand(answer, sources, brandName, brandAliases = [], competitors 
   // On ne se fie PAS au numéro littéral écrit par le LLM (sous-listes, redémarrages…).
   // On prend la position ORDINALE réelle dans la séquence contiguë la plus longue.
   const subBulletRe = /^\s*[•\-*]\s+\S/;
+  // Item de top "en-tête" SANS numéro : lien markdown (option. gras) ou titre gras / heading.
+  // Couvre le format type "[Nom](url)", "**[Nom](url)**", "**Nom**", "### Nom".
+  const headingLinkRe = /^\s*(?:[•\-*]\s*)?\*{0,2}\[([^\]]{2,90})\]\([^)]*\)\*{0,2}\s*(?:[—:-].*)?$/;
+  const headingBoldRe = /^\s*(?:#{1,4}\s*)?\*\*([^*\n]{2,90})\*\*\s*:?\s*$/;
+  const headingPlainRe = /^\s*#{1,4}\s*([^\n]{2,90})$/;
+  const matchHeading = (s) => {
+    let m = s.match(headingLinkRe); if (m) return m[1].replace(/\*/g, "").trim();
+    m = s.match(headingBoldRe);    if (m) return m[1].trim();
+    m = s.match(headingPlainRe);   if (m) return m[1].replace(/[\[\]]|\(.*\)/g, "").replace(/\*/g, "").trim();
+    return null;
+  };
   const isDetailLine = (s) => {
     const t = s.trim();
     if (!t) return true;
     if (subBulletRe.test(t) && !topItemRe.test(t)) return true;
     if (/^\s{2,}\S/.test(s)) return true;
     if (/^[A-Za-zÀ-ÿ' ]{2,20}\s*:/.test(t) && t.length < 80) return true;
+    if (/^_.*_$/.test(t)) return true; // ligne en italique (ex. "_Le Mans, France_")
     return false;
   };
   const sequences = [];
-  let current = null, prevNum = null;
+  let current = null, prevNum = null, seqType = null; // seqType: "num" | "head" | null
   for (const raw of lines) {
     const m = raw.match(topItemRe);
     if (m) {
       const num = parseInt(m[1], 10);
-      const continues = current && prevNum != null && (num === prevNum + 1 || num === prevNum);
-      if (!continues) { current = []; sequences.push(current); }
+      const continues = current && seqType === "num" && prevNum != null && (num === prevNum + 1 || num === prevNum);
+      if (!continues) { current = []; sequences.push(current); seqType = "num"; }
       current.push({ num, text: m[2], ordinal: current.length + 1 });
       prevNum = num;
-    } else if (isDetailLine(raw)) {
       continue;
-    } else {
-      current = null; prevNum = null;
     }
+    const headTitle = matchHeading(raw);
+    if (headTitle) {
+      const continues = current && seqType === "head";
+      if (!continues) { current = []; sequences.push(current); seqType = "head"; prevNum = null; }
+      current.push({ num: null, text: headTitle, ordinal: current.length + 1 });
+      continue;
+    }
+    if (isDetailLine(raw)) continue;
+    // En mode "en-têtes", la prose entre items (localisation, description) ne casse PAS
+    // la séquence : seuls les en-têtes ajoutent des items, le reste est ignoré.
+    if (seqType === "head") continue;
+    // Sinon (liste numérotée ou hors séquence), une ligne de prose termine la séquence.
+    current = null; prevNum = null; seqType = null;
   }
   // La (les) vraie(s) liste(s) classée(s) = séquences d'au moins 2 items, plus longue d'abord.
   const ranked = sequences.filter(s => s.length >= 2).sort((a, b) => b.length - a.length);
