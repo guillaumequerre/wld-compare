@@ -2754,6 +2754,17 @@ function ProviderRow({ provider, results, brandName, brandAliases, brandDomain =
 
   const displayDate = result?.created_at || lastCalDate || null;
 
+  // ── Source de vérité unique pour la présence (Top / évoc. / src) ──
+  // On recalcule M/É/C EN DIRECT sur la réponse affichée avec le moteur courant
+  // (le même qui alimente le carré du calendrier), plutôt que de lire des champs
+  // persistés qui peuvent dater d'un ancien calcul. Le badge et le carré dérivent
+  // ainsi de la même valeur et ne peuvent plus diverger.
+  const liveDetect = useMemo(() => {
+    if (!result?.answer) return null;
+    try { return detectBrand(result.answer, result.sources || [], brandName, brandAliases || [], []); }
+    catch { return null; }
+  }, [result?.answer, result?.sources, brandName, brandAliases]);
+
   return (
     <div>
       {/* ── Ligne provider ── */}
@@ -2765,20 +2776,22 @@ function ProviderRow({ provider, results, brandName, brandAliases, brandDomain =
         {/* Calendrier de présence 30j */}
         <PresenceCalendar questionId={questionId} providers={[provider]} newEntry={newCalEntry} />
 
-        {/* Présence — 3 types calculés depuis les champs DB ─────── */}
+        {/* Présence — Top / évoc. / src dérivés du calcul LIVE (fait foi) ───── */}
         {(() => {
           if (!result) return null;
-          // Champs nouveaux (post-migration)
-          const mentionPos   = result.brand_mention_position;
-          const evocPos      = result.brand_evocation_position;
-          const citationPos  = result.brand_citation_position;
-          // Rétrocompat champs anciens
-          const hasMention   = mentionPos != null || (result.brand_position != null && result.brand_position > 0);
-          const hasEvocation = evocPos != null || (
-            (result.brand_mentioned === true || result.brand_mentioned === 1) && !hasMention
-          );
-          const hasCitation  = citationPos != null || result.brand_in_sources;
-          const topPos       = mentionPos || result.brand_position;
+          // Positions issues du recalcul live sur la réponse affichée. En l'absence
+          // de réponse exploitable, repli sur les champs persistés (anciens résultats).
+          const mentionPos   = liveDetect ? (liveDetect.mention?.position   ?? null) : (result.brand_mention_position   ?? null);
+          const evocPos      = liveDetect ? (liveDetect.evocation?.position ?? null) : (result.brand_evocation_position ?? null);
+          const citationPos  = liveDetect ? (liveDetect.citation?.position  ?? null) : (result.brand_citation_position  ?? null);
+          // L'ancien champ brand_position n'est utilisé QUE sans calcul live, pour ne
+          // pas réintroduire de valeur périmée quand on a la réponse sous la main.
+          const legacyTopPos = liveDetect ? null : result.brand_position;
+          const brandFlag    = liveDetect ? liveDetect.brandMentioned : (result.brand_mentioned === true || result.brand_mentioned === 1);
+          const hasMention   = mentionPos != null || (legacyTopPos != null && legacyTopPos > 0);
+          const hasEvocation = evocPos != null || (brandFlag && !hasMention);
+          const hasCitation  = citationPos != null || (!liveDetect && result.brand_in_sources);
+          const topPos       = mentionPos || legacyTopPos;
           return (<>
             {hasMention && (
               <span className="gt-provider-status gt-success" title={`Mention dans le Top${topPos ? ` — position #${topPos}` : ""}`}>
