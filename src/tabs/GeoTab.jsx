@@ -1144,7 +1144,7 @@ function detectBrand(answer, sources, brandName, brandAliases = [], competitors 
   const matchHeading = (s) => {
     let m = s.match(headingLinkRe); if (m) return m[1].replace(/\*/g, "").trim();
     m = s.match(headingBoldRe);    if (m) return m[1].trim();
-    m = s.match(headingPlainRe);   if (m) return m[1].replace(/[\[\]]|\(.*\)/g, "").replace(/\*/g, "").trim();
+    m = s.match(headingPlainRe);   if (m) return m[1].replace(/[[\]]|\(.*\)/g, "").replace(/\*/g, "").trim();
     return null;
   };
   const isDetailLine = (s) => {
