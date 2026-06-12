@@ -4470,7 +4470,7 @@ ${question}`;
     return out;
   }, [calendarEntries, resultsByQ, latestResultByQ]);
 
-  const filtered = useMemo(() => { const base = sortedQuestions.filter(q => {
+  const filtered = useMemo(() => { const bn = brand?.brand_name || ""; const base = sortedQuestions.filter(q => {
     // Filtres cumulatifs (ET)
     if (filterFav && !q.is_favorite) return false;
     if (filterCat && q.category_id !== filterCat) return false;
@@ -4486,21 +4486,26 @@ ${question}`;
       } else if (searchField === "mention") {
         // éléments classés (mention) : nom de la marque/concurrents positionnés
         haystack = qRes.flatMap(r => [
-          ...((r.brand_mention_position != null) ? [brand_name] : []),
+          ...((r.brand_mention_position != null) ? [bn] : []),
           ...(r.competitors_mentioned || []).filter(c => c.position != null && c.position > 0).map(c => c.name),
         ]).join(" ");
       } else if (searchField === "evocation") {
         haystack = qRes.flatMap(r => [
-          ...((r.brand_mentioned && r.brand_mention_position == null) ? [brand_name] : []),
+          ...((r.brand_mentioned && r.brand_mention_position == null) ? [bn] : []),
           ...(r.competitors_mentioned || []).filter(c => c.mentioned && !(c.position != null && c.position > 0)).map(c => c.name),
         ]).join(" ");
       } else if (searchField === "citation") {
         haystack = qRes.flatMap(r => (r.sources || [])).join(" ");
       }
-      try {
-        const rx = new RegExp(filterSearch, 'i');
-        if (!rx.test(haystack)) return false;
-      } catch { if (!haystack.toLowerCase().includes(filterSearch.toLowerCase())) return false; }
+      let ok = false;
+      try { ok = new RegExp(filterSearch, 'i').test(haystack); } catch { ok = false; }
+      if (!ok) {
+        // Repli robuste aux accents : dé-échappe le terme et compare en normalisant (NFD)
+        const norm = (s) => (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+        const literal = filterSearch.replace(/\\(.)/g, "$1");
+        ok = norm(haystack).includes(norm(literal));
+      }
+      if (!ok) return false;
     }
     if (filterProviders.length > 0) {
       const qRes = resultsByQ[q.id] || [];
