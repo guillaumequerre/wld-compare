@@ -664,6 +664,16 @@ export default function App() {
               </div>
               <span style={{ fontWeight: 800, fontSize: 15, letterSpacing: -0.3, color: "#1A3C2E" }}>Dashboard GEO par Sonate</span>
               <span style={{ color: C.textLight, fontSize: 12 }}>· Votre croissance est clé</span>
+              {tab !== "home" && currentProjectId && currentProject?.name && (
+                <span title={currentProject.name} style={{
+                  marginLeft: 6, padding: "3px 11px", background: "#EAF0EC", color: "#1A3C2E",
+                  borderRadius: 999, fontSize: 12, fontWeight: 700, maxWidth: 240,
+                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                  display: "inline-flex", alignItems: "center", gap: 5,
+                }}>
+                  <span style={{ fontSize: 11 }}>📁</span>{currentProject.name}
+                </span>
+              )}
             </div>
             <NavBar tab={tab} setTab={goTo} user={user} onLogout={() => { authLogout(); setUser(null); setTab("home"); }} />
           </div>

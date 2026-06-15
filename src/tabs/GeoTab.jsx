@@ -2763,7 +2763,7 @@ function ProviderRow({ provider, results, brandName, brandAliases, brandDomain =
         <span className="gt-provider-name">{p.label}</span>
 
         {/* Calendrier de présence 30j */}
-        <PresenceCalendar questionId={questionId} providers={[provider]} newEntry={newCalEntry} />
+        <PresenceCalendar questionId={questionId} providers={[provider]} newEntry={newCalEntry} errorMsg={errorMsg} />
 
         {/* Présence — 3 types calculés depuis les champs DB ─────── */}
         {(() => {

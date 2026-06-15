@@ -13,8 +13,9 @@ function localDateKey(d) {
 
 // ── CalendarGrid — pure rendering ────────────────────────────────
 
-function CalendarGrid({ entries, providers }) {
+function CalendarGrid({ entries, providers, errorMsg = null }) {
   const today = new Date(); today.setHours(0, 0, 0, 0);
+  const ERR_COLOR = "#B45309"; // ambre — distinct du rouge "absent"
 
   // Group entries by provider → date → { présence + type M/É/C + position }
   // Type prioritaire : mention > évocation > citation. La présence reste binaire.
@@ -46,7 +47,7 @@ function CalendarGrid({ entries, providers }) {
     }
   });
 
-  const activeProviders = providers.filter(p => byProvider[p.id]);
+  const activeProviders = providers.filter(p => byProvider[p.id] || errorMsg);
   if (!activeProviders.length) return null;
 
   // Glyphe affiché dans le carré : position si mention, sinon e / c
@@ -77,13 +78,21 @@ function CalendarGrid({ entries, providers }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 6 }}>
       {activeProviders.map(p => {
-        const dayMap = byProvider[p.id];
+        const dayMap = byProvider[p.id] || {};
         const slots = [];
         for (let i = DAYS - 1; i >= 0; i--) {
           const d = new Date(today); d.setDate(d.getDate() - i);
           const key = localDateKey(d);
           const cell = dayMap[key];
           slots.push({ key, cell, color: colorOf(cell), glyph: glyphOf(cell), title: `${key} — ${labelOf(cell)}` });
+        }
+        // Erreur sur la dernière interrogation : le carré du jour devient une icône
+        // d'erreur (ambre « ! »), PAS un carré rouge « absent ». Message au survol.
+        if (errorMsg) {
+          const last = slots[slots.length - 1];
+          last.color = ERR_COLOR;
+          last.glyph = "!";
+          last.title = `⚠ Erreur d'interrogation : ${errorMsg}`;
         }
         const lastKey = Object.keys(dayMap).sort().pop();
         const lastCell = lastKey !== undefined ? dayMap[lastKey] : undefined;
@@ -106,11 +115,15 @@ function CalendarGrid({ entries, providers }) {
                 </div>
               ))}
             </div>
-            {lastCell !== undefined && (
+            {errorMsg ? (
+              <span title={errorMsg} style={{ fontSize: 10, fontWeight: 700, color: ERR_COLOR, flexShrink: 0, display: "inline-flex", alignItems: "center", gap: 3, cursor: "help" }}>
+                ⚠ Erreur
+              </span>
+            ) : (lastCell !== undefined && (
               <span style={{ fontSize: 9, fontWeight: 700, color: colorOf(lastCell), flexShrink: 0 }}>
                 {lastCell.present ? (lastCell.type === "m" && lastCell.pos != null ? "#" + lastCell.pos : (lastCell.type || "✓").toUpperCase()) : "✗"}
               </span>
-            )}
+            ))}
           </div>
         );
       })}
@@ -120,7 +133,7 @@ function CalendarGrid({ entries, providers }) {
 
 // ── PresenceCalendar — data + rendering ──────────────────────────
 
-export default function PresenceCalendar({ questionId, providers = [], newEntry = null }) {
+export default function PresenceCalendar({ questionId, providers = [], newEntry = null, errorMsg = null }) {
   const [entries, setEntries] = useState([]);
 
   // Load from DB on mount / question change
@@ -162,5 +175,5 @@ export default function PresenceCalendar({ questionId, providers = [], newEntry 
       .catch(() => {});
   }, [newEntry]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  return <CalendarGrid entries={entries} providers={providers} />;
+  return <CalendarGrid entries={entries} providers={providers} errorMsg={errorMsg} />;
 }
