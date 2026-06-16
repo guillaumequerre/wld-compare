@@ -1183,3 +1183,42 @@ export async function sbDeleteAlias(id) {
   );
   return res.ok;
 }
+// ── Suivi d'activité (heartbeats) ────────────────────────────────
+// Enregistre un battement d'activité (≈ 1 minute d'usage actif).
+export async function sbRecordActivity(user_email, project_id = null) {
+  if (!user_email) return null;
+  try {
+    const res = await fetchSupabase(`${PROXY}/rest/v1/user_activity`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json", "Prefer": "return=minimal" }),
+      body: JSON.stringify({ user_email: user_email.toLowerCase(), project_id: project_id || null }),
+    });
+    return res.ok;
+  } catch (e) { return false; }
+}
+
+// Agrégat d'usage par utilisateur (dernier usage + minutes par période).
+export async function sbGetActivitySummary() {
+  try {
+    const res = await fetch(`${PROXY}/rest/v1/rpc/get_activity_summary`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: "{}",
+    });
+    if (!res.ok) return [];
+    return res.json();
+  } catch (e) { return []; }
+}
+
+// Agrégat d'usage par utilisateur ET par projet.
+export async function sbGetActivityByProject() {
+  try {
+    const res = await fetch(`${PROXY}/rest/v1/rpc/get_activity_by_project`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: "{}",
+    });
+    if (!res.ok) return [];
+    return res.json();
+  } catch (e) { return []; }
+}

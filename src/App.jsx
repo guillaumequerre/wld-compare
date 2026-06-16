@@ -3,7 +3,7 @@ import { C, SF_DIMS, RES_KPIS, RADAR_DIMS, DEFAULT_SITES, SEMRUSH_DIMS } from ".
 import { emptyDataMap, makeInitialProject, parseCSV, parseSemrushCSV } from "./lib/helpers";
 import { extractSF, extractGSC, extractGA, extractBing, extractSemrush, parseSemrush, filterByMode } from "./lib/parsers";
 import { buildUrlMaps, buildSfPageVectors, intraCorrFast, smIntraCorr } from "./lib/correlations";
-import { sbSaveProject, sbDeleteProject, sbGetHistory, sbGetLatest, sbDownload, sbGetPageTypes, sbSaveGeoAxes, sbGetGeoResultsAll, sbGetUrlIndex } from "./lib/supabase";
+import { sbSaveProject, sbDeleteProject, sbGetHistory, sbGetLatest, sbDownload, sbGetPageTypes, sbSaveGeoAxes, sbGetGeoResultsAll, sbGetUrlIndex, sbRecordActivity } from "./lib/supabase";
 
 import AnalyseTab from "./tabs/AnalyseTab";
 import ImportTab from "./tabs/ImportTab";
@@ -15,6 +15,7 @@ import SemrushTab from "./tabs/SemrushTab";
 import EvolutionTab from "./tabs/EvolutionTab";
 import GeoTab from "./tabs/GeoTab";
 import GeoAuditTab from "./tabs/GeoAuditTab";
+import ConnectionsTab from "./tabs/ConnectionsTab";
 import HomeTab from "./tabs/HomeTab";
 import ManageTab from "./tabs/ManageTab";
 import ResetPasswordPage from "./components/ResetPasswordPage"; // ← AJOUTÉ
@@ -36,6 +37,7 @@ const BURGER_TABS_USER = [
 const NAV_TABS_SUPERADMIN = [
   { key: "pages", label: "Vue par page" },
   { key: "sites", label: "Vue par site" },
+  { key: "connections", label: "🔐 Connexions" },
 ];
 
 const BURGER_TABS_SUPERADMIN = [
@@ -66,7 +68,7 @@ function NavBar({ tab, setTab, user, onLogout }) {
   const [burgerOpen, setBurgerOpen] = useState(false);
   const burgerRef = useRef(null);
   // Navigation dynamique selon le rôle
-  const superAdmin = isSuperAdmin(user?.email);
+  const superAdmin = isSuperAdmin(user);
   const navTabs    = getNavTabs(superAdmin);
   const burgerTabs = getBurgerTabs(superAdmin);
   const isBurgerTab = burgerTabs.some(t => t.key === tab);
@@ -204,6 +206,21 @@ export default function App() {
   }, []);
 
   useEffect(() => { currentProjectIdRef.current = currentProjectId; }, [currentProjectId]);
+
+  // ── Heartbeat d'activité : 1 ping/60s tant que l'onglet est actif ──
+  // Sert au suivi des connexions/usage (super admin). 1 ping ≈ 1 minute d'usage.
+  useEffect(() => {
+    if (!user?.email) return;
+    const beat = () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      sbRecordActivity(user.email, currentProjectIdRef.current || null);
+    };
+    beat(); // immédiat à la connexion / au montage
+    const iv = setInterval(beat, 60000);
+    const onVis = () => { if (document.visibilityState === "visible") beat(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { clearInterval(iv); document.removeEventListener("visibilitychange", onVis); };
+  }, [user?.email]);
 
   const updateProject = useCallback(
     (updater) => setProjects(prev => prev.map(p =>
@@ -941,6 +958,10 @@ export default function App() {
               pageTypes={pageTypes}
               setPageTypes={setPageTypes}
             />
+          )}
+
+          {tab === "connections" && superAdmin && (
+            <ConnectionsTab projects={projects} />
           )}
 
           {tab === "manage" && (

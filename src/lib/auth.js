@@ -301,3 +301,18 @@ export async function getOrRefreshSession() {
     return data.user;
   } catch { clearSession(); return null; }
 }
+// Liste des utilisateurs avec dernière connexion (super admin uniquement).
+export async function authAdminListUsers() {
+  const token = getToken();
+  if (!token) return [];
+  try {
+    const res = await fetch(`/api/auth?action=admin_list_users`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ access_token: token }),
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.users || [];
+  } catch (e) { return []; }
+}

@@ -285,6 +285,33 @@ ${inviterEmail || "L'équipe CorrelDash"}`,
       });
     }
 
+    if (action === "admin_list_users") {
+      // Réservé au super admin : on vérifie le token appelant.
+      const token = body.access_token;
+      if (!token) return json({ error: "Non autorisé" }, 401);
+      if (!SUPABASE_SERVICE_KEY) return json({ error: "SUPABASE_SERVICE_KEY manquante" }, 500);
+      const meRes = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+        headers: { "apikey": SUPABASE_ANON, "Authorization": `Bearer ${token}` },
+      });
+      const me = await meRes.json().catch(() => ({}));
+      if (!meRes.ok || !SUPERADMINS.includes((me.email || "").toLowerCase())) {
+        return json({ error: "Réservé au super admin" }, 403);
+      }
+      // Liste des utilisateurs (Admin API) → email + dernière connexion + création
+      const usersRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/users?per_page=1000`, {
+        headers: { "apikey": SUPABASE_SERVICE_KEY, "Authorization": `Bearer ${SUPABASE_SERVICE_KEY}` },
+      });
+      const data = await usersRes.json().catch(() => ({}));
+      if (!usersRes.ok) return json({ error: "Erreur Admin API", detail: data }, 502);
+      const list = Array.isArray(data) ? data : (data.users || []);
+      const users = list.map(u => ({
+        email:          u.email || "",
+        last_sign_in_at: u.last_sign_in_at || null,
+        created_at:     u.created_at || null,
+      }));
+      return json({ users });
+    }
+
         return json({ error: "Action inconnue" }, 400);
   } catch (e) {
     return json({ error: e.message }, 500);
