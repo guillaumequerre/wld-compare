@@ -186,6 +186,7 @@ export default function App() {
   const [currentProjectId, setCurrentProjectId] = useState(null);
   const [editingProjectName, setEditingProjectName] = useState(null);
   const [user, setUser] = useState(() => getCurrentUser());
+  const superAdmin = isSuperAdmin(user);
 
   const EMPTY_PROJECT = useMemo(() => ({ sites: [], sfData: {}, gscData: {}, gaData: {}, bingData: {}, smData: {} }), []);
   const currentProject = useMemo(
