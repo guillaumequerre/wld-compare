@@ -32,6 +32,25 @@ import { matchGscForQuestion } from "../lib/audit-tools";
 
 
 
+// ── Recommandations : modèles + recherche web (temps réel + vérif d'existence) ──
+const RECO_MODEL_DEEP = "claude-sonnet-4-6";          // analyses globales (qualité)
+const RECO_MODEL_LIGHT = "claude-haiku-4-5-20251001"; // reco par question (coût)
+const webSearchTool = (maxUses = 5) => ({ type: "web_search_20250305", name: "web_search", max_uses: maxUses });
+
+// Extrait le texte FINAL d'une réponse Claude. Avec l'outil web_search, le modèle
+// intercale des blocs (server_tool_use / web_search_tool_result) et du texte de
+// raisonnement : on ne garde que le texte qui suit le dernier résultat d'outil.
+function claudeFinalText(content) {
+  const blocks = Array.isArray(content) ? content : [];
+  let lastTool = -1;
+  blocks.forEach((b, i) => {
+    if (b.type === "web_search_tool_result" || b.type === "server_tool_use" || b.type === "tool_result" || b.type === "tool_use") lastTool = i;
+  });
+  let textBlocks = blocks.filter((b, i) => b.type === "text" && i > lastTool);
+  if (!textBlocks.length) textBlocks = blocks.filter(b => b.type === "text");
+  return textBlocks.map(b => b.text).join("\n").trim();
+}
+
 const DEFAULT_AXES = [
   "Meilleur / top / recommandé",
   "Pistes et approches pour utiliser / bénéficier du mot-clé",
@@ -2644,19 +2663,26 @@ function HintPanelQuestion({ questionId, question, sources, brandName, brandAlia
       ? "Pages dans la réponse :\n" + sources.slice(0, 6).map((u, i) => `[${i+1}] ${u}`).join("\n")
       : "Aucune source listée.";
     const brandContext = hasBrand
-      ? `La marque est présente. Analyse comment RENFORCER cette présence sur ${bDomain}.`
-      : `Si une page de ${bDomain} est pertinente → comment l'optimiser. Sinon → quel contenu créer.`;
+      ? `La marque est DÉJÀ présente. Objectif : RENFORCER cette présence sur ${bDomain}.`
+      : `La marque est ABSENTE. Objectif : la faire apparaître.`;
     const prompt = [
-      `Tu es un expert GEO. Un moteur d'IA a répondu à cette question sans mentionner "${brandName}" :`,
+      `Tu es un expert GEO (Generative Engine Optimization). Un moteur d'IA a répondu à cette question sans mettre en avant "${brandName}" :`,
       `"${question}"`,
       "",
       sourcesText,
       "",
-      "REGLES STRICTES :",
-      "- Commence directement par la recommandation, sans introduction",
-      "- 5 à 7 lignes max, ton direct et actionnable",
+      "UTILISE LA RECHERCHE WEB pour :",
+      `1. Vérifier si une page pertinente existe DÉJÀ sur le site via une recherche "site:${bDomain} <sujet de la question>". Conclus clairement : page existante (donne l'URL exacte) ou aucune page.`,
+      "2. Regarder ce que contiennent les pages réellement citées par l'IA sur cette requête (format, angle), pour t'en inspirer.",
       "",
       brandContext,
+      "",
+      "REGLES STRICTES :",
+      "- Ne décris PAS ta recherche, ne mets pas d'introduction. Donne directement le résultat.",
+      "- Réponds en 3 lignes EXACTEMENT, préfixées ainsi :",
+      "  • Diagnostic : pourquoi la marque n'est pas (assez) citée ici (1 phrase).",
+      `  • Page : soit "Optimiser <URL existante vérifiée>", soit "Créer /<slug-suggéré> (H1 : <titre>)" si aucune page ne couvre le sujet.`,
+      "  • Contenu : le format à adopter (liste, comparatif, tableau, FAQ…) + 2 éléments concrets à inclure (entités, chiffres, sections).",
     ].join("\n");
 
     try {
@@ -2664,19 +2690,16 @@ function HintPanelQuestion({ questionId, question, sources, brandName, brandAlia
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Claude-Key": claudeKey },
         body: JSON.stringify({
-          model: "claude-haiku-4-5-20251001",
-          max_tokens: 500,
+          model: RECO_MODEL_LIGHT,
+          max_tokens: 900,
+          tools: [webSearchTool(3)],
           messages: [{ role: "user", content: prompt }],
         }),
       });
       const raw = await res.text();
       const data = JSON.parse(raw);
       if (!res.ok) throw new Error(data.error?.message || `Claude ${res.status}`);
-      const text = (data.content || [])
-        .filter(b => b.type === "text")
-        .map(b => b.text)
-        .join("\n")
-        .trim();
+      const text = claudeFinalText(data.content);
       const cleaned = text
         .replace(/^(Je vais|En effectuant|Je recherche|Voici|Permettez)[^\n]*/gim, "")
         .replace(/^\s*\n/gm, "")
@@ -2986,15 +3009,19 @@ Produis exactement 4 sections dans ce format :
 ## MAILLAGE INTERNE — PAGES À RELIER
 [2-4 recommandations de maillage interne : quelles pages du site ${brandDomain} doivent pointer vers quelles autres. Base-toi sur les URLs citées en source et les thèmes des questions sans mention.]
 
-## PAGES À CRÉER OU ADAPTER
-[3-5 pages à créer ou adapter sur ${brandDomain}. Pour chaque page : indiquer le titre H1 suggéré, l'angle éditorial, et la question sans présence qu'elle ciblerait.]
+## PAGES — ADAPTER (existantes) vs CRÉER (nouvelles)
+[Avant de recommander, VÉRIFIE par recherche web "site:${brandDomain} <sujet>" si une page couvre déjà le sujet. Puis deux sous-listes :
+- ADAPTER : pages EXISTANTES (URL exacte vérifiée) à optimiser, avec ce qu'il faut ajouter/restructurer.
+- CRÉER : pages absentes, avec slug suggéré, H1, angle éditorial, et la question sans présence ciblée.
+Ne recommande JAMAIS de créer une page qui existe déjà.]
 
 ## URLS CONCURRENTES — CE QUI FONCTIONNE
-[Pour les 3-5 URLs concurrentes les plus citées : analyser pourquoi les LLMs les citent. Identifier les patterns (format liste, comparatif, chiffres clés, FAQ) et recommander comment les reproduire sur ${brandDomain}.]
+[Pour les 3-5 URLs concurrentes les plus citées : LIS-LES via la recherche web et extrais le pattern réel (format liste, comparatif, chiffres clés, FAQ, données structurées) — ne te contente pas de deviner d'après l'URL. Recommande comment reproduire ce pattern sur ${brandDomain}.]
 
 RÈGLES :
+- UTILISE LA RECHERCHE WEB pour vérifier l'existence des pages ${brandDomain} et lire les pages concurrentes citées. Appuie-toi sur des faits récents, pas seulement tes connaissances.
 - Commence DIRECTEMENT par ## ÉTAT DES LIEUX, pas d'introduction
-- Recommandations concrètes : noms de pages, H1 suggérés, types de contenu
+- Recommandations concrètes : URLs exactes, H1 suggérés, types de contenu
 - Chaque recommandation = une action précise, réalisable, avec un résultat attendu
 - Pas de formules génériques comme "améliorer le contenu" — être spécifique`;
 
@@ -3002,11 +3029,11 @@ RÈGLES :
       const res = await fetch("/api/claude-geo", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Claude-Key": claudeKey },
-        body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 1800, messages: [{ role: "user", content: prompt }] }),
+        body: JSON.stringify({ model: RECO_MODEL_DEEP, max_tokens: 2800, tools: [webSearchTool(6)], messages: [{ role: "user", content: prompt }] }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error?.message || `Claude ${res.status}`);
-      const text = (data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n").trim();
+      const text = claudeFinalText(data.content);
 
       // Parser les sections
       const parsed = text.split(/^## /m).filter(Boolean).map(s => {
@@ -3234,7 +3261,7 @@ CONTEXTE par question :
 ${hasGsc ? "" : "\nNOTE : aucune donnée Google Search Console importée — base-toi sur present/brandPos et juge s'il faut probablement créer ou optimiser une page.\n"}
 RÈGLE de décision (à adapter finement) :
 - Si une page du site ranke déjà (gscUrl présent) → privilégier "optimize" ou "enrich".
-- Si aucune page ne ranke (gscUrl null) → souvent "create".
+- Si aucune page ne ranke (gscUrl null) → VÉRIFIE via la recherche web "site:${siteDomain || "le-site"} <sujet>" si une page existe quand même (GSC ne voit que les pages qui rankent) : si oui → "optimize" avec son URL ; sinon → "create".
 - "schema", "media", "netlink" si pertinent en complément.
 
 TYPES D'ACTION AUTORISÉS (clé exacte) : ${typeKeys.join(", ")}
@@ -3258,13 +3285,13 @@ Réponds UNIQUEMENT en JSON valide, sans texte autour :
       const res = await fetch("/api/claude-geo", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Claude-Key": claudeKey },
-        body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 2000, messages: [{ role: "user", content: prompt }] }),
+        body: JSON.stringify({ model: RECO_MODEL_DEEP, max_tokens: 2500, tools: [webSearchTool(6)], messages: [{ role: "user", content: prompt }] }),
       });
       const text = await res.text();
       if (text.trimStart().startsWith("<")) throw new Error("Proxy /api/claude-geo introuvable");
       let data;
       try { data = JSON.parse(text); } catch { throw new Error(`Réponse non-JSON (${res.status})`); }
-      const raw = data?.content?.[0]?.text || data?.completion || data?.choices?.[0]?.message?.content || "";
+      const raw = claudeFinalText(data?.content) || data?.completion || data?.choices?.[0]?.message?.content || "";
       const jsonMatch = raw.match(/\{[\s\S]*\}/);
       if (!jsonMatch) throw new Error("Aucun JSON dans la réponse");
       const parsed = JSON.parse(jsonMatch[0]);
@@ -3401,27 +3428,29 @@ Réponds UNIQUEMENT avec un objet JSON valide (sans markdown, sans backticks) de
     { "category": "nom catégorie", "synthesis": "synthèse 1-2 phrases", "recommendation": "reco actionnable précise" }
   ],
   "roadmap": [
-    { "action": "action concrète et précise", "category": "catégorie concernée ou 'Marque'", "impact": 8, "confidence": 7, "ease": 5, "favorite": false }
+    { "action": "action concrète et précise", "category": "catégorie concernée ou 'Marque'", "target_url": "URL existante à optimiser OU /slug à créer", "page_exists": false, "impact": 8, "confidence": 7, "ease": 5, "favorite": false }
   ],
   ${previousForComparison ? `"comparison": { "better": "ce qui a mieux fonctionné", "worse": "ce qui a moins bien fonctionné", "done": "ce qui semble avoir été fait", "missing": "ce qui semble avoir manqué", "reinforce": "ce qui est à renforcer" }` : `"comparison": null`}
 }
 
 RÈGLES :
+- UTILISE LA RECHERCHE WEB pour fonder tes recommandations sur des données réelles et récentes, et pour VÉRIFIER l'existence des pages : pour chaque action liée à une page, fais "site:<domaine> <sujet>". Renseigne "target_url" (URL existante vérifiée à optimiser, ou /slug à créer) et "page_exists" (true si une page couvre déjà le sujet, false sinon).
+- Une action sur page EXISTANTE (optimiser) a un "ease" plus élevé qu'une création de zéro.
 - roadmap : 6 à 10 actions, triées par priorité décroissante. impact/confidence/ease sont des entiers de 1 à 10.
 - Pour les actions liées aux questions marque, mets "category": "Marque".
 - categoryAnalysis : une entrée par catégorie réelle ci-dessus (max 8).
-- Recommandations spécifiques (noms de pages, formats, H1) — jamais génériques.
+- Recommandations spécifiques (URLs, formats, H1) — jamais génériques.
 - Réponds en français.`;
 
     try {
       const res = await fetch("/api/claude-geo", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Claude-Key": claudeKey },
-        body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 4096, messages: [{ role: "user", content: prompt }] }),
+        body: JSON.stringify({ model: RECO_MODEL_DEEP, max_tokens: 4096, tools: [webSearchTool(6)], messages: [{ role: "user", content: prompt }] }),
       });
       const respData = await res.json();
       if (!res.ok) throw new Error(respData.error?.message || `Claude ${res.status}`);
-      const text = (respData.content || []).filter(b => b.type === "text").map(b => b.text).join("\n").trim();
+      const text = claudeFinalText(respData.content);
 
       // Parser le JSON (retirer un éventuel wrapping ```json)
       const cleaned = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();
@@ -3464,10 +3493,10 @@ RÈGLES :
   // ── Export CSV roadmap ──
   const exportRoadmapCSV = () => {
     if (!data?.roadmap?.length) return;
-    const header = ["Action", "Catégorie", "Favori", "Impact", "Confidence", "Ease", "Score ICE"];
+    const header = ["Action", "Catégorie", "Page", "URL cible", "Favori", "Impact", "Confidence", "Ease", "Score ICE"];
     const rows = [header, ...data.roadmap.map(r => {
       const ice = ((r.impact || 0) + (r.confidence || 0) + (r.ease || 0));
-      return [r.action, r.category || "", r.favorite ? "Oui" : "", r.impact, r.confidence, r.ease, ice];
+      return [r.action, r.category || "", r.target_url ? (r.page_exists ? "Optimiser" : "Créer") : "", r.target_url || "", r.favorite ? "Oui" : "", r.impact, r.confidence, r.ease, ice];
     })];
     downloadText(toCSV(rows), `roadmap_geo_${new Date().toISOString().slice(0,10)}.csv`);
   };
@@ -3751,6 +3780,14 @@ RÈGLES :
                           <td style={{ padding: "8px", color: "#1A3C2E", lineHeight: 1.4 }}>
                             {r.favorite && <span title="Concerne une question favorite" style={{ color: "#C97820", marginRight: 5 }}>★</span>}
                             {r.action}
+                            {r.target_url && (
+                              <div style={{ marginTop: 3, fontSize: 10 }}>
+                                <span style={{ fontWeight: 700, color: r.page_exists ? "#1A7A4A" : "#C97820", marginRight: 5 }}>
+                                  {r.page_exists ? "✓ Optimiser" : "+ Créer"}
+                                </span>
+                                <span style={{ color: "#6B7A70", wordBreak: "break-all" }}>{r.target_url}</span>
+                              </div>
+                            )}
                           </td>
                           <td style={{ padding: "8px" }}>
                             <span style={{ fontSize: 10, fontWeight: 600, color: isBrand ? "#1A3C2E" : "#1A3C2E", background: isBrand ? "#1A3C2E11" : "transparent", border: `0.5px solid ${isBrand ? "#1A3C2E33" : "#1A3C2E11"}`, borderRadius: 10, padding: "1px 8px", whiteSpace: "nowrap" }}>
@@ -5649,16 +5686,8 @@ function AutomationTab({ projectId, site, user, providerKeys }) {
   const [error, setError]         = useState("");
 
   const [active, setActive]       = useState(true);
-  const [frequency, setFrequency] = useState("weekly");
   const [providers, setProviders] = useState(["openai"]);
   const [maxQ, setMaxQ]           = useState(10);
-
-  const FREQUENCIES = [
-    { key: "daily",    label: "Quotidien",    desc: "Chaque jour" },
-    { key: "weekly",   label: "Hebdomadaire", desc: "Chaque semaine" },
-    { key: "biweekly", label: "Bi-mensuel",   desc: "Toutes les 2 semaines" },
-    { key: "monthly",  label: "Mensuel",      desc: "Chaque mois" },
-  ];
 
   useEffect(() => {
     if (!projectId || !site?.id) return;
@@ -5667,7 +5696,6 @@ function AutomationTab({ projectId, site, user, providerKeys }) {
       if (s) {
         setSchedule(s);
         setActive(s.active);
-        setFrequency(s.frequency);
         setProviders(s.providers || ["openai"]);
         setMaxQ(s.max_questions || 10);
       }
@@ -5684,7 +5712,7 @@ function AutomationTab({ projectId, site, user, providerKeys }) {
       const s = await sbSaveSchedule({
         project_id: projectId, site_id: site.id,
         owner_email: user?.email || "",
-        frequency, providers, active, max_questions: maxQ,
+        frequency: "daily", providers, active, max_questions: maxQ,
       });
       setSchedule(s);
     } catch(e) { setError(e.message); }
@@ -5766,26 +5794,12 @@ function AutomationTab({ projectId, site, user, providerKeys }) {
         </div>
       )}
 
-      {/* ── Fréquence ── */}
-      <div style={{ marginBottom: 24 }}>
-        <div className="gt-label" style={{ marginBottom: 12 }}>Fréquence</div>
-        <div className="geo-freq-grid" style={{ gap: 8 }}>
-          {FREQUENCIES.map(f => {
-            const active = frequency === f.key;
-            return (
-              <button key={f.key} onClick={() => setFrequency(f.key)}
-                style={{
-                  padding: "14px 10px", textAlign: "center", cursor: "pointer",
-                  border: active ? "1px solid #1A3C2E" : "0.5px solid #1A3C2E18",
-                  borderRadius: 8,
-                  background: active ? "#1A3C2E" : "transparent",
-                  transition: "all 0.15s",
-                }}>
-                <div className={`gt-body ${active ? "" : "gt-dimmed"}`} style={{ fontWeight: 500, fontSize: 12, color: active ? "#F0EBE0" : undefined, marginBottom: 3 }}>{f.label}</div>
-                <div style={{ fontSize: 10, color: active ? "#F0EBE0" : "#1A3C2E" }}>{f.desc}</div>
-              </button>
-            );
-          })}
+      {/* ── Fréquence : quotidienne (verrouillée) ── */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", marginBottom: 24, background: "#1A3C2E", borderRadius: 8 }}>
+        <span style={{ fontSize: 16, flexShrink: 0 }}>📅</span>
+        <div style={{ color: "#F0EBE0", lineHeight: 1.45 }}>
+          <div style={{ fontWeight: 600, fontSize: 13 }}>Interrogation quotidienne</div>
+          <div style={{ fontSize: 11, opacity: 0.85 }}>Les questions favorites sont interrogées automatiquement chaque jour.</div>
         </div>
       </div>
 
@@ -5826,6 +5840,14 @@ function AutomationTab({ projectId, site, user, providerKeys }) {
         <div className="gt-caption" style={{ marginTop: 6 }}>
           ~{maxQ} × {providers.length} provider{providers.length > 1 ? "s" : ""} = {maxQ * providers.length} appels API par run
         </div>
+      </div>
+
+      {/* ── Notification email ── */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 14px", marginBottom: 20, background: "#FFFBF5", border: "0.5px solid #C9782033", borderRadius: 8, fontSize: 12 }}>
+        <span style={{ fontSize: 14, flexShrink: 0 }}>✉️</span>
+        <span style={{ color: "#8A5A1A", lineHeight: 1.5 }}>
+          Un email récapitulatif est envoyé à <strong>{user?.email || "votre adresse"}</strong> après chaque interrogation automatique.
+        </span>
       </div>
 
       {/* ── Bouton save ── */}
@@ -6112,6 +6134,34 @@ function FanoutSetupPanel({
   );
 }
 
+
+// ── Bouton « remonter en haut » — sticky, discret, bas à droite ──
+function ScrollToTopButton() {
+  const [show, setShow] = useState(false);
+  useEffect(() => {
+    const onScroll = () => setShow(window.scrollY > 400);
+    window.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+  if (!show) return null;
+  return (
+    <button
+      onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+      title="Remonter en haut"
+      aria-label="Remonter en haut"
+      style={{
+        position: "fixed", bottom: 24, right: 24, zIndex: 500,
+        width: 40, height: 40, borderRadius: "50%", border: "none", cursor: "pointer",
+        background: "#1A3C2E", color: "#F0EBE0", fontSize: 18, lineHeight: 1,
+        boxShadow: "0 2px 10px rgba(0,0,0,0.18)", display: "flex", alignItems: "center", justifyContent: "center",
+        opacity: 0.85, transition: "opacity 0.15s ease, transform 0.15s ease",
+      }}
+      onMouseEnter={e => { e.currentTarget.style.opacity = "1"; e.currentTarget.style.transform = "translateY(-2px)"; }}
+      onMouseLeave={e => { e.currentTarget.style.opacity = "0.85"; e.currentTarget.style.transform = "none"; }}
+    >↑</button>
+  );
+}
 
 export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes, onSaveProviderKeys, user,
   // Props setup (nouvelles — passées depuis App.jsx)
@@ -6543,6 +6593,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
         )}
 
       </div>)}
+      <ScrollToTopButton />
     </div>
   );
 }

@@ -10,6 +10,10 @@ const SUPABASE_ANON     = process.env.SUPABASE_ANON             || "";
 const SUPABASE_SERVICE  = process.env.SUPABASE_SERVICE_ROLE_KEY ||
                           process.env.SUPABASE_SERVICE_KEY      || "";
 
+// ── Email de fin de run (Resend) ──────────────────────────────────
+const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
+const MAIL_FROM      = process.env.SCHEDULER_MAIL_FROM || "Dashboard GEO | Sonate <noreply@geo.sonate.group>";
+
 // ── Supabase helpers ──────────────────────────────────────────────
 // Lecture : clé anon (respecte les RLS publiques)
 function sbReadHeaders() {
@@ -365,6 +369,41 @@ async function processSchedule(schedule, project, brand) {
 // ── Main handler ──────────────────────────────────────────────────
 
 
+// ── Email de notification de fin de run (via API Resend) ──────────
+async function sendRunEmail(schedule, count, projectName) {
+  const to = (schedule.owner_email || "").trim();
+  if (!to) { console.warn("[scheduler] Pas d'owner_email — email ignoré"); return; }
+  if (!RESEND_API_KEY) { console.warn("[scheduler] RESEND_API_KEY absente — email ignoré"); return; }
+
+  const date = new Date().toLocaleString("fr-FR", { dateStyle: "long", timeStyle: "short", timeZone: "Europe/Paris" });
+  const providers = (schedule.providers || []).join(", ") || "—";
+  const subject = `[Dashboard GEO] Interrogation automatique effectuée — ${count} question${count > 1 ? "s" : ""} favorite${count > 1 ? "s" : ""}`;
+  const text =
+    `Bonjour,\n\n` +
+    `L'interrogation automatique de vos questions favorites a eu lieu le ${date}.\n\n` +
+    `• Projet : ${projectName || schedule.project_id}\n` +
+    `• Questions favorites interrogées : ${count}\n` +
+    `• Providers interrogés : ${providers}\n\n` +
+    `Les résultats sont disponibles dans l'onglet Questions de votre dashboard GEO.\n\n` +
+    `— Dashboard GEO par Sonate`;
+
+  try {
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ from: MAIL_FROM, to: [to], subject, text }),
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      console.error(`[scheduler] Email Resend échoué (${res.status}): ${detail.slice(0, 200)}`);
+    } else {
+      console.log(`[scheduler] Email envoyé à ${to} (${count} question(s))`);
+    }
+  } catch (e) {
+    console.error("[scheduler] Email Resend exception:", e.message);
+  }
+}
+
 // ── computeNextRun ────────────────────────────────────────────────
 function computeNextRun(frequency) {
   const d = new Date();
@@ -412,6 +451,7 @@ async function runScheduler({ forceRun = false } = {}) {
     }
     const nextRun = computeNextRun(schedule.frequency);
     await sbPatch(`geo_schedules?id=eq.${schedule.id}`, { next_run: nextRun, last_run: now, last_run_count: count });
+    await sendRunEmail(schedule, count, project?.name);
     results.push({ schedule_id: schedule.id, questions_processed: count, next_run: nextRun });
   }
 
