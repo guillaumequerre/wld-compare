@@ -33,26 +33,14 @@ const BURGER_TABS_USER = [
   { key: "manage", label: "👤 Compte & projets" },
 ];
 
-// Tabs supplémentaires réservés au superadmin
-const NAV_TABS_SUPERADMIN = [
-  { key: "pages", label: "Vue par page" },
-  { key: "sites", label: "Vue par site" },
+// Réservé au superadmin — accessible uniquement via le burger menu
+const BURGER_TABS_SUPERADMIN = [
   { key: "connections", label: "🔐 Connexions" },
 ];
 
-const BURGER_TABS_SUPERADMIN = [
-  { key: "analyse",     label: "✦ Analyse IA"       },
-  { key: "evolution",   label: "📅 Évolution"       },
-  { key: "matrix",      label: "Matrice"            },
-  { key: "semrush",     label: "📊 Semrush"         },
-  { key: "allprojects", label: "◈ Tous les projets" },
-];
-
 // Calcul dynamique selon le rôle
-function getNavTabs(isSuperAdmin) {
-  return isSuperAdmin
-    ? [...NAV_TABS_USER, ...NAV_TABS_SUPERADMIN]
-    : NAV_TABS_USER;
+function getNavTabs() {
+  return NAV_TABS_USER; // header identique pour tous : Suivi GEO + Audit GEO
 }
 
 function getBurgerTabs(isSuperAdmin) {
@@ -69,7 +57,7 @@ function NavBar({ tab, setTab, user, onLogout }) {
   const burgerRef = useRef(null);
   // Navigation dynamique selon le rôle
   const superAdmin = isSuperAdmin(user);
-  const navTabs    = getNavTabs(superAdmin);
+  const navTabs    = getNavTabs();
   const burgerTabs = getBurgerTabs(superAdmin);
   const isBurgerTab = burgerTabs.some(t => t.key === tab);
 

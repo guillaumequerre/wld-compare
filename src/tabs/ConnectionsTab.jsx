@@ -42,6 +42,17 @@ export default function ConnectionsTab({ projects = [] }) {
   const [summary, setSummary]       = useState([]);   // [{user_email, last_usage, m7..mall}]
   const [byProject, setByProject]   = useState([]);   // [{user_email, project_id, m30, mall}]
   const [expanded, setExpanded]     = useState(null); // email déplié
+  const [period, setPeriod]         = useState("m30"); // période sélectionnée
+
+  const PERIODS = [
+    { key: "m7",   label: "7 derniers jours"  },
+    { key: "m30",  label: "30 derniers jours" },
+    { key: "m90",  label: "3 derniers mois"   },
+    { key: "m180", label: "6 derniers mois"   },
+    { key: "m365", label: "12 derniers mois"  },
+    { key: "mall", label: "Tout l'historique" },
+  ];
+  const periodLabel = PERIODS.find(p => p.key === period)?.label || "période";
 
   const projName = useMemo(() => {
     const map = {};
@@ -123,66 +134,68 @@ export default function ConnectionsTab({ projects = [] }) {
       {!loading && error && <div style={{ padding: 14, background: "#FEF2F2", color: "#B91C1C", borderRadius: 8, fontSize: 13 }}>{error}</div>}
 
       {!loading && !error && (
-        <div style={{ overflowX: "auto", border: `1px solid ${C.border}`, borderRadius: 12, background: "#fff" }}>
-          <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 920 }}>
-            <thead>
-              <tr>
-                <th style={th}>Utilisateur</th>
-                <th style={th}>Dernière connexion</th>
-                <th style={th}>Dernier usage</th>
-                <th style={{ ...th, textAlign: "right" }}>7 j</th>
-                <th style={{ ...th, textAlign: "right" }}>30 j</th>
-                <th style={{ ...th, textAlign: "right" }}>3 mois</th>
-                <th style={{ ...th, textAlign: "right" }}>6 mois</th>
-                <th style={{ ...th, textAlign: "right" }}>12 mois</th>
-                <th style={{ ...th, textAlign: "right" }}>Tout</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.length === 0 && (
-                <tr><td colSpan={9} style={{ ...td, textAlign: "center", color: C.textLight }}>Aucun utilisateur.</td></tr>
-              )}
-              {rows.map(r => {
-                const projRows = projectsFor(r.email);
-                const isOpen = expanded === r.email;
-                return (
-                  <Fragment key={r.email}>
-                    <tr style={{ cursor: projRows.length ? "pointer" : "default" }}
-                        onClick={() => projRows.length && setExpanded(isOpen ? null : r.email)}>
-                      <td style={{ ...td, fontWeight: 600 }}>
-                        {projRows.length > 0 && <span style={{ color: C.textLight, marginRight: 6, fontSize: 10 }}>{isOpen ? "▼" : "▶"}</span>}
-                        {r.email}
-                      </td>
-                      <td style={td}>
-                        {fmtDate(r.last_sign_in_at)}
-                        {r.last_sign_in_at && <span style={{ color: C.textLight, fontSize: 11, marginLeft: 6 }}>({relativeDays(r.last_sign_in_at)})</span>}
-                      </td>
-                      <td style={td}>
-                        {r.last_usage ? fmtDate(r.last_usage) : "—"}
-                        {r.last_usage && <span style={{ color: C.textLight, fontSize: 11, marginLeft: 6 }}>({relativeDays(r.last_usage)})</span>}
-                      </td>
-                      <td style={tdNum}>{fmtDuration(r.m7)}</td>
-                      <td style={tdNum}>{fmtDuration(r.m30)}</td>
-                      <td style={tdNum}>{fmtDuration(r.m90)}</td>
-                      <td style={tdNum}>{fmtDuration(r.m180)}</td>
-                      <td style={tdNum}>{fmtDuration(r.m365)}</td>
-                      <td style={{ ...tdNum, fontWeight: 700 }}>{fmtDuration(r.mall)}</td>
-                    </tr>
-                    {isOpen && projRows.map(p => (
-                      <tr key={r.email + "|" + p.project_id} style={{ background: C.greenLight }}>
-                        <td style={{ ...td, paddingLeft: 30, fontSize: 12, color: C.textLight }}>↳ {projName[p.project_id] || p.project_id}</td>
-                        <td style={td}></td>
-                        <td style={{ ...td, fontSize: 12, color: C.textLight }}>30 j : {fmtDuration(p.m30)}</td>
-                        <td style={tdNum}></td><td style={tdNum}></td><td style={tdNum}></td><td style={tdNum}></td><td style={tdNum}></td>
-                        <td style={{ ...tdNum, fontSize: 12, fontWeight: 600 }}>{fmtDuration(p.mall)}</td>
+        <>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+            <label style={{ fontSize: 12, fontWeight: 600, color: C.green }}>Période suivie :</label>
+            <select
+              value={period}
+              onChange={e => setPeriod(e.target.value)}
+              style={{ fontSize: 13, padding: "6px 10px", border: `1px solid ${C.border}`, borderRadius: 8, background: "#fff", color: C.text, cursor: "pointer" }}>
+              {PERIODS.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
+            </select>
+            <span style={{ fontSize: 11, color: C.textLight }}>— temps passé sur l'outil sur la période choisie</span>
+          </div>
+
+          <div style={{ overflowX: "auto", border: `1px solid ${C.border}`, borderRadius: 12, background: "#fff" }}>
+            <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 640 }}>
+              <thead>
+                <tr>
+                  <th style={th}>Utilisateur</th>
+                  <th style={th}>Dernière connexion</th>
+                  <th style={th}>Dernier usage</th>
+                  <th style={{ ...th, textAlign: "right" }}>Temps passé ({periodLabel})</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.length === 0 && (
+                  <tr><td colSpan={4} style={{ ...td, textAlign: "center", color: C.textLight }}>Aucun utilisateur.</td></tr>
+                )}
+                {rows.map(r => {
+                  const projRows = projectsFor(r.email);
+                  const isOpen = expanded === r.email;
+                  return (
+                    <Fragment key={r.email}>
+                      <tr style={{ cursor: projRows.length ? "pointer" : "default" }}
+                          onClick={() => projRows.length && setExpanded(isOpen ? null : r.email)}>
+                        <td style={{ ...td, fontWeight: 600 }}>
+                          {projRows.length > 0 && <span style={{ color: C.textLight, marginRight: 6, fontSize: 10 }}>{isOpen ? "▼" : "▶"}</span>}
+                          {r.email}
+                        </td>
+                        <td style={td}>
+                          {fmtDate(r.last_sign_in_at)}
+                          {r.last_sign_in_at && <span style={{ color: C.textLight, fontSize: 11, marginLeft: 6 }}>({relativeDays(r.last_sign_in_at)})</span>}
+                        </td>
+                        <td style={td}>
+                          {r.last_usage ? fmtDate(r.last_usage) : "—"}
+                          {r.last_usage && <span style={{ color: C.textLight, fontSize: 11, marginLeft: 6 }}>({relativeDays(r.last_usage)})</span>}
+                        </td>
+                        <td style={{ ...tdNum, fontWeight: 700 }}>{fmtDuration(r[period])}</td>
                       </tr>
-                    ))}
-                  </Fragment>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                      {isOpen && projRows.map(p => (
+                        <tr key={r.email + "|" + p.project_id} style={{ background: C.greenLight }}>
+                          <td style={{ ...td, paddingLeft: 30, fontSize: 12, color: C.textLight }}>↳ {projName[p.project_id] || p.project_id}</td>
+                          <td style={td}></td>
+                          <td style={td}></td>
+                          <td style={{ ...tdNum, fontSize: 12, fontWeight: 600 }}>{fmtDuration(p[period])}</td>
+                        </tr>
+                      ))}
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
     </div>
   );
