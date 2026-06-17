@@ -1056,7 +1056,7 @@ export async function sbSaveSchedule({ project_id, site_id, owner_email, frequen
     next_run: nextRun.toISOString(),
   };
 
-  const res = await fetchSupabase(`${PROXY}/rest/v1/geo_schedules`, {
+  const res = await fetchSupabase(`${PROXY}/rest/v1/geo_schedules?on_conflict=project_id,site_id`, {
     method: "POST",
     headers: { ...authHeaders(), "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation" },
     body: JSON.stringify(payload),
