@@ -1726,6 +1726,59 @@ function CatSelect({ value, categories, onChange, placeholder = "Catégorie…" 
   );
 }
 
+// Multi-select catégories (checkboxes + tout sélectionner/désélectionner), stylé comme .gt-select
+function CatMultiSelect({ value = [], categories, onChange, placeholder = "Catégorie" }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  const cats = (Array.isArray(categories) ? categories : []).filter(c => c.id && c.name);
+  const sel = Array.isArray(value) ? value : [];
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
+  const allSelected = cats.length > 0 && sel.length === cats.length;
+  const toggle = (id) => onChange(sel.includes(id) ? sel.filter(x => x !== id) : [...sel, id]);
+  const toggleAll = () => onChange(allSelected ? [] : cats.map(c => c.id));
+  const label = sel.length === 0 ? placeholder
+    : allSelected ? "Toutes catégories"
+    : sel.length === 1 ? (cats.find(c => c.id === sel[0])?.name || "1 catégorie")
+    : `${sel.length} catégories`;
+  return (
+    <div ref={ref} style={{ position: "relative", display: "inline-block" }}>
+      <button type="button" className="gt-select" onClick={() => setOpen(o => !o)}
+        style={{ display: "inline-flex", alignItems: "center", gap: 6, color: sel.length ? "#1A3C2E" : undefined }}>
+        <span>{label}</span>
+        <span style={{ fontSize: 9, opacity: 0.6 }}>▾</span>
+      </button>
+      {open && (
+        <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 50, minWidth: 200, maxHeight: 280, overflowY: "auto", background: "#fff", border: "0.5px solid #1A3C2E22", borderRadius: 8, boxShadow: "0 4px 16px rgba(26,60,46,0.12)", padding: 4 }}>
+          {cats.length === 0 ? (
+            <div style={{ padding: "8px 10px", fontSize: 11, color: "#1A3C2E77" }}>Aucune catégorie</div>
+          ) : (
+            <>
+              <button type="button" onClick={toggleAll}
+                style={{ width: "100%", textAlign: "left", padding: "6px 10px", fontSize: 11, fontWeight: 600, color: "#1A3C2E", background: "transparent", border: "none", borderBottom: "0.5px solid #1A3C2E11", cursor: "pointer", borderRadius: 4 }}>
+                {allSelected ? "Tout désélectionner" : "Tout sélectionner"}
+              </button>
+              {cats.map(c => {
+                const on = sel.includes(c.id);
+                return (
+                  <label key={c.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", fontSize: 11, color: "#1A3C2E", cursor: "pointer", borderRadius: 4 }}>
+                    <input type="checkbox" checked={on} onChange={() => toggle(c.id)} style={{ cursor: "pointer", accentColor: "#1A3C2E" }} />
+                    <span>{c.name}</span>
+                  </label>
+                );
+              })}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Keywords sub-tab (v2) ─────────────────────────────────────────
 
 function KeywordsTab({ site, projectId, apiKey, model, axes, context, categories, setCategories, onAxesChange, onQuestionsGenerated, semrushKey = "", providerKeys = {} }) {
@@ -1740,6 +1793,9 @@ function KeywordsTab({ site, projectId, apiKey, model, axes, context, categories
   const [filterSearch, setFilterSearch] = useState(""); // regex/text filter on keyword
   const stopRef = useRef(false);
   const [enriching, setEnriching] = useState(false);
+  const [showAddKw, setShowAddKw]   = useState(false); // section « Ajouter » repliée si ≥1 mot-clé
+  const [showVolModal, setShowVolModal] = useState(false); // modal d'enrichissement Semrush
+  const [copiedKw, setCopiedKw]     = useState(false);
   const fileVolRef = useRef(null);
 
   useEffect(() => {
@@ -2024,9 +2080,9 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
           </span>
           <div className="geo-volume-toolbar-actions" style={{ gap: 6 }}>
             <input ref={fileVolRef} type="file" accept=".csv" style={{ display: "none" }} onChange={enrichFromCsv} />
-            <button onClick={() => fileVolRef.current?.click()}
+            <button onClick={() => setShowVolModal(true)}
               style={{ fontSize: 11, fontWeight: 600, padding: "4px 10px", border: "1px solid #BFDBFE", borderRadius: 7, background: "#fff", color: "#2563EB", cursor: "pointer" }}>
-              📄 CSV Semrush
+              🔍 Enrichir avec des volumes de recherche
             </button>
             <button onClick={enrichFromApi} disabled={enriching || !semrushKey}
               title={!semrushKey ? "Clé API Semrush non configurée — ajoutez-la dans ⚙️ Gestion des Providers" : "Récupérer les volumes depuis l'API Semrush (1 crédit/mot-clé)"}
@@ -2037,7 +2093,8 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
         </div>
       )}
 
-      {/* Input + CSV import */}
+      {/* Input + CSV import — masqué si des mots-clés existent déjà (toggle « Ajouter des mots-clés ») */}
+      {(keywords.length === 0 || showAddKw) && (
       <div style={{ background: "#fff", border: "0.5px solid #1A3C2E0D", borderRadius: 12, padding: 20, marginBottom: 16 }}>
         <div style={{ display: "flex", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
           <div style={{ flex: 1, minWidth: 220 }}>
@@ -2058,6 +2115,7 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
           </div>
         </div>
       </div>
+      )}
 
       {/* Categories */}
       <div style={{ background: "#fff", border: "0.5px solid #1A3C2E0D", borderRadius: 12, padding: "12px 16px", marginBottom: 16 }}>
@@ -2126,6 +2184,9 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
             )}
 
             <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+              <Btn onClick={() => setShowAddKw(v => !v)} variant="outline" small color={site.color}>
+                {showAddKw ? "✕ Fermer l'ajout" : "➕ Ajouter des mots-clés"}
+              </Btn>
               {runningAll && <Btn onClick={() => { stopRef.current = true; setRunningAll(false); }} color="#DC2626" variant="outline" small>⏹ Arrêter</Btn>}
             <Btn onClick={generateAll} disabled={runningAll || (!apiKey && !providerKeys?.openai?.dec)} color={site.color} small
               title={(!apiKey && !providerKeys?.openai?.dec) ? "Clé OpenAI manquante — ajoutez-la dans ⚙️ Gestion des Providers (en haut de page)" : undefined}>
@@ -2211,6 +2272,49 @@ Réponds UNIQUEMENT avec les ${numQ} questions séparées par des points-virgule
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* ── Modal : enrichissement volumes de recherche (CSV Semrush) ── */}
+      {showVolModal && (
+        <div onClick={() => setShowVolModal(false)}
+          style={{ position: "fixed", inset: 0, background: "rgba(26,60,46,0.45)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+          <div onClick={e => e.stopPropagation()}
+            style={{ background: "#fff", borderRadius: 14, padding: "24px 26px", maxWidth: 520, width: "100%", boxShadow: "0 12px 40px rgba(0,0,0,0.2)", maxHeight: "85vh", overflowY: "auto" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+              <div style={{ fontSize: 16, fontWeight: 600, color: "#1A3C2E" }}>🔍 Enrichir avec des volumes de recherche</div>
+              <button onClick={() => setShowVolModal(false)} style={{ background: "none", border: "none", fontSize: 18, color: "#1A3C2E", cursor: "pointer", lineHeight: 1 }}>✕</button>
+            </div>
+            <div style={{ fontSize: 13, color: "#1A3C2E", lineHeight: 1.55, marginBottom: 16 }}>
+              Importez un fichier de suivi de mots-clés Semrush au format <strong>.csv</strong> pour ajouter les volumes de recherche à vos mots-clés.
+            </div>
+
+            <div style={{ background: "#F8F7F4", border: "0.5px solid #1A3C2E14", borderRadius: 10, padding: "12px 14px", marginBottom: 12 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "#1A3C2E", marginBottom: 8 }}>1. Copiez votre liste de mots-clés</div>
+              <button onClick={() => { navigator.clipboard?.writeText(keywords.map(k => k.keyword).join("\n")); setCopiedKw(true); setTimeout(() => setCopiedKw(false), 2000); }}
+                style={{ fontSize: 12, fontWeight: 600, padding: "6px 14px", border: "1px solid #1A3C2E", borderRadius: 8, background: copiedKw ? "#1A3C2E" : "#fff", color: copiedKw ? "#F0EBE0" : "#1A3C2E", cursor: "pointer" }}>
+                {copiedKw ? "✓ Copié" : `📋 Copier les ${keywords.length} mots-clés`}
+              </button>
+            </div>
+
+            <div style={{ fontSize: 12.5, color: "#1A3C2E", lineHeight: 1.6, marginBottom: 16 }}>
+              <div style={{ fontWeight: 600, marginBottom: 6 }}>2. Récupérez le CSV depuis Semrush</div>
+              <ol style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 4 }}>
+                <li>Dans Semrush, ouvrez <strong>Keyword Overview</strong> (Vue d'ensemble des mots-clés) en mode analyse groupée.</li>
+                <li>Collez la liste, choisissez le pays / la langue, puis lancez l'analyse.</li>
+                <li>Cliquez sur <strong>Export</strong> et choisissez le format <strong>CSV</strong>.</li>
+              </ol>
+              <div style={{ fontSize: 11, color: "#8A8A82", marginTop: 6 }}>Le fichier doit contenir une colonne « Keyword » et une colonne « Volume ».</div>
+            </div>
+
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", alignItems: "center", borderTop: "0.5px solid #1A3C2E11", paddingTop: 14 }}>
+              <button onClick={() => setShowVolModal(false)} style={{ fontSize: 12, padding: "8px 14px", border: "0.5px solid #1A3C2E22", borderRadius: 8, background: "transparent", color: "#1A3C2E", cursor: "pointer" }}>Annuler</button>
+              <button onClick={() => { fileVolRef.current?.click(); setShowVolModal(false); }}
+                style={{ fontSize: 12, fontWeight: 600, padding: "8px 16px", border: "none", borderRadius: 8, background: "#2563EB", color: "#fff", cursor: "pointer" }}>
+                📄 Importer le fichier .csv
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -3513,7 +3617,7 @@ function QuestionsTab({ site, projectId, apiKey, model, brand, categories, setCa
   const [filterPositioned, setFilterPositionedRaw] = useState(savedF.filterPositioned || false);
   const [filterLost,       setFilterLostRaw]       = useState(savedF.filterLost       || false);
   const [sortByResult,     setSortByResult]        = useState(savedF.sortByResult     || false); // tri par résultat (mention/évoc/citation)
-  const [filterCat,        setFilterCatRaw]        = useState(savedF.filterCat        || "");
+  const [filterCat,        setFilterCatRaw]        = useState(Array.isArray(savedF.filterCat) ? savedF.filterCat : (savedF.filterCat ? [savedF.filterCat] : []));
   const [filterKeyword,    setFilterKeywordRaw]    = useState(savedF.filterKeyword    || "");
   const [filterSearch,     setFilterSearchRaw]     = useState(savedF.filterSearch     || "");
   const [searchField,      setSearchField]         = useState(savedF.searchField      || "question"); // question|answer|mention|evocation|citation
@@ -4077,7 +4181,7 @@ Réponds UNIQUEMENT avec les ${n} questions séparées par des points-virgules (
   const filtered = useMemo(() => { const bn = brand?.brand_name || ""; const base = sortedQuestions.filter(q => {
     // Filtres cumulatifs (ET)
     if (filterFav && !q.is_favorite) return false;
-    if (filterCat && q.category_id !== filterCat) return false;
+    if (filterCat.length && !filterCat.includes(q.category_id)) return false;
     if (filterKeyword && q.keyword_id !== filterKeyword) return false;
     if (filterSearch) {
       // Construire le texte cible selon le champ choisi (question/réponse/mention/évocation/citation)
@@ -4363,7 +4467,7 @@ Réponds UNIQUEMENT avec les ${n} questions séparées par des points-virgules (
           />
 
           {/* Catégorie */}
-          <CatSelect value={filterCat} categories={categories} onChange={v => setFilterCat(v || "")} placeholder="Catégorie" />
+          <CatMultiSelect value={filterCat} categories={categories} onChange={v => setFilterCat(v)} placeholder="Catégorie" />
 
           {/* Mot-clé */}
           <select value={filterKeyword} onChange={e => setFilterKeyword(e.target.value)} className="gt-select">
@@ -4397,9 +4501,9 @@ Réponds UNIQUEMENT avec les ${n} questions séparées par des points-virgules (
           </button>
 
           {/* Reset — apparaît seulement si filtre actif */}
-          {(filterSearch || filterCat || filterKeyword || filterFav || filterPositioned || filterLost || filterProviders.length > 0 || sortByResult) && (
+          {(filterSearch || filterCat.length || filterKeyword || filterFav || filterPositioned || filterLost || filterProviders.length > 0 || sortByResult) && (
             <button
-              onClick={() => { setFilterSearch(""); setFilterCat(""); setFilterKeyword(""); setFilterFav(false); setFilterPositioned(false); setFilterLost(false); setFilterProviders([]); setSortByResult(false); }}
+              onClick={() => { setFilterSearch(""); setFilterCat([]); setFilterKeyword(""); setFilterFav(false); setFilterPositioned(false); setFilterLost(false); setFilterProviders([]); setSortByResult(false); }}
               className="gt-btn-icon"
               title="Effacer tous les filtres"
               style={{ fontSize: 12, color: "#1A3C2E" }}>
@@ -5762,13 +5866,12 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
   autoStartTour = false,
   onTourStarted = null,
 }) {
-  const [mainTab, setMainTab]       = useState("analyse"); // "setup" | "analyse"
-  const [subTab, setSubTab]         = useState("keywords"); // keywords | questions | urls
+  const [subTab, setSubTab]         = useState("questions"); // questions | keywords | competitors | automation | urls | setup
   const [questionsKey, setQuestionsKey] = useState(0); // incremented to force QuestionsTab reload
   const [selectedSite, setSelectedSite] = useState(sites[0]?.id || "");
   // Démarrer le tour automatiquement si demandé
   useEffect(() => {
-    if (autoStartTour) { setMainTab("analyse"); setShowTour(true); onTourStarted?.(); }
+    if (autoStartTour) { setSubTab("questions"); setShowTour(true); onTourStarted?.(); }
   }, [autoStartTour]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Sync selectedSite quand le projet change
@@ -5927,7 +6030,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
       desc: "5 onglets pour piloter votre analyse GEO : Mots-clés → génération des questions, Questions → interrogation des LLMs, Concurrents → qualification, Automatisation → planifier les runs, Sources → URLs citées.",
       tip: "Démarrez toujours par ajouter vos mots-clés cibles.",
       position: "bottom",
-      onActivate: () => { setMainTab("analyse"); setSubTab("keywords"); },
+      onActivate: () => { setSubTab("keywords"); },
     },
     {
       target: "keywords-section",
@@ -5936,7 +6039,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
       desc: "Saisissez vos requêtes cibles (une par ligne) puis cliquez 'Générer toutes les questions'. L'IA crée automatiquement plusieurs questions par axe (meilleur, pistes, avis, objectif…). Import CSV possible.",
       tip: "5-10 mots-clés suffisent pour commencer. Ajoutez des volumes via Semrush.",
       position: "bottom",
-      onActivate: () => { setMainTab("analyse"); setSubTab("keywords"); },
+      onActivate: () => { setSubTab("keywords"); },
     },
     {
       target: "stats-header",
@@ -5945,7 +6048,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
       desc: "3 métriques clés : Mention (dans un top numéroté LLM), Évocation (dans le corps du texte) et Citation (dans les sources). Se met à jour en temps réel après chaque interrogation.",
       tip: "Filtrez par provider pour comparer OpenAI, Gemini, Perplexity et Claude.",
       position: "bottom",
-      onActivate: () => { setMainTab("analyse"); setSubTab("questions"); },
+      onActivate: () => { setSubTab("questions"); },
     },
     {
       target: "provider-pills",
@@ -5954,7 +6057,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
       desc: "Activez ou désactivez chaque provider pour filtrer l'affichage. Les pills sans clé configurée sont grisées. Configurez vos clés dans l'onglet 'Configuration'.",
       tip: "Perplexity et Gemini ont un accès web en temps réel — utile pour les requêtes récentes.",
       position: "bottom",
-      onActivate: () => { setMainTab("analyse"); setSubTab("questions"); },
+      onActivate: () => { setSubTab("questions"); },
     },
     {
       target: "run-all",
@@ -5963,7 +6066,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
       desc: "Lance toutes les questions non encore interrogées aujourd'hui. Le bouton ▶ individuel force le rechargement pour une question. Un 💡 Hint GEO peut être généré pour chaque question sans présence.",
       tip: "Les résultats sont sauvegardés automatiquement dans Supabase — consultez l'Audit GEO pour l'historique.",
       position: "top",
-      onActivate: () => { setMainTab("analyse"); setSubTab("questions"); },
+      onActivate: () => { setSubTab("questions"); },
     },
     {
       target: "export-btn",
@@ -5972,7 +6075,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
       desc: "Exportez les questions avec présence marque, les favoris ou toutes les questions. Filtrez par provider. Le PDF génère un rapport mis en page avec chiffres clés, concurrents et hints GEO.",
       tip: "Générez les 💡 Hints avant le PDF pour un rapport plus actionnable.",
       position: "top",
-      onActivate: () => { setMainTab("analyse"); setSubTab("questions"); },
+      onActivate: () => { setSubTab("questions"); },
     },
     {
       target: "geo-analysis",
@@ -5981,7 +6084,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
       desc: "Claude analyse vos données de présence et produit 4 sections actionnables : État des lieux, Maillage interne à créer, Pages à adapter, URLs concurrentes à surveiller.",
       tip: "Relancez l'analyse après chaque série d'interrogations pour des recommandations à jour.",
       position: "bottom",
-      onActivate: () => { setMainTab("analyse"); setSubTab("questions"); },
+      onActivate: () => { setSubTab("questions"); },
     },
   ];
 
@@ -5999,7 +6102,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             {!isReadOnly && (
-              <button onClick={() => { setMainTab("analyse"); setShowTour(true); }}
+              <button onClick={() => { setSubTab("questions"); setShowTour(true); }}
                 style={{ fontSize: 11, fontWeight: 500, color: "#1A3C2E", background: "#F0EBE0", border: "1px solid #1A3C2E22", borderRadius: 20, padding: "5px 14px", cursor: "pointer" }}>
                 Guide
               </button>
@@ -6012,31 +6115,32 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
           </div>
         </div>
 
-        {/* Nav principale */}
-        {!isReadOnly && (
-          <div style={{ display: "flex", borderBottom: "1px solid #1A3C2E22" }}>
-            {[{ key: "analyse", label: "Analyse" }, { key: "setup", label: "Configuration" }].map(t => {
-              const isActive = t.key === "setup" ? mainTab === "setup" : mainTab !== "setup";
-              return (
-                <button key={t.key}
-                  onClick={() => setMainTab(t.key === "analyse" ? "analyse" : "setup")}
-                  style={{
-                    padding: "8px 20px", fontSize: 13, fontWeight: isActive ? 500 : 400,
-                    color: isActive ? "#1A3C2E" : "#1A3C2E",
-                    background: "none", border: "none",
-                    borderBottom: isActive ? "1.5px solid #1A3C2E" : "1.5px solid transparent",
-                    marginBottom: -1, cursor: "pointer", transition: "all 0.15s",
-                  }}>
-                  {t.label}
-                </button>
-              );
-            })}
-          </div>
-        )}
+      </div>
+
+      {/* ── Sous-nav (toujours visible) — Questions mis en avant ; Configuration au même niveau ── */}
+      <div data-tour="subnav" className="geo-subnav" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 24 }}>
+        {[
+          { key: "questions",   label: "Questions",      primary: true },
+          { key: "keywords",    label: "Mots-clés" },
+          { key: "competitors", label: "Concurrents" },
+          { key: "automation",  label: "Automatisation" },
+          { key: "urls",        label: "Sources" },
+          ...(!isReadOnly ? [{ key: "setup", label: "⚙ Configuration", right: true }] : []),
+        ].map(t => {
+          const active = subTab === t.key;
+          const base = { padding: "6px 16px", fontSize: 12, borderRadius: 20, cursor: "pointer", transition: "all 0.15s", whiteSpace: "nowrap" };
+          const style = t.primary
+            ? { ...base, fontWeight: 600, color: active ? "#F0EBE0" : "#1A3C2E", background: active ? "#1A3C2E" : "transparent", border: "1px solid #1A3C2E" }
+            : { ...base, fontWeight: active ? 500 : 400, color: "#1A3C2E",
+                background: active ? "#F0EBE0" : "transparent",
+                border: active ? "1px solid #1A3C2E33" : "1px solid transparent",
+                ...(t.right ? { marginLeft: "auto" } : {}) };
+          return <button key={t.key} onClick={() => setSubTab(t.key)} style={style}>{t.label}</button>;
+        })}
       </div>
 
       {/* ── Configuration ── */}
-      {mainTab === "setup" && (
+      {subTab === "setup" && (
         <FanoutSetupPanel
           projects={projects}
           currentProjectId={currentProjectId}
@@ -6091,32 +6195,10 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
       )}
 
       {/* ── Analyse ── */}
-      {mainTab !== "setup" && (<div>
+      {subTab !== "setup" && (<div>
 
         {/* Site switcher retiré : seul le site principal est suivi.
             Un éventuel 2e site est traité comme « 2nd site suivi » dans l'onglet Concurrents. */}
-
-        {/* Sous-nav */}
-        <div data-tour="subnav" className="geo-subnav" style={{ marginBottom: 24 }}>
-          {[
-            { key: "keywords",    label: "Mots-clés" },
-            { key: "questions",   label: "Questions" },
-            { key: "competitors", label: "Concurrents" },
-            { key: "automation",  label: "Automatisation" },
-            { key: "urls",        label: "Sources" },
-          ].map(t => {
-            const active = subTab === t.key;
-            return (
-              <button key={t.key} onClick={() => setSubTab(t.key)} style={{
-                padding: "6px 16px", fontSize: 12, fontWeight: active ? 500 : 400,
-                color: active ? "#1A3C2E" : "#1A3C2E",
-                background: active ? "#F0EBE0" : "transparent",
-                border: active ? "1px solid #1A3C2E33" : "1px solid transparent",
-                borderRadius: 20, cursor: "pointer", transition: "all 0.15s",
-              }}>{t.label}</button>
-            );
-          })}
-        </div>
 
         {/* ── Mots-clés ── */}
         {subTab === "keywords" && (
