@@ -84,70 +84,130 @@ const PROVIDERS = {
   claude:     { model: "claude-haiku-4-5-20251001", keyField: "claude_geo_key_enc" },
 };
 
-// ── Call each provider API ────────────────────────────────────────
-async function callProvider(providerId, apiKey, prompt) {
+const PROVIDER_LABEL = { openai: "OpenAI", gemini: "Gemini", perplexity: "Perplexity", claude: "Claude" };
+
+// ── Parsers IDENTIQUES à l'onglet Questions (extraction réponse + sources) ──
+const HALLUCINATION = [/exemple\d*\./i, /example\d*\./i, /site\d+\./i, /domaine\d*\./i, /placeholder/i, /turn\d+search/i];
+
+function extractOpenAIUrls(data) {
+  const urls = [], seen = new Set();
+  for (const item of data.output || []) {
+    if (item.type !== "message") continue;
+    for (const part of item.content || []) {
+      for (const ann of part.annotations || []) {
+        if (ann.type === "url_citation" && ann.url && !seen.has(ann.url)) { seen.add(ann.url); urls.push(ann.url); }
+      }
+    }
+  }
+  return urls;
+}
+
+function parseOpenAIResponse(data, endpoint = "responses") {
+  let rawText = "";
+  if (endpoint === "responses") {
+    for (const item of data.output || []) {
+      if (item.type !== "message") continue;
+      for (const part of item.content || []) if (part.type === "output_text") rawText += part.text;
+    }
+  } else {
+    rawText = data.choices?.[0]?.message?.content || "";
+  }
+  const realUrls = extractOpenAIUrls(data);
+  const urlRe = /https?:\/\/[^\s\])"'>]+/g;
+  const textUrls = [...rawText.matchAll(urlRe)].map(m => m[0].replace(/[.,;:)]+$/, "")).filter(u => !HALLUCINATION.some(p => p.test(u)));
+  const allUrls = [...new Set([...realUrls, ...textUrls])];
+  let answer = rawText;
+  const s = rawText.lastIndexOf("{"), e = rawText.lastIndexOf("}");
+  if (s !== -1 && e > s) {
+    try { const j = JSON.parse(rawText.substring(s, e + 1)); if (j.answer && !String(j.answer).startsWith("{")) answer = j.answer; } catch {}
+  }
+  return { answer, sources: [...new Set(allUrls)].filter(u => !HALLUCINATION.some(p => p.test(u))) };
+}
+
+function parseTextResponse(text, extraSources = []) {
+  const s = text.lastIndexOf("{"), e = text.lastIndexOf("}");
+  if (s !== -1 && e > s) {
+    try {
+      const parsed = JSON.parse(text.substring(s, e + 1));
+      if (parsed.answer) {
+        const inlineUrls = [...String(parsed.answer).matchAll(/https?:\/\/[^\s\])"'>]+/g)].map(m => m[0]).filter(u => !HALLUCINATION.some(p => p.test(u)));
+        return { answer: parsed.answer, sources: [...new Set([...(parsed.sources || []), ...extraSources, ...inlineUrls])].filter(Boolean) };
+      }
+    } catch {}
+  }
+  const foundUrls = [...text.matchAll(/https?:\/\/[^\s\])"'>]+/g)].map(m => m[0]).filter(u => !HALLUCINATION.some(p => p.test(u)));
+  return { answer: text, sources: [...new Set([...foundUrls, ...extraSources])] };
+}
+
+// Évite de réessayer la Responses API OpenAI si elle a échoué une fois (tier).
+let openaiResponsesDisabled = false;
+
+// ── Appels providers VIA LES PROXIES — identiques à l'onglet Questions ──
+// `site` = origine absolue du déploiement (les proxies sont des routes relatives
+// côté front ; côté serveur il faut une URL absolue).
+async function callProvider(providerId, apiKey, prompt, site) {
   if (!apiKey) throw new Error(`No API key for ${providerId}`);
+  const base = site || "";
+  const model = PROVIDERS[providerId].model;
 
   if (providerId === "openai") {
-    const res = await fetch("https://api.openai.com/v1/chat/completions", {
-      method:  "POST",
-      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
-      body:    JSON.stringify({
-        model:      PROVIDERS.openai.model,
-        messages:   [{ role: "user", content: prompt }],
-        max_tokens: 1200,
-      }),
+    // Tentative 1 : Responses API + web_search (temps réel), comme dans Questions.
+    if (!openaiResponsesDisabled) {
+      try {
+        const resA = await fetch(`${base}/api/openai`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Openai-Key": apiKey, "X-Openai-Endpoint": "responses" },
+          body: JSON.stringify({ model, input: prompt, tools: [{ type: "web_search_preview", search_context_size: "high" }], max_output_tokens: 4000 }),
+        });
+        const rawA = await resA.text();
+        if (resA.ok && !rawA.trimStart().startsWith("<")) {
+          try { return parseOpenAIResponse(JSON.parse(rawA), "responses"); } catch {}
+        }
+        openaiResponsesDisabled = true;
+      } catch { openaiResponsesDisabled = true; }
+    }
+    // Tentative 2 : Chat Completions (fallback).
+    const res = await fetch(`${base}/api/openai`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Openai-Key": apiKey, "X-Openai-Endpoint": "completions" },
+      body: JSON.stringify({ model, messages: [{ role: "system", content: "Tu es un expert en recommandation d'entreprises et prestataires. Réponds directement et factuellement." }, { role: "user", content: prompt }], temperature: 0.7, max_tokens: 2000 }),
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error?.message || `OpenAI ${res.status}`);
-    return { text: data.choices?.[0]?.message?.content || "", sources: [] };
+    const raw = await res.text();
+    if (raw.trimStart().startsWith("<")) throw new Error("Proxy /api/openai introuvable");
+    const data = JSON.parse(raw);
+    if (!res.ok) throw new Error(data?.error?.message || `OpenAI ${res.status}`);
+    return parseOpenAIResponse(data, "completions");
   }
 
   if (providerId === "gemini") {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${PROVIDERS.gemini.model}:generateContent?key=${apiKey}`;
-    const res = await fetch(url, {
-      method:  "POST",
-      headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error?.message || `Gemini ${res.status}`);
-    return { text: data.candidates?.[0]?.content?.parts?.[0]?.text || "", sources: [] };
+    const res = await fetch(`${base}/api/gemini`, { method: "POST", headers: { "Content-Type": "application/json", "X-Gemini-Key": apiKey }, body: JSON.stringify({ model, prompt }) });
+    const raw = await res.text();
+    if (raw.trimStart().startsWith("<")) throw new Error("Proxy /api/gemini introuvable");
+    const data = JSON.parse(raw);
+    if (!res.ok) throw new Error(data.error || `Gemini ${res.status}`);
+    return parseTextResponse(data.choices?.[0]?.message?.content || "", data._sources || []);
   }
 
   if (providerId === "perplexity") {
-    const res = await fetch("https://api.perplexity.ai/chat/completions", {
-      method:  "POST",
-      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
-      body:    JSON.stringify({
-        model:      PROVIDERS.perplexity.model,
-        messages:   [{ role: "user", content: prompt }],
-        max_tokens: 1200,
-      }),
-    });
-    const data = await res.json();
+    const res = await fetch(`${base}/api/perplexity`, { method: "POST", headers: { "Content-Type": "application/json", "X-Perplexity-Key": apiKey }, body: JSON.stringify({ model, prompt }) });
+    const raw = await res.text();
+    if (raw.trimStart().startsWith("<")) throw new Error("Proxy /api/perplexity introuvable");
+    const data = JSON.parse(raw);
     if (!res.ok) throw new Error(data.error?.message || `Perplexity ${res.status}`);
-    const citations = data.citations || data._citations || [];
-    return { text: data.choices?.[0]?.message?.content || "", sources: citations };
+    return parseTextResponse(data.choices?.[0]?.message?.content || "", data._citations || []);
   }
 
   if (providerId === "claude") {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method:  "POST",
-      headers: {
-        "Content-Type":      "application/json",
-        "x-api-key":         apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model:      PROVIDERS.claude.model,
-        max_tokens: 1200,
-        messages:   [{ role: "user", content: prompt }],
-      }),
+    const res = await fetch(`${base}/api/claude-geo`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Claude-Key": apiKey },
+      body: JSON.stringify({ model, max_tokens: 4000, system: "Tu es un expert en recommandation d'entreprises et prestataires. Réponds directement sans mentionner les limites de tes connaissances.", messages: [{ role: "user", content: prompt }] }),
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error?.message || `Claude ${res.status}`);
-    return { text: data.content?.[0]?.text || "", sources: [] };
+    const raw = await res.text();
+    if (raw.trimStart().startsWith("<")) throw new Error("Proxy /api/claude-geo introuvable");
+    if (!res.ok) { let m = `Claude ${res.status}`; try { m = JSON.parse(raw)?.error?.message || m; } catch {} throw new Error(m); }
+    const data = JSON.parse(raw);
+    return parseTextResponse(data.content?.[0]?.text || "", []);
   }
 
   throw new Error(`Unknown provider: ${providerId}`);
@@ -227,17 +287,29 @@ function extractSources(text) {
 }
 
 // ── Build prompt ──────────────────────────────────────────────────
-function buildPrompt(question, brandName, brandAliases, context) {
-  const ctx      = context ? `Contexte : ${context}\n\n` : "";
-  const aliasStr = (brandAliases || []).filter(Boolean).join(", ");
-  const brandCtx = brandName
-    ? `Marque à détecter : "${brandName}"${aliasStr ? ` (aussi connue comme : ${aliasStr})` : ""}.\n\n`
-    : "";
-  return `${ctx}${brandCtx}RÈGLE ABSOLUE : Ne demande jamais de clarification. Réponds directement.\n\nPour chaque acteur recommandé : donne le nom, le site web, et une description courte.\n\n${question}`;
+// Prompts IDENTIQUES à l'onglet Questions (par provider). La marque n'est PAS
+// injectée dans le prompt (détection a posteriori), comme dans runProvider.
+function buildPrompt(providerId, question, context) {
+  const baseContext = context ? `Contexte : "${context}"\n` : "";
+  const q = `Question : ${question}`;
+  if (providerId === "claude") {
+    return `${baseContext}Tu es un expert en recommandation d'entreprises et prestataires. Réponds à la question suivante en te basant sur tes connaissances pour donner une liste de vrais acteurs, entreprises ou prestataires du marché.
+RÈGLE : Ne dis jamais que tu n'as pas accès au web ou aux avis récents. Donne directement des recommandations concrètes avec les vrais noms d'entreprises que tu connais.
+Réponds en texte libre structuré. Liste les acteurs avec une courte description de chacun.
+Pour chaque acteur, indique son site web réel (URL complète https://…) afin qu'il apparaisse comme source.
+${q}`;
+  }
+  if (providerId === "gemini") {
+    return `${baseContext}Tu as accès à Google Search en temps réel. Utilise-le pour trouver les meilleurs acteurs, entreprises et prestataires actuels.
+Réponds avec une liste de vrais acteurs du marché, leurs sites web et leurs caractéristiques principales.
+Sois direct et factuel. Cite les sources que tu as consultées.
+${q}`;
+  }
+  return [baseContext, "Tu es un assistant IA avec accès au web. Réponds directement et complètement à la question.", "RÈGLE ABSOLUE : Ne pose jamais de question de clarification. Donne directement une liste de recommandations concrètes.", "Pour chaque acteur recommandé : donne le nom, le site web, et une description courte.", "Sois factuel, précis, et cite tes sources.", q].filter(Boolean).join("\n");
 }
 
 // ── Process one schedule ──────────────────────────────────────────
-async function processSchedule(schedule, project, brand) {
+async function processSchedule(schedule, project, brand, site) {
   const providerIds = schedule.providers || ["openai"];
   const maxQ        = schedule.max_questions || 10;
 
@@ -267,10 +339,10 @@ async function processSchedule(schedule, project, brand) {
       }
 
       try {
-        const prompt = buildPrompt(q.question, brandName, brandAliases, context);
-        const { text: answer, sources: providerSources } = await callProvider(providerId, apiKey, prompt);
+        const prompt = buildPrompt(providerId, q.question, context);
+        const { answer, sources: providerSources } = await callProvider(providerId, apiKey, prompt, site);
         const textSources = extractSources(answer);
-        const sources = [...new Set([...providerSources, ...textSources])];
+        const sources = [...new Set([...(providerSources || []), ...textSources])];
 // détection inline dans le record ci-dessous
 
         const now = new Date().toISOString();
@@ -290,7 +362,7 @@ async function processSchedule(schedule, project, brand) {
           question_id:              q.id,
           project_id:               schedule.project_id,
           site_id:                  schedule.site_id,
-          model:                    `${providerId} (${pDef.model}) [auto]`,
+          model:                    `${PROVIDER_LABEL[providerId] || providerId} (${pDef.model}) [auto]`,
           answer,
           sources,
           source_types:             [],
@@ -418,7 +490,8 @@ function computeNextRun(frequency) {
 }
 
 // ── Runner : traite les schedules dûs (ou forcés) ─────────────────
-async function runScheduler({ forceRun = false } = {}) {
+async function runScheduler({ forceRun = false, site = "" } = {}) {
+  const SITE = site || process.env.URL || process.env.DEPLOY_PRIME_URL || process.env.DEPLOY_URL || "";
   const start = Date.now();
   const now = new Date().toISOString();
 
@@ -445,7 +518,7 @@ async function runScheduler({ forceRun = false } = {}) {
 
     let count = 0;
     try {
-      count = await processSchedule(schedule, project, brand);
+      count = await processSchedule(schedule, project, brand, SITE);
     } catch(e) {
       console.error(`[scheduler] Schedule ${schedule.id} failed:`, e.message);
     }
@@ -464,16 +537,18 @@ async function runScheduler({ forceRun = false } = {}) {
 // Suffixe -background → timeout 15 min, retourne 202 immédiatement.
 export default async (req) => {
   let forceRun = false;
+  let origin = "";
   try {
     if (req.method === "POST") {
       const body = await req.json().catch(() => ({}));
       forceRun = body?.force !== false; // POST manuel = forcé par défaut
+      origin = body?.origin || "";
     }
   } catch {}
 
   // Le travail s'exécute ; Netlify maintient la fonction vivante jusqu'à 15 min.
   try {
-    const out = await runScheduler({ forceRun });
+    const out = await runScheduler({ forceRun, site: origin });
     console.log("[geo-scheduler-bg] result:", JSON.stringify(out).slice(0, 300));
   } catch(e) {
     console.error("[geo-scheduler-bg] fatal:", e.message);

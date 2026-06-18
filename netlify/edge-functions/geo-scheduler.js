@@ -39,7 +39,7 @@ export default async function(request) {
     fetch(bgUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ force }),
+      body: JSON.stringify({ force, origin }),
       signal: controller.signal,
     }).catch(() => {}).finally(() => clearTimeout(t));
   } catch {}
