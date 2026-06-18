@@ -4,6 +4,9 @@
 // Déclenchée par : (1) le cron via geo-scheduler.js (edge), (2) le trigger manuel front.
 // Le suffixe "-background" active le mode asynchrone Netlify : réponse 202 immédiate.
 
+// ── Moteur partagé [Call + Identification] — MÊME code que l'onglet Questions ──
+import { callProvider, detectBrand, buildPrompt, PROVIDER_LABEL } from "../../src/lib/geoEngine.js";
+
 const SUPABASE_URL      = process.env.SUPABASE_URL              || "";
 const SUPABASE_ANON     = process.env.SUPABASE_ANON             || "";
 // FIX BUG 1 : utiliser la SERVICE_ROLE key pour bypasser les RLS policies
@@ -13,6 +16,7 @@ const SUPABASE_SERVICE  = process.env.SUPABASE_SERVICE_ROLE_KEY ||
 // ── Email de fin de run (Resend) ──────────────────────────────────
 const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
 const MAIL_FROM      = process.env.SCHEDULER_MAIL_FROM || "Dashboard GEO | Sonate <noreply@geo.sonate.group>";
+
 
 // ── Supabase helpers ──────────────────────────────────────────────
 // Lecture : clé anon (respecte les RLS publiques)
@@ -84,230 +88,6 @@ const PROVIDERS = {
   claude:     { model: "claude-haiku-4-5-20251001", keyField: "claude_geo_key_enc" },
 };
 
-const PROVIDER_LABEL = { openai: "OpenAI", gemini: "Gemini", perplexity: "Perplexity", claude: "Claude" };
-
-// ── Parsers IDENTIQUES à l'onglet Questions (extraction réponse + sources) ──
-const HALLUCINATION = [/exemple\d*\./i, /example\d*\./i, /site\d+\./i, /domaine\d*\./i, /placeholder/i, /turn\d+search/i];
-
-function extractOpenAIUrls(data) {
-  const urls = [], seen = new Set();
-  for (const item of data.output || []) {
-    if (item.type !== "message") continue;
-    for (const part of item.content || []) {
-      for (const ann of part.annotations || []) {
-        if (ann.type === "url_citation" && ann.url && !seen.has(ann.url)) { seen.add(ann.url); urls.push(ann.url); }
-      }
-    }
-  }
-  return urls;
-}
-
-function parseOpenAIResponse(data, endpoint = "responses") {
-  let rawText = "";
-  if (endpoint === "responses") {
-    for (const item of data.output || []) {
-      if (item.type !== "message") continue;
-      for (const part of item.content || []) if (part.type === "output_text") rawText += part.text;
-    }
-  } else {
-    rawText = data.choices?.[0]?.message?.content || "";
-  }
-  const realUrls = extractOpenAIUrls(data);
-  const urlRe = /https?:\/\/[^\s\])"'>]+/g;
-  const textUrls = [...rawText.matchAll(urlRe)].map(m => m[0].replace(/[.,;:)]+$/, "")).filter(u => !HALLUCINATION.some(p => p.test(u)));
-  const allUrls = [...new Set([...realUrls, ...textUrls])];
-  let answer = rawText;
-  const s = rawText.lastIndexOf("{"), e = rawText.lastIndexOf("}");
-  if (s !== -1 && e > s) {
-    try { const j = JSON.parse(rawText.substring(s, e + 1)); if (j.answer && !String(j.answer).startsWith("{")) answer = j.answer; } catch {}
-  }
-  return { answer, sources: [...new Set(allUrls)].filter(u => !HALLUCINATION.some(p => p.test(u))) };
-}
-
-function parseTextResponse(text, extraSources = []) {
-  const s = text.lastIndexOf("{"), e = text.lastIndexOf("}");
-  if (s !== -1 && e > s) {
-    try {
-      const parsed = JSON.parse(text.substring(s, e + 1));
-      if (parsed.answer) {
-        const inlineUrls = [...String(parsed.answer).matchAll(/https?:\/\/[^\s\])"'>]+/g)].map(m => m[0]).filter(u => !HALLUCINATION.some(p => p.test(u)));
-        return { answer: parsed.answer, sources: [...new Set([...(parsed.sources || []), ...extraSources, ...inlineUrls])].filter(Boolean) };
-      }
-    } catch {}
-  }
-  const foundUrls = [...text.matchAll(/https?:\/\/[^\s\])"'>]+/g)].map(m => m[0]).filter(u => !HALLUCINATION.some(p => p.test(u)));
-  return { answer: text, sources: [...new Set([...foundUrls, ...extraSources])] };
-}
-
-// Évite de réessayer la Responses API OpenAI si elle a échoué une fois (tier).
-let openaiResponsesDisabled = false;
-
-// ── Appels providers VIA LES PROXIES — identiques à l'onglet Questions ──
-// `site` = origine absolue du déploiement (les proxies sont des routes relatives
-// côté front ; côté serveur il faut une URL absolue).
-async function callProvider(providerId, apiKey, prompt, site) {
-  if (!apiKey) throw new Error(`No API key for ${providerId}`);
-  const base = site || "";
-  const model = PROVIDERS[providerId].model;
-
-  if (providerId === "openai") {
-    // Tentative 1 : Responses API + web_search (temps réel), comme dans Questions.
-    if (!openaiResponsesDisabled) {
-      try {
-        const resA = await fetch(`${base}/api/openai`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-Openai-Key": apiKey, "X-Openai-Endpoint": "responses" },
-          body: JSON.stringify({ model, input: prompt, tools: [{ type: "web_search_preview", search_context_size: "high" }], max_output_tokens: 4000 }),
-        });
-        const rawA = await resA.text();
-        if (resA.ok && !rawA.trimStart().startsWith("<")) {
-          try { return parseOpenAIResponse(JSON.parse(rawA), "responses"); } catch {}
-        }
-        openaiResponsesDisabled = true;
-      } catch { openaiResponsesDisabled = true; }
-    }
-    // Tentative 2 : Chat Completions (fallback).
-    const res = await fetch(`${base}/api/openai`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Openai-Key": apiKey, "X-Openai-Endpoint": "completions" },
-      body: JSON.stringify({ model, messages: [{ role: "system", content: "Tu es un expert en recommandation d'entreprises et prestataires. Réponds directement et factuellement." }, { role: "user", content: prompt }], temperature: 0.7, max_tokens: 2000 }),
-    });
-    const raw = await res.text();
-    if (raw.trimStart().startsWith("<")) throw new Error("Proxy /api/openai introuvable");
-    const data = JSON.parse(raw);
-    if (!res.ok) throw new Error(data?.error?.message || `OpenAI ${res.status}`);
-    return parseOpenAIResponse(data, "completions");
-  }
-
-  if (providerId === "gemini") {
-    const res = await fetch(`${base}/api/gemini`, { method: "POST", headers: { "Content-Type": "application/json", "X-Gemini-Key": apiKey }, body: JSON.stringify({ model, prompt }) });
-    const raw = await res.text();
-    if (raw.trimStart().startsWith("<")) throw new Error("Proxy /api/gemini introuvable");
-    const data = JSON.parse(raw);
-    if (!res.ok) throw new Error(data.error || `Gemini ${res.status}`);
-    return parseTextResponse(data.choices?.[0]?.message?.content || "", data._sources || []);
-  }
-
-  if (providerId === "perplexity") {
-    const res = await fetch(`${base}/api/perplexity`, { method: "POST", headers: { "Content-Type": "application/json", "X-Perplexity-Key": apiKey }, body: JSON.stringify({ model, prompt }) });
-    const raw = await res.text();
-    if (raw.trimStart().startsWith("<")) throw new Error("Proxy /api/perplexity introuvable");
-    const data = JSON.parse(raw);
-    if (!res.ok) throw new Error(data.error?.message || `Perplexity ${res.status}`);
-    return parseTextResponse(data.choices?.[0]?.message?.content || "", data._citations || []);
-  }
-
-  if (providerId === "claude") {
-    const res = await fetch(`${base}/api/claude-geo`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Claude-Key": apiKey },
-      body: JSON.stringify({ model, max_tokens: 4000, system: "Tu es un expert en recommandation d'entreprises et prestataires. Réponds directement sans mentionner les limites de tes connaissances.", messages: [{ role: "user", content: prompt }] }),
-    });
-    const raw = await res.text();
-    if (raw.trimStart().startsWith("<")) throw new Error("Proxy /api/claude-geo introuvable");
-    if (!res.ok) { let m = `Claude ${res.status}`; try { m = JSON.parse(raw)?.error?.message || m; } catch {} throw new Error(m); }
-    const data = JSON.parse(raw);
-    return parseTextResponse(data.content?.[0]?.text || "", []);
-  }
-
-  throw new Error(`Unknown provider: ${providerId}`);
-}
-
-// ── Brand detection — 3 types (mirrors GeoTab.jsx detectBrand) ──
-function detectBrand(answer, sources, brandName, brandAliases) {
-  if (!answer || !brandName) {
-    return { brandMentioned: false, brandInSources: false, brandPosition: null,
-             mention: { present: false, position: null },
-             evocation: { present: false, position: null },
-             citation: { present: false, position: null } };
-  }
-
-  const terms = [brandName, ...(brandAliases || [])].map(t => t.toLowerCase().trim()).filter(Boolean);
-  const domainTerms = terms.map(t => t.replace(/\s+/g, ""));
-
-  function matches(text) {
-    const t = (text || "").toLowerCase();
-    return terms.some(term => term && t.includes(term));
-  }
-
-  const lines = answer.split("\n");
-  const topItemRe = /^\s*(?:[•\-\*]\s*)?(\d+)[.)\s]\s*(.+)/;
-
-  // MENTION : item numéroté du top
-  let mentionPosition = null;
-  for (const line of lines) {
-    const m = line.match(topItemRe);
-    if (m && matches(m[2]) && mentionPosition === null) {
-      mentionPosition = parseInt(m[1], 10);
-    }
-  }
-
-  // EVOCATION : corps narratif hors top items
-  let evocationPosition = null;
-  let narrativeCount = 0;
-  for (const line of lines) {
-    const stripped = line.trim();
-    if (!stripped || topItemRe.test(line)) continue;
-    if (stripped.startsWith("http") || stripped.startsWith("[") || stripped.startsWith("Source")) continue;
-    narrativeCount++;
-    if (matches(stripped) && evocationPosition === null) evocationPosition = narrativeCount;
-  }
-
-  // CITATION : domaine dans les sources
-  let citationPosition = null;
-  const urlRe = /https?:\/\/[^\s\)\],"']+/g;
-  const textUrls = [...answer.matchAll(urlRe)].map(m => m[0].replace(/[.,;:]+$/, ""));
-  const allSources = [...new Set([...(sources || []), ...textUrls])];
-  for (let i = 0; i < allSources.length; i++) {
-    const src = allSources[i].toLowerCase().replace("www.", "");
-    if (domainTerms.some(d => d && src.includes(d)) && citationPosition === null) {
-      citationPosition = i + 1;
-    }
-  }
-
-  const brandMentioned = mentionPosition !== null || evocationPosition !== null;
-  return {
-    brandMentioned,
-    brandPosition:  mentionPosition,
-    brandInSources: citationPosition !== null,
-    mention:   { present: mentionPosition !== null,   position: mentionPosition },
-    evocation: { present: evocationPosition !== null, position: evocationPosition },
-    citation:  { present: citationPosition !== null,  position: citationPosition },
-  };
-}
-
-function extractSources(text) {
-  const urlRegex = /https?:\/\/[^\s\)\],"']+/g;
-  const matches = [];
-  let m;
-  while ((m = urlRegex.exec(text)) !== null) {
-    matches.push(m[0].replace(/[.,;:]+$/, ""));
-  }
-  return [...new Set(matches)].slice(0, 10);
-}
-
-// ── Build prompt ──────────────────────────────────────────────────
-// Prompts IDENTIQUES à l'onglet Questions (par provider). La marque n'est PAS
-// injectée dans le prompt (détection a posteriori), comme dans runProvider.
-function buildPrompt(providerId, question, context) {
-  const baseContext = context ? `Contexte : "${context}"\n` : "";
-  const q = `Question : ${question}`;
-  if (providerId === "claude") {
-    return `${baseContext}Tu es un expert en recommandation d'entreprises et prestataires. Réponds à la question suivante en te basant sur tes connaissances pour donner une liste de vrais acteurs, entreprises ou prestataires du marché.
-RÈGLE : Ne dis jamais que tu n'as pas accès au web ou aux avis récents. Donne directement des recommandations concrètes avec les vrais noms d'entreprises que tu connais.
-Réponds en texte libre structuré. Liste les acteurs avec une courte description de chacun.
-Pour chaque acteur, indique son site web réel (URL complète https://…) afin qu'il apparaisse comme source.
-${q}`;
-  }
-  if (providerId === "gemini") {
-    return `${baseContext}Tu as accès à Google Search en temps réel. Utilise-le pour trouver les meilleurs acteurs, entreprises et prestataires actuels.
-Réponds avec une liste de vrais acteurs du marché, leurs sites web et leurs caractéristiques principales.
-Sois direct et factuel. Cite les sources que tu as consultées.
-${q}`;
-  }
-  return [baseContext, "Tu es un assistant IA avec accès au web. Réponds directement et complètement à la question.", "RÈGLE ABSOLUE : Ne pose jamais de question de clarification. Donne directement une liste de recommandations concrètes.", "Pour chaque acteur recommandé : donne le nom, le site web, et une description courte.", "Sois factuel, précis, et cite tes sources.", q].filter(Boolean).join("\n");
-}
-
 // ── Process one schedule ──────────────────────────────────────────
 async function processSchedule(schedule, project, brand, site) {
   const providerIds = schedule.providers || ["openai"];
@@ -325,6 +105,10 @@ async function processSchedule(schedule, project, brand, site) {
   const brandName    = brand?.brand_name    || "";
   const brandAliases = brand?.brand_aliases || [];
   const context      = brand?.context       || "";
+  // Concurrents (mêmes données que le PROP `competitors` de l'onglet Questions)
+  const competitors  = await sbGet(
+    `geo_competitors?project_id=eq.${encodeURIComponent(schedule.project_id)}&site_id=eq.${encodeURIComponent(schedule.site_id)}&select=name`
+  ).catch(() => []);
   let savedCount = 0;
 
   for (const q of questions) {
@@ -340,15 +124,14 @@ async function processSchedule(schedule, project, brand, site) {
 
       try {
         const prompt = buildPrompt(providerId, q.question, context);
-        const { answer, sources: providerSources } = await callProvider(providerId, apiKey, prompt, site);
-        const textSources = extractSources(answer);
-        const sources = [...new Set([...(providerSources || []), ...textSources])];
-// détection inline dans le record ci-dessous
+        const parsed = await callProvider({ id: providerId, model: pDef.model }, apiKey, prompt, 2000, site);
+        const answer = parsed.answer || "";
+        const sources = parsed.sources || [];
 
         const now = new Date().toISOString();
 
-        // ── Détection marque (3 types) ────────────────────────────
-        const detected = detectBrand(answer, sources, brandName, brandAliases);
+        // ── Détection marque (3 types) — MÊME moteur que l'onglet Questions ──
+        const detected = detectBrand(answer, sources, brandName, brandAliases, competitors);
         const brandMentioned = detected.brandMentioned;
 
         // Type de présence pour le calendrier (mirror runProvider front)
@@ -364,17 +147,20 @@ async function processSchedule(schedule, project, brand, site) {
           site_id:                  schedule.site_id,
           model:                    `${PROVIDER_LABEL[providerId] || providerId} (${pDef.model}) [auto]`,
           answer,
+          answer_type:              parsed.answer_type || "Texte libre",
+          intent_type:              parsed.intent_type || "Informative",
           sources,
-          source_types:             [],
+          source_types:             parsed.source_types || [],
           brand_mentioned:          brandMentioned,
-          brand_in_sources:         detected.brandInSources,
           brand_position:           detected.brandPosition,
+          brand_in_sources:         detected.brandInSources,
+          competitors_mentioned:    detected.competitorsMentioned || [],
+          unknown_entities:         detected.unknownEntities || [],
           brand_mention_position:   detected.mention?.position   || null,
           brand_evocation_position: detected.evocation?.position || null,
           brand_citation_position:  detected.citation?.position  || null,
-          competitors_mentioned:    [],
-          answer_type:              "list",
-          intent_type:              "informational",
+          input_tokens:             parsed._input_tokens || 0,
+          output_tokens:            parsed._output_tokens || 0,
           created_at:               now,
         };
 
@@ -476,13 +262,19 @@ async function sendRunEmail(schedule, count, projectName) {
 // ── computeNextRun ────────────────────────────────────────────────
 function computeNextRun(frequency) {
   const d = new Date();
-  switch (frequency) {
-    case "daily":    d.setDate(d.getDate() + 1);  break;
-    case "weekly":   d.setDate(d.getDate() + 7);  break;
-    case "biweekly": d.setDate(d.getDate() + 14); break;
-    case "monthly":  d.setDate(d.getDate() + 30); break;
-    default:         d.setDate(d.getDate() + 7);
+  let days = 7;
+  if (typeof frequency === "string" && frequency.startsWith("every_")) {
+    days = Math.max(1, parseInt(frequency.slice(6), 10) || 7);
+  } else {
+    switch (frequency) {
+      case "daily":    days = 1;  break;
+      case "weekly":   days = 7;  break;
+      case "biweekly": days = 14; break;
+      case "monthly":  days = 30; break;
+      default:         days = 7;
+    }
   }
+  d.setDate(d.getDate() + days);
   return d.toISOString();
 }
 
