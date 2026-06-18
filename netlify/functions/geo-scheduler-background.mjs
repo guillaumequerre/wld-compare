@@ -89,7 +89,7 @@ const PROVIDERS = {
 };
 
 // ── Process one schedule ──────────────────────────────────────────
-async function processSchedule(schedule, project, brand, site) {
+async function processSchedule(schedule, project, brand, site, secondBrand = null) {
   const providerIds = schedule.providers || ["openai"];
   const maxQ        = schedule.max_questions || 10;
 
@@ -109,6 +109,11 @@ async function processSchedule(schedule, project, brand, site) {
   const competitors  = await sbGet(
     `geo_competitors?project_id=eq.${encodeURIComponent(schedule.project_id)}&site_id=eq.${encodeURIComponent(schedule.site_id)}&select=name`
   ).catch(() => []);
+  // 2e site → suivi comme concurrent « 2nd site suivi » (compté dans les détections), consolidé ici
+  const secondName = secondBrand?.brand_name?.trim();
+  if (secondName && !competitors.some(c => c.name?.toLowerCase() === secondName.toLowerCase())) {
+    competitors.push({ name: secondName });
+  }
   let savedCount = 0;
 
   for (const q of questions) {
@@ -307,15 +312,36 @@ async function runScheduler({ forceRun = false, site = "", target = {} } = {}) {
   const brandsRaw = await sbGet(`site_brand?project_id=in.(${projectIds.join(",")})&select=*`);
   const brandsMap = Object.fromEntries(brandsRaw.map(b => [`${b.project_id}__${b.site_id}`, b]));
 
+  // Sites par projet (sites_json) → site principal = sites[0], 2e site = sites[1]
+  const sitesOf = (project) => {
+    try { return JSON.parse(project?.sites_json || "[]"); } catch { return []; }
+  };
+
   const results = [];
   for (const schedule of schedules) {
     const project = projectsMap[schedule.project_id];
     if (!project) { console.warn(`[scheduler] Project not found: ${schedule.project_id}`); continue; }
+
+    // ── Consolidation multi-sites ──
+    // Si le projet a 2 sites, on ne suit QUE le site principal (sites[0]).
+    // Le schedule propre au 2e site est ignoré (consolidé sur le principal).
+    // La marque du 2e site est injectée comme concurrent « 2nd site suivi ».
+    const projSites = sitesOf(project);
+    const primaryId = projSites[0]?.id;
+    const secondId  = projSites[1]?.id;
+    if (secondId && schedule.site_id === secondId) {
+      console.log(`[scheduler] Skip 2e site ${schedule.site_id} (consolidé sur le site principal ${primaryId})`);
+      continue;
+    }
+    const secondBrand = (secondId && schedule.site_id === primaryId)
+      ? (brandsMap[`${schedule.project_id}__${secondId}`] || null)
+      : null;
+
     const brand = brandsMap[`${schedule.project_id}__${schedule.site_id}`] || null;
 
     let count = 0;
     try {
-      count = await processSchedule(schedule, project, brand, SITE);
+      count = await processSchedule(schedule, project, brand, SITE, secondBrand);
     } catch(e) {
       console.error(`[scheduler] Schedule ${schedule.id} failed:`, e.message);
     }

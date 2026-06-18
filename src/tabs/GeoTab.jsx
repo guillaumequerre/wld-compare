@@ -1331,10 +1331,11 @@ function StatsHeader({ questions, results, brandName, qualifiedCompetitors = [],
 
 // ── Competitor categories ─────────────────────────────────────────
 const COMP_CATEGORIES = [
-  { key: "direct",  label: "Concurrent direct",  color: "#DC2626", bg: "#FEF2F2" },
-  { key: "geo",     label: "Concurrent GEO",      color: "#D97706", bg: "#FFFBEB" },
-  { key: "partner", label: "Partenaire",           color: "#059669", bg: "#ECFDF5" },
-  { key: "other",   label: "Autre",                color: "#64748B", bg: "#F1F5F9" },
+  { key: "direct",      label: "Concurrent direct",  color: "#DC2626", bg: "#FEF2F2" },
+  { key: "geo",         label: "Concurrent GEO",      color: "#D97706", bg: "#FFFBEB" },
+  { key: "partner",     label: "Partenaire",           color: "#059669", bg: "#ECFDF5" },
+  { key: "second_site", label: "2nd site suivi",       color: "#2563EB", bg: "#EFF6FF" },
+  { key: "other",       label: "Autre",                color: "#64748B", bg: "#F1F5F9" },
 ];
 
 function CompetitorManager({ projectId, siteId, allResults, competitors, setCompetitors }) {
@@ -1579,6 +1580,12 @@ function CompetitorManager({ projectId, siteId, allResults, competitors, setComp
                   <div style={{ width: 8, height: 8, borderRadius: "50%", background: catDef.color, flexShrink: 0 }} />
                   <span style={{ fontSize: 12, fontWeight: 600, color: "#1A3C2E", flex: 1 }}>{comp.name}</span>
                   {mentions > 0 && <span style={{ fontSize: 10, color: catDef.color, background: "#fff", border: `1px solid ${catDef.color}33`, borderRadius: 5, padding: "1px 6px", fontWeight: 600 }}>{mentions}×</span>}
+                  {comp._virtual ? (
+                    <span style={{ fontSize: 10, color: catDef.color, background: catDef.bg, border: `1px solid ${catDef.color}33`, borderRadius: 5, padding: "2px 8px", fontWeight: 700 }}>
+                      {catDef.label}
+                    </span>
+                  ) : (
+                  <>
                   <button onClick={() => updateEnabled(comp, !enabled)}
                     style={{ width: 32, height: 18, borderRadius: 9, border: "none", cursor: "pointer", background: enabled ? "#1A3C2E" : "#CBD5E1", position: "relative", transition: "background 0.2s", flexShrink: 0 }}>
                     <span style={{ position: "absolute", top: 1, left: enabled ? 15 : 1, width: 16, height: 16, borderRadius: "50%", background: "#fff", transition: "left 0.2s" }} />
@@ -1588,6 +1595,8 @@ function CompetitorManager({ projectId, siteId, allResults, competitors, setComp
                     {COMP_CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
                   </select>
                   <button onClick={() => remove(comp.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "#94A3B8", fontSize: 11 }}>✕</button>
+                  </>
+                  )}
                 </div>
               );
             })}
@@ -3823,7 +3832,10 @@ Réponds UNIQUEMENT avec les ${n} questions séparées par des points-virgules (
       }
     }
     await sbUpdateQuestion(qId, { is_favorite: !cur });
+    const sy = window.scrollY;
     setQuestions(prev => prev.map(q => q.id === qId ? { ...q, is_favorite: !cur } : q));
+    // Empêche tout retour en haut de page suite au re-render de la liste
+    requestAnimationFrame(() => { if (Math.abs(window.scrollY - sy) > 4) window.scrollTo(0, sy); });
   };
 
   const deleteQ = async (qId) => {
@@ -5242,7 +5254,6 @@ function AutomationTab({ projectId, site, user, providerKeys }) {
 
   const [active, setActive]       = useState(true);
   const [providers, setProviders] = useState(["openai"]);
-  const [maxQ, setMaxQ]           = useState(10);
   const [intervalDays, setIntervalDays] = useState(1); // tous les X jours (1 = quotidien)
 
   // Conversion fréquence <-> nombre de jours (compat presets + "every_N")
@@ -5267,7 +5278,6 @@ function AutomationTab({ projectId, site, user, providerKeys }) {
         setSchedule(s);
         setActive(s.active);
         setProviders(s.providers || ["openai"]);
-        setMaxQ(s.max_questions || 10);
         setIntervalDays(freqToDays(s.frequency));
       }
       setLoading(false);
@@ -5283,7 +5293,7 @@ function AutomationTab({ projectId, site, user, providerKeys }) {
       const s = await sbSaveSchedule({
         project_id: projectId, site_id: site.id,
         owner_email: user?.email || "",
-        frequency: daysToFreq(intervalDays), providers, active, max_questions: maxQ,
+        frequency: daysToFreq(intervalDays), providers, active, max_questions: 1000,
       });
       setSchedule(s);
     } catch(e) { setError(e.message); }
@@ -5325,7 +5335,7 @@ function AutomationTab({ projectId, site, user, providerKeys }) {
         <div>
           <div className="gt-label" style={{ marginBottom: 4 }}>Automatisation</div>
           <div className="gt-heading" style={{ marginBottom: 4 }}>Interrogation automatique</div>
-          <div className="gt-body-sm">Questions ⭐ favoris — sans connexion à l'app</div>
+          <div className="gt-body-sm">Questions ⭐ favoris</div>
         </div>
         {schedule && (
           <button
@@ -5418,19 +5428,6 @@ function AutomationTab({ projectId, site, user, providerKeys }) {
               </button>
             );
           })}
-        </div>
-      </div>
-
-      {/* ── Nb max questions ── */}
-      <div style={{ marginBottom: 28 }}>
-        <div className="gt-label" style={{ marginBottom: 12 }}>Nb max de questions par run</div>
-        <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
-          <input type="range" min={1} max={50} value={maxQ} onChange={e => setMaxQ(+e.target.value)}
-            style={{ flex: 1, accentColor: "#1A3C2E", height: 2 }} />
-          <span className="gt-kpi-val" style={{ fontSize: 20, minWidth: 28, textAlign: "right" }}>{maxQ}</span>
-        </div>
-        <div className="gt-caption" style={{ marginTop: 6 }}>
-          ~{maxQ} × {providers.length} provider{providers.length > 1 ? "s" : ""} = {maxQ * providers.length} appels API par run
         </div>
       </div>
 
@@ -5785,6 +5782,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
 
   const [model] = useState(projectSettings.model || "gpt-4o-mini"); // kept for variation generation (OpenAI completions endpoint)
   const [brand, setBrand]           = useState(null);
+  const [secondSiteBrand, setSecondSiteBrand] = useState(null); // 2e site → suivi comme concurrent tagué
   const [runMode] = useState(projectSettings.runMode || "parallel"); // parallel | sequential
   const [semrushKeyDec, setSemrushKeyDec] = useState(() => decodeKey(project?.semrush_key_enc || ""));
   // Sync semrush key when project changes
@@ -5895,6 +5893,24 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
     }).catch(() => {});
   }, [projectId, site?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // 2e site → chargé comme « 2nd site suivi » (concurrent tagué du site principal)
+  useEffect(() => {
+    const list = Array.isArray(sites) ? sites : [];
+    if (!projectId || list.length < 2) { setSecondSiteBrand(null); return; }
+    sbGetBrand(projectId, list[1].id).then(b => setSecondSiteBrand(b || null)).catch(() => setSecondSiteBrand(null));
+  }, [projectId, sites]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Liste de concurrents enrichie : injecte le 2e site (virtuel, non éditable) tagué « 2nd site suivi »
+  const competitorsView = useMemo(() => {
+    const base = Array.isArray(competitors) ? competitors : [];
+    const name = secondSiteBrand?.brand_name?.trim();
+    if (!name) return base;
+    const exists = base.some(c => c.name?.toLowerCase() === name.toLowerCase());
+    if (exists) return base;
+    const def = COMP_CATEGORIES.find(c => c.key === "second_site");
+    return [{ id: "__second_site__", name, category: "second_site", color: def?.color || "#2563EB", enabled: true, _virtual: true }, ...base];
+  }, [competitors, secondSiteBrand]);
+
   // Decode key when enc changes
   useEffect(() => {
     if (!apiKeyEnc) return;
@@ -5978,8 +5994,8 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
       <div style={{ marginBottom: 28 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
           <div>
-            <div style={{ fontSize: 11, fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", color: "#1A3C2E", opacity: 0.5, marginBottom: 4 }}>Fan-outs GEO</div>
-            <div style={{ fontSize: 22, fontWeight: 500, color: "#1A3C2E" }}>Visibilité générative</div>
+            <div style={{ fontSize: 11, fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", color: "#1A3C2E", opacity: 0.5, marginBottom: 4 }}>Suivi GEO</div>
+            <div style={{ fontSize: 22, fontWeight: 500, color: "#1A3C2E" }}>Votre visibilité dans les LLMs</div>
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             {!isReadOnly && (
@@ -6077,20 +6093,8 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
       {/* ── Analyse ── */}
       {mainTab !== "setup" && (<div>
 
-        {/* Site switcher */}
-        {(Array.isArray(sites) ? sites : []).length > 1 && (
-          <div style={{ display: "flex", gap: 6, marginBottom: 20 }}>
-            {(Array.isArray(sites) ? sites : []).map(s => (
-              <button key={s.id} onClick={() => setSelectedSite(s.id)} style={{
-                padding: "5px 14px", fontSize: 12, fontWeight: 500, cursor: "pointer",
-                border: "none", borderRadius: 20,
-                background: selectedSite === s.id ? "#1A3C2E" : "#F0EBE0",
-                color: selectedSite === s.id ? "#F0EBE0" : "#1A3C2E",
-                transition: "all 0.15s",
-              }}>{s.label}</button>
-            ))}
-          </div>
-        )}
+        {/* Site switcher retiré : seul le site principal est suivi.
+            Un éventuel 2e site est traité comme « 2nd site suivi » dans l'onglet Concurrents. */}
 
         {/* Sous-nav */}
         <div data-tour="subnav" className="geo-subnav" style={{ marginBottom: 24 }}>
@@ -6137,7 +6141,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
             activeProviders={activeProviders} providerKeys={providerKeys}
             runMode={runMode} keywordsOrder={keywords.map(k => k.id)}
             refreshTrigger={questionsKey}
-            competitors={competitors} setCompetitors={setCompetitors}
+            competitors={competitorsView} setCompetitors={setCompetitors}
             isReadOnly={isReadOnly}
             onSaveKey={(keyPatch) => {
               setProviderKeys(prev => {
@@ -6167,7 +6171,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
             <CompetitorManager
               projectId={projectId} siteId={site?.id}
               allResults={allResults.filter(r => r.site_id === site?.id)}
-              competitors={competitors} setCompetitors={setCompetitors}
+              competitors={competitorsView} setCompetitors={setCompetitors}
             />
           </div>
         )}
