@@ -328,14 +328,14 @@ async function processSchedule(schedule, project, brand, site) {
   let savedCount = 0;
 
   for (const q of questions) {
-    for (const providerId of providerIds) {
+    await Promise.all(providerIds.map(async (providerId) => {
       const pDef = PROVIDERS[providerId];
-      if (!pDef) continue;
+      if (!pDef) return;
 
       const apiKey = decodeKey(project[pDef.keyField]);
       if (!apiKey) {
         console.warn(`[scheduler] Missing key for ${providerId} on project ${schedule.project_id}`);
-        continue;
+        return;
       }
 
       try {
@@ -426,13 +426,10 @@ async function processSchedule(schedule, project, brand, site) {
         savedCount++;
         console.log(`[scheduler] ✓ q=${q.id} provider=${providerId} brand=${brandMentioned} pres=${presTypeForCal}`);
 
-        // Délai anti-rate-limit
-        await new Promise(r => setTimeout(r, 400));
-
       } catch(e) {
         console.error(`[scheduler] Error q=${q.id} provider=${providerId}:`, e.message);
       }
-    }
+    }));
   }
 
   return savedCount;
@@ -490,15 +487,23 @@ function computeNextRun(frequency) {
 }
 
 // ── Runner : traite les schedules dûs (ou forcés) ─────────────────
-async function runScheduler({ forceRun = false, site = "" } = {}) {
+async function runScheduler({ forceRun = false, site = "", target = {} } = {}) {
   const SITE = site || process.env.URL || process.env.DEPLOY_PRIME_URL || process.env.DEPLOY_URL || "";
   const start = Date.now();
   const now = new Date().toISOString();
 
-  // Sélection des schedules
-  const filter = forceRun
-    ? `geo_schedules?active=eq.true&order=next_run.asc&limit=50`
-    : `geo_schedules?active=eq.true&next_run=lte.${encodeURIComponent(now)}&order=next_run.asc&limit=50`;
+  // Sélection des schedules.
+  // Si une cible est fournie (test manuel sur le projet courant) → uniquement ce schedule.
+  let filter;
+  if (target && target.project_id) {
+    filter = `geo_schedules?active=eq.true&project_id=eq.${encodeURIComponent(target.project_id)}`
+      + (target.site_id ? `&site_id=eq.${encodeURIComponent(target.site_id)}` : "")
+      + `&limit=5`;
+  } else if (forceRun) {
+    filter = `geo_schedules?active=eq.true&order=next_run.asc&limit=50`;
+  } else {
+    filter = `geo_schedules?active=eq.true&next_run=lte.${encodeURIComponent(now)}&order=next_run.asc&limit=50`;
+  }
 
   const schedules = await sbGet(filter);
   console.log(`[geo-scheduler-bg] ${forceRun ? "FORCED" : "SCHEDULED"} — ${schedules.length} schedules`);
@@ -538,17 +543,19 @@ async function runScheduler({ forceRun = false, site = "" } = {}) {
 export default async (req) => {
   let forceRun = false;
   let origin = "";
+  let target = { project_id: null, site_id: null };
   try {
     if (req.method === "POST") {
       const body = await req.json().catch(() => ({}));
       forceRun = body?.force !== false; // POST manuel = forcé par défaut
       origin = body?.origin || "";
+      if (body?.project_id) target = { project_id: body.project_id, site_id: body.site_id || null };
     }
   } catch {}
 
   // Le travail s'exécute ; Netlify maintient la fonction vivante jusqu'à 15 min.
   try {
-    const out = await runScheduler({ forceRun, site: origin });
+    const out = await runScheduler({ forceRun, site: origin, target });
     console.log("[geo-scheduler-bg] result:", JSON.stringify(out).slice(0, 300));
   } catch(e) {
     console.error("[geo-scheduler-bg] fatal:", e.message);

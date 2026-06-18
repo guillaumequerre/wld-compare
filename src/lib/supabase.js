@@ -1085,9 +1085,11 @@ export async function sbDeleteSchedule(id) {
   return res.ok;
 }
 
-export async function sbTriggerScheduler() {
+export async function sbTriggerScheduler(target = {}) {
   // Le scheduler est désormais asynchrone : l'edge dispatch vers une
   // background function (15 min de timeout) et renvoie 202 immédiatement.
+  // `target` = { project_id, site_id } pour ne traiter QUE ce schedule
+  // (test manuel sur le projet courant) au lieu de tous les schedules actifs.
   const secret = process.env.REACT_APP_SCHEDULER_SECRET;
   const res = await fetch("/api/geo-scheduler", {
     method: "POST",
@@ -1095,7 +1097,7 @@ export async function sbTriggerScheduler() {
       "Content-Type": "application/json",
       ...(secret ? { "X-Scheduler-Secret": secret } : {}),
     },
-    body: JSON.stringify({ force: true }),
+    body: JSON.stringify({ force: true, project_id: target.project_id || null, site_id: target.site_id || null }),
   });
   // 202 = accepté et lancé en arrière-plan (pas d'erreur)
   if (!res.ok && res.status !== 202) {

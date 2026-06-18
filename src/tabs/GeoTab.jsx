@@ -5730,7 +5730,7 @@ function AutomationTab({ projectId, site, user, providerKeys }) {
   const trigger = async () => {
     setTriggering(true); setTriggerResult(null); setError("");
     try {
-      const res = await sbTriggerScheduler();
+      const res = await sbTriggerScheduler({ project_id: projectId, site_id: site.id });
       setTriggerResult(res);
     } catch(e) { setError(e.message); }
     setTriggering(false);

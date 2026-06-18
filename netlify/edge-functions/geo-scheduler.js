@@ -16,12 +16,14 @@ export default async function(request) {
     return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 });
   }
 
-  // Déterminer force (POST manuel = forcé par défaut)
+  // Déterminer force (POST manuel = forcé par défaut) + cible éventuelle
   let force = request.method === "POST";
+  let target = { project_id: null, site_id: null };
   if (request.method === "POST") {
     try {
       const body = await request.clone().json().catch(() => ({}));
       if (body?.force === false) force = false;
+      if (body?.project_id) target = { project_id: body.project_id, site_id: body.site_id || null };
     } catch {}
   }
 
@@ -39,7 +41,7 @@ export default async function(request) {
     fetch(bgUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ force, origin }),
+      body: JSON.stringify({ force, origin, project_id: target.project_id, site_id: target.site_id }),
       signal: controller.signal,
     }).catch(() => {}).finally(() => clearTimeout(t));
   } catch {}
