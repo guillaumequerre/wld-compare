@@ -482,3 +482,16 @@ export function detectBrand(answer, sources, brandName, brandAliases = [], compe
     unknownEntities,
   };
 }
+
+// ── Présence calendrier (type + position) — MÊME logique que l'onglet Questions ──
+// Détermine ce qu'affiche le carré de suivi : « mention » porte la position (numéro),
+// sinon « evocation » / « citation ». Source unique partagée front + scheduler.
+// Priorité IDENTIQUE au manuel : mention > évocation > citation.
+export function calendarPresence(detected) {
+  const mentionPos = detected?.mention?.position || null;
+  const presType = mentionPos != null ? "mention"
+    : detected?.brandMentioned ? "evocation"
+    : detected?.brandInSources ? "citation"
+    : null;
+  return { presType, mentionPos };
+}

@@ -3,7 +3,7 @@ import "./geo-tab.css";
 import "./geo-responsive.css";
 import TourGuide from "./TourGuide";
 import PresenceCalendar from "../components/PresenceCalendar";
-import { callProvider, detectBrand, extractDomain, getProviderId, buildPrompt } from "../lib/geoEngine";
+import { callProvider, detectBrand, extractDomain, getProviderId, buildPrompt, calendarPresence } from "../lib/geoEngine";
 import {
   sbGetBrand,
   sbSaveKeywords, sbGetKeywords, sbUpdateKeywordStatus, sbDeleteKeyword, sbUpdateKeywordVolume,
@@ -4068,12 +4068,8 @@ Réponds UNIQUEMENT avec les ${n} questions séparées par des points-virgules (
         }
       }).catch(e => console.error("sbSaveGeoResult error:", e));
 
-      // Déterminer le type de présence + position pour le calendrier
-      const presTypeForCal = record.brand_mention_position != null ? "mention"
-        : brandMentioned ? "evocation"
-        : record.brand_in_sources ? "citation"
-        : null;
-      const mentionPosForCal = record.brand_mention_position != null ? record.brand_mention_position : null;
+      // Déterminer le type de présence + position pour le calendrier (moteur partagé)
+      const { presType: presTypeForCal, mentionPos: mentionPosForCal } = calendarPresence(detectedBrand);
       // Add to calendar (optimistic + persist) — avec type + position
       setNewCalEntries(prev => ({ ...prev, [`${q.id}|${provider.id}`]: { provider_id: provider.id, brand_present: brandMentioned, presType: presTypeForCal, mentionPos: mentionPosForCal } }));
       // Persist to DB (best effort)

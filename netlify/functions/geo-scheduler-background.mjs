@@ -5,7 +5,7 @@
 // Le suffixe "-background" active le mode asynchrone Netlify : réponse 202 immédiate.
 
 // ── Moteur partagé [Call + Identification] — MÊME code que l'onglet Questions ──
-import { callProvider, detectBrand, buildPrompt, PROVIDER_LABEL } from "../../src/lib/geoEngine.js";
+import { callProvider, detectBrand, buildPrompt, PROVIDER_LABEL, calendarPresence } from "../../src/lib/geoEngine.js";
 
 const SUPABASE_URL      = process.env.SUPABASE_URL              || "";
 const SUPABASE_ANON     = process.env.SUPABASE_ANON             || "";
@@ -139,11 +139,8 @@ async function processSchedule(schedule, project, brand, site, secondBrand = nul
         const detected = detectBrand(answer, sources, brandName, brandAliases, competitors);
         const brandMentioned = detected.brandMentioned;
 
-        // Type de présence pour le calendrier (mirror runProvider front)
-        const presTypeForCal = detected.mention?.position != null ? "mention"
-          : detected.brandInSources ? "citation"
-          : brandMentioned ? "evocation"
-          : null;
+        // Type de présence + position pour le calendrier (moteur partagé — identique au manuel)
+        const { presType: presTypeForCal, mentionPos: mentionPosForCal } = calendarPresence(detected);
 
         // ── 1. Sauvegarder dans geo_results ───────────────────────
         const record = {
@@ -201,6 +198,7 @@ async function processSchedule(schedule, project, brand, site, secondBrand = nul
             brand_mention:   presTypeForCal === "mention"   ? 1 : 0,
             brand_citation:  presTypeForCal === "citation"  ? 1 : 0,
             brand_evocation: presTypeForCal === "evocation" ? 1 : 0,
+            mention_position: presTypeForCal === "mention" && mentionPosForCal != null ? mentionPosForCal : null,
             test_date:       today,
           });
         } catch(calErr) {
