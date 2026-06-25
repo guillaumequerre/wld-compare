@@ -202,7 +202,7 @@ export async function sbLoadProjects() {
   const res = await fetch(`${PROXY}/rest/v1/projects?select=*&order=created_at.asc`, { headers: authHeaders() });
   if (!res.ok) return null;
   const rows = await res.json();
-  return rows.map(r => ({ id: r.id, name: r.name, sites: JSON.parse(r.sites_json || "[]"), openai_key_enc: r.openai_key_enc || null, geo_axes: JSON.parse(r.geo_axes_json || "null") || ["Meilleur / top / recommandé","Pistes et approches pour utiliser / bénéficier du mot-clé","Avis / fiable / fiabilité","Pour atteindre un objectif lié au mot-clé","Pour résoudre une problématique liée au mot-clé"], gemini_key_enc: r.gemini_key_enc || null, perplexity_key_enc: r.perplexity_key_enc || null, claude_geo_key_enc: r.claude_geo_key_enc || null, semrush_key_enc: r.semrush_key_enc || null, owner_email: r.owner_email || null, updated_at: r.updated_at || null, settings_json: r.settings_json || null }));
+  return rows.map(r => ({ id: r.id, name: r.name, sites: JSON.parse(r.sites_json || "[]"), openai_key_enc: r.openai_key_enc || null, geo_axes: JSON.parse(r.geo_axes_json || "null") || ["Meilleur / top / recommandé","Pistes et approches pour utiliser / bénéficier du mot-clé","Avis / fiable / fiabilité","Pour atteindre un objectif lié au mot-clé","Pour résoudre une problématique liée au mot-clé"], gemini_key_enc: r.gemini_key_enc || null, perplexity_key_enc: r.perplexity_key_enc || null, claude_geo_key_enc: r.claude_geo_key_enc || null, semrush_key_enc: r.semrush_key_enc || null, owner_email: r.owner_email || null, updated_at: r.updated_at || null, settings_json: r.settings_json || null, provider_web_search: r.provider_web_search || {} }));
 }
 
 export async function sbDeleteProject(projectId) {
@@ -801,6 +801,16 @@ export async function sbSaveUrlQuestion({ url_id, question_id, result_id, as_sou
 
 function extractDomain(url) {
   try { return new URL(url).hostname.replace("www.", ""); } catch { return url; }
+}
+
+export async function sbSaveProviderWebSearch(project_id, map) {
+  // map: { openai: bool, gemini: bool, perplexity: bool, claude: bool }
+  const res = await fetch(`${PROXY}/rest/v1/projects?id=eq.${encodeURIComponent(project_id)}`, {
+    method: "PATCH",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ provider_web_search: map || {} }),
+  });
+  return res.ok;
 }
 
 export async function sbSaveProviderKeys(project_id, keys) {

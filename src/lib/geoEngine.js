@@ -137,6 +137,10 @@ export function parseOpenAIResponse(data, endpoint = "responses") {
   parsed.sources = [...new Set(allUrls)].filter(u => !HALLUCINATION.some(p => p.test(u)));
   parsed._input_tokens = inTok;
   parsed._output_tokens = outTok;
+  // Nb de recherches web réellement effectuées (Responses API) — pour les coûts réels.
+  parsed._web_searches = endpoint === "responses"
+    ? (data.output || []).filter(it => it.type === "web_search_call").length
+    : 0;
   return parsed;
 }
 
@@ -171,11 +175,11 @@ export function parseTextResponse(text, inTok, outTok, extraSources = []) {
 
 let openaiResponsesDisabled = false;
 
-export async function callProvider(provider, apiKey, prompt, maxTokens = 2000, base = "") {
+export async function callProvider(provider, apiKey, prompt, maxTokens = 2000, base = "", webSearch = true) {
   if (provider.id === "openai") {
     // Tentative 1 : Responses API avec web_search (Tier 1+).
-    // Sautée si elle a déjà échoué dans cette session.
-    if (!openaiResponsesDisabled) {
+    // Sautée si désactivée par l'utilisateur, ou si elle a déjà échoué dans cette session.
+    if (webSearch && !openaiResponsesDisabled) {
       try {
         const resA = await fetch(`${base}/api/openai`, {
           method: "POST",
@@ -234,7 +238,7 @@ export async function callProvider(provider, apiKey, prompt, maxTokens = 2000, b
     if (!res.ok) throw new Error(data.error || `Gemini ${res.status}`);
     const text = data.choices?.[0]?.message?.content || "";
     const groundingSources = data._sources || []; // real URLs from Google Search
-    return parseTextResponse(text, data.usage?.prompt_tokens || 0, data.usage?.completion_tokens || 0, groundingSources);
+    const _g = parseTextResponse(text, data.usage?.prompt_tokens || 0, data.usage?.completion_tokens || 0, groundingSources); _g._web_searches = 1; return _g;
   }
 
   if (provider.id === "perplexity") {
@@ -250,7 +254,7 @@ export async function callProvider(provider, apiKey, prompt, maxTokens = 2000, b
     const text = data.choices?.[0]?.message?.content || "";
     // Perplexity returns citations separately
     const citations = data._citations || [];
-    return parseTextResponse(text, data.usage?.prompt_tokens || 0, data.usage?.completion_tokens || 0, citations);
+    const _p = parseTextResponse(text, data.usage?.prompt_tokens || 0, data.usage?.completion_tokens || 0, citations); _p._web_searches = 1; return _p;
   }
 
   if (provider.id === "claude") {
@@ -274,7 +278,7 @@ export async function callProvider(provider, apiKey, prompt, maxTokens = 2000, b
     const data = JSON.parse(raw);
     const text = data.content?.[0]?.text || "";
     if (!text) throw new Error("Réponse Claude vide — vérifiez la clé API");
-    return parseTextResponse(text, data.usage?.input_tokens || 0, data.usage?.output_tokens || 0);
+    const _c = parseTextResponse(text, data.usage?.input_tokens || 0, data.usage?.output_tokens || 0); _c._web_searches = 0; return _c;
   }
 
   throw new Error(`Provider inconnu: ${provider.id}`);
@@ -494,4 +498,15 @@ export function calendarPresence(detected) {
     : detected?.brandInSources ? "citation"
     : null;
   return { presType, mentionPos };
+}
+
+// ── Recherche web activée pour ce provider ? — logique partagée (front + scheduler + UI) ──
+// settings = projects.provider_web_search, ex. {"openai": false}.
+//  • OpenAI : optionnel, activé par défaut (désactivé si explicitement false).
+//  • Gemini / Perplexity : toujours (ancrage Google / Sonar intégrés).
+//  • Claude : jamais à l'interrogation.
+export function webSearchEnabled(providerId, settings) {
+  if (providerId === "gemini" || providerId === "perplexity") return true;
+  if (providerId === "claude") return false;
+  return !(settings && settings[providerId] === false);
 }

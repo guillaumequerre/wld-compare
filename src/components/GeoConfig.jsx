@@ -4,7 +4,7 @@
 
 import { useState, useEffect } from "react";
 import { C } from "../lib/constants";
-import { sbSaveProviderKeys, sbSaveBrand, sbGetBrand } from "../lib/supabase";
+import { sbSaveProviderKeys, sbSaveProviderWebSearch, sbSaveBrand, sbGetBrand } from "../lib/supabase";
 
 function encodeKey(k) { try { return btoa(k); } catch { return ""; } }
 function decodeKey(e) { try { return atob(e); } catch { return ""; } }
@@ -36,7 +36,7 @@ export const MODEL_CATALOG = {
     { id: "sonar-pro", label: "Sonar Pro", in: 3.00, out: 15.00 },
   ],
   claude: [
-    { id: "claude-haiku-4-5-20251001",  label: "Claude Haiku 4.5",  in: 0.80, out: 4.00 },
+    { id: "claude-haiku-4-5-20251001",  label: "Claude Haiku 4.5",  in: 1.00, out: 5.00 },
     { id: "claude-sonnet-4-6",          label: "Claude Sonnet 4.6", in: 3.00, out: 15.00 },
   ],
 };
@@ -46,6 +46,23 @@ export function getModelPricing(providerId, modelId) {
   const list = MODEL_CATALOG[providerId] || [];
   return list.find(m => m.id === modelId) || list[0] || { in: 0, out: 0, label: modelId };
 }
+
+// ── Frais de recherche web (USD), facturés PAR APPEL, EN PLUS des tokens ──
+// Ces frais n'apparaissent pas dans input/output_tokens et étaient donc oubliés
+// dans l'estimation, alors qu'ils figurent bien sur les factures OpenAI/Anthropic/etc.
+//  • OpenAI  : 10 $/1000 appels web_search (+ ~8k tokens de contenu déjà comptés en input).
+//              L'app utilise search_context_size:"high" → coût réel souvent supérieur.
+//  • Gemini  : ancrage Google Search ~35 $/1000 requêtes (hors quota gratuit).
+//  • Perplexity : frais de requête Sonar (~5-8 $/1000) en plus des tokens.
+//  • Claude  : l'INTERROGATION n'utilise pas la recherche web → 0.
+//              (Les analyses reco/audit en Sonnet+web_search, elles, ne sont pas
+//               journalisées dans geo_results et restent hors de ce suivi.)
+export const WEB_SEARCH_FEE = {
+  openai:     0.010,
+  gemini:     0.035,
+  perplexity: 0.006,
+  claude:     0,
+};
 
 // ── Modes d'interrogation ─────────────────────────────────────────
 // Chaque mode fait varier le nombre de tokens (et donc le coût) + le style.
@@ -103,6 +120,21 @@ export function ProviderConfigPanel({ project, projectId, sites, onSaveProviderK
   const cfgFor = (pid) => providerCfg[pid] || {};
   const modelIdFor = (p) => cfgFor(p.id).model || (MODEL_CATALOG[p.id]?.[0]?.id) || p.model;
   const modeIdFor  = (p) => cfgFor(p.id).mode || DEFAULT_MODE;
+  // Recherche web : optionnelle (OpenAI, défaut ON), toujours active (Perplexity/Sonar
+  // et Gemini/ancrage Google via le proxy), ou jamais utilisée à l'interrogation (Claude).
+  const webSearchKind = (pid) => (pid === "perplexity" || pid === "gemini") ? "always" : pid === "claude" ? "never" : "optional";
+  const webSearchMap = project?.provider_web_search || {};
+  const webSearchOn = (p) => {
+    const k = webSearchKind(p.id);
+    if (k === "always") return true;
+    if (k === "never")  return false;
+    return webSearchMap[p.id] !== false; // défaut activé, persistance BDD
+  };
+  const toggleWebSearch = async (pid) => {
+    const next = { ...webSearchMap, [pid]: !(webSearchMap[pid] !== false) };
+    onSaveProviderKeys?.({ provider_web_search: next }); // maj optimiste du projet
+    await sbSaveProviderWebSearch(projectId, next);
+  };
 
   // Sync when project changes
   useEffect(() => {
@@ -191,8 +223,9 @@ export function ProviderConfigPanel({ project, projectId, sites, onSaveProviderK
                     const modeId = modeIdFor(p);
                     const mode = QUERY_MODES[modeId] || QUERY_MODES[DEFAULT_MODE];
                     const pricing = getModelPricing(p.id, modelId);
-                    // Coût d'une réponse = (estIn × prixIn + estOut × prixOut) / 1e6
-                    const costPerQ = (mode.estIn * pricing.in + mode.estOut * pricing.out) / 1e6;
+                    // Coût d'une réponse = tokens + frais de recherche web (si active)
+                    const webFee = webSearchOn(p) ? (WEB_SEARCH_FEE[p.id] || 0) : 0;
+                    const costPerQ = (mode.estIn * pricing.in + mode.estOut * pricing.out) / 1e6 + webFee;
                     const totalCost = costPerQ * nQuestions;
                     const tokPerResp = mode.estIn + mode.estOut;
                     const costPer1k = ((pricing.in + pricing.out) / 2) / 1000; // moyenne in/out par 1000 tok
@@ -216,6 +249,30 @@ export function ProviderConfigPanel({ project, projectId, sites, onSaveProviderK
                           </label>
                         </div>
                         <div style={{ fontSize: 10, color: "#1A3C2E", lineHeight: 1.4 }}>{mode.desc}</div>
+                        {/* Recherche web (activer / désactiver) */}
+                        {(() => {
+                          const kind = webSearchKind(p.id);
+                          const on = webSearchOn(p);
+                          const fee = WEB_SEARCH_FEE[p.id] || 0;
+                          return (
+                            <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "space-between", paddingTop: 6, borderTop: "0.5px solid #1A3C2E0D" }}>
+                              <span style={{ fontSize: 11, color: "#1A3C2E" }}>
+                                🔍 Recherche web{fee > 0 && on ? <span style={{ color: "#C97820" }}> +${fee.toFixed(3)}/question</span> : null}
+                              </span>
+                              {kind === "optional" ? (
+                                <button type="button" onClick={() => toggleWebSearch(p.id)}
+                                  title={on ? "Désactiver la recherche web" : "Activer la recherche web"}
+                                  style={{ width: 36, height: 20, borderRadius: 10, border: "none", cursor: "pointer", background: on ? p.color : "#CBD5E1", position: "relative", transition: "background 0.2s", flexShrink: 0 }}>
+                                  <span style={{ position: "absolute", top: 2, left: on ? 18 : 2, width: 16, height: 16, borderRadius: "50%", background: "#fff", transition: "left 0.2s" }} />
+                                </button>
+                              ) : (
+                                <span style={{ fontSize: 10, color: "#8A8A82", fontStyle: "italic" }}>
+                                  {kind === "always" ? "toujours active (Sonar)" : "non utilisée à l'interrogation"}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })()}
                         {/* Estimation de coût */}
                         <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 14px", fontSize: 11, color: "#1A3C2E", alignItems: "baseline", paddingTop: 6, borderTop: "0.5px solid #1A3C2E0D" }}>
                           <span><span style={{ color: "#1A3C2E" }}>≈ </span><strong>{tokPerResp}</strong> tok/réponse</span>
@@ -247,7 +304,8 @@ export function ProviderConfigPanel({ project, projectId, sites, onSaveProviderK
                   const grand = PROVIDERS.filter(p => keys[p.id]?.dec).reduce((sum, p) => {
                     const mode = QUERY_MODES[modeIdFor(p)] || QUERY_MODES[DEFAULT_MODE];
                     const pr = getModelPricing(p.id, modelIdFor(p));
-                    return sum + ((mode.estIn * pr.in + mode.estOut * pr.out) / 1e6) * nQuestions;
+                    const webFee = webSearchOn(p) ? (WEB_SEARCH_FEE[p.id] || 0) : 0;
+                    return sum + (((mode.estIn * pr.in + mode.estOut * pr.out) / 1e6) + webFee) * nQuestions;
                   }, 0);
                   return (
                     <div style={{ marginTop: 8, paddingTop: 8, borderTop: "0.5px solid #1A3C2E12", display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>

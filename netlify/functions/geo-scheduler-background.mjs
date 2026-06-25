@@ -1,381 +1,512 @@
-// netlify/functions/geo-scheduler-background.mjs
-// Netlify BACKGROUND FUNCTION (timeout 15 min, pas ~50s comme les Edge Functions)
-// Interroge les questions FAVORITES des schedules actifs, sans session utilisateur.
-// Déclenchée par : (1) le cron via geo-scheduler.js (edge), (2) le trigger manuel front.
-// Le suffixe "-background" active le mode asynchrone Netlify : réponse 202 immédiate.
+// ════════════════════════════════════════════════════════════════════
+// geoEngine.js — Moteur partagé [Call + Identification] GEO
+//
+// SOURCE DE VÉRITÉ UNIQUE utilisée à la fois par l'onglet Questions (GeoTab)
+// et par le scheduler automatique (netlify/functions/geo-scheduler-background).
+// Toute logique d'appel des providers (proxies + web search) et d'identification
+// des présences (mention / évocation / citation) vit ICI — pas de copie.
+//
+// Environnement-agnostique : pas de React, pas de DOM, pas de localStorage.
+// Utilise uniquement `fetch` (dispo côté navigateur ET côté fonction Netlify).
+// Les proxies sont des routes relatives côté front (base="") ; le scheduler
+// passe une base absolue (origine du déploiement).
+// ════════════════════════════════════════════════════════════════════
 
-// ── Moteur partagé [Call + Identification] — MÊME code que l'onglet Questions ──
-import { callProvider, detectBrand, buildPrompt, PROVIDER_LABEL, calendarPresence } from "../../src/lib/geoEngine.js";
-
-const SUPABASE_URL      = process.env.SUPABASE_URL              || "";
-const SUPABASE_ANON     = process.env.SUPABASE_ANON             || "";
-// FIX BUG 1 : utiliser la SERVICE_ROLE key pour bypasser les RLS policies
-const SUPABASE_SERVICE  = process.env.SUPABASE_SERVICE_ROLE_KEY ||
-                          process.env.SUPABASE_SERVICE_KEY      || "";
-
-// ── Email de fin de run (Resend) ──────────────────────────────────
-const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
-const MAIL_FROM      = process.env.SCHEDULER_MAIL_FROM || "Dashboard GEO | Sonate <noreply@geo.sonate.group>";
-
-
-// ── Supabase helpers ──────────────────────────────────────────────
-// Lecture : clé anon (respecte les RLS publiques)
-function sbReadHeaders() {
-  return {
-    "apikey":        SUPABASE_ANON,
-    "Authorization": `Bearer ${SUPABASE_ANON}`,
-    "Content-Type":  "application/json",
-  };
-}
-
-// Écriture : clé service role (bypasse les RLS — requis pour écrire sans session)
-function sbWriteHeaders() {
-  const key = SUPABASE_SERVICE || SUPABASE_ANON;
-  return {
-    "apikey":        key,
-    "Authorization": `Bearer ${key}`,
-    "Content-Type":  "application/json",
-    "Prefer":        "return=representation",
-  };
-}
-
-async function sbGet(path) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { headers: sbReadHeaders() });
-  if (!res.ok) {
-    const err = await res.text().catch(() => "");
-    throw new Error(`sbGet ${path}: ${res.status} — ${err.slice(0, 120)}`);
-  }
-  return res.json();
-}
-
-async function sbPost(path, body) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
-    method:  "POST",
-    headers: sbWriteHeaders(),
-    body:    JSON.stringify(body),
-  });
-  if (!res.ok) {
-    const err = await res.text().catch(() => "");
-    throw new Error(`sbPost ${path}: ${res.status} — ${err.slice(0, 200)}`);
-  }
-  return res.json();
-}
-
-async function sbPatch(path, body) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
-    method:  "PATCH",
-    headers: sbWriteHeaders(),
-    body:    JSON.stringify(body),
-  });
-  if (!res.ok) {
-    const err = await res.text().catch(() => "");
-    console.warn(`sbPatch ${path}: ${res.status} — ${err.slice(0, 120)}`);
-  }
-  return res.ok;
-}
-
-// ── Key codec (base64, mirrors frontend encodeKey/decodeKey) ──────
-function decodeKey(enc) {
-  if (!enc) return "";
-  try { return atob(enc); } catch { return ""; }
-}
-
-// ── Provider definitions ──────────────────────────────────────────
-const PROVIDERS = {
-  openai:     { model: "gpt-4o-mini",              keyField: "openai_key_enc" },
-  gemini:     { model: "gemini-2.0-flash",          keyField: "gemini_key_enc" },
-  perplexity: { model: "sonar",                    keyField: "perplexity_key_enc" },
-  claude:     { model: "claude-haiku-4-5-20251001", keyField: "claude_geo_key_enc" },
+// Modèles par défaut par provider (alignés avec l'onglet Questions).
+export const PROVIDER_MODELS = {
+  openai:     "gpt-4o-mini",
+  gemini:     "gemini-2.0-flash",
+  perplexity: "sonar",
+  claude:     "claude-haiku-4-5-20251001",
 };
+export const PROVIDER_LABEL = { openai: "OpenAI", gemini: "Gemini", perplexity: "Perplexity", claude: "Claude" };
 
-// ── Process one schedule ──────────────────────────────────────────
-async function processSchedule(schedule, project, brand, site, secondBrand = null) {
-  const providerIds = schedule.providers || ["openai"];
-  const maxQ        = schedule.max_questions || 10;
-
-  const questions = await sbGet(
-    `geo_questions?project_id=eq.${encodeURIComponent(schedule.project_id)}&site_id=eq.${encodeURIComponent(schedule.site_id)}&is_favorite=eq.true&order=created_at.asc&limit=${maxQ}`
-  );
-
-  if (!questions.length) {
-    console.log(`[scheduler] No favorite questions for ${schedule.project_id}/${schedule.site_id}`);
-    return 0;
-  }
-
-  const brandName    = brand?.brand_name    || "";
-  const brandAliases = brand?.brand_aliases || [];
-  const context      = brand?.context       || "";
-  // Concurrents (mêmes données que le PROP `competitors` de l'onglet Questions)
-  const competitors  = await sbGet(
-    `geo_competitors?project_id=eq.${encodeURIComponent(schedule.project_id)}&site_id=eq.${encodeURIComponent(schedule.site_id)}&select=name`
-  ).catch(() => []);
-  // 2e site → suivi comme concurrent « 2nd site suivi » (compté dans les détections), consolidé ici
-  const secondName = secondBrand?.brand_name?.trim();
-  if (secondName && !competitors.some(c => c.name?.toLowerCase() === secondName.toLowerCase())) {
-    competitors.push({ name: secondName });
-  }
-  let savedCount = 0;
-
-  for (const q of questions) {
-    await Promise.all(providerIds.map(async (providerId) => {
-      const pDef = PROVIDERS[providerId];
-      if (!pDef) return;
-
-      const apiKey = decodeKey(project[pDef.keyField]);
-      if (!apiKey) {
-        console.warn(`[scheduler] Missing key for ${providerId} on project ${schedule.project_id}`);
-        return;
-      }
-
-      try {
-        const prompt = buildPrompt(providerId, q.question, context);
-        const parsed = await callProvider({ id: providerId, model: pDef.model }, apiKey, prompt, 2000, site);
-        const answer = parsed.answer || "";
-        const sources = parsed.sources || [];
-
-        const now = new Date().toISOString();
-
-        // ── Détection marque (3 types) — MÊME moteur que l'onglet Questions ──
-        const detected = detectBrand(answer, sources, brandName, brandAliases, competitors);
-        const brandMentioned = detected.brandMentioned;
-
-        // Type de présence + position pour le calendrier (moteur partagé — identique au manuel)
-        const { presType: presTypeForCal, mentionPos: mentionPosForCal } = calendarPresence(detected);
-
-        // ── 1. Sauvegarder dans geo_results ───────────────────────
-        const record = {
-          question_id:              q.id,
-          project_id:               schedule.project_id,
-          site_id:                  schedule.site_id,
-          model:                    `${PROVIDER_LABEL[providerId] || providerId} (${pDef.model}) [auto]`,
-          answer,
-          answer_type:              parsed.answer_type || "Texte libre",
-          intent_type:              parsed.intent_type || "Informative",
-          sources,
-          source_types:             parsed.source_types || [],
-          brand_mentioned:          brandMentioned,
-          brand_position:           detected.brandPosition,
-          brand_in_sources:         detected.brandInSources,
-          competitors_mentioned:    detected.competitorsMentioned || [],
-          unknown_entities:         detected.unknownEntities || [],
-          brand_mention_position:   detected.mention?.position   || null,
-          brand_evocation_position: detected.evocation?.position || null,
-          brand_citation_position:  detected.citation?.position  || null,
-          input_tokens:             parsed._input_tokens || 0,
-          output_tokens:            parsed._output_tokens || 0,
-          created_at:               now,
-        };
-
-        // Dédoublonnage : supprimer un éventuel résultat auto du même jour
-        // pour ce couple (question, provider) puis insérer le nouveau.
-        const today = now.slice(0, 10);
-        try {
-          await fetch(
-            `${SUPABASE_URL}/rest/v1/geo_results?question_id=eq.${encodeURIComponent(q.id)}&model=eq.${encodeURIComponent(record.model)}&created_at=gte.${today}T00:00:00&created_at=lte.${today}T23:59:59`,
-            { method: "DELETE", headers: { ...sbWriteHeaders(), "Prefer": "return=minimal" } }
-          );
-        } catch {}
-
-        // Insert avec fallback : si une colonne brand_*_position manque, retry sans
-        try {
-          await sbPost("geo_results", record);
-        } catch(insErr) {
-          if (/column|PGRST204|schema|400/i.test(insErr.message)) {
-            const { brand_mention_position, brand_evocation_position, brand_citation_position, ...base } = record;
-            await sbPost("geo_results", base);
-          } else {
-            throw insErr;
-          }
-        }
-
-        // ── 2. Insérer dans geo_calendar_dates (même table que le front) ──
-        // Schéma identique à sbAddCalendarEntry : brand_present + brand_mention/citation/evocation + test_date
-        try {
-          await sbPost("geo_calendar_dates", {
-            question_id:     q.id,
-            provider_id:     providerId,
-            brand_present:   brandMentioned === true,
-            brand_mention:   presTypeForCal === "mention"   ? 1 : 0,
-            brand_citation:  presTypeForCal === "citation"  ? 1 : 0,
-            brand_evocation: presTypeForCal === "evocation" ? 1 : 0,
-            mention_position: presTypeForCal === "mention" && mentionPosForCal != null ? mentionPosForCal : null,
-            test_date:       today,
-          });
-        } catch(calErr) {
-          console.warn(`[scheduler] calendar insert failed: ${calErr.message}`);
-        }
-
-        // ── 3. Mettre à jour le cache de la question (last_date, has_result) ──
-        try {
-          const cachePatch = { has_result: true, last_answer: answer, last_model: record.model, last_date: now };
-          if (brandMentioned) Object.assign(cachePatch, { best_answer: answer, best_model: record.model, best_date: now });
-          await sbPatch(`geo_questions?id=eq.${encodeURIComponent(q.id)}`, cachePatch);
-        } catch {}
-
-        savedCount++;
-        console.log(`[scheduler] ✓ q=${q.id} provider=${providerId} brand=${brandMentioned} pres=${presTypeForCal}`);
-
-      } catch(e) {
-        console.error(`[scheduler] Error q=${q.id} provider=${providerId}:`, e.message);
-      }
-    }));
-  }
-
-  return savedCount;
-}
-
-// ── Main handler ──────────────────────────────────────────────────
-
-
-// ── Email de notification de fin de run (via API Resend) ──────────
-async function sendRunEmail(schedule, count, projectName) {
-  const to = (schedule.owner_email || "").trim();
-  if (!to) { console.warn("[scheduler] Pas d'owner_email — email ignoré"); return; }
-  if (!RESEND_API_KEY) { console.warn("[scheduler] RESEND_API_KEY absente — email ignoré"); return; }
-
-  const date = new Date().toLocaleString("fr-FR", { dateStyle: "long", timeStyle: "short", timeZone: "Europe/Paris" });
-  const providers = (schedule.providers || []).join(", ") || "—";
-  const subject = `[Dashboard GEO] Interrogation automatique effectuée — ${count} question${count > 1 ? "s" : ""} favorite${count > 1 ? "s" : ""}`;
-  const text =
-    `Bonjour,\n\n` +
-    `L'interrogation automatique de vos questions favorites a eu lieu le ${date}.\n\n` +
-    `• Projet : ${projectName || schedule.project_id}\n` +
-    `• Questions favorites interrogées : ${count}\n` +
-    `• Providers interrogés : ${providers}\n\n` +
-    `Les résultats sont disponibles dans l'onglet Questions de votre dashboard GEO.\n\n` +
-    `— Dashboard GEO par Sonate`;
-
-  try {
-    const res = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: { "Authorization": `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ from: MAIL_FROM, to: [to], subject, text }),
-    });
-    if (!res.ok) {
-      const detail = await res.text().catch(() => "");
-      console.error(`[scheduler] Email Resend échoué (${res.status}): ${detail.slice(0, 200)}`);
-    } else {
-      console.log(`[scheduler] Email envoyé à ${to} (${count} question(s))`);
-    }
-  } catch (e) {
-    console.error("[scheduler] Email Resend exception:", e.message);
-  }
-}
-
-// ── computeNextRun ────────────────────────────────────────────────
-function computeNextRun(frequency) {
-  const d = new Date();
-  let days = 7;
-  if (typeof frequency === "string" && frequency.startsWith("every_")) {
-    days = Math.max(1, parseInt(frequency.slice(6), 10) || 7);
+// ── Construction des prompts — IDENTIQUE à runProvider (onglet Questions) ──
+export function buildPrompt(providerId, question, context = "", mode = "standard") {
+  const baseContext = context ? `Contexte : "${context}"\n` : "";
+  const q = `Question : ${question}`;
+  let prompt;
+  if (providerId === "claude") {
+    prompt = `${baseContext}Tu es un expert en recommandation d'entreprises et prestataires. Réponds à la question suivante en te basant sur tes connaissances pour donner une liste de vrais acteurs, entreprises ou prestataires du marché.
+RÈGLE : Ne dis jamais que tu n'as pas accès au web ou aux avis récents. Donne directement des recommandations concrètes avec les vrais noms d'entreprises que tu connais.
+Réponds en texte libre structuré. Liste les acteurs avec une courte description de chacun.
+Pour chaque acteur, indique son site web réel (URL complète https://…) afin qu'il apparaisse comme source.
+${q}`;
+  } else if (providerId === "gemini") {
+    prompt = `${baseContext}Tu as accès à Google Search en temps réel. Utilise-le pour trouver les meilleurs acteurs, entreprises et prestataires actuels.
+Réponds avec une liste de vrais acteurs du marché, leurs sites web et leurs caractéristiques principales.
+Sois direct et factuel. Cite les sources que tu as consultées.
+${q}`;
   } else {
-    switch (frequency) {
-      case "daily":    days = 1;  break;
-      case "weekly":   days = 7;  break;
-      case "biweekly": days = 14; break;
-      case "monthly":  days = 30; break;
-      default:         days = 7;
+    prompt = [baseContext, "Tu es un assistant IA avec accès au web. Réponds directement et complètement à la question.", "RÈGLE ABSOLUE : Ne pose jamais de question de clarification. Donne directement une liste de recommandations concrètes.", "Pour chaque acteur recommandé : donne le nom, le site web, et une description courte.", "Sois factuel, précis, et cite tes sources.", q].filter(Boolean).join("\n");
+  }
+  if (mode === "fidelity") {
+    prompt += "\n\nConsigne de fiabilité : réponds comme le ferait un moteur de recherche web récent. Donne une réponse complète, structurée et SOURCÉE (URLs réelles), en privilégiant la concordance avec ce qu'un utilisateur trouverait dans son navigateur.";
+  } else if (mode === "discussion") {
+    prompt += "\n\nConsigne de discussion : simule un échange réaliste de plusieurs messages autour de cette question transactionnelle (questions de suivi pertinentes + réponses), puis conclus par une synthèse des acteurs recommandés.";
+  }
+  return prompt;
+}
+
+export function extractDomain(url) {
+  try { return new URL(url).hostname.replace("www.", ""); } catch { return url; }
+}
+
+export function getProviderId(model) {
+  const m = (model || "").toLowerCase();
+  if (m.includes("openai") || m.includes("gpt")) return "openai";
+  if (m.includes("gemini")) return "gemini";
+  if (m.includes("perplexity") || m.includes("sonar")) return "perplexity";
+  if (m.includes("claude")) return "claude";
+  return "other";
+}
+
+export function extractOpenAIUrls(data) {
+  // Extract real URLs from annotations (url_citation type) in Responses API
+  const urls = [];
+  const seen = new Set();
+  for (const item of data.output || []) {
+    if (item.type !== "message") continue;
+    for (const part of item.content || []) {
+      // annotations array contains url_citation objects
+      for (const ann of part.annotations || []) {
+        if (ann.type === "url_citation" && ann.url && !seen.has(ann.url)) {
+          seen.add(ann.url);
+          urls.push(ann.url);
+        }
+      }
     }
   }
-  d.setDate(d.getDate() + days);
-  return d.toISOString();
+  return urls;
 }
 
-// ── Runner : traite les schedules dûs (ou forcés) ─────────────────
-async function runScheduler({ forceRun = false, site = "", target = {} } = {}) {
-  const SITE = site || process.env.URL || process.env.DEPLOY_PRIME_URL || process.env.DEPLOY_URL || "";
-  const start = Date.now();
-  const now = new Date().toISOString();
+export function parseOpenAIResponse(data, endpoint = "responses") {
+  const usage = data.usage || {};
+  const inTok = usage.input_tokens || usage.prompt_tokens || 0;
+  const outTok = usage.output_tokens || usage.completion_tokens || 0;
 
-  // Sélection des schedules.
-  // Si une cible est fournie (test manuel sur le projet courant) → uniquement ce schedule.
-  let filter;
-  if (target && target.project_id) {
-    filter = `geo_schedules?active=eq.true&project_id=eq.${encodeURIComponent(target.project_id)}`
-      + (target.site_id ? `&site_id=eq.${encodeURIComponent(target.site_id)}` : "")
-      + `&limit=5`;
-  } else if (forceRun) {
-    filter = `geo_schedules?active=eq.true&order=next_run.asc&limit=50`;
+  let rawText = "";
+  if (endpoint === "responses") {
+    for (const item of data.output || []) {
+      if (item.type !== "message") continue;
+      for (const part of item.content || []) {
+        if (part.type === "output_text") rawText += part.text;
+      }
+    }
   } else {
-    filter = `geo_schedules?active=eq.true&next_run=lte.${encodeURIComponent(now)}&order=next_run.asc&limit=50`;
+    rawText = data.choices?.[0]?.message?.content || "";
   }
 
-  const schedules = await sbGet(filter);
-  console.log(`[geo-scheduler-bg] ${forceRun ? "FORCED" : "SCHEDULED"} — ${schedules.length} schedules`);
-  if (!schedules.length) return { ok: true, processed: 0, duration: Date.now() - start };
+  // Extract real URLs from annotations FIRST (before parsing JSON)
+  const realUrls = extractOpenAIUrls(data);
 
-  const projectIds = [...new Set(schedules.map(s => s.project_id))];
-  const projectsRaw = await sbGet(`projects?id=in.(${projectIds.join(",")})&select=*`);
-  const projectsMap = Object.fromEntries(projectsRaw.map(p => [p.id, p]));
-  const brandsRaw = await sbGet(`site_brand?project_id=in.(${projectIds.join(",")})&select=*`);
-  const brandsMap = Object.fromEntries(brandsRaw.map(b => [`${b.project_id}__${b.site_id}`, b]));
+  // Also extract URLs directly from the answer text (markdown links + plain URLs)
+  const urlRe = /https?:\/\/[^\s\])"'>]+/g;
+  const HALLUCINATION = [/exemple\d*\./i, /example\d*\./i, /site\d+\./i, /domaine\d*\./i, /placeholder/i, /turn\d+search/i];
+  const textUrls = [...rawText.matchAll(urlRe)]
+    .map(m => m[0].replace(/[.,;:)]+$/, "")) // strip trailing punctuation
+    .filter(u => !HALLUCINATION.some(p => p.test(u)));
 
-  // Sites par projet (sites_json) → site principal = sites[0], 2e site = sites[1]
-  const sitesOf = (project) => {
-    try { return JSON.parse(project?.sites_json || "[]"); } catch { return []; }
+  // Merge: annotations first (most reliable), then text URLs
+  const allUrls = [...new Set([...realUrls, ...textUrls])];
+
+  // Try to parse JSON schema response
+  let parsed = { answer: rawText, answer_type: "Texte libre", intent_type: "Informative", sources: [], source_types: [] };
+  const s = rawText.lastIndexOf("{");
+  const e = rawText.lastIndexOf("}");
+  if (s !== -1 && e > s) {
+    try {
+      const jsonParsed = JSON.parse(rawText.substring(s, e + 1));
+      if (jsonParsed.answer) {
+        parsed = jsonParsed;
+        // Replace turn0searchX sources with real URLs
+        const fakeSources = (parsed.sources || []).filter(u => /turn\d+search/i.test(u) || !u.startsWith("http"));
+        if (fakeSources.length > 0 || allUrls.length > 0) {
+          parsed.sources = allUrls;
+        }
+      }
+    } catch {}
+  }
+
+  // If answer is still the raw JSON text, extract readable answer
+  if (parsed.answer && parsed.answer.startsWith("{")) {
+    parsed.answer = rawText; // use raw text as answer
+  }
+
+  // Final URL dedup and hallucination filter
+  parsed.sources = [...new Set(allUrls)].filter(u => !HALLUCINATION.some(p => p.test(u)));
+  parsed._input_tokens = inTok;
+  parsed._output_tokens = outTok;
+  // Nb de recherches web réellement effectuées (Responses API) — pour les coûts réels.
+  parsed._web_searches = endpoint === "responses"
+    ? (data.output || []).filter(it => it.type === "web_search_call").length
+    : 0;
+  return parsed;
+}
+
+export function parseTextResponse(text, inTok, outTok, extraSources = []) {
+  // Try to extract JSON if model returned it
+  const s = text.lastIndexOf("{"); const e = text.lastIndexOf("}");
+  if (s !== -1 && e > s) {
+    try {
+      const parsed = JSON.parse(text.substring(s, e + 1));
+      if (parsed.answer) {
+        parsed._input_tokens = inTok; parsed._output_tokens = outTok;
+        // Extraire aussi les URLs citées dans le corps de la réponse (Claude cite inline)
+        const urlReJson = /https?:\/\/[^\s\])"'>]+/g;
+        const HALL = [/exemple\d*\./i, /example\d*\./i, /site\d+\./i, /domaine\d*\./i, /placeholder/i];
+        const inlineUrls = [...String(parsed.answer).matchAll(urlReJson)].map(m => m[0]).filter(u => !HALL.some(p => p.test(u)));
+        parsed.sources = [...new Set([...(parsed.sources || []), ...extraSources, ...inlineUrls])].filter(Boolean);
+        return parsed;
+      }
+    } catch {}
+  }
+  // Fallback: treat entire text as answer, extract URLs
+  const HALLUCINATION = [/exemple\d*\./i, /example\d*\./i, /site\d+\./i, /domaine\d*\./i, /placeholder/i];
+  const urlRe = /https?:\/\/[^\s\])"'>]+/g;
+  const foundUrls = [...text.matchAll(urlRe)].map(m => m[0]).filter(u => !HALLUCINATION.some(p => p.test(u)));
+  const allSources = [...new Set([...foundUrls, ...extraSources])];
+  return {
+    answer: text, answer_type: "Texte libre", intent_type: "Informative",
+    sources: allSources, source_types: [],
+    _input_tokens: inTok, _output_tokens: outTok,
   };
+}
 
-  const results = [];
-  for (const schedule of schedules) {
-    const project = projectsMap[schedule.project_id];
-    if (!project) { console.warn(`[scheduler] Project not found: ${schedule.project_id}`); continue; }
+let openaiResponsesDisabled = false;
 
-    // ── Consolidation multi-sites ──
-    // Si le projet a 2 sites, on ne suit QUE le site principal (sites[0]).
-    // Le schedule propre au 2e site est ignoré (consolidé sur le principal).
-    // La marque du 2e site est injectée comme concurrent « 2nd site suivi ».
-    const projSites = sitesOf(project);
-    const primaryId = projSites[0]?.id;
-    const secondId  = projSites[1]?.id;
-    if (secondId && schedule.site_id === secondId) {
-      console.log(`[scheduler] Skip 2e site ${schedule.site_id} (consolidé sur le site principal ${primaryId})`);
+export async function callProvider(provider, apiKey, prompt, maxTokens = 2000, base = "", webSearch = true) {
+  if (provider.id === "openai") {
+    // Tentative 1 : Responses API avec web_search (Tier 1+).
+    // Sautée si désactivée par l'utilisateur, ou si elle a déjà échoué dans cette session.
+    if (webSearch && !openaiResponsesDisabled) {
+      try {
+        const resA = await fetch(`${base}/api/openai`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Openai-Key": apiKey, "X-Openai-Endpoint": "responses" },
+          body: JSON.stringify({
+            model: provider.model,
+            input: prompt,
+            tools: [{ type: "web_search_preview", search_context_size: "high" }],
+            max_output_tokens: Math.max(maxTokens * 4, 2000),
+          }),
+        });
+        const rawA = await resA.text();
+        if (resA.ok && !rawA.trimStart().startsWith("<")) {
+          try { return parseOpenAIResponse(JSON.parse(rawA), "responses"); } catch {}
+        }
+        // Échec (souvent web_search non dispo selon le tier) → on désactive pour la session.
+        openaiResponsesDisabled = true;
+      } catch { openaiResponsesDisabled = true; }
+    }
+
+    // Tentative 2 : Chat Completions (toujours disponible).
+    const res = await fetch(`${base}/api/openai`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Openai-Key": apiKey, "X-Openai-Endpoint": "completions" },
+      body: JSON.stringify({
+        model: provider.model,
+        messages: [{ role: "system", content: "Tu es un expert en recommandation d'entreprises et prestataires. Réponds directement et factuellement." }, { role: "user", content: prompt }],
+        temperature: 0.7,
+        max_tokens: maxTokens,
+      }),
+    });
+    const raw = await res.text();
+    if (raw.trimStart().startsWith("<")) throw new Error("Proxy /api/openai introuvable (réponse HTML)");
+    let data;
+    try { data = JSON.parse(raw); }
+    catch { throw new Error(`Réponse OpenAI illisible (${res.status}) : ${raw.slice(0, 120)}`); }
+    if (!res.ok) {
+      const msg = data?.error?.message || data?.error || `OpenAI ${res.status}`;
+      const hint = res.status === 429 ? " — quota dépassé, vérifiez votre plan/facturation OpenAI"
+                 : res.status === 401 ? " — clé invalide"
+                 : res.status >= 500 ? " — erreur serveur OpenAI, réessayez dans un instant" : "";
+      throw new Error(msg + hint);
+    }
+    return parseOpenAIResponse(data, "completions");
+  }
+
+  if (provider.id === "gemini") {
+    const res = await fetch(`${base}/api/gemini`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Gemini-Key": apiKey },
+      body: JSON.stringify({ model: provider.model, prompt }),
+    });
+    const raw = await res.text();
+    if (raw.trimStart().startsWith("<")) throw new Error("Proxy /api/gemini introuvable");
+    const data = JSON.parse(raw);
+    if (!res.ok) throw new Error(data.error || `Gemini ${res.status}`);
+    const text = data.choices?.[0]?.message?.content || "";
+    const groundingSources = data._sources || []; // real URLs from Google Search
+    const _g = parseTextResponse(text, data.usage?.prompt_tokens || 0, data.usage?.completion_tokens || 0, groundingSources); _g._web_searches = 1; return _g;
+  }
+
+  if (provider.id === "perplexity") {
+    const res = await fetch(`${base}/api/perplexity`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Perplexity-Key": apiKey },
+      body: JSON.stringify({ model: provider.model, prompt }),
+    });
+    const raw = await res.text();
+    if (raw.trimStart().startsWith("<")) throw new Error("Proxy /api/perplexity introuvable");
+    const data = JSON.parse(raw);
+    if (!res.ok) throw new Error(data.error?.message || `Perplexity ${res.status}`);
+    const text = data.choices?.[0]?.message?.content || "";
+    // Perplexity returns citations separately
+    const citations = data._citations || [];
+    const _p = parseTextResponse(text, data.usage?.prompt_tokens || 0, data.usage?.completion_tokens || 0, citations); _p._web_searches = 1; return _p;
+  }
+
+  if (provider.id === "claude") {
+    const res = await fetch(`${base}/api/claude-geo`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Claude-Key": apiKey },
+      body: JSON.stringify({
+        model: provider.model,
+        max_tokens: 4000,
+        system: "Tu es un expert en recommandation d'entreprises et prestataires. Réponds directement sans mentionner les limites de tes connaissances.",
+        messages: [{ role: "user", content: prompt }],
+      }),
+    });
+    const raw = await res.text();
+    if (raw.trimStart().startsWith("<")) throw new Error("Proxy /api/claude-geo introuvable — ajoutez claude-geo-proxy.js dans netlify/edge-functions/");
+    if (!res.ok) {
+      let errMsg = `Claude ${res.status}`;
+      try { errMsg = JSON.parse(raw)?.error?.message || errMsg; } catch {}
+      throw new Error(errMsg);
+    }
+    const data = JSON.parse(raw);
+    const text = data.content?.[0]?.text || "";
+    if (!text) throw new Error("Réponse Claude vide — vérifiez la clé API");
+    const _c = parseTextResponse(text, data.usage?.input_tokens || 0, data.usage?.output_tokens || 0); _c._web_searches = 0; return _c;
+  }
+
+  throw new Error(`Provider inconnu: ${provider.id}`);
+}
+
+export function detectBrand(answer, sources, brandName, brandAliases = [], competitors = []) {
+  // Normalisation casse + accents : « ÉLÉAS » et « Eleas » doivent matcher.
+  const norm = (s) => (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+
+  const lines = (answer || "").split("\n");
+  // Pattern d'item de top : "1. Titre", "2) Titre", "• 3. Titre"
+  const topItemRe = /^\s*(?:[•\-*]\s*)?(\d+)[.)]\s*(.+)/;
+
+  // ── Reconstruction des séquences de liste classées (fiabilité du "Top") ──
+  // On ne se fie PAS au numéro littéral écrit par le LLM (sous-listes, redémarrages…).
+  // On prend la position ORDINALE réelle dans la séquence contiguë la plus longue.
+  const subBulletRe = /^\s*[•\-*]\s+\S/;
+  // Item de top "en-tête" SANS numéro : lien markdown (option. gras) ou titre gras / heading.
+  // Couvre le format type "[Nom](url)", "**[Nom](url)**", "**Nom**", "### Nom".
+  const headingLinkRe = /^\s*(?:[•\-*]\s*)?\*{0,2}\[([^\]]{2,90})\]\([^)]*\)\*{0,2}\s*(?:[—:-].*)?$/;
+  const headingBoldRe = /^\s*(?:#{1,4}\s*)?\*\*([^*\n]{2,90})\*\*\s*:?\s*$/;
+  const headingPlainRe = /^\s*#{1,4}\s*([^\n]{2,90})$/;
+  const matchHeading = (s) => {
+    let m = s.match(headingLinkRe); if (m) return m[1].replace(/\*/g, "").trim();
+    m = s.match(headingBoldRe);    if (m) return m[1].trim();
+    m = s.match(headingPlainRe);   if (m) return m[1].replace(/[[\]]|\(.*\)/g, "").replace(/\*/g, "").trim();
+    return null;
+  };
+  const isDetailLine = (s) => {
+    const t = s.trim();
+    if (!t) return true;
+    if (subBulletRe.test(t) && !topItemRe.test(t)) return true;
+    if (/^\s{2,}\S/.test(s)) return true;
+    if (/^[A-Za-zÀ-ÿ' ]{2,20}\s*:/.test(t) && t.length < 80) return true;
+    if (/^_.*_$/.test(t)) return true; // ligne en italique (ex. "_Le Mans, France_")
+    return false;
+  };
+  const sequences = [];
+  let current = null, prevNum = null, seqType = null; // seqType: "num" | "head" | null
+  for (const raw of lines) {
+    const m = raw.match(topItemRe);
+    if (m) {
+      const num = parseInt(m[1], 10);
+      const continues = current && seqType === "num" && prevNum != null && (num === prevNum + 1 || num === prevNum);
+      if (!continues) { current = []; sequences.push(current); seqType = "num"; }
+      current.push({ num, text: m[2], ordinal: current.length + 1 });
+      prevNum = num;
       continue;
     }
-    const secondBrand = (secondId && schedule.site_id === primaryId)
-      ? (brandsMap[`${schedule.project_id}__${secondId}`] || null)
-      : null;
-
-    const brand = brandsMap[`${schedule.project_id}__${schedule.site_id}`] || null;
-
-    let count = 0;
-    try {
-      count = await processSchedule(schedule, project, brand, SITE, secondBrand);
-    } catch(e) {
-      console.error(`[scheduler] Schedule ${schedule.id} failed:`, e.message);
+    const headTitle = matchHeading(raw);
+    if (headTitle) {
+      const continues = current && seqType === "head";
+      if (!continues) { current = []; sequences.push(current); seqType = "head"; prevNum = null; }
+      current.push({ num: null, text: headTitle, ordinal: current.length + 1 });
+      continue;
     }
-    const nextRun = computeNextRun(schedule.frequency);
-    await sbPatch(`geo_schedules?id=eq.${schedule.id}`, { next_run: nextRun, last_run: now, last_run_count: count });
-    await sendRunEmail(schedule, count, project?.name);
-    results.push({ schedule_id: schedule.id, questions_processed: count, next_run: nextRun });
+    if (isDetailLine(raw)) continue;
+    // En mode "en-têtes", la prose entre items (localisation, description) ne casse PAS
+    // la séquence : seuls les en-têtes ajoutent des items, le reste est ignoré.
+    if (seqType === "head") continue;
+    // Sinon (liste numérotée ou hors séquence), une ligne de prose termine la séquence.
+    current = null; prevNum = null; seqType = null;
+  }
+  // La (les) vraie(s) liste(s) classée(s) = séquences d'au moins 2 items, plus longue d'abord.
+  const ranked = sequences.filter(s => s.length >= 2).sort((a, b) => b.length - a.length);
+  const searchSeqs = ranked.length ? ranked : sequences;
+
+  // Lignes narratives (hors items de top et hors métadonnées) — pour l'évocation.
+  const narrativeLines = [];
+  for (const line of lines) {
+    const stripped = line.trim();
+    if (!stripped) continue;
+    if (topItemRe.test(line)) continue;
+    if (
+      stripped.startsWith("http") || stripped.startsWith("[") ||
+      stripped.startsWith("- Site") || stripped.startsWith("- Description") ||
+      stripped.startsWith("Source") || stripped.match(/^\d+\.\s*https?:/)
+    ) continue;
+    narrativeLines.push(stripped);
   }
 
-  const duration = Date.now() - start;
-  console.log(`[geo-scheduler-bg] Done in ${duration}ms — ${results.length} schedules`);
-  return { ok: true, processed: results.length, results, duration };
+  // Sources = sources fournies + URLs extraites du texte.
+  const urlRe = /https?:\/\/[^\s),'"\]]+/g;
+  const textUrls = [...(answer || "").matchAll(urlRe)].map(m => m[0].replace(/[.,;:]+$/, ""));
+  const allSources = [...new Set([...(Array.isArray(sources) ? sources : []), ...textUrls])];
+  const normSources = allSources.map(s => norm(s).replace(/^www\./, "").replace(/https?:\/\//, ""));
+
+  // ── MOTEUR UNIQUE de détection M/É/C pour une entité (marque OU concurrent) ──
+  // terms : liste de noms/alias normalisés à chercher.
+  // Renvoie { mentionPosition, evocationPosition, citationPosition }.
+  function detectEntity(terms) {
+    const T = terms.filter(Boolean);
+    if (!T.length) return { mentionPosition: null, evocationPosition: null, citationPosition: null };
+    // Match sur LIMITES DE MOTS pour éviter les faux positifs par sous-chaîne
+    // (ex. « Eleas » ne doit pas matcher « Eleastic »). Insensible casse+accents.
+    // Une frontière = début/fin de chaîne ou caractère non alphanumérique.
+    const wordHit = (haystack, term) => {
+      if (!term) return false;
+      const esc = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      // \p{L}\p{N} = lettre/chiffre Unicode ; frontière manuelle car \b est ASCII-only
+      const re = new RegExp(`(^|[^\\p{L}\\p{N}])${esc}([^\\p{L}\\p{N}]|$)`, "u");
+      return re.test(haystack);
+    };
+    const hit = (text) => { const t = norm(text); return T.some(term => wordHit(t, term)); };
+
+    // MENTION — position ordinale réelle dans la 1ère séquence où l'entité apparaît.
+    let mentionPosition = null;
+    for (const seq of searchSeqs) {
+      for (const item of seq) {
+        if (hit(item.text)) { mentionPosition = item.ordinal; break; }
+      }
+      if (mentionPosition !== null) break;
+    }
+
+    // ÉVOCATION — 1ère ligne narrative qui cite l'entité (rang dans le récit).
+    let evocationPosition = null;
+    let narrativeCount = 0;
+    for (const nl of narrativeLines) {
+      narrativeCount++;
+      if (hit(nl) && evocationPosition === null) { evocationPosition = narrativeCount; break; }
+    }
+
+    // CITATION — 1ère source où le nom apparaît comme SEGMENT délimité de l'URL
+    // (entre début/fin, /, ., -, _). Évite les faux positifs (« aw » ∈ « lawfirm »).
+    let citationPosition = null;
+    const domainTerms = T.map(t => t.replace(/\s+/g, "")).filter(Boolean);
+    const segHit = (url, term) => {
+      const esc = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      return new RegExp(`(^|[^a-z0-9])${esc}([^a-z0-9]|$)`, "i").test(url);
+    };
+    for (let i = 0; i < normSources.length; i++) {
+      if (domainTerms.some(d => segHit(normSources[i], d))) { citationPosition = i + 1; break; }
+    }
+
+    return { mentionPosition, evocationPosition, citationPosition };
+  }
+
+  // ── MARQUE ──
+  const brandTerms = [brandName, ...brandAliases].filter(Boolean).map(norm);
+  const b = detectEntity(brandTerms);
+  const mentionPosition = b.mentionPosition;
+  const evocationPosition = b.evocationPosition;
+  const citationPosition = b.citationPosition;
+
+  // ── CONCURRENTS — MÊME moteur fiable, avec positions M/É/C ──
+  const allCompetitorNames = competitors.filter(Boolean).map(c => (typeof c === "string" ? c : c.name)).filter(Boolean);
+  const competitorsMentioned = allCompetitorNames
+    .map(name => {
+      const d = detectEntity([norm(name)]);
+      const mentioned = d.mentionPosition !== null || d.evocationPosition !== null;
+      return {
+        name,
+        mentioned,
+        // position = position de MENTION (top). null si pas dans un top classé.
+        position: d.mentionPosition,
+        mention_position:   d.mentionPosition,
+        evocation_position: d.evocationPosition,
+        citation_position:  d.citationPosition,
+        in_sources: d.citationPosition !== null,
+      };
+    })
+    .filter(c => c.mentioned || c.in_sources);
+
+  // ── Autres entités présentes dans les tops (à identifier) ──
+  // On parcourt TOUTES les séquences classées (pas seulement la plus longue) et on
+  // calcule pour chaque entité inconnue son triplet M/É/C via le même moteur fiable,
+  // afin qu'elles apparaissent correctement dans Top mentions / évocations / citations.
+  const knownTerms = [brandName, ...(brandAliases || []), ...allCompetitorNames].map(norm).filter(Boolean);
+  const seenUnknown = new Set();
+  const unknownEntities = [];
+  for (const seq of (ranked.length ? ranked : sequences)) {
+    for (const item of seq) {
+      const txt = (item.text || "").trim();
+      if (!txt) continue;
+      let nameRaw = txt.split(/[:–\-(]/)[0].trim().replace(/\*\*/g, "").replace(/[.,;]+$/, "").trim();
+      if (nameRaw.length < 2 || nameRaw.length > 40 || nameRaw.split(/\s+/).length > 5) continue;
+      const low = norm(nameRaw);
+      if (!low) continue;
+      if (knownTerms.some(t => low.includes(t) || t.includes(low))) continue; // marque/concurrent connu
+      if (seenUnknown.has(low)) continue;
+      seenUnknown.add(low);
+      const d = detectEntity([low]);
+      unknownEntities.push({
+        name: nameRaw,
+        position: d.mentionPosition != null ? d.mentionPosition : item.ordinal,
+        mention_position:   d.mentionPosition,
+        evocation_position: d.evocationPosition,
+        citation_position:  d.citationPosition,
+        in_sources: d.citationPosition !== null,
+      });
+    }
+  }
+
+  return {
+    // Champs structurés
+    mention:   { present: mentionPosition !== null,   position: mentionPosition },
+    evocation: { present: evocationPosition !== null, position: evocationPosition },
+    citation:  { present: citationPosition !== null,  position: citationPosition },
+
+    // Rétrocompat — champs utilisés par le reste de l'app
+    brandMentioned:       mentionPosition !== null || evocationPosition !== null,
+    brandPosition:        mentionPosition,
+    brandInSources:       citationPosition !== null,
+    competitorsMentioned,
+    unknownEntities,
+  };
 }
 
-// ── Handler Background Function (Netlify) ─────────────────────────
-// Suffixe -background → timeout 15 min, retourne 202 immédiatement.
-export default async (req) => {
-  let forceRun = false;
-  let origin = "";
-  let target = { project_id: null, site_id: null };
-  try {
-    if (req.method === "POST") {
-      const body = await req.json().catch(() => ({}));
-      forceRun = body?.force !== false; // POST manuel = forcé par défaut
-      origin = body?.origin || "";
-      if (body?.project_id) target = { project_id: body.project_id, site_id: body.site_id || null };
-    }
-  } catch {}
+// ── Présence calendrier (type + position) — MÊME logique que l'onglet Questions ──
+// Détermine ce qu'affiche le carré de suivi : « mention » porte la position (numéro),
+// sinon « evocation » / « citation ». Source unique partagée front + scheduler.
+// Priorité IDENTIQUE au manuel : mention > évocation > citation.
+export function calendarPresence(detected) {
+  const mentionPos = detected?.mention?.position || null;
+  const presType = mentionPos != null ? "mention"
+    : detected?.brandMentioned ? "evocation"
+    : detected?.brandInSources ? "citation"
+    : null;
+  return { presType, mentionPos };
+}
 
-  // Le travail s'exécute ; Netlify maintient la fonction vivante jusqu'à 15 min.
-  try {
-    const out = await runScheduler({ forceRun, site: origin, target });
-    console.log("[geo-scheduler-bg] result:", JSON.stringify(out).slice(0, 300));
-  } catch(e) {
-    console.error("[geo-scheduler-bg] fatal:", e.message);
-  }
-  // Les background functions renvoient 202 automatiquement ; ce return est ignoré.
-  return new Response(null, { status: 202 });
-};
+// ── Recherche web activée pour ce provider ? — logique partagée (front + scheduler + UI) ──
+// settings = projects.provider_web_search, ex. {"openai": false}.
+//  • OpenAI : optionnel, activé par défaut (désactivé si explicitement false).
+//  • Gemini / Perplexity : toujours (ancrage Google / Sonar intégrés).
+//  • Claude : jamais à l'interrogation.
+export function webSearchEnabled(providerId, settings) {
+  if (providerId === "gemini" || providerId === "perplexity") return true;
+  if (providerId === "claude") return false;
+  return !(settings && settings[providerId] === false);
+}
