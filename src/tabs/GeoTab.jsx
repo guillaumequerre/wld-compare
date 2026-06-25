@@ -2571,7 +2571,6 @@ function NextStepsAnalysis({ questions, results, brand, categories = [], gscRows
 
   const brandName    = brand?.brand_name || "";
   const brandDomain  = brand?.brand_domain || "";
-  const brandAliases = Array.isArray(brand?.brand_aliases) ? brand.brand_aliases : [];
 
   // ── Charger la dernière analyse roadmap persistée ──
   useEffect(() => {
@@ -2609,12 +2608,6 @@ function NextStepsAnalysis({ questions, results, brand, categories = [], gscRows
     results.forEach(r => { if (!m[r.question_id]) m[r.question_id] = []; m[r.question_id].push(r); });
     return m;
   }, [results]);
-
-  const isBrandQuestion = (q) => {
-    const terms = [brandName, ...brandAliases].filter(Boolean).map(t => t.toLowerCase().trim());
-    const txt = (q.question || "").toLowerCase();
-    return terms.some(t => t.length >= 2 && txt.includes(t));
-  };
 
   // Position de la marque sur une question (meilleur résultat)
   const brandPosOf = (qId) => {
