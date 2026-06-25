@@ -3,7 +3,9 @@ import "./geo-tab.css";
 import "./geo-responsive.css";
 import TourGuide from "./TourGuide";
 import PresenceCalendar from "../components/PresenceCalendar";
-import { callProvider, detectBrand, extractDomain, getProviderId, buildPrompt, calendarPresence } from "../lib/geoEngine";
+import { callProvider, detectBrand, extractDomain, getProviderId, buildPrompt, calendarPresence, webSearchEnabled } from "../lib/geoEngine";
+import { buildKeywordClustersCsv } from "../lib/exportOptimisations";
+import { generateRoadmap, RoadmapView } from "../lib/roadmapShared";
 import {
   sbGetBrand,
   sbSaveKeywords, sbGetKeywords, sbUpdateKeywordStatus, sbDeleteKeyword, sbUpdateKeywordVolume,
@@ -83,53 +85,6 @@ function stripQuery(url) {
 }
 
 // Convertit le markdown basique (gras, italique, listes) en éléments React
-// Répare un JSON tronqué (réponse LLM coupée par max_tokens) : retire le
-// dernier élément incomplet et referme les structures ouvertes. Best-effort.
-function repairTruncatedJson(str) {
-  if (!str) return null;
-  let s = str.trim();
-  // Retirer une virgule traînante éventuelle
-  // Parcourir et suivre la pile des structures ouvertes hors chaînes
-  const stack = [];
-  let inStr = false, esc = false, lastSafe = -1;
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i];
-    if (inStr) {
-      if (esc) { esc = false; }
-      else if (c === "\\") { esc = true; }
-      else if (c === '"') { inStr = false; }
-      continue;
-    }
-    if (c === '"') { inStr = true; continue; }
-    if (c === "{" || c === "[") { stack.push(c); }
-    else if (c === "}" || c === "]") { stack.pop(); }
-    // Point sûr : fin d'un élément complet (valeur ou objet/tableau fermé)
-    if ((c === "}" || c === "]") && stack.length >= 0) lastSafe = i;
-  }
-  // Tronquer après le dernier point sûr connu, puis refermer la pile
-  let body = lastSafe >= 0 ? s.slice(0, lastSafe + 1) : s;
-  // Recalculer la pile sur le body tronqué
-  const st2 = [];
-  inStr = false; esc = false;
-  for (let i = 0; i < body.length; i++) {
-    const c = body[i];
-    if (inStr) {
-      if (esc) esc = false; else if (c === "\\") esc = true; else if (c === '"') inStr = false;
-      continue;
-    }
-    if (c === '"') inStr = true;
-    else if (c === "{" || c === "[") st2.push(c);
-    else if (c === "}" || c === "]") st2.pop();
-  }
-  // Retirer virgule traînante avant fermeture
-  body = body.replace(/,\s*$/, "");
-  // Refermer dans l'ordre inverse
-  for (let i = st2.length - 1; i >= 0; i--) {
-    body += st2[i] === "{" ? "}" : "]";
-  }
-  try { return JSON.parse(body); } catch { return null; }
-}
-
 function renderMarkdown(text) {
   if (!text) return null;
   const lines = text.split("\n");
@@ -2591,234 +2546,6 @@ function ProviderRow({ provider, results, brandName, brandAliases, brandDomain =
 
 
 
-// ── GeoAnalysis — AI analysis of fan-out presence ─────────────────
-
-function GeoAnalysis({ questions, results, brand, claudeKey, projectId = null, siteId = null }) {
-  const [status, setStatus] = useState("idle");
-  const [sections, setSections] = useState([]);
-  const [open, setOpen] = useState(false);
-  const [savedDate, setSavedDate] = useState(null); // date de la dernière analyse persistée
-
-  const brandName   = brand?.brand_name   || "";
-  const brandDomain = brand?.brand_domain || "";
-  const brandAliases = brand?.brand_aliases || [];
-
-  // Charger la dernière analyse "fanout" persistée au montage
-  useEffect(() => {
-    if (!projectId || !siteId) return;
-    let cancelled = false;
-    sbGetGeoAnalyses(projectId, siteId, "fanout").then(rows => {
-      if (cancelled || !rows?.length) return;
-      const latest = rows[0];
-      const c = latest.content;
-      if (c?.sections?.length) {
-        setSections(c.sections);
-        setStatus("done");
-        setSavedDate(latest.created_at);
-      }
-    }).catch(() => {});
-    return () => { cancelled = true; };
-  }, [projectId, siteId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const run = async () => {
-    if (!claudeKey || !results.length) return;
-    setStatus("loading"); setSections([]); setOpen(true);
-
-    const total      = results.length;
-    const withBrand  = results.filter(r => r.brand_mentioned === true || r.brand_mentioned === 1).length;
-    const withSrc    = results.filter(r => r.brand_in_sources).length;
-    const positions  = results.filter(r => r.brand_position).map(r => r.brand_position);
-    const avgPos     = positions.length ? (positions.reduce((a,b)=>a+b,0)/positions.length).toFixed(1) : null;
-    const presence   = total ? Math.round(withBrand/total*100) : 0;
-
-    // Questions sans présence
-    const qMap = {};
-    questions.forEach(q => { qMap[q.id] = q.question; });
-    const missing = [...new Set(results.filter(r => !(r.brand_mentioned===true||r.brand_mentioned===1)).map(r=>qMap[r.question_id]).filter(Boolean))].slice(0,8);
-    const present = [...new Set(results.filter(r => r.brand_mentioned===true||r.brand_mentioned===1).map(r=>qMap[r.question_id]).filter(Boolean))].slice(0,5);
-
-    // Top concurrents
-    const compCount = {};
-    results.forEach(r => (r.competitors_mentioned||[]).forEach(c=>{
-      if(c.name) compCount[c.name]=(compCount[c.name]||0)+1;
-    }));
-    const topComps = Object.entries(compCount).sort((a,b)=>b[1]-a[1]).slice(0,5);
-
-    // URLs
-    const urlCount = {};
-    results.forEach(r=>(r.sources||[]).forEach(url=>{ urlCount[url]=(urlCount[url]||0)+1; }));
-    const allTerms = [brandName,...brandAliases].filter(Boolean).map(t=>t.toLowerCase());
-    const brandUrls = Object.entries(urlCount).filter(([u])=>allTerms.some(t=>u.toLowerCase().includes(t))).sort((a,b)=>b[1]-a[1]).slice(0,8);
-    const competitorUrls = Object.entries(urlCount).filter(([u])=>!allTerms.some(t=>u.toLowerCase().includes(t))).sort((a,b)=>b[1]-a[1]).slice(0,10);
-
-    // Provider stats
-    const provStats = {};
-    results.forEach(r=>{
-      const pid = r.model?.includes("openai")||r.model?.includes("gpt")?"OpenAI":r.model?.includes("gemini")?"Gemini":r.model?.includes("perplexity")||r.model?.includes("sonar")?"Perplexity":r.model?.includes("claude")?"Claude":"Autre";
-      if(!provStats[pid]) provStats[pid]={total:0,with:0};
-      provStats[pid].total++;
-      if(r.brand_mentioned===true||r.brand_mentioned===1) provStats[pid].with++;
-    });
-
-    const prompt = `Tu es un expert GEO (Generative Engine Optimization) senior. Analyse la présence de "${brandName}" (${brandDomain}) dans les LLMs et produis des recommandations précises et actionnables.
-
-DONNÉES DE PRÉSENCE :
-- Mention dans les tops : ${withBrand}/${total} réponses (${presence}%)
-- Citée en source : ${withSrc} fois
-- Position moyenne : ${avgPos ? "#"+avgPos : "non mesurée"}
-
-PAR PROVIDER :
-${Object.entries(provStats).map(([p,s])=>`- ${p}: ${s.with}/${s.total} (${Math.round(s.with/s.total*100)}%)`).join("\n")}
-
-QUESTIONS AVEC MENTION (${present.length}) :
-${present.map((q,i)=>`${i+1}. ${q}`).join("\n")||"Aucune"}
-
-QUESTIONS SANS MENTION — PRIORITÉS (${missing.length}) :
-${missing.map((q,i)=>`${i+1}. ${q}`).join("\n")||"Aucune"}
-
-TOP CONCURRENTS CITÉS :
-${topComps.map(([n,c])=>`- ${n}: ${c}×`).join("\n")||"Aucun"}
-
-URLS MARQUE CITÉES EN SOURCE :
-${brandUrls.map(([u,c])=>`- ${u} (${c}×)`).join("\n")||"Aucune"}
-
-TOP URLS CONCURRENTES :
-${competitorUrls.slice(0,8).map(([u,c])=>`- ${u} (${c}×)`).join("\n")||"Aucune"}
-
----
-
-Produis exactement 4 sections dans ce format :
-
-## ÉTAT DES LIEUX
-[Diagnostic factuel en 4-5 points clés. Cite les chiffres exacts. Identifie les providers où la présence est faible vs forte.]
-
-## MAILLAGE INTERNE — PAGES À RELIER
-[2-4 recommandations de maillage interne : quelles pages du site ${brandDomain} doivent pointer vers quelles autres. Base-toi sur les URLs citées en source et les thèmes des questions sans mention.]
-
-## PAGES — ADAPTER (existantes) vs CRÉER (nouvelles)
-[Avant de recommander, VÉRIFIE par recherche web "site:${brandDomain} <sujet>" si une page couvre déjà le sujet. Puis deux sous-listes :
-- ADAPTER : pages EXISTANTES (URL exacte vérifiée) à optimiser, avec ce qu'il faut ajouter/restructurer.
-- CRÉER : pages absentes, avec slug suggéré, H1, angle éditorial, et la question sans présence ciblée.
-Ne recommande JAMAIS de créer une page qui existe déjà.]
-
-## URLS CONCURRENTES — CE QUI FONCTIONNE
-[Pour les 3-5 URLs concurrentes les plus citées : LIS-LES via la recherche web et extrais le pattern réel (format liste, comparatif, chiffres clés, FAQ, données structurées) — ne te contente pas de deviner d'après l'URL. Recommande comment reproduire ce pattern sur ${brandDomain}.]
-
-RÈGLES :
-- UTILISE LA RECHERCHE WEB pour vérifier l'existence des pages ${brandDomain} et lire les pages concurrentes citées. Appuie-toi sur des faits récents, pas seulement tes connaissances.
-- Commence DIRECTEMENT par ## ÉTAT DES LIEUX, pas d'introduction
-- Recommandations concrètes : URLs exactes, H1 suggérés, types de contenu
-- Chaque recommandation = une action précise, réalisable, avec un résultat attendu
-- Pas de formules génériques comme "améliorer le contenu" — être spécifique`;
-
-    try {
-      const res = await fetch("/api/claude-geo", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Claude-Key": claudeKey },
-        body: JSON.stringify({ model: RECO_MODEL_DEEP, max_tokens: 2800, tools: [webSearchTool(6)], messages: [{ role: "user", content: prompt }] }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error?.message || `Claude ${res.status}`);
-      const text = claudeFinalText(data.content);
-
-      // Parser les sections
-      const parsed = text.split(/^## /m).filter(Boolean).map(s => {
-        const idx = s.indexOf("\n");
-        return { title: s.slice(0, idx).trim(), body: s.slice(idx+1).trim() };
-      });
-      setSections(parsed);
-      setStatus("done");
-      const now = new Date().toISOString();
-      setSavedDate(now);
-      // Persister en BDD (best-effort)
-      if (projectId && siteId) {
-        sbSaveGeoAnalysis({ project_id: projectId, site_id: siteId, kind: "fanout", content: { sections: parsed, generated_at: now } }).catch(() => {});
-      }
-    } catch(e) {
-      setSections([{ title: "Erreur", body: e.message }]);
-      setStatus("error");
-    }
-  };
-
-  // Icônes par section
-  const SECTION_META = {
-    "ÉTAT DES LIEUX":                 { icon: "◎", color: "#1A3C2E",   border: "#1A3C2E18" },
-    "MAILLAGE INTERNE":               { icon: "⟶", color: "#1A3C2E",   border: "#1A3C2E11" },
-    "PAGES À CRÉER OU ADAPTER":       { icon: "✦", color: "#C97820",   border: "#C9782018" },
-    "URLS CONCURRENTES":              { icon: "↗", color: "#1A3C2E", border: "#1A3C2E0D" },
-  };
-  const getMeta = (title) => {
-    const key = Object.keys(SECTION_META).find(k => title.includes(k));
-    return SECTION_META[key] || { icon: "·", color: "#1A3C2E", border: "#1A3C2E0D" };
-  };
-
-  if (!results.length) return null;
-
-  return (
-    <div style={{ marginBottom: 24 }}>
-      {/* ── Header ── */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: open && status === "done" ? 16 : 0 }}>
-        <div>
-          <div className="gt-label" style={{ marginBottom: 3 }}>Analyse GEO</div>
-          <div style={{ fontSize: 13, fontWeight: 400, color: "#1A3C2E", letterSpacing: "-0.005em" }}>
-            Recommandations actionnables — {results.length} réponses analysées
-          </div>
-          {savedDate && (
-            <div style={{ fontSize: 10, color: "#1A3C2E", marginTop: 2 }}>
-              Dernière analyse : {new Date(savedDate).toLocaleString("fr-FR", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
-            </div>
-          )}
-        </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          {status === "done" && (
-            <button onClick={() => setOpen(o => !o)} className="gt-btn gt-btn--ghost" style={{ fontSize: 11 }}>
-              {open ? "Masquer" : "Voir l'analyse"}
-            </button>
-          )}
-          <button
-            onClick={run}
-            disabled={status === "loading" || !claudeKey}
-            className={`gt-btn ${status === "idle" ? "gt-btn--solid" : "gt-btn--ghost"}`}
-            title={!claudeKey ? "Clé Claude manquante" : undefined}
-            style={{ opacity: (!claudeKey || status === "loading") ? 0.4 : 1 }}>
-            {status === "loading" ? "Analyse…" : status === "done" ? "↺ Relancer" : "Analyser"}
-          </button>
-        </div>
-      </div>
-
-      {/* ── Contenu ── */}
-      {open && status === "done" && sections.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 1, borderTop: "0.5px solid #1A3C2E0D", paddingTop: 16 }}>
-          {sections.map((s, i) => {
-            const meta = getMeta(s.title);
-            if (s.title === "Erreur") return (
-              <div key={i} style={{ fontSize: 12, color: "#C0352A", padding: "10px 0" }}>{s.body}</div>
-            );
-            return (
-              <div key={i} style={{
-                borderLeft: `2px solid ${meta.border}`,
-                paddingLeft: 16, paddingBottom: 16,
-                marginBottom: i < sections.length - 1 ? 4 : 0,
-              }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-                  <span style={{ fontSize: 12, color: meta.color, fontWeight: 500 }}>{meta.icon}</span>
-                  <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.10em", textTransform: "uppercase", color: meta.color }}>
-                    {s.title}
-                  </span>
-                </div>
-                <div style={{ fontSize: 12, color: "#1A3C2E", lineHeight: 1.75 }}>
-                  {renderMarkdown(s.body)}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-
 // ── NextStepsAnalysis — "Et maintenant ?" ────────────────────────
 // Analyse multi-niveaux produisant des recommandations actionnables :
 //  1. Analyse des requêtes marque (ton + synthèse + recos)
@@ -3040,133 +2767,12 @@ Réponds UNIQUEMENT en JSON valide, sans texte autour :
     if (!claudeKey || !results.length) return;
     setStatus("loading"); setOpen(true);
 
-    // Sauver l'analyse courante comme "précédente" avant d'en générer une nouvelle
     const previousForComparison = data;
-
-    // ── Préparer les données ──
-    const qMap = {};
-    questions.forEach(q => { qMap[q.id] = q; });
-
-    // Questions marque
-    const brandQs = questions.filter(isBrandQuestion);
-    const brandQsData = brandQs.map(q => {
-      const rs = resultsByQ[q.id] || [];
-      const answers = rs.map(r => (r.answer || "").slice(0, 400)).join(" | ");
-      return { question: q.question, mentioned: isMentioned(q.id), pos: brandPosOf(q.id), excerpt: answers.slice(0, 600) };
-    });
-
-    // Catégories de questions (via tags)
-    const catMap = {};
-    categories.forEach(c => { catMap[c.id] = c.name; });
-    const byCat = {};
-    questions.forEach(q => {
-      const tags = Array.isArray(q.tags) ? q.tags : (q.category_id ? [q.category_id] : []);
-      const cats = tags.length ? tags : ["__none__"];
-      cats.forEach(cid => {
-        const name = catMap[cid] || "Sans catégorie";
-        if (!byCat[name]) byCat[name] = { total: 0, mentioned: 0 };
-        byCat[name].total++;
-        if (isMentioned(q.id)) byCat[name].mentioned++;
-      });
-    });
-
-    // Favoris catégorisés
-    const favs = questions.filter(q => q.is_favorite);
-    const favClassified = favs.map(q => {
-      const pos = brandPosOf(q.id);
-      const ment = isMentioned(q.id);
-      const kw = q.keyword_id;
-      let bucket;
-      if (ment && pos != null && pos <= 3) bucket = "defend";        // À défendre (lead)
-      else if (ment && pos != null && pos >= 4 && pos <= 10) bucket = "watch"; // À surveiller (top 4-10)
-      else if (!ment && kw) bucket = "conquest_priority";            // Conquête prioritaire (non positionné, potentiel marchand = a un mot-clé)
-      else bucket = "conquer";                                        // À conquérir (non positionné, non catégorisé)
-      return { question: q.question, pos, mentioned: ment, bucket };
-    });
-
-    const total      = results.length;
-    const withBrand  = results.filter(r => r.brand_mentioned === true || r.brand_mentioned === 1).length;
-    const presence   = total ? Math.round(withBrand / total * 100) : 0;
-
-    // ── Prompt Claude — JSON structuré ──
-    const prompt = `Tu es un expert GEO (Generative Engine Optimization) senior. Tu produis un plan d'action stratégique pour "${brandName}" (${brandDomain}).
-
-DONNÉES GLOBALES :
-- Présence marque : ${withBrand}/${total} réponses (${presence}%)
-
-QUESTIONS MARQUE (${brandQsData.length}) :
-${brandQsData.slice(0, 12).map((q, i) => `${i+1}. "${q.question}" — ${q.mentioned ? "mentionnée" + (q.pos ? ` #${q.pos}` : "") : "absente"}`).join("\n") || "Aucune question marque"}
-
-SYNTHÈSE PAR CATÉGORIE :
-${Object.entries(byCat).map(([cat, s]) => `- ${cat} : ${s.mentioned}/${s.total} questions avec mention (${Math.round(s.mentioned/s.total*100)}%)`).join("\n") || "Aucune catégorie"}
-
-QUESTIONS FAVORITES — PÉRIMÈTRE STRATÉGIQUE PRIORITAIRE (${favClassified.length}) :
-${favClassified.slice(0, 25).map((f, i) => `${i+1}. "${f.question}" — ${f.bucket === "defend" ? "à défendre (lead)" : f.bucket === "watch" ? "à surveiller (top 4-10)" : f.bucket === "conquest_priority" ? "conquête prioritaire" : "à conquérir"}${f.pos ? ` #${f.pos}` : ""}`).join("\n") || "Aucune question favorite"}
-IMPORTANT : les questions favorites sont le périmètre stratégique du client. Priorise EXPLICITEMENT les actions qui les concernent. Pour toute action de la roadmap liée à une question favorite, mets "favorite": true.
-${previousForComparison ? `\nANALYSE PRÉCÉDENTE (pour comparaison) :\n${JSON.stringify(previousForComparison).slice(0, 1500)}` : ""}
-
----
-
-Réponds UNIQUEMENT avec un objet JSON valide (sans markdown, sans backticks) de cette forme exacte :
-{
-  "brandAnalysis": "Analyse du ton et synthèse des réponses sur les questions marque (3-4 phrases). Puis 2-3 recommandations actionnables concrètes pour améliorer le GEO sur ces requêtes marque. Si aucune question marque, indique-le brièvement.",
-  "categoryAnalysis": [
-    { "category": "nom catégorie", "synthesis": "synthèse 1-2 phrases", "recommendation": "reco actionnable précise" }
-  ],
-  "roadmap": [
-    { "action": "action concrète et précise", "category": "catégorie concernée ou 'Marque'", "target_url": "URL existante à optimiser OU /slug à créer", "page_exists": false, "impact": 8, "confidence": 7, "ease": 5, "favorite": false }
-  ],
-  ${previousForComparison ? `"comparison": { "better": "ce qui a mieux fonctionné", "worse": "ce qui a moins bien fonctionné", "done": "ce qui semble avoir été fait", "missing": "ce qui semble avoir manqué", "reinforce": "ce qui est à renforcer" }` : `"comparison": null`}
-}
-
-RÈGLES :
-- UTILISE LA RECHERCHE WEB pour fonder tes recommandations sur des données réelles et récentes, et pour VÉRIFIER l'existence des pages : pour chaque action liée à une page, fais "site:<domaine> <sujet>". Renseigne "target_url" (URL existante vérifiée à optimiser, ou /slug à créer) et "page_exists" (true si une page couvre déjà le sujet, false sinon).
-- Une action sur page EXISTANTE (optimiser) a un "ease" plus élevé qu'une création de zéro.
-- roadmap : 6 à 10 actions, triées par priorité décroissante. impact/confidence/ease sont des entiers de 1 à 10.
-- Pour les actions liées aux questions marque, mets "category": "Marque".
-- categoryAnalysis : une entrée par catégorie réelle ci-dessus (max 8).
-- Recommandations spécifiques (URLs, formats, H1) — jamais génériques.
-- Réponds en français.`;
-
     try {
-      const res = await fetch("/api/claude-geo", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Claude-Key": claudeKey },
-        body: JSON.stringify({ model: RECO_MODEL_DEEP, max_tokens: 4096, tools: [webSearchTool(6)], messages: [{ role: "user", content: prompt }] }),
-      });
-      const respData = await res.json();
-      if (!res.ok) throw new Error(respData.error?.message || `Claude ${res.status}`);
-      const text = claudeFinalText(respData.content);
-
-      // Parser le JSON (retirer un éventuel wrapping ```json)
-      const cleaned = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();
-      let parsed;
-      try {
-        parsed = JSON.parse(cleaned);
-      } catch {
-        // 1) extraction du bloc { ... } le plus large
-        const s = cleaned.indexOf("{"); const e = cleaned.lastIndexOf("}");
-        let candidate = (s >= 0 && e > s) ? cleaned.slice(s, e + 1) : cleaned;
-        try {
-          parsed = JSON.parse(candidate);
-        } catch {
-          // 2) réparation d'un JSON tronqué (réponse coupée par max_tokens) :
-          //    on retire un éventuel dernier élément incomplet puis on referme
-          //    les structures ouvertes ([ et {) dans le bon ordre.
-          parsed = repairTruncatedJson(s >= 0 ? cleaned.slice(s) : cleaned);
-          if (!parsed) throw new Error("Réponse de l'IA incomplète ou mal formée. Réessaie — si le problème persiste, réduis le nombre de questions.");
-        }
-      }
-
-      // Ajouter le tableau favoris (calculé localement, pas via Claude)
-      parsed.favorites = favClassified;
-      parsed.generated_at = new Date().toISOString();
-
+      const parsed = await generateRoadmap({ questions, results, brand, categories, claudeKey, previousForComparison });
       setData(parsed);
       setStatus("done");
       setSavedDate(parsed.generated_at);
-
-      // Persister
       if (projectId && siteId) {
         sbSaveGeoAnalysis({ project_id: projectId, site_id: siteId, kind: "roadmap", content: parsed }).catch(() => {});
       }
@@ -3185,6 +2791,15 @@ RÈGLES :
       return [r.action, r.category || "", r.target_url ? (r.page_exists ? "Optimiser" : "Créer") : "", r.target_url || "", r.favorite ? "Oui" : "", r.impact, r.confidence, r.ease, ice];
     })];
     downloadText(toCSV(rows), `roadmap_geo_${new Date().toISOString().slice(0,10)}.csv`);
+  };
+
+  // ── Export "Optimisations mots clés" (format clusters, inspiré du template Sheets) ──
+  const exportClustersCSV = async () => {
+    if (!data?.roadmap?.length) return;
+    let kws = [];
+    try { kws = (projectId && siteId) ? (await sbGetKeywords(projectId, siteId)) || [] : []; } catch { kws = []; }
+    const csv = buildKeywordClustersCsv({ keywords: kws, roadmap: data.roadmap, categories });
+    downloadText(csv, `optimisations_mots_cles_${new Date().toISOString().slice(0,10)}.csv`);
   };
 
   // ── Export CSV favoris ──
@@ -3207,7 +2822,6 @@ RÈGLES :
 
   if (!results.length) return null;
 
-  const iceColor = (score) => score >= 24 ? "#1A7A4A" : score >= 18 ? "#C97820" : "#1A3C2E77";
   const BUCKET_META = {
     defend:            { label: "À défendre",          color: "#1A7A4A", desc: "La marque lead (#1-3)" },
     watch:             { label: "À surveiller",         color: "#C97820", desc: "Top 4-10" },
@@ -3378,120 +2992,13 @@ RÈGLES :
       {mode === "url" && open && status === "done" && data && !data.error && (
         <div style={{ borderTop: "0.5px solid #1A3C2E0D", paddingTop: 16, display: "flex", flexDirection: "column", gap: 24 }}>
 
-          {/* 0. Accroche favoris — périmètre stratégique en tête */}
-          {Array.isArray(data.favorites) && data.favorites.length > 0 && (() => {
-            const counts = data.favorites.reduce((acc, f) => { acc[f.bucket] = (acc[f.bucket] || 0) + 1; return acc; }, {});
-            const META = { defend: { l: "à défendre", c: "#1A7A4A" }, watch: { l: "à surveiller", c: "#C97820" }, conquest_priority: { l: "en conquête prioritaire", c: "#E8541A" }, conquer: { l: "à conquérir", c: "#1A3C2E77" } };
-            return (
-              <div style={{ background: "#FFFBF5", border: "0.5px solid #C9782022", borderRadius: 10, padding: "14px 16px" }}>
-                <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.10em", textTransform: "uppercase", color: "#C97820", marginBottom: 8, display: "flex", alignItems: "center", gap: 5 }}>
-                  <span>★</span> Périmètre stratégique — {data.favorites.length} favori{data.favorites.length > 1 ? "s" : ""}
-                </div>
-                <div style={{ fontSize: 12, color: "#1A3C2E", lineHeight: 1.7 }}>
-                  {["defend", "watch", "conquest_priority", "conquer"].filter(b => counts[b]).map((b, i, arr) => (
-                    <span key={b}>
-                      <strong style={{ color: META[b].c }}>{counts[b]}</strong> {META[b].l}{i < arr.length - 1 ? " · " : ""}
-                    </span>
-                  ))}
-                </div>
-                <div style={{ fontSize: 11, color: "#1A3C2E", marginTop: 6 }}>
-                  Les recommandations ci-dessous priorisent ces questions (★ dans la roadmap).
-                </div>
-              </div>
-            );
-          })()}
-
-          {/* 1. Analyse requêtes marque */}
-          {data.brandAnalysis && (
-            <div style={{ borderLeft: "2px solid #1A3C2E18", paddingLeft: 16 }}>
-              <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E", marginBottom: 8 }}>
-                ◎ Requêtes marque
-              </div>
-              <div style={{ fontSize: 12, color: "#1A3C2E", lineHeight: 1.75 }}>
-                {renderMarkdown(data.brandAnalysis)}
-              </div>
+          {/* ── Plan d'action partagé (identique à l'audit) ── */}
+          <RoadmapView data={data} exportSlot={
+            <div style={{ display: "flex", gap: 6 }}>
+              <button onClick={exportClustersCSV} className="gt-btn gt-btn--ghost" style={{ fontSize: 10, padding: "3px 10px" }} title="Mots-clés par cluster + actions, format inspiré du template Sheets">↓ Optimisations mots clés</button>
+              <button onClick={exportRoadmapCSV} className="gt-btn gt-btn--ghost" style={{ fontSize: 10, padding: "3px 10px" }}>↓ Export CSV</button>
             </div>
-          )}
-
-          {/* 2. Synthèse par catégorie */}
-          {Array.isArray(data.categoryAnalysis) && data.categoryAnalysis.length > 0 && (
-            <div style={{ borderLeft: "2px solid #C9782018", paddingLeft: 16 }}>
-              <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.10em", textTransform: "uppercase", color: "#C97820", marginBottom: 10 }}>
-                ⟶ Synthèse par catégorie
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {data.categoryAnalysis.map((c, i) => (
-                  <div key={i} style={{ paddingBottom: 10, borderBottom: i < data.categoryAnalysis.length - 1 ? "0.5px solid #1A3C2E08" : "none" }}>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: "#1A3C2E", marginBottom: 2 }}>{c.category}</div>
-                    <div style={{ fontSize: 11, color: "#1A3C2E", lineHeight: 1.6, marginBottom: 4 }}>{c.synthesis}</div>
-                    <div style={{ fontSize: 11, color: "#1A7A4A", lineHeight: 1.6 }}>→ {c.recommendation}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* 3a. Tableau roadmap ICE */}
-          {Array.isArray(data.roadmap) && data.roadmap.length > 0 && (
-            <div>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-                <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.10em", textTransform: "uppercase", color: "#1A3C2E" }}>
-                  ✦ Roadmap priorisée (ICE)
-                </div>
-                <button onClick={exportRoadmapCSV} className="gt-btn gt-btn--ghost" style={{ fontSize: 10, padding: "3px 10px" }}>
-                  ↓ Export CSV
-                </button>
-              </div>
-              <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, minWidth: 540 }}>
-                  <thead>
-                    <tr style={{ borderBottom: "1px solid #1A3C2E22" }}>
-                      <th style={{ textAlign: "left", padding: "6px 8px", fontWeight: 600, color: "#1A3C2E", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em" }}>Action</th>
-                      <th style={{ textAlign: "left", padding: "6px 8px", fontWeight: 600, color: "#1A3C2E", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em" }}>Catégorie</th>
-                      <th style={{ textAlign: "center", padding: "6px 8px", fontWeight: 600, color: "#1A3C2E", fontSize: 10 }} title="Impact">I</th>
-                      <th style={{ textAlign: "center", padding: "6px 8px", fontWeight: 600, color: "#1A3C2E", fontSize: 10 }} title="Confidence">C</th>
-                      <th style={{ textAlign: "center", padding: "6px 8px", fontWeight: 600, color: "#1A3C2E", fontSize: 10 }} title="Ease">E</th>
-                      <th style={{ textAlign: "center", padding: "6px 8px", fontWeight: 600, color: "#1A3C2E", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em" }}>Score</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {[...data.roadmap].sort((a, b) => {
-                      if (!!b.favorite !== !!a.favorite) return b.favorite ? 1 : -1; // Favoris d'abord
-                      return ((b.impact||0)+(b.confidence||0)+(b.ease||0)) - ((a.impact||0)+(a.confidence||0)+(a.ease||0));
-                    }).map((r, i) => {
-                      const ice = (r.impact || 0) + (r.confidence || 0) + (r.ease || 0);
-                      const isBrand = (r.category || "").toLowerCase() === "marque";
-                      return (
-                        <tr key={i} style={{ borderBottom: "0.5px solid #1A3C2E0D", background: r.favorite ? "#FFFBF5" : "transparent" }}>
-                          <td style={{ padding: "8px", color: "#1A3C2E", lineHeight: 1.4 }}>
-                            {r.favorite && <span title="Concerne une question favorite" style={{ color: "#C97820", marginRight: 5 }}>★</span>}
-                            {r.action}
-                            {r.target_url && (
-                              <div style={{ marginTop: 3, fontSize: 10 }}>
-                                <span style={{ fontWeight: 700, color: r.page_exists ? "#1A7A4A" : "#C97820", marginRight: 5 }}>
-                                  {r.page_exists ? "✓ Optimiser" : "+ Créer"}
-                                </span>
-                                <span style={{ color: "#6B7A70", wordBreak: "break-all" }}>{r.target_url}</span>
-                              </div>
-                            )}
-                          </td>
-                          <td style={{ padding: "8px" }}>
-                            <span style={{ fontSize: 10, fontWeight: 600, color: isBrand ? "#1A3C2E" : "#1A3C2E", background: isBrand ? "#1A3C2E11" : "transparent", border: `0.5px solid ${isBrand ? "#1A3C2E33" : "#1A3C2E11"}`, borderRadius: 10, padding: "1px 8px", whiteSpace: "nowrap" }}>
-                              {r.category || "—"}
-                            </span>
-                          </td>
-                          <td style={{ padding: "8px", textAlign: "center", color: "#1A3C2E", fontVariantNumeric: "tabular-nums" }}>{r.impact}</td>
-                          <td style={{ padding: "8px", textAlign: "center", color: "#1A3C2E", fontVariantNumeric: "tabular-nums" }}>{r.confidence}</td>
-                          <td style={{ padding: "8px", textAlign: "center", color: "#1A3C2E", fontVariantNumeric: "tabular-nums" }}>{r.ease}</td>
-                          <td style={{ padding: "8px", textAlign: "center", fontWeight: 700, color: iceColor(ice), fontVariantNumeric: "tabular-nums" }}>{ice}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
+          } />
 
           {/* 3b. Tableau favoris catégorisés */}
           {Array.isArray(data.favorites) && data.favorites.length > 0 && (
@@ -3573,7 +3080,7 @@ RÈGLES :
 
 // ── Questions sub-tab (v2) ────────────────────────────────────────
 
-function QuestionsTab({ site, projectId, apiKey, model, brand, categories, setCategories, allResults, gscRows = [], aliasMap = {}, onResultSaved, activeProviders = ["openai"], providerKeys = {}, runMode = "parallel", keywordsOrder = [], refreshTrigger = 0, competitors = [], setCompetitors = null, onSaveKey = null, isReadOnly = false }) {
+function QuestionsTab({ site, projectId, apiKey, model, brand, categories, setCategories, allResults, gscRows = [], aliasMap = {}, onResultSaved, activeProviders = ["openai"], providerKeys = {}, runMode = "parallel", keywordsOrder = [], refreshTrigger = 0, competitors = [], setCompetitors = null, onSaveKey = null, isReadOnly = false, webSearchSettings = {} }) {
   const [questions, setQuestions]   = useState([]);
   const [results, setResults]       = useState(allResults || []);
   const [recomputing, setRecomputing]   = useState(false);
@@ -4018,10 +3525,11 @@ Réponds UNIQUEMENT avec les ${n} questions séparées par des points-virgules (
     const chosenModel = cfg.model || provider.model;
     const modeId = cfg.mode || "standard";
     const modeMaxTokens = modeId === "discussion" ? 3072 : modeId === "fidelity" ? 2048 : 1024;
+    const useWebSearch = webSearchEnabled(provider.id, webSearchSettings); // réglage BDD (projet)
     const prompt = buildPrompt(provider.id, q.question, context, modeId);
     const effectiveProvider = { ...provider, model: chosenModel };
     try {
-      const parsed = await callProvider(effectiveProvider, pk.dec, prompt, modeMaxTokens);
+      const parsed = await callProvider(effectiveProvider, pk.dec, prompt, modeMaxTokens, "", useWebSearch);
       const detectedBrand = detectBrand(parsed.answer, parsed.sources, brand_name, brand_aliases, competitors);
       const { brandMentioned, brandPosition, brandInSources, competitorsMentioned, unknownEntities } = detectedBrand;
       const domain_counts = {};
@@ -4043,6 +3551,7 @@ Réponds UNIQUEMENT avec les ${n} questions séparées par des points-virgules (
         brand_evocation_position: detectedBrand.evocation?.position || null,
         brand_citation_position:  detectedBrand.citation?.position  || null,
         input_tokens: parsed._input_tokens, output_tokens: parsed._output_tokens,
+        web_searches: parsed._web_searches ?? null,
         created_at: now,
       };
       // Optimistic local update — immediately update the card
@@ -4305,6 +3814,12 @@ Réponds UNIQUEMENT avec les ${n} questions séparées par des points-virgules (
     }).length;
   }, [filtered, resultsByQ, activeProviders, providerKeys]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Au moins un provider actif possède une clé API ? (sinon "Lancer tout" est impossible)
+  const hasConfiguredProviders = useMemo(
+    () => PROVIDERS.some(p => activeProviders.includes(p.id) && providerKeys[p.id]?.dec),
+    [activeProviders, providerKeys] // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
   // ── Recalcul de la détection sur l'historique (sans re-interroger les modèles) ──
   // Re-passe detectBrand sur les réponses déjà stockées avec la liste de concurrents
   // actuelle, et met à jour competitors_mentioned / unknown_entities / positions.
@@ -4358,15 +3873,49 @@ Réponds UNIQUEMENT avec les ${n} questions séparées par des points-virgules (
 
   return (
     <div>
-      {/* ── GEO Analysis ── */}
-      <div data-tour="geo-analysis"><GeoAnalysis
-        questions={questions}
-        results={results}
-        brand={brand}
-        claudeKey={providerKeysRef.current["claude"]?.dec || ""}
-        projectId={projectId}
-        siteId={site?.id}
-      /></div>
+      {/* ── Onboarding : aucune question encore renseignée ── */}
+      {questions.length === 0 && !isReadOnly && (
+        <div style={{ border: "1px solid #1A3C2E22", borderRadius: 14, padding: "20px 22px", marginBottom: 22, background: "linear-gradient(180deg,#FFFFFF,#F6F8F7)" }}>
+          <div style={{ fontSize: 16, fontWeight: 700, color: "#1A3C2E", marginBottom: 3 }}>Pour lancer votre projet</div>
+          <div style={{ fontSize: 12.5, color: "#1A3C2E", opacity: 0.75, marginBottom: 18 }}>Deux étapes pour commencer à mesurer votre visibilité dans les LLMs.</div>
+
+          {/* Étape 1 — Configuration */}
+          <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
+            <span style={{ flexShrink: 0, width: 26, height: 26, borderRadius: "50%", background: "#1A3C2E", color: "#F0EBE0", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700 }}>1</span>
+            <div>
+              <div style={{ fontSize: 13.5, fontWeight: 600, color: "#1A3C2E" }}>Configurez vos accès API</div>
+              <div style={{ fontSize: 12.5, color: "#1A3C2E", lineHeight: 1.6, marginTop: 3 }}>
+                Rendez-vous dans l'onglet <strong>⚙ Configuration</strong> pour brancher vos clés API. <strong>Claude (Anthropic)</strong> et <strong>OpenAI</strong> sont indispensables pour certaines actions : Claude génère les questions et produit les analyses « Et maintenant ? » et l'audit ; OpenAI permet d'interroger ChatGPT. Sans au moins une clé, l'interrogation des modèles est impossible.
+              </div>
+            </div>
+          </div>
+
+          {/* Étape 2 — Questions */}
+          <div style={{ display: "flex", gap: 12 }}>
+            <span style={{ flexShrink: 0, width: 26, height: 26, borderRadius: "50%", background: "#1A3C2E", color: "#F0EBE0", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700 }}>2</span>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 600, color: "#1A3C2E" }}>Renseignez vos questions</div>
+              <div style={{ fontSize: 12.5, color: "#1A3C2E", lineHeight: 1.6, marginTop: 3, marginBottom: 10 }}>Quatre méthodes, au choix — chacune précise où agir :</div>
+              <div style={{ display: "grid", gap: 8 }}>
+                {[
+                  ["a", "À partir de mots-clés", "Onglet ⚙ Mots-clés : ajoutez vos mots-clés, puis générez les questions associées."],
+                  ["b", "À partir de l'URL du site", "Ici, onglet Questions → bouton « Générer depuis une URL » : la page est crawlée et l'IA en déduit des questions."],
+                  ["c", "À partir d'un fichier CSV", "Ici, onglet Questions → bouton d'import CSV : une question par ligne."],
+                  ["d", "À la main", "Ici, onglet Questions → bouton « + Ajouter » pour saisir vos questions une à une."],
+                ].map(([k, t, d]) => (
+                  <div key={k} style={{ display: "flex", gap: 8, background: "#1A3C2E06", borderRadius: 8, padding: "8px 10px" }}>
+                    <span style={{ flexShrink: 0, fontSize: 11.5, fontWeight: 700, color: "#E8541A" }}>{k})</span>
+                    <div>
+                      <span style={{ fontSize: 12.5, fontWeight: 600, color: "#1A3C2E" }}>{t}</span>
+                      <span style={{ fontSize: 12, color: "#1A3C2E", opacity: 0.85 }}> — {d}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Et maintenant ? — plan d'action priorisé ── */}
       <NextStepsAnalysis
@@ -4593,14 +4142,23 @@ Réponds UNIQUEMENT avec les ${n} questions séparées par des points-virgules (
           {/* Lancer tout */}
           {!isReadOnly && (
             <>
-              <button
-                data-tour="run-all"
-                onClick={runAllQuestions}
-                disabled={runAll || toRunCount === 0}
-                className={`gt-btn ${toRunCount > 0 ? "gt-btn--solid" : "gt-btn--ghost"}`}
-                title={toRunCount === 0 ? "Tout interrogé aujourd'hui" : `Interroger ${toRunCount} question${toRunCount > 1 ? "s" : ""} sans réponse`}>
-                {runAll ? "…" : toRunCount > 0 ? `▶ Lancer (${toRunCount})` : "✓ Généré"}
-              </button>
+              {!hasConfiguredProviders ? (
+                <span
+                  data-tour="run-all"
+                  title="Aucun provider configuré : ajoutez au moins une clé API (Claude et/ou OpenAI) dans l'onglet ⚙ Configuration pour pouvoir lancer les interrogations."
+                  style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 30, height: 30, borderRadius: "50%", fontSize: 15, color: "#C97820", background: "#FFFBEB", border: "1px solid #FDE68A", cursor: "help" }}>
+                  ⚠
+                </span>
+              ) : (
+                <button
+                  data-tour="run-all"
+                  onClick={runAllQuestions}
+                  disabled={runAll || toRunCount === 0}
+                  className={`gt-btn ${toRunCount > 0 ? "gt-btn--solid" : "gt-btn--ghost"}`}
+                  title={toRunCount === 0 ? "Tout interrogé aujourd'hui" : `Interroger ${toRunCount} question${toRunCount > 1 ? "s" : ""} sans réponse`}>
+                  {runAll ? "…" : toRunCount > 0 ? `▶ Lancer (${toRunCount})` : "✓ Généré"}
+                </button>
+              )}
               {runAll && (
                 <button onClick={() => { stopAllRef.current = true; setRunAll(false); }} className="gt-btn gt-btn--ghost" style={{ borderColor: "#C0352A33", color: "#C0352A" }}>⏹</button>
               )}
@@ -4950,12 +4508,22 @@ function UrlsTab({ projectId, categories, brand, allResults }) {
   }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Classify a URL
+  const _norm = (s) => (s || "").toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").split("/")[0].trim();
+  const _compact = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const brandDomainNorm = _norm(brand?.brand_domain || "");
   const classifyUrl = (u) => {
-    const d = (u.domain || "").toLowerCase();
-    const allBrand = [brandName, ...brandAliases].filter(Boolean).map(t => t.toLowerCase());
+    const d = _norm(u.domain || u.url || "");
+    const dRoot = _compact(d.split(".")[0]); // domaine sans TLD, compacté
+    const brandTerms = [brandName, ...brandAliases].filter(Boolean);
     const knownComps = competitors.filter(Boolean).map(t => t.toLowerCase());
 
-    if (allBrand.some(t => d.includes(t))) return "brand";
+    // 1) Domaine de marque déclaré (ex. gestioncreditexpert.com)
+    if (brandDomainNorm && (d === brandDomainNorm || d.endsWith("." + brandDomainNorm) || brandDomainNorm.endsWith("." + d))) return "brand";
+    // 2) Nom de marque / alias compacté présent dans le domaine
+    //    (gère « Gestion Credit expert » → « gestioncreditexpert »)
+    if (brandTerms.some(t => { const c = _compact(t); if (c.length < 4) return false; return dRoot.includes(c) || (dRoot.length >= 5 && c.includes(dRoot)); })) return "brand";
+    // 3) Repli : sous-chaîne brute (ancien comportement)
+    if (brandTerms.some(t => d.includes(t.toLowerCase()))) return "brand";
 
     // Identified competitors from results
     const compNames = new Set();
@@ -5373,12 +4941,18 @@ function AutomationTab({ projectId, site, user, providerKeys }) {
   useEffect(() => {
     if (!projectId || !site?.id) return;
     setLoading(true);
+    setSchedule(null); // masque immédiatement les stats du projet précédent pendant le chargement
     sbGetSchedule(projectId, site.id).then(s => {
       if (s) {
         setSchedule(s);
         setActive(s.active);
         setProviders(s.providers || ["openai"]);
         setIntervalDays(freqToDays(s.frequency));
+      } else {
+        // Aucune automatisation pour CE projet → réinitialiser le formulaire aux défauts
+        setActive(true);
+        setProviders(["openai"]);
+        setIntervalDays(1);
       }
       setLoading(false);
     }).catch(() => setLoading(false));
@@ -6073,15 +5647,6 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
       position: "top",
       onActivate: () => { setSubTab("questions"); },
     },
-    {
-      target: "geo-analysis",
-      icon: "✦",
-      title: "Analyse GEO par IA",
-      desc: "Claude analyse vos données de présence et produit 4 sections actionnables : État des lieux, Maillage interne à créer, Pages à adapter, URLs concurrentes à surveiller.",
-      tip: "Relancez l'analyse après chaque série d'interrogations pour des recommandations à jour.",
-      position: "bottom",
-      onActivate: () => { setSubTab("questions"); },
-    },
   ];
 
   return (
@@ -6116,12 +5681,12 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
       {/* ── Sous-nav (toujours visible) — Questions mis en avant ; Configuration au même niveau ── */}
       <div data-tour="subnav" className="geo-subnav" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 24 }}>
         {[
-          { key: "questions",   label: "Questions",      primary: true },
+          ...(!isReadOnly ? [{ key: "setup", label: "⚙ Configuration" }] : []),
           { key: "keywords",    label: "Mots-clés" },
+          { key: "questions",   label: "Questions",      primary: true },
           { key: "competitors", label: "Concurrents" },
-          { key: "automation",  label: "Automatisation" },
           { key: "urls",        label: "Sources" },
-          ...(!isReadOnly ? [{ key: "setup", label: "⚙ Configuration", right: true }] : []),
+          { key: "automation",  label: "Automatisation" },
         ].map(t => {
           const active = subTab === t.key;
           const base = { padding: "6px 16px", fontSize: 12, borderRadius: 20, cursor: "pointer", transition: "all 0.15s", whiteSpace: "nowrap" };
@@ -6221,6 +5786,7 @@ export default function GeoTab({ sites, projectId, project, geoAxes, onSaveAxes,
             refreshTrigger={questionsKey}
             competitors={competitorsView} setCompetitors={setCompetitors}
             isReadOnly={isReadOnly}
+            webSearchSettings={project?.provider_web_search || {}}
             onSaveKey={(keyPatch) => {
               setProviderKeys(prev => {
                 const next = { ...prev };

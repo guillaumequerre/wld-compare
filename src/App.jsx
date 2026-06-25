@@ -732,7 +732,7 @@ export default function App() {
                 setProjects(prev => [...prev, p]);
                 setCurrentProjectId(p.id);
                 sbSaveProject(p).catch(() => {});
-                goTo("import");
+                goTo("geo");
               }}
               onDeleteProject={async (id) => {
                 const proj = projects.find(p => p.id === id);

@@ -16,17 +16,10 @@ import UploadCard from "../components/UploadCard";
 import PageTypeClassifier from "../components/PageTypeClassifier";
 import { newProject } from "../lib/helpers";
 import { C, SITE_PALETTE } from "../lib/constants";
-
-const ANTHROPIC_PROXY = "/api/anthropic";
+import { buildGeoPagesCsv, downloadCsv } from "../lib/exportOptimisations";
+import { generateRoadmap, RoadmapView } from "../lib/roadmapShared";
 
 // Catégories concurrents — miroir de GeoTab
-
-// Rend les **texte** en <strong> dans toute l'app
-// ── Modèles Claude utilisés dans l'audit ─────────────────────────
-// AIAnalysis = analyse experte longue et sourcée (sonnet recommandé pour la qualité).
-// FanoutAnalysis & CompetitorPageAnalyzer = analyses courtes (haiku, plus rapide/économique).
-// Pour basculer AIAnalysis sur haiku : remplacer AUDIT_AI_MODEL par "claude-haiku-4-5-20251001".
-const AUDIT_AI_MODEL = "claude-sonnet-4-6";
 
 function renderBold(text) {
   if (!text || !text.includes("**")) return text;
@@ -1338,173 +1331,53 @@ function TrendChart({ trendDays }) {
   );
 }
 
-function AIAnalysis({ audit, brand, site, questions, onTextReady, projectId = null, siteId = null }) {
+function RoadmapAuditPanel({ roadmapData, setRoadmapData, questions, results, brand, categories, claudeKey, projectId, siteId, onTextReady }) {
   const [status, setStatus] = useState("idle");
-  const [analysis, setAnalysis] = useState("");
-  const [savedDate, setSavedDate] = useState(null);
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState("");
+  const [err, setErr] = useState(null);
 
-  // Recharger la dernière analyse IA persistée au montage
+  // Alimente le PDF (section "Analyse IA détaillée") avec un résumé texte du plan.
   useEffect(() => {
-    if (!projectId || !siteId) return;
-    let cancelled = false;
-    sbGetGeoAnalyses(projectId, siteId, "audit-ai").then(rows => {
-      if (cancelled || !rows?.length) return;
-      const latest = rows[0];
-      const txt = typeof latest.content === "string" ? latest.content : latest.content?.text;
-      if (txt) {
-        setAnalysis(txt);
-        setStatus("done");
-        setSavedDate(latest.created_at);
-        onTextReady?.(txt);
-      }
-    }).catch(() => {});
-    return () => { cancelled = true; };
-  }, [projectId, siteId]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!roadmapData) return;
+    const d = roadmapData.diagnostic || {};
+    const lines = [];
+    if (d.verdict) lines.push(`Verdict : ${d.verdict}`);
+    if (d.levier_principal) lines.push(`Levier n°1 : ${d.levier_principal}`);
+    (roadmapData.roadmap || []).slice(0, 10).forEach(r => lines.push(`- [${(r.priority || "").toUpperCase()}] ${r.action}${r.target_url ? ` (${r.page_exists ? "optimiser" : "créer"} ${r.target_url})` : ""}`));
+    onTextReady?.(lines.join("\n"));
+  }, [roadmapData]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const generate = useCallback(async () => {
-    setStatus("loading"); setAnalysis("");
-    const summary = {
-      site: site?.label, brand: brand?.brand_name,
-      totalQuestions: audit.questions, totalResults: audit.total,
-      presenceRate: audit.presenceRate + "%", avgPosition: audit.avgPos,
-      topIntents: Object.entries(audit.intentCount).sort((a,b)=>b[1]-a[1]).slice(0,3).map(([k,v])=>`${k}(${v})`).join(", "),
-      competitors: Object.entries(audit.compStats).sort((a,b)=>b[1].mentions-a[1].mentions).slice(0,5).map(([k,v])=>`${k}(${v.mentions}x)`).join(", "),
-      urlsToOptimize: audit.urlsToOptimize.slice(0,5).map(u => u.norm || u.url).join(", "),
-      favorites: (() => {
-        const favs = (questions || []).filter(q => q.is_favorite);
-        if (!favs.length) return "aucune";
-        const byQ = {};
-        (audit._rawResults || []).forEach(r => { (byQ[r.question_id] = byQ[r.question_id] || []).push(r); });
-        const ment = (qId) => (byQ[qId] || []).some(r => r.brand_mentioned);
-        const presentFav = favs.filter(q => ment(q.id)).length;
-        return `${favs.length} questions favorites (périmètre stratégique prioritaire), dont ${presentFav} avec présence marque`;
-      })(),
-    };
-    const prompt = `Tu es un expert senior en SEO et GEO (Generative Engine Optimization). Tu maîtrises les études publiées par Moz, Ahrefs, Search Engine Land, Google, Bing, et les travaux académiques sur les LLMs. Produis un audit GEO expert et rigoureusement sourcé pour ${summary.site} / "${summary.brand}".
-
-DONNÉES D'ANALYSE :
-${JSON.stringify(summary, null, 2)}
-
-CONSIGNES STRICTES :
-- PRIORISE les recommandations qui concernent les questions favorites (périmètre stratégique du client, voir champ "favorites")
-- Chaque recommandation concrète DOIT se terminer par [En savoir plus](URL) avec une vraie source reconnue (2022-2025)
-- Sources autorisées : moz.com, ahrefs.com, searchengineland.com, developers.google.com, bing.com/webmasters, perplexity.ai/blog, etudes HubSpot, Nielsen, Semrush
-- Citer le % ou chiffre exact de l'étude quand disponible
-- Être précis sur les délais et résultats attendus
-
-Sections OBLIGATOIRES (titres ## markdown) :
-
-## 1. Synthèse exécutive
-Présence GEO actuelle : ${summary.presenceRate}%. Diagnostic en 3 phrases. Ce qui fonctionne et ce qui bloque.
-
-## 2. Analyse de la visibilité LLM
-Analyse par provider avec taux de présence. Pourquoi ces providers citent ou ne citent pas la marque. Analyse des ${summary.withRanked} mentions vs ${summary.withMentionOnly} évocations vs ${summary.withSourceOnly} citations.
-
-## 3. Analyse concurrentielle GEO
-Positionnement réel vs concurrents cités. Ce qu'ils font pour être davantage mentionnés. 2-3 actions spécifiques de différenciation.
-
-## 4. Plan d'action priorisé — 10 actions
-Format strict pour chaque action :
-**[HAUTE/MOYENNE/BASE] Titre de l'action**
-Pourquoi : donnée précise justifiant l'action.
-Comment : 2-3 étapes concrètes.
-Résultat attendu : métrique chiffrée et délai.
-[En savoir plus](URL_SOURCE)
-
-## 5. KPIs à suivre
-Cibles à 3 mois et 6 mois basées sur le score actuel de ${summary.presenceRate}%. Métriques GEO spécifiques (taux mention, position moyenne, couverture providers).
-
-Commence DIRECTEMENT par ## 1. Synthèse exécutive.`;
-
+  const run = async () => {
+    if (!claudeKey || !results.length || status === "loading") return;
+    setStatus("loading"); setErr(null);
     try {
-      // Le proxy /api/anthropic rassemble le stream SSE côté serveur
-      // et renvoie un JSON standard { content: [{ type:"text", text:"..." }] }
-      const res = await fetch(ANTHROPIC_PROXY, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: AUDIT_AI_MODEL, max_tokens: 4000, messages: [{ role: "user", content: prompt }] }),
-      });
-      if (!res.ok) {
-        const errBody = await res.text().catch(() => "");
-        throw new Error(`HTTP ${res.status} — ${errBody.slice(0, 120)}`);
-      }
-      const data = await res.json();
-      const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("\n").trim();
-      if (!text) throw new Error("Réponse vide du proxy");
-      setAnalysis(text);
-      onTextReady?.(text);
+      const parsed = await generateRoadmap({ questions, results, brand, categories, claudeKey, previousForComparison: roadmapData });
+      setRoadmapData(parsed);
+      if (projectId && siteId) sbSaveGeoAnalysis({ project_id: projectId, site_id: siteId, kind: "roadmap", content: parsed }).catch(() => {});
       setStatus("done");
-      const now = new Date().toISOString();
-      setSavedDate(now);
-      if (projectId && siteId) {
-        sbSaveGeoAnalysis({ project_id: projectId, site_id: siteId, kind: "audit-ai", content: { text, generated_at: now } }).catch(() => {});
-      }
-    } catch(e) { console.error("[AIAnalysis]", e); setStatus("error"); }
-  }, [audit, brand, site, questions, projectId, siteId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Édition manuelle du texte de l'audit
-  const startEdit = () => { setDraft(analysis); setEditing(true); };
-  const cancelEdit = () => { setEditing(false); setDraft(""); };
-  const saveEdit = () => {
-    const text = draft;
-    setAnalysis(text);
-    onTextReady?.(text);
-    const now = new Date().toISOString();
-    setSavedDate(now);
-    setEditing(false);
-    if (projectId && siteId) {
-      sbSaveGeoAnalysis({ project_id: projectId, site_id: siteId, kind: "audit-ai", content: { text, generated_at: now, edited: true } }).catch(() => {});
-    }
+    } catch (e) { setErr(e.message); setStatus("error"); }
   };
 
-  if (status === "idle") return (
-    <div style={{ textAlign: "center", padding: "24px 0" }}>
-      <div style={{ fontSize: 12, color: C.textLight, marginBottom: 12 }}>L'analyse IA utilise Claude pour interpréter vos données GEO.</div>
-      <button onClick={generate} style={{ padding: "6px 16px", background: "#1A3C2E", color: "#F0EBE0", border: "0.5px solid #1A3C2E22", borderRadius: 6, fontSize: 11, fontWeight: 500, cursor: "pointer" }}>Générer l'analyse IA</button>
-    </div>
-  );
-  if (status === "loading" && !analysis) return <div style={{ textAlign: "center", padding: 24, color: C.textLight, fontSize: 12 }}>✦ Génération en cours…</div>;
   return (
     <div>
-      {savedDate && (
-        <div style={{ fontSize: 10, color: "#1A3C2E", marginBottom: 10 }}>
-          Analyse générée le {new Date(savedDate).toLocaleString("fr-FR", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
-        </div>
-      )}
-      {editing ? (
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
         <div>
-          <textarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            style={{ width: "100%", minHeight: 320, fontSize: 12, lineHeight: 1.7, color: C.text, border: "0.5px solid #1A3C2E22", borderRadius: 8, padding: "12px 14px", fontFamily: "inherit", resize: "vertical", boxSizing: "border-box" }}
-          />
-          <div style={{ fontSize: 10, color: "#1A3C2E", marginTop: 6 }}>
-            Astuce : « ## Titre » crée un titre de section, « **gras** » met en gras.
-          </div>
-          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-            <button onClick={saveEdit} style={{ padding: "5px 14px", border: "none", borderRadius: 6, background: "#1A3C2E", color: "#F0EBE0", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Enregistrer</button>
-            <button onClick={cancelEdit} style={{ padding: "5px 14px", border: "0.5px solid #1A3C2E22", borderRadius: 6, background: "transparent", color: "#1A3C2E", fontSize: 11, cursor: "pointer" }}>Annuler</button>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#1A3C2E" }}>Plan d'action — « Et maintenant ? »</div>
+          <div style={{ fontSize: 11, color: "#1A3C2E99" }}>
+            {roadmapData?.generated_at
+              ? `Généré le ${new Date(roadmapData.generated_at).toLocaleString("fr-FR", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })} · même analyse que l'onglet Suivi GEO`
+              : "Analyse unique, partagée avec l'onglet Suivi GEO"}
           </div>
         </div>
-      ) : (
-      <div style={{ fontSize: 12, lineHeight: 1.8, color: C.text }}>
-        {analysis.split("\n").map((line, i) => {
-          if (line.startsWith("## ")) return <div key={i} style={{ fontSize: 14, fontWeight: 800, color: C.text, marginTop: 20, marginBottom: 6, borderBottom: `2px solid ${C.border}`, paddingBottom: 4 }}>{line.slice(3)}</div>;
-          if (line.startsWith("- ")) return <div key={i} style={{ paddingLeft: 16, marginBottom: 3 }}>• {renderBold(line.slice(2))}</div>;
-          if (!line.trim()) return <div key={i} style={{ height: 8 }} />;
-          return <div key={i} style={{ marginBottom: 4 }}>{renderBold(line)}</div>;
-        })}
+        <button onClick={run} disabled={status === "loading" || !claudeKey || !results.length}
+          title={!claudeKey ? "Clé Claude manquante dans \u2699\ufe0f Providers" : (!results.length ? "Aucun résultat à analyser" : undefined)}
+          style={{ padding: "5px 14px", background: (status === "loading" || !claudeKey || !results.length) ? "transparent" : "#1A3C2E", color: (status === "loading" || !claudeKey || !results.length) ? "#1A3C2E" : "#F0EBE0", border: "0.5px solid #1A3C2E22", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: (status === "loading" || !claudeKey || !results.length) ? "default" : "pointer" }}>
+          {status === "loading" ? "Génération…" : roadmapData ? "↺ Régénérer" : "Générer le plan"}
+        </button>
       </div>
-      )}
-      {status === "done" && !editing && (
-        <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-          <button onClick={generate} style={{ padding: "4px 12px", border: "0.5px solid #1A3C2E18", borderRadius: 6, background: "transparent", fontSize: 11, cursor: "pointer", color: "#1A3C2E" }}>↺ Regénérer</button>
-          <button onClick={startEdit} style={{ padding: "4px 12px", border: "0.5px solid #1A3C2E18", borderRadius: 6, background: "transparent", fontSize: 11, cursor: "pointer", color: "#1A3C2E" }}>✎ Éditer</button>
-        </div>
-      )}
-      {status === "error" && <div style={{ color: "#DC2626", fontSize: 11, marginTop: 8 }}>Erreur — réessayez.</div>}
+      {err && <div style={{ fontSize: 11, color: "#C0352A", background: "#FEF2F2", border: "1px solid #FCA5A5", borderRadius: 8, padding: "8px 12px", marginBottom: 12 }}>{err}</div>}
+      {roadmapData
+        ? <RoadmapView data={roadmapData} />
+        : <div style={{ fontSize: 12, color: "#1A3C2E", lineHeight: 1.6, background: "#1A3C2E08", borderRadius: 10, padding: "14px 16px" }}>Aucun plan généré pour l'instant. Cliquez « Générer le plan » : il s'affichera ici et dans l'onglet Suivi GEO (c'est la même analyse).</div>}
     </div>
   );
 }
@@ -3298,6 +3171,12 @@ export default function GeoAuditTab({
                 style={{ padding: "4px 12px", background: "transparent", color: noData ? "#1A3C2E" : "#1A3C2E", border: "0.5px solid #1A3C2E22", borderRadius: 5, fontSize: 11, fontWeight: 500, cursor: noData ? "not-allowed" : "pointer" }}>
                 {exporting ? "…" : "⬇ Rapport complet"}
               </button>
+              <button onClick={() => { try { downloadCsv(buildGeoPagesCsv({ audit, keywords }), `optimisations_geo_${new Date().toISOString().slice(0,10)}.csv`); } catch(e) { console.error(e); } }}
+                disabled={noData}
+                title="Par page auditée : mots-clés liés + actions GEO, format inspiré du template Sheets"
+                style={{ padding: "4px 12px", background: "transparent", color: "#1A3C2E", border: "0.5px solid #1A3C2E22", borderRadius: 5, fontSize: 11, fontWeight: 500, cursor: noData ? "not-allowed" : "pointer" }}>
+                ⬇ Optimisations GEO
+              </button>
             </span>
           </div>
 
@@ -3710,7 +3589,7 @@ export default function GeoAuditTab({
 
               {/* Analyse IA */}
               <div style={{ paddingTop: 16, borderTop: "0.5px solid #1A3C2E0C" }}>
-                <AIAnalysis audit={audit} brand={brand} site={site} questions={siteQuestions} onTextReady={setAiText} projectId={projectId} siteId={site?.id} />
+                <RoadmapAuditPanel roadmapData={roadmapData} setRoadmapData={setRoadmapData} questions={siteQuestions} results={siteResults} brand={brand} categories={categories} claudeKey={claudeKey} projectId={projectId} siteId={site?.id} onTextReady={setAiText} />
               </div>
             </Section>
             </div>
