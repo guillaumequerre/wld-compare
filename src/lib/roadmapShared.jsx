@@ -338,3 +338,160 @@ export function RoadmapView({ data, exportSlot = null }) {
     </div>
   );
 }
+
+// ════════════════════════════════════════════════════════════════════
+// PISTE 3 — Analyse macro de sentiment / perception de la marque (IA)
+// Analyse la tonalité et ce qui est dit de la marque dans les réponses
+// où elle est présente. Appel Claude Sonnet, SANS recherche web (analyse
+// du texte fourni uniquement). Persisté via kind="sentiment".
+// ════════════════════════════════════════════════════════════════════
+export async function generateSentiment({ results = [], brand = null, claudeKey }) {
+  if (!claudeKey) throw new Error("Clé Claude manquante.");
+  const brandName = brand?.brand_name || "la marque";
+  const present = results.filter(r => r.brand_mentioned && (r.answer || "").trim());
+  if (!present.length) throw new Error("Aucune réponse où la marque est présente à analyser.");
+
+  // Échantillon borné (coût tokens) : jusqu'à 24 extraits de 600 car.
+  const samples = present.slice(0, 24).map((r, i) => {
+    const prov = (r.model || "").replace(/\s*\(.*/, "") || "IA";
+    return `[${i + 1}] (${prov}) ${(r.answer || "").replace(/\s+/g, " ").slice(0, 600)}`;
+  }).join("\n\n");
+
+  const prompt = `Tu es analyste de réputation de marque. Analyse comment la marque « ${brandName} » est PERÇUE et PRÉSENTÉE dans les réponses ci-dessous, générées par des assistants IA (LLM) sur des questions où la marque apparaît.
+
+RÉPONSES À ANALYSER :
+${samples}
+
+Évalue la TONALITÉ globale et le contenu de ce qui est dit sur la marque. Réponds UNIQUEMENT par un objet JSON valide (aucun texte autour, pas de balise markdown), au format EXACT :
+{
+  "overall": "positif" | "plutôt positif" | "neutre" | "mitigé" | "négatif",
+  "score": <entier 0-100, 50 = strictement neutre, 100 = très positif>,
+  "summary": "<2-3 phrases : comment la marque est globalement perçue et présentée>",
+  "themes": [ { "label": "<thème abordé au sujet de la marque>", "tone": "positif"|"neutre"|"négatif", "detail": "<ce qui est dit, 1 phrase>" } ],
+  "strengths": [ "<atout / point positif récurrent associé à la marque>" ],
+  "watchouts": [ "<angle négatif, réserve, confusion ou risque d'image>" ],
+  "quotes": [ { "text": "<extrait court et représentatif, < 140 caractères>", "tone": "positif"|"neutre"|"négatif" } ]
+}
+Contraintes : 3 à 5 thèmes, 1 à 4 strengths, 0 à 4 watchouts, 2 à 4 quotes. Sois factuel et strictement fidèle aux réponses fournies. N'invente rien. Si la marque n'est qu'évoquée sans jugement, dis-le (tonalité neutre).`;
+
+  const res = await fetch("/api/claude-geo", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Claude-Key": claudeKey },
+    body: JSON.stringify({ model: RECO_MODEL_DEEP, max_tokens: 2048, messages: [{ role: "user", content: prompt }] }),
+  });
+  const rawBody = await res.text();
+  if (!res.ok) throw new Error(`Analyse impossible (${res.status}). ${rawBody.slice(0, 160)}`);
+  let respData;
+  try { respData = JSON.parse(rawBody); }
+  catch { throw new Error("Réponse IA illisible (non-JSON)."); }
+
+  const text = claudeFinalText(respData.content);
+  let cleaned = text.replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```\s*$/i, "").trim();
+  let parsed;
+  try { parsed = JSON.parse(cleaned); }
+  catch {
+    const m = cleaned.match(/\{[\s\S]*\}/);
+    parsed = (m && (() => { try { return JSON.parse(m[0]); } catch { return null; } })()) || repairTruncatedJson(cleaned);
+  }
+  if (!parsed) throw new Error("Analyse IA non exploitable.");
+
+  parsed.generated_at = new Date().toISOString();
+  parsed.n_analyzed = present.length;
+  return parsed;
+}
+
+const SENT_TONE = {
+  "positif":        { c: "#2D6A4F", bg: "#2D6A4F12", label: "Positif" },
+  "plutôt positif": { c: "#2D6A4F", bg: "#2D6A4F10", label: "Plutôt positif" },
+  "neutre":         { c: "#64748B", bg: "#64748B12", label: "Neutre" },
+  "mitigé":         { c: "#C2790F", bg: "#C2790F12", label: "Mitigé" },
+  "négatif":        { c: "#9B2335", bg: "#9B233512", label: "Négatif" },
+};
+const toneOf = (t) => SENT_TONE[(t || "").toLowerCase()] || SENT_TONE.neutre;
+
+export function SentimentView({ data }) {
+  if (!data) return null;
+  const ov = toneOf(data.overall);
+  const score = Math.max(0, Math.min(100, Number(data.score) || 50));
+  return (
+    <div>
+      {/* Score + tonalité globale */}
+      <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 14, flexWrap: "wrap" }}>
+        <div style={{ flex: "0 0 auto" }}>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "4px 12px", borderRadius: 999, background: ov.bg, color: ov.c, fontWeight: 700, fontSize: 13 }}>
+            <span style={{ width: 8, height: 8, borderRadius: "50%", background: ov.c }} />{ov.label}
+          </span>
+        </div>
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <div style={{ position: "relative", height: 8, borderRadius: 999, background: "linear-gradient(90deg,#9B2335,#C2790F,#64748B,#2D6A4F)" }}>
+            <div style={{ position: "absolute", top: -3, left: `calc(${score}% - 7px)`, width: 14, height: 14, borderRadius: "50%", background: "#fff", border: `2.5px solid ${ov.c}`, boxShadow: "0 1px 3px #0003" }} />
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9.5, color: "#94A3B8", marginTop: 4 }}><span>négatif</span><span style={{ fontWeight: 700, color: ov.c }}>{score}/100</span><span>positif</span></div>
+        </div>
+      </div>
+
+      {data.summary && <p style={{ fontSize: 13, lineHeight: 1.6, color: "#1C1C1C", margin: "0 0 16px" }}>{data.summary}</p>}
+
+      {/* Thèmes */}
+      {Array.isArray(data.themes) && data.themes.length > 0 && (
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E", marginBottom: 8 }}>Ce qui est dit de la marque</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+            {data.themes.map((t, i) => {
+              const to = toneOf(t.tone);
+              return (
+                <div key={i} style={{ display: "flex", gap: 10, alignItems: "baseline", padding: "8px 12px", background: to.bg, borderRadius: 8, borderLeft: `2px solid ${to.c}` }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: to.c, flexShrink: 0, minWidth: 90 }}>{t.label}</span>
+                  <span style={{ fontSize: 12, color: "#4A4A4A", lineHeight: 1.5 }}>{t.detail}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Atouts / Points de vigilance */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, marginBottom: 16 }}>
+        {Array.isArray(data.strengths) && data.strengths.length > 0 && (
+          <div>
+            <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: "#2D6A4F", marginBottom: 8 }}>Atouts perçus</div>
+            <ul style={{ margin: 0, paddingLeft: 16, fontSize: 12, color: "#1C1C1C", lineHeight: 1.6 }}>
+              {data.strengths.map((s, i) => <li key={i} style={{ marginBottom: 4 }}>{s}</li>)}
+            </ul>
+          </div>
+        )}
+        {Array.isArray(data.watchouts) && data.watchouts.length > 0 && (
+          <div>
+            <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: "#C2790F", marginBottom: 8 }}>Points de vigilance</div>
+            <ul style={{ margin: 0, paddingLeft: 16, fontSize: 12, color: "#1C1C1C", lineHeight: 1.6 }}>
+              {data.watchouts.map((s, i) => <li key={i} style={{ marginBottom: 4 }}>{s}</li>)}
+            </ul>
+          </div>
+        )}
+      </div>
+
+      {/* Extraits représentatifs */}
+      {Array.isArray(data.quotes) && data.quotes.length > 0 && (
+        <div>
+          <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E", marginBottom: 8 }}>Extraits représentatifs</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {data.quotes.map((q, i) => {
+              const to = toneOf(q.tone);
+              return (
+                <blockquote key={i} style={{ margin: 0, padding: "8px 14px", borderLeft: `3px solid ${to.c}`, background: "#1A3C2E06", borderRadius: "0 8px 8px 0", fontSize: 12, fontStyle: "italic", color: "#1C1C1C", lineHeight: 1.5 }}>
+                  « {q.text} »
+                </blockquote>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {data.generated_at && (
+        <div style={{ fontSize: 10, color: "#94A3B8", marginTop: 14 }}>
+          Analyse de {data.n_analyzed || "?"} réponses · {new Date(data.generated_at).toLocaleString("fr-FR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
+        </div>
+      )}
+    </div>
+  );
+}

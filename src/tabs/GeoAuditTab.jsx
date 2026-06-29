@@ -11,13 +11,13 @@ import {
   computeSeoGeoGap, computeReverseCannibalization, computeBingGap,
   computeBusinessValue, computeAITraffic,
   buildCSV, downloadCSV, CSV_COLUMNS,
-} from "../lib/auditTools";
+} from "../lib/audit-tools";
 import UploadCard from "../components/UploadCard";
 import PageTypeClassifier from "../components/PageTypeClassifier";
 import { newProject } from "../lib/helpers";
 import { C, SITE_PALETTE } from "../lib/constants";
 import { buildGeoPagesCsv, downloadCsv } from "../lib/exportOptimisations";
-import { generateRoadmap, RoadmapView } from "../lib/roadmapShared";
+import { generateRoadmap, RoadmapView, generateSentiment, SentimentView } from "../lib/roadmapShared";
 import { exportAuditPptx, exportAuditPdf } from "../lib/auditExport";
 
 // Catégories concurrents — miroir de GeoTab
@@ -30,7 +30,6 @@ function renderBold(text) {
 }
 
 function pct(a, b) { return b ? Math.round(a / b * 100) : 0; }
-function getDomain(url) { try { return new URL(url).hostname.replace("www.", ""); } catch { return url; } }
 function dayKey(d) { return d.toISOString().slice(0, 10); }
 function decodeKey(enc) { try { return enc ? atob(enc) : ""; } catch { return ""; } }
 function getProviderId(model) {
@@ -1221,7 +1220,21 @@ function computeAudit(questions, results, urlIndex, brand, site, calendarEntries
     { label: "Citée comme source", value: citationCount, sub: "URL en source" },
   ];
 
-  return { total, withBrand, withSources, withRanked, withSourceOnly, withMentionOnly, avgPos, avgMentionPos, avgEvocationPos, avgCitationPos, mentionCount, evocationCount, citationCount, presenceRate, trendDays, sortedUrls, brandUrls, brandOwnUrls, brandExternalUrls, urlDetails, competitorUrls, referenceUrls, topDomains, intentCount, typeCount, intentStatsList, pageTypeStatsList, mentionTrend, compStats, top5Competitors, competitorsRanked, byQuestionCategory, urlsToOptimize, urlsToRework, urlsToInspire, leads, questions: questions.length, providerStats, missingBrandQs, presentBrandQs, hasFavFilter, favCount, shareOfVoice, coMatrix, visibilityFunnel, _rawResults: results };
+  // ── Angles morts : questions testées où NI la marque NI un concurrent n'apparaît ──
+  const _byQ = {};
+  results.forEach(r => { (_byQ[r.question_id] = _byQ[r.question_id] || []).push(r); });
+  const blindSpots = [];
+  questions.forEach(q => {
+    const rs = _byQ[q.id] || [];
+    if (!rs.length) return; // jamais interrogée → on ne la compte pas comme angle mort
+    const brandSomewhere = rs.some(r => r.brand_mentioned);
+    const compSomewhere = rs.some(r => (r.competitors_mentioned || []).some(c =>
+      (c.mention_position != null && c.mention_position > 0) || c.mentioned || c.in_sources || c.evocation_position != null || c.citation_position != null || (c.position != null && c.position > 0)
+    ));
+    if (!brandSomewhere && !compSomewhere) blindSpots.push({ id: q.id, question: q.question, providers: rs.length });
+  });
+
+  return { total, withBrand, withSources, withRanked, withSourceOnly, withMentionOnly, avgPos, avgMentionPos, avgEvocationPos, avgCitationPos, mentionCount, evocationCount, citationCount, presenceRate, trendDays, sortedUrls, brandUrls, brandOwnUrls, brandExternalUrls, urlDetails, competitorUrls, referenceUrls, topDomains, intentCount, typeCount, intentStatsList, pageTypeStatsList, mentionTrend, compStats, top5Competitors, competitorsRanked, byQuestionCategory, urlsToOptimize, urlsToRework, urlsToInspire, leads, questions: questions.length, providerStats, missingBrandQs, presentBrandQs, hasFavFilter, favCount, shareOfVoice, coMatrix, visibilityFunnel, blindSpots, _rawResults: results };
 }
 
 
@@ -2362,6 +2375,57 @@ function CoOccurrenceMatrix({ coMatrix }) {
   );
 }
 
+// Piste 3 — Panneau « Perception de la marque » (sentiment IA, autonome + persistant).
+function SentimentAuditPanel({ results, brand, claudeKey, projectId, siteId }) {
+  const [data, setData] = useState(null);
+  const [status, setStatus] = useState("idle");
+  const [err, setErr] = useState(null);
+
+  useEffect(() => {
+    if (!projectId || !siteId) return;
+    let cancelled = false;
+    sbGetGeoAnalyses(projectId, siteId, "sentiment").then(rows => {
+      if (!cancelled && rows?.length) setData(rows[0].content);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [projectId, siteId]);
+
+  const presentCount = (results || []).filter(r => r.brand_mentioned && (r.answer || "").trim()).length;
+  const disabled = status === "loading" || !claudeKey || !presentCount;
+
+  const run = async () => {
+    if (disabled) return;
+    setStatus("loading"); setErr(null);
+    try {
+      const parsed = await generateSentiment({ results, brand, claudeKey });
+      setData(parsed);
+      if (projectId && siteId) sbSaveGeoAnalysis({ project_id: projectId, site_id: siteId, kind: "sentiment", content: parsed }).catch(() => {});
+      setStatus("done");
+    } catch (e) { setErr(e.message); setStatus("error"); }
+  };
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 11, color: "#1A3C2E99" }}>
+          {data?.generated_at
+            ? `Tonalité et image de la marque dans ${data.n_analyzed || presentCount} réponses où elle apparaît`
+            : `${presentCount} réponse${presentCount > 1 ? "s" : ""} où la marque apparaît, analysable${presentCount > 1 ? "s" : ""} par l'IA`}
+        </div>
+        <button onClick={run} disabled={disabled}
+          title={!claudeKey ? "Clé Claude manquante dans \u2699\ufe0f Providers" : (!presentCount ? "Aucune réponse où la marque est présente" : undefined)}
+          style={{ padding: "5px 14px", background: disabled ? "transparent" : "#1A3C2E", color: disabled ? "#1A3C2E" : "#F0EBE0", border: "0.5px solid #1A3C2E22", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: disabled ? "default" : "pointer" }}>
+          {status === "loading" ? "Analyse…" : data ? "↺ Ré-analyser" : "Analyser le sentiment"}
+        </button>
+      </div>
+      {err && <div style={{ fontSize: 11, color: "#C0352A", background: "#FEF2F2", border: "1px solid #FCA5A5", borderRadius: 8, padding: "8px 12px", marginBottom: 12 }}>{err}</div>}
+      {data
+        ? <SentimentView data={data} />
+        : <div style={{ fontSize: 12, color: "#1A3C2E", lineHeight: 1.6, background: "#1A3C2E08", borderRadius: 10, padding: "14px 16px" }}>Aucune analyse de perception générée. Cliquez « Analyser le sentiment » : l'IA évalue la tonalité (positif / neutre / négatif), ce qui est dit de la marque, ses atouts perçus et les points de vigilance.</div>}
+    </div>
+  );
+}
+
 export default function GeoAuditTab({
   sites, projectId, project = null, corrMatrix = [], metrics = [], resultVals = [], bingData = {},
   // Props setup depuis App.jsx
@@ -2377,7 +2441,6 @@ export default function GeoAuditTab({
   useEffect(() => {
     setSelectedSite(sites?.[0]?.id || "");
   }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
-  const [aiText, setAiText]             = useState("");
   const [roadmapData, setRoadmapData]   = useState(null);
   const [exporting, setExporting]       = useState(false);
   const [showTour, setShowTour]         = useState(false);
@@ -2809,6 +2872,11 @@ export default function GeoAuditTab({
             </div>{/* ══════════════════════════════════════════════════════
                 BLOC 2B — ANALYSE PAR CATÉGORIE
             ══════════════════════════════════════════════════════ */}
+            {/* ── Perception de la marque (sentiment IA) ── */}
+            <Section title="Perception de la marque" sub="Analyse IA de la tonalité et de l'image dans les réponses">
+              <SentimentAuditPanel results={siteResults} brand={brand} claudeKey={claudeKey} projectId={projectId} siteId={site?.id} />
+            </Section>
+
             <CategoryAnalysisCard
               siteQuestions={siteQuestions}
               siteResults={siteResults}
@@ -2898,6 +2966,23 @@ export default function GeoAuditTab({
                 <div style={{ marginTop: 18, paddingTop: 16, borderTop: "0.5px solid #1A3C2E0C" }}>
                   <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E", marginBottom: 10 }}>Matrice de co-occurrence — qui apparaît avec qui</div>
                   <CoOccurrenceMatrix coMatrix={audit.coMatrix} />
+                </div>
+              )}
+
+              {/* Angles morts — questions où personne ne ressort */}
+              {Array.isArray(audit.blindSpots) && audit.blindSpots.length > 0 && (
+                <div style={{ marginTop: 18, paddingTop: 16, borderTop: "0.5px solid #1A3C2E0C" }}>
+                  <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E", marginBottom: 4 }}>Angles morts — {audit.blindSpots.length} question{audit.blindSpots.length > 1 ? "s" : ""} sans aucun acteur</div>
+                  <div style={{ fontSize: 11, color: "#1A3C2E99", marginBottom: 10 }}>Questions où ni votre marque ni aucun concurrent n'apparaît : terrain libre à conquérir en priorité (contenu dédié, citations).</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {audit.blindSpots.slice(0, 12).map(b => (
+                      <div key={b.id} style={{ display: "flex", alignItems: "baseline", gap: 8, fontSize: 12, color: "#1C1C1C", padding: "6px 10px", background: "#E8541A0A", borderLeft: "2px solid #E8541A", borderRadius: 6 }}>
+                        <span style={{ color: "#E8541A", fontWeight: 700, flexShrink: 0 }}>○</span>
+                        <span style={{ lineHeight: 1.45 }}>{b.question}</span>
+                      </div>
+                    ))}
+                  </div>
+                  {audit.blindSpots.length > 12 && <div style={{ fontSize: 10.5, color: "#94A3B8", marginTop: 8 }}>+ {audit.blindSpots.length - 12} autres</div>}
                 </div>
               )}
 
@@ -3063,7 +3148,7 @@ export default function GeoAuditTab({
 
               {/* Analyse IA */}
               <div style={{ paddingTop: 16, borderTop: "0.5px solid #1A3C2E0C" }}>
-                <RoadmapAuditPanel roadmapData={roadmapData} setRoadmapData={setRoadmapData} questions={siteQuestions} results={siteResults} brand={brand} categories={categories} claudeKey={claudeKey} projectId={projectId} siteId={site?.id} onTextReady={setAiText} />
+                <RoadmapAuditPanel roadmapData={roadmapData} setRoadmapData={setRoadmapData} questions={siteQuestions} results={siteResults} brand={brand} categories={categories} claudeKey={claudeKey} projectId={projectId} siteId={site?.id} />
               </div>
             </Section>
             </div>
