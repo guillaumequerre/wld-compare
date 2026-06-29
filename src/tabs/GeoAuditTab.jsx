@@ -11,7 +11,7 @@ import {
   computeSeoGeoGap, computeReverseCannibalization, computeBingGap,
   computeBusinessValue, computeAITraffic,
   buildCSV, downloadCSV, CSV_COLUMNS,
-} from "../lib/audit-tools";
+} from "../lib/auditTools";
 import UploadCard from "../components/UploadCard";
 import PageTypeClassifier from "../components/PageTypeClassifier";
 import { newProject } from "../lib/helpers";
