@@ -30,7 +30,7 @@ import UploadCard from "../components/UploadCard";
 import { newProject, parseCSV, parseSemrushCSV } from "../lib/helpers";
 import { parseSemrush } from "../lib/parsers";
 import { C, SITE_PALETTE } from "../lib/constants";
-import { matchGscForQuestion } from "../lib/audit-tools";
+import { matchGscForQuestion } from "../lib/auditTools";
 // Note: sbSaveGeoAxes is called via onSaveAxes prop from App.jsx
 
 
@@ -2471,6 +2471,14 @@ function ProviderRow({ provider, results, brandName, brandAliases, brandDomain =
 
         <div style={{ flex: 1 }} />
 
+        {/* Pastille bleue discrète — recherche web effectuée */}
+        {result && (result.web_searches > 0) && (
+          <span title="Réponse générée avec recherche web"
+            style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 9.5, fontWeight: 600, color: "#1A4A7A", background: "#1A4A7A12", border: "0.5px solid #1A4A7A30", borderRadius: 999, padding: "1px 7px", letterSpacing: 0.2, whiteSpace: "nowrap" }}>
+            <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#1A4A7A", flexShrink: 0 }} />web
+          </span>
+        )}
+
         {/* Date et tokens — méta discrète */}
         {displayDate && (
           <span className="gt-mono">
@@ -3840,6 +3848,7 @@ Réponds UNIQUEMENT avec les ${n} questions séparées par des points-virgules (
           brand_evocation_position: d.evocation?.position || null,
           brand_citation_position:  d.citation?.position  || null,
           input_tokens: r.input_tokens, output_tokens: r.output_tokens,
+          web_searches: r.web_searches ?? null,
           created_at: r.created_at, // préserve la date d'origine
         });
         // Met aussi à jour le « petit carré » (calendrier de présence) à la DATE d'origine
@@ -5202,12 +5211,13 @@ function BrandConfigAccordion({ sites, projectId }) {
 
 
 // ── FanoutSetupPanel — vue props-only, zéro état local projet ──────
-function SetupSection({ icon, title, children }) {
+function SetupSection({ icon, title, desc, children }) {
   return (
-    <div style={{ marginBottom: 18 }}>
-      <div style={{ fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
-        <span>{icon}</span>{title}
+    <div style={{ marginBottom: 24 }}>
+      <div style={{ fontSize: 12.5, fontWeight: 700, color: "#1A3C2E", marginBottom: desc ? 3 : 9, display: "flex", alignItems: "center", gap: 7 }}>
+        <span style={{ fontSize: 14 }}>{icon}</span>{title}
       </div>
+      {desc && <div style={{ fontSize: 11.5, color: "#64748B", lineHeight: 1.55, marginBottom: 11, maxWidth: 620 }}>{desc}</div>}
       {children}
     </div>
   );
@@ -5240,7 +5250,7 @@ function FanoutSetupPanel({
     <div style={{ maxWidth: 680 }}>
 
       {/* ── Projet actif ── */}
-      <SetupSection icon="📁" title="Projet actif">
+      <SetupSection icon="📁" title="Projet actif" desc="Sélectionnez le projet et les sites suivis. Vous pouvez en créer un nouveau, en supprimer, et rattacher jusqu'à 3 sites à comparer.">
         <div style={{ background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 10, padding: "12px 16px" }}>
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <div style={{ position: "relative", flex: 1, minWidth: 180 }}>
@@ -5320,43 +5330,19 @@ function FanoutSetupPanel({
         </div>
       </SetupSection>
 
-      {/* ── Import Semrush ── */}
-      <SetupSection icon="📈" title="Import Semrush — volumes de recherche">
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          {safeSites.map(site => (
-            <div key={site.id} style={{ flex: "1 1 200px", background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 10, padding: "10px 14px" }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: site.color, marginBottom: 8 }}>{site.label}</div>
-              <UploadCard label="Semrush" icon="📈" hint="Organic pages export" color={site.color}
-                loaded={(smData||{})[site.id]?.length > 0} rows={(smData||{})[site.id]}
-                onData={(_, rawText) => { const rows = parseSemrush(parseSemrushCSV(rawText)); setSmData(p => ({...p, [site.id]: rows})); }}
-                onClear={() => setSmData(p => ({...p, [site.id]: []}))}
-                rawMode siteId={site.id} source="sm" projectId={projectId}
-                onAfterUpload={refreshHistory}
-                onLoadFromHistory={async row => { try { const t = await sbDownload(row.storage_path); const rows = parseSemrush(parseSemrushCSV(t)); setSmData(p => ({...p, [site.id]: rows})); } catch(e) {} }}
-              />
-              {(smData||{})[site.id]?.length > 0 && <div style={{ marginTop: 4, fontSize: 10, color: site.color, fontWeight: 600 }}>✓ {(smData||{})[site.id].length} pages</div>}
-              {lastImports[`${site.id}_sm`]?.storage_path && !(smData||{})[site.id]?.length && (
-                <button onClick={async () => { try { const t = await sbDownload(lastImports[`${site.id}_sm`].storage_path); const rows = parseSemrush(parseSemrushCSV(t)); setSmData(p => ({...p, [site.id]: rows})); } catch(e) {} }}
-                  style={{ marginTop: 4, width: "100%", padding: "3px 0", border: `1px solid ${site.color}`, borderRadius: 6, background: site.bg, color: site.color, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>↩ Dernier</button>
-              )}
-            </div>
-          ))}
-        </div>
-      </SetupSection>
-
-      {/* ── Clés API providers ── */}
-      <SetupSection icon="🔑" title="Clés API — providers IA">
+      {/* ── Gestion des providers et Clés API ── */}
+      <SetupSection icon="🔑" title="Gestion des providers et Clés API" desc="Branchez les clés API des moteurs IA et choisissez ceux à interroger. Claude et OpenAI sont indispensables : Claude génère les questions, les analyses « Et maintenant ? » et l'audit, OpenAI interroge ChatGPT.">
         <div style={{ background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 10, padding: "12px 16px" }}>
           <ProviderConfigPanel project={project} projectId={projectId} sites={safeSites} onSaveProviderKeys={onSaveProviderKeys} />
         </div>
       </SetupSection>
 
-      {/* ── Axes de génération ── */}
-      <SetupSection icon="🎯" title="Axes de génération des questions">
+      {/* ── Configuration du suivi de marque ── */}
+      <SetupSection icon="🏷️" title="Configuration du suivi de marque" desc="Déclarez le nom de votre marque, ses variantes, son domaine et vos concurrents. Ces éléments servent à détecter votre présence et celle des concurrents dans les réponses des LLMs.">
+        <BrandConfigAccordion sites={safeSites} projectId={projectId} />
+      </SetupSection>      {/* ── Mots-clés — Axes de génération ── */}
+      <SetupSection icon="🎯" title="Mots-clés — Axes de génération des questions" desc="Définissez les angles sous lesquels chaque mot-clé sera décliné en question, adaptés à votre secteur. Chaque mot-clé génèrera une question par axe ; pensez à sauvegarder.">
         <div style={{ background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 10, padding: "12px 16px" }}>
-          <div style={{ fontSize: 11, color: "#64748B", marginBottom: 10 }}>
-            Chaque mot-clé génère une question par axe. Adaptez les angles à votre secteur.
-          </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             {safeAxes.map((a, i) => (
               <div key={i} style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -5381,10 +5367,31 @@ function FanoutSetupPanel({
         </div>
       </SetupSection>
 
-      {/* ── Configuration marques ── */}
-      <SetupSection icon="🏷️" title="Configuration des marques">
-        <BrandConfigAccordion sites={safeSites} projectId={projectId} />
+      {/* ── Ajout des volumes — Import Semrush ── */}
+      <SetupSection icon="📈" title="Ajout des volumes — Import Semrush" desc="Importez l'export Semrush « Organic pages » de chaque site pour associer un volume de recherche à vos mots-clés. Ces volumes priorisent les questions et enrichissent les analyses.">
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          {safeSites.map(site => (
+            <div key={site.id} style={{ flex: "1 1 200px", background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 10, padding: "10px 14px" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: site.color, marginBottom: 8 }}>{site.label}</div>
+              <UploadCard label="Semrush" icon="📈" hint="Organic pages export" color={site.color}
+                loaded={(smData||{})[site.id]?.length > 0} rows={(smData||{})[site.id]}
+                onData={(_, rawText) => { const rows = parseSemrush(parseSemrushCSV(rawText)); setSmData(p => ({...p, [site.id]: rows})); }}
+                onClear={() => setSmData(p => ({...p, [site.id]: []}))}
+                rawMode siteId={site.id} source="sm" projectId={projectId}
+                onAfterUpload={refreshHistory}
+                onLoadFromHistory={async row => { try { const t = await sbDownload(row.storage_path); const rows = parseSemrush(parseSemrushCSV(t)); setSmData(p => ({...p, [site.id]: rows})); } catch(e) {} }}
+              />
+              {(smData||{})[site.id]?.length > 0 && <div style={{ marginTop: 4, fontSize: 10, color: site.color, fontWeight: 600 }}>✓ {(smData||{})[site.id].length} pages</div>}
+              {lastImports[`${site.id}_sm`]?.storage_path && !(smData||{})[site.id]?.length && (
+                <button onClick={async () => { try { const t = await sbDownload(lastImports[`${site.id}_sm`].storage_path); const rows = parseSemrush(parseSemrushCSV(t)); setSmData(p => ({...p, [site.id]: rows})); } catch(e) {} }}
+                  style={{ marginTop: 4, width: "100%", padding: "3px 0", border: `1px solid ${site.color}`, borderRadius: 6, background: site.bg, color: site.color, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>↩ Dernier</button>
+              )}
+            </div>
+          ))}
+        </div>
       </SetupSection>
+
+
 
     </div>
   );

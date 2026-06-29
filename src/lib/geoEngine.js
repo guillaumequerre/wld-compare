@@ -173,13 +173,16 @@ export function parseTextResponse(text, inTok, outTok, extraSources = []) {
   };
 }
 
-let openaiResponsesDisabled = false;
+// Désactivé DURABLEMENT seulement si l'API Responses / web_search est réellement
+// indisponible pour ce compte (tier sans web_search). Un échec transitoire
+// (429 / 5xx / réseau) ne désactive PAS : on retombe juste pour CET appel et on
+// réessaie la recherche web à l'appel suivant — plus de perte silencieuse de session.
+let openaiResponsesUnsupported = false;
 
 export async function callProvider(provider, apiKey, prompt, maxTokens = 2000, base = "", webSearch = true) {
   if (provider.id === "openai") {
     // Tentative 1 : Responses API avec web_search (Tier 1+).
-    // Sautée si désactivée par l'utilisateur, ou si elle a déjà échoué dans cette session.
-    if (webSearch && !openaiResponsesDisabled) {
+    if (webSearch && !openaiResponsesUnsupported) {
       try {
         const resA = await fetch(`${base}/api/openai`, {
           method: "POST",
@@ -193,11 +196,17 @@ export async function callProvider(provider, apiKey, prompt, maxTokens = 2000, b
         });
         const rawA = await resA.text();
         if (resA.ok && !rawA.trimStart().startsWith("<")) {
-          try { return parseOpenAIResponse(JSON.parse(rawA), "responses"); } catch {}
+          try { return parseOpenAIResponse(JSON.parse(rawA), "responses"); } catch { /* JSON illisible → repli ponctuel, sans désactiver */ }
+        } else {
+          // Distinguer "non supporté" (désactiver durablement) d'un échec transitoire.
+          let errMsg = "";
+          try { const eb = JSON.parse(rawA); errMsg = (eb?.error?.message || eb?.error || "").toString().toLowerCase(); } catch {}
+          const unsupported = (resA.status === 400 || resA.status === 403 || resA.status === 404)
+            && /web_search|tool|responses|not supported|unsupported|unknown|model/.test(errMsg);
+          if (unsupported) openaiResponsesUnsupported = true;
+          // sinon (429 / 5xx / message générique) : transitoire → repli pour cet appel, réessai au suivant.
         }
-        // Échec (souvent web_search non dispo selon le tier) → on désactive pour la session.
-        openaiResponsesDisabled = true;
-      } catch { openaiResponsesDisabled = true; }
+      } catch { /* erreur réseau : transitoire → repli pour cet appel, pas de désactivation durable */ }
     }
 
     // Tentative 2 : Chat Completions (toujours disponible).

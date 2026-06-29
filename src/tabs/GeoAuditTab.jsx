@@ -11,13 +11,14 @@ import {
   computeSeoGeoGap, computeReverseCannibalization, computeBingGap,
   computeBusinessValue, computeAITraffic,
   buildCSV, downloadCSV, CSV_COLUMNS,
-} from "../lib/audit-tools";
+} from "../lib/auditTools";
 import UploadCard from "../components/UploadCard";
 import PageTypeClassifier from "../components/PageTypeClassifier";
 import { newProject } from "../lib/helpers";
 import { C, SITE_PALETTE } from "../lib/constants";
 import { buildGeoPagesCsv, downloadCsv } from "../lib/exportOptimisations";
 import { generateRoadmap, RoadmapView } from "../lib/roadmapShared";
+import { exportAuditPptx, exportAuditPdf } from "../lib/auditExport";
 
 // Catégories concurrents — miroir de GeoTab
 
@@ -1188,7 +1189,39 @@ function computeAudit(questions, results, urlIndex, brand, site, calendarEntries
     } catch { return false; }
   }).slice(0, 10);
 
-  return { total, withBrand, withSources, withRanked, withSourceOnly, withMentionOnly, avgPos, avgMentionPos, avgEvocationPos, avgCitationPos, mentionCount, evocationCount, citationCount, presenceRate, trendDays, sortedUrls, brandUrls, brandOwnUrls, brandExternalUrls, urlDetails, competitorUrls, referenceUrls, topDomains, intentCount, typeCount, intentStatsList, pageTypeStatsList, mentionTrend, compStats, top5Competitors, competitorsRanked, byQuestionCategory, urlsToOptimize, urlsToRework, urlsToInspire, leads, questions: questions.length, providerStats, missingBrandQs, presentBrandQs, hasFavFilter, favCount, _rawResults: results };
+  // ── Part de voix & co-occurrence concurrentielle (marque + top 5) ──
+  const _coLabels = [brandName || "Marque", ...top5Competitors.map(([n]) => n)];
+  const _coIdx = {}; _coLabels.forEach((n, i) => { if (_coIdx[canonName(n)] == null) _coIdx[canonName(n)] = i; });
+  const _N = _coLabels.length;
+  const coCounts = Array.from({ length: _N }, () => new Array(_N).fill(0));
+  const sovCounts = new Array(_N).fill(0);
+  results.forEach(r => {
+    const present = new Set();
+    if (r.brand_mentioned === true || r.brand_mentioned === 1) present.add(0);
+    (r.competitors_mentioned || []).forEach(c => {
+      if (!c.name) return;
+      const sig = (c.mention_position != null && c.mention_position > 0) || c.mentioned || c.in_sources || c.evocation_position != null || c.citation_position != null || (c.position != null && c.position > 0);
+      if (!sig) return;
+      const idx = _coIdx[canonName(c.name)];
+      if (idx != null) present.add(idx);
+    });
+    const arr = [...present];
+    arr.forEach(i => { sovCounts[i]++; });
+    for (let x = 0; x < arr.length; x++) for (let y = 0; y < arr.length; y++) coCounts[arr[x]][arr[y]]++;
+  });
+  const sovTotal = sovCounts.reduce((a, b) => a + b, 0) || 1;
+  const shareOfVoice = _coLabels.map((name, i) => ({ name, count: sovCounts[i], pct: Math.round((sovCounts[i] / sovTotal) * 100) }));
+  const coMatrix = { labels: _coLabels, counts: coCounts, totals: sovCounts };
+
+  // ── Funnel de visibilité (du plus large au plus précis) ──
+  const visibilityFunnel = [
+    { label: "Réponses analysées", value: total, sub: "périmètre testé" },
+    { label: "Marque présente", value: withBrand, sub: "mentionnée ou évoquée" },
+    { label: "Marque nommée", value: mentionCount, sub: "citée par son nom" },
+    { label: "Citée comme source", value: citationCount, sub: "URL en source" },
+  ];
+
+  return { total, withBrand, withSources, withRanked, withSourceOnly, withMentionOnly, avgPos, avgMentionPos, avgEvocationPos, avgCitationPos, mentionCount, evocationCount, citationCount, presenceRate, trendDays, sortedUrls, brandUrls, brandOwnUrls, brandExternalUrls, urlDetails, competitorUrls, referenceUrls, topDomains, intentCount, typeCount, intentStatsList, pageTypeStatsList, mentionTrend, compStats, top5Competitors, competitorsRanked, byQuestionCategory, urlsToOptimize, urlsToRework, urlsToInspire, leads, questions: questions.length, providerStats, missingBrandQs, presentBrandQs, hasFavFilter, favCount, shareOfVoice, coMatrix, visibilityFunnel, _rawResults: results };
 }
 
 
@@ -2054,704 +2087,6 @@ RÈGLES : Commence DIRECTEMENT par ## ÉTAT DES LIEUX. Recommandations concrète
   );
 }
 
-function exportPDF(audit, brand, site, aiText) {
-  const brandName = brand?.brand_name || "Marque";
-  const dateStr = new Date().toLocaleDateString("fr-FR", { day: "2-digit", month: "long", year: "numeric" });
-  const dateFile = new Date().toLocaleDateString("fr-FR").replace(/\//g, "-");
-
-  // ── Palette Sonate ────────────────────────────────────────────
-  const S = {
-    green:      "#1A3C2E",
-    greenMid:   "#2D5A42",
-    greenLight: "#4A8C6A",
-    greenPale:  "#EAF2ED",
-    cream:      "#F5F0E8",
-    creamDark:  "#E8E0CE",
-    ink:        "#1C1C1C",
-    inkMid:     "#4A4A4A",
-    inkLight:   "#909090",
-    white:      "#FFFFFF",
-    ok:         "#2D6A4F",   okBg:   "#D8F3DC",
-    warn:       "#92400E",   warnBg: "#FEF3C7",
-    danger:     "#9B2335",   dangerBg:"#FCE4E8",
-    blue:       "#1A4A7A",   blueBg: "#DBEAFE",
-  };
-
-  const scoreColor = audit.presenceRate >= 70 ? S.ok     : audit.presenceRate >= 50 ? S.blue   : audit.presenceRate >= 30 ? S.warn   : S.danger;
-  const scoreBg    = audit.presenceRate >= 70 ? S.okBg   : audit.presenceRate >= 50 ? S.blueBg  : audit.presenceRate >= 30 ? S.warnBg  : S.dangerBg;
-  const scoreLabel = audit.presenceRate >= 70 ? "Excellente présence" : audit.presenceRate >= 50 ? "Bonne présence" : audit.presenceRate >= 30 ? "Potentiel à développer" : "Potentiel à exploiter";
-
-  // ── Helpers HTML ──────────────────────────────────────────────
-  const section = (num, title) =>
-    `<div class="section-hd"><div class="section-num">${num}</div><div class="section-title">${title}</div></div>`;
-
-  const kpi = (val, label, color = S.green, bg = S.white, border = S.creamDark) =>
-    `<div class="kpi" style="background:${bg};border-color:${border}"><div class="kpi-val" style="color:${color}">${val}</div><div class="kpi-label">${label}</div></div>`;
-
-  const bar = (p, color) =>
-    `<div class="bar-track"><div class="bar-fill" style="width:${Math.min(p,100)}%;background:${color}"></div></div>`;
-
-  const pill = (text, color, bg) =>
-    `<span class="pill" style="color:${color};background:${bg}">${text}</span>`;
-
-  const lead = (title, body, color = S.green, bg = S.greenPale) =>
-    `<div class="lead" style="border-color:${color};background:${bg}"><div class="lead-title" style="color:${color}">${title}</div><div class="lead-body">${body}</div></div>`;
-
-  const tbl = (headers, rows) =>
-    `<table><thead><tr>${headers.map(h => `<th>${h}</th>`).join("")}</tr></thead><tbody>${
-      rows.map((r, i) => `<tr${i % 2 ? ' class="alt"' : ""}>${r.map(c => `<td>${c}</td>`).join("")}</tr>`).join("")
-    }</tbody></table>`;
-
-  const urlRow = (url, meta, badge, bColor, bBg) =>
-    `<div class="url-row"><a href="${url}" target="_blank" class="url-link">${url.replace(/^https?:\/\//, "")}</a><span class="url-meta">${meta}</span>${pill(badge, bColor, bBg)}</div>`;
-
-  // ── CSS ───────────────────────────────────────────────────────
-  const css = `
-    @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=DM+Sans:wght@300;400;500;600;700&display=swap');
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    html { background: ${S.cream}; }
-    body { font-family: 'DM Sans', system-ui, sans-serif; font-weight: 400; max-width: 960px; margin: 0 auto; color: ${S.ink}; line-height: 1.6; background: ${S.cream}; padding: 0 0 60px; }
-
-    /* ── Cover ── */
-    .cover { background: ${S.green}; padding: 48px 56px 40px; position: relative; overflow: hidden; }
-    .cover::after { content: ""; position: absolute; top: -60px; right: -60px; width: 280px; height: 280px; border-radius: 50%; background: rgba(255,255,255,.04); pointer-events: none; }
-    .cover-logo { display: flex; align-items: center; gap: 14px; margin-bottom: 40px; }
-    .cover-logo-mark { width: 40px; height: 40px; background: ${S.greenLight}; border-radius: 8px; display: flex; align-items: center; justify-content: center; }
-    .cover-logo-mark svg { width: 22px; height: 22px; fill: ${S.white}; }
-    .cover-logo-name { font-family: 'DM Sans', sans-serif; font-size: 13px; font-weight: 600; color: rgba(255,255,255,.7); letter-spacing: 2px; text-transform: uppercase; }
-    .cover-eyebrow { font-size: 10px; font-weight: 600; color: ${S.greenLight}; letter-spacing: 2.5px; text-transform: uppercase; margin-bottom: 10px; }
-    .cover-title { font-family: 'Playfair Display', Georgia, serif; font-size: 38px; font-weight: 900; color: ${S.white}; line-height: 1.15; margin-bottom: 6px; }
-    .cover-sub { font-size: 15px; color: rgba(255,255,255,.55); font-weight: 300; margin-bottom: 32px; }
-    .cover-meta { display: flex; gap: 28px; flex-wrap: wrap; }
-    .cover-meta-item { font-size: 11px; }
-    .cover-meta-label { color: rgba(255,255,255,.4); text-transform: uppercase; letter-spacing: 1px; font-size: 9px; display: block; margin-bottom: 2px; }
-    .cover-meta-val { color: ${S.white}; font-weight: 600; }
-
-    /* ── Score banner ── */
-    .score-banner { margin: 32px 40px 0; background: ${S.white}; border-radius: 16px; padding: 28px 32px; display: flex; gap: 36px; align-items: center; flex-wrap: wrap; box-shadow: 0 4px 24px rgba(26,60,46,.1); }
-    .score-circle { text-align: center; min-width: 90px; }
-    .score-pct { font-family: 'Playfair Display', Georgia, serif; font-size: 56px; font-weight: 900; color: ${S.green}; line-height: 1; }
-    .score-label { font-size: 10px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; margin-top: 4px; }
-    .score-sub { font-size: 9px; color: ${S.inkLight}; }
-    .score-bar-wrap { flex: 1; min-width: 220px; }
-    .score-track { height: 8px; background: ${S.creamDark}; border-radius: 4px; overflow: hidden; margin-bottom: 14px; }
-    .score-fill { height: 100%; border-radius: 4px; }
-    .score-facts { display: flex; gap: 20px; flex-wrap: wrap; font-size: 12px; }
-    .score-fact span { color: ${S.inkLight}; font-size: 10px; display: block; margin-bottom: 1px; }
-    .score-kpis { display: flex; flex-direction: column; gap: 4px; min-width: 130px; font-size: 11px; }
-    .score-kpi-row { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; border-bottom: 1px solid ${S.creamDark}; }
-    .score-kpi-row:last-child { border-bottom: none; }
-
-    /* ── Content wrapper ── */
-    .content { padding: 0 40px; margin-top: 32px; }
-
-    /* ── Section header ── */
-    .section-hd { display: flex; align-items: center; gap: 14px; margin: 36px 0 16px; }
-    .section-num { width: 28px; height: 28px; background: ${S.green}; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: ${S.white}; flex-shrink: 0; }
-    .section-title { font-family: 'Playfair Display', Georgia, serif; font-size: 18px; font-weight: 700; color: ${S.green}; border-bottom: 2px solid ${S.creamDark}; padding-bottom: 8px; flex: 1; }
-
-    /* ── KPI grid ── */
-    .kpi-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; margin: 16px 0; }
-    .kpi { border: 1px solid ${S.creamDark}; border-radius: 12px; padding: 14px 12px; text-align: center; }
-    .kpi-val { font-family: 'Playfair Display', Georgia, serif; font-size: 24px; font-weight: 900; }
-    .kpi-label { font-size: 9px; color: ${S.inkLight}; text-transform: uppercase; letter-spacing: .6px; margin-top: 3px; }
-
-    /* ── Tables ── */
-    table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 10px 0; }
-    th { background: ${S.green}; color: ${S.white}; padding: 9px 14px; text-align: left; font-size: 10px; font-weight: 600; letter-spacing: .8px; text-transform: uppercase; }
-    th:first-child { border-radius: 8px 0 0 0; }
-    th:last-child  { border-radius: 0 8px 0 0; }
-    td { padding: 9px 14px; border-bottom: 1px solid ${S.creamDark}; color: ${S.inkMid}; vertical-align: middle; }
-    tr.alt td { background: ${S.cream}; }
-    tr:last-child td { border-bottom: none; }
-
-    /* ── Bars ── */
-    .bar-track { height: 5px; background: ${S.creamDark}; border-radius: 3px; margin-top: 5px; overflow: hidden; }
-    .bar-fill   { height: 100%; border-radius: 3px; }
-
-    /* ── Pills ── */
-    .pill { font-size: 9px; font-weight: 700; border-radius: 20px; padding: 2px 8px; letter-spacing: .4px; text-transform: uppercase; white-space: nowrap; }
-
-    /* ── Leads ── */
-    .lead { border-left: 3px solid ${S.green}; border-radius: 0 10px 10px 0; padding: 10px 16px; margin: 6px 0; }
-    .lead-title { font-size: 12px; font-weight: 700; margin-bottom: 2px; }
-    .lead-body  { font-size: 12px; color: ${S.inkMid}; line-height: 1.5; }
-
-    /* ── 2-col / 3-col ── */
-    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 16px; }
-    .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-top: 16px; }
-    .col-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .7px; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid ${S.creamDark}; }
-
-    /* ── URL rows ── */
-    .url-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid ${S.creamDark}; flex-wrap: wrap; }
-    .url-link { font-size: 11px; color: ${S.greenMid}; text-decoration: none; flex: 1; min-width: 160px; word-break: break-all; }
-    .url-link:hover { text-decoration: underline; }
-    .url-meta { font-size: 10px; color: ${S.inkLight}; white-space: nowrap; }
-
-    /* ── Q lists ── */
-    .q-list { list-style: none; padding: 0; margin: 0; font-size: 12px; }
-    .q-list li { padding: 5px 0; border-bottom: 1px solid ${S.creamDark}; display: flex; gap: 8px; }
-    .q-list li:last-child { border-bottom: none; }
-
-    /* ── AI block ── */
-    .ai-block { background: ${S.white}; border: 1px solid ${S.creamDark}; border-left: 4px solid ${S.green}; border-radius: 0 12px 12px 0; padding: 20px 24px; font-size: 12px; line-height: 1.85; color: ${S.inkMid}; white-space: pre-wrap; margin-top: 12px; }
-
-    /* ── Footer ── */
-    .footer { margin: 48px 40px 0; padding-top: 20px; border-top: 1px solid ${S.creamDark}; display: flex; justify-content: space-between; align-items: center; font-size: 10px; color: ${S.inkLight}; }
-    .footer-brand { font-family: 'Playfair Display', serif; font-size: 13px; font-weight: 700; color: ${S.green}; }
-
-    @media print {
-      html, body { background: ${S.white}; }
-      .cover { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-      .score-banner { box-shadow: none; }
-      .section-hd { break-before: auto; }
-    }
-  `;
-
-  // ── COVER ─────────────────────────────────────────────────────
-  const cover = `
-<div class="cover">
-  <div class="cover-logo">
-    <div class="cover-logo-mark">
-      <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/></svg>
-    </div>
-    <div class="cover-logo-name">Sonate · GEO Monitor</div>
-  </div>
-  <div class="cover-eyebrow">Rapport d'audit</div>
-  <div class="cover-title">Audit GEO<br>${brandName}</div>
-  <div class="cover-sub">Analyse de visibilité générative — IA & LLMs</div>
-  <div class="cover-meta">
-    <div class="cover-meta-item"><span class="cover-meta-label">Site analysé</span><span class="cover-meta-val">${site?.label || "—"}</span></div>
-    <div class="cover-meta-item"><span class="cover-meta-label">Date de génération</span><span class="cover-meta-val">${dateStr}</span></div>
-    <div class="cover-meta-item"><span class="cover-meta-label">Questions testées</span><span class="cover-meta-val">${audit.questions}</span></div>
-    <div class="cover-meta-item"><span class="cover-meta-label">Résultats analysés</span><span class="cover-meta-val">${audit.total}</span></div>
-  </div>
-</div>
-
-<div class="score-banner">
-  <div class="score-circle">
-    <div class="score-pct" style="color:${scoreColor}">${audit.presenceRate}%</div>
-    <div class="score-label" style="color:${scoreColor}">${scoreLabel}</div>
-    <div class="score-sub">Présence GEO</div>
-  </div>
-  <div class="score-bar-wrap">
-    <div class="score-track"><div class="score-fill" style="width:${audit.presenceRate}%;background:${scoreColor}"></div></div>
-    <div class="score-facts">
-      <div class="score-fact"><span>Marque</span><strong>${brandName}</strong></div>
-      <div class="score-fact"><span>Questions</span><strong>${audit.questions}</strong></div>
-      <div class="score-fact"><span>Résultats</span><strong>${audit.total}</strong></div>
-      <div class="score-fact"><span>Concurrents</span><strong>${Object.keys(audit.compStats).length}</strong></div>
-    </div>
-  </div>
-  <div class="score-kpis">
-    ${[
-      ["Présence marque", audit.withBrand + "/" + audit.total, scoreColor],
-      ["Position moy.",   audit.avgPos ? "#" + audit.avgPos : "—", S.ink],
-      ["Cité en source",  String(audit.withSources), S.blue],
-      ["Concurrents",     String(Object.keys(audit.compStats).length), S.warn],
-    ].map(([l, v, c]) => `<div class="score-kpi-row"><span style="color:${S.inkLight};font-size:10px">${l}</span><strong style="color:${c}">${v}</strong></div>`).join("")}
-  </div>
-</div>`;
-
-  // ── BLOC 1 : KPIs ─────────────────────────────────────────────
-  const bloc1 = `
-${section("01", "Indicateurs clés")}
-<div class="kpi-grid">
-  ${kpi(audit.presenceRate + "%", "Présence marque",  scoreColor, scoreBg)}
-  ${kpi(audit.avgPos ? "#" + audit.avgPos : "—", "Position moy.", S.ink)}
-  ${kpi(audit.withSources, "Cité en source", S.blue, S.blueBg)}
-  ${kpi(audit.withBrand + "/" + audit.total, "Avec mention", S.ink)}
-  ${kpi(audit.questions, "Questions testées", S.green, S.greenPale)}
-  ${kpi(Object.keys(audit.compStats).length, "Concurrents", S.warn, S.warnBg)}
-</div>`;
-
-  // ── BLOC 2 : Visibilité ───────────────────────────────────────
-  const providerRows = Object.entries(audit.providerStats).map(([pid, s]) => {
-    const rate = pct(s.withBrand, s.total);
-    const c = rate >= 50 ? S.ok : rate > 0 ? S.warn : S.danger;
-    return [`<strong>${pid}</strong>`, `<span style="color:${c};font-weight:700">${rate}%</span>`, `${s.withBrand}/${s.total}`, bar(rate, c)];
-  });
-
-  const presentList = audit.presentBrandQs.map(q =>
-    `<li><span style="color:${S.ok};font-weight:700">✓</span>${q.isFav ? "⭐ " : ""}${q.question}${q.volume > 0 ? ` <span style="color:#2563EB;font-size:10px">(🔍${q.volume >= 1000 ? (q.volume/1000).toFixed(1)+"k" : q.volume})</span>` : ""}</li>`).join("");
-  const missingList = audit.missingBrandQs.map(q =>
-    `<li><span style="color:${S.danger};font-weight:700">✗</span>${q.isFav ? "⭐ " : ""}${q.question}${q.volume > 0 ? ` <span style="color:#2563EB;font-size:10px">(🔍${q.volume >= 1000 ? (q.volume/1000).toFixed(1)+"k" : q.volume})</span>` : ""}</li>`).join("");
-
-  const bloc2 = `
-${section("02", "Visibilité marque")}
-${tbl(["Provider", "Présence", "Ratio", ""], providerRows)}
-<div class="grid-2">
-  <div>
-    <div class="col-label" style="color:${S.ok}">✓ Questions avec présence (${audit.presentBrandQs.length})</div>
-    <ul class="q-list">${presentList || `<li style="color:${S.inkLight};font-style:italic">Aucune présence</li>`}</ul>
-  </div>
-  <div>
-    <div class="col-label" style="color:${S.danger}">✗ Questions sans présence (${audit.missingBrandQs.length})</div>
-    <ul class="q-list">${missingList || `<li style="color:${S.inkLight};font-style:italic">Toutes les questions ont une présence !</li>`}</ul>
-  </div>
-</div>`;
-
-  // ── BLOC 3 : Concurrentiel ────────────────────────────────────
-  const compRows = Object.entries(audit.compStats).sort((a, b) => b[1].mentions - a[1].mentions).map(([name, s]) => [
-    `<strong>${name}</strong>`,
-    s.mentions,
-    `<span style="color:${S.warn}">${pct(s.mentions, audit.total)}%</span>`,
-    (s.positions && s.positions.length) ? (s.positions.reduce((a, b) => a + b, 0) / s.positions.length).toFixed(1) : "—",
-  ]);
-  const intentRows = Object.entries(audit.intentCount).sort((a, b) => b[1] - a[1]).map(([k, v]) => [
-    k, v, `<span style="color:${S.green}">${pct(v, audit.total)}%</span>`, bar(pct(v, audit.total), S.green),
-  ]);
-  const typeRows = Object.entries(audit.typeCount).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([k, v]) => [
-    k, v, `<span style="color:${S.blue}">${pct(v, audit.total)}%</span>`, bar(pct(v, audit.total), S.blue),
-  ]);
-
-  const bloc3 = `
-${section("03", "Paysage concurrentiel")}
-${compRows.length ? tbl(["Concurrent", "Mentions", "% résultats", "Pos. moy."], compRows) : `<p style="color:${S.inkLight};font-style:italic;font-size:12px">Aucun concurrent détecté dans les réponses LLM</p>`}
-<div class="grid-2">
-  <div>
-    <div class="col-label">Répartition par intention</div>
-    ${intentRows.length ? tbl(["Intention", "Count", "%", ""], intentRows) : `<p style="color:${S.inkLight};font-style:italic;font-size:11px">—</p>`}
-  </div>
-  <div>
-    <div class="col-label">Types de réponses LLM</div>
-    ${typeRows.length ? tbl(["Type", "Count", "%", ""], typeRows) : `<p style="color:${S.inkLight};font-style:italic;font-size:11px">—</p>`}
-  </div>
-</div>`;
-
-  // ── BLOC 4 : Sources & URLs ───────────────────────────────────
-  const domainRows = Object.entries(audit.topDomains).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([d, cnt], i) => {
-    const isBrand = audit.brandUrls.some(u => u.domain === d);
-    const isComp  = audit.competitorUrls.some(u => u.domain === d);
-    const badge   = isBrand ? pill("marque",     S.ok,     S.okBg)
-                  : isComp  ? pill("concurrent", S.danger, S.dangerBg) : "";
-    return [
-      `<span style="color:${S.inkLight};font-weight:700">#${i+1}</span>`,
-      `<strong style="color:${isBrand ? S.ok : isComp ? S.danger : S.ink}">${d}</strong> ${badge}`,
-      `<strong>${cnt}×</strong>`,
-    ];
-  });
-
-  const urlsOpt     = audit.urlsToOptimize.slice(0, 8).map(u  => urlRow(u.norm || u.url, `${u.count_as_source} src · ${u.count_in_answer} rép`, "À booster",  S.warn,   S.warnBg)).join("");
-  const urlsRework  = audit.urlsToRework.slice(0, 8).map(u    => urlRow(u.norm || u.url, `${u.count_as_source} src · ${u.count_in_answer} rép`, "À refaire",  S.danger, S.dangerBg)).join("");
-  const urlsInspire = audit.urlsToInspire.slice(0, 8).map(u   => urlRow(u.norm || u.url, `${getDomain(u.url)} · ${u.count_as_source} cit.`,     "Inspiration", S.blue,   S.blueBg)).join("");
-
-  const bloc4 = `
-${section("04", "Sources & URLs")}
-${domainRows.length ? tbl(["#", "Domaine", "Citations"], domainRows) : `<p style="color:${S.inkLight};font-style:italic;font-size:12px">Aucun domaine indexé</p>`}
-<div class="grid-3">
-  <div>
-    <div class="col-label" style="color:${S.warn}">⚡ À optimiser</div>
-    ${urlsOpt || `<p style="color:${S.inkLight};font-style:italic;font-size:11px">Aucune</p>`}
-  </div>
-  <div>
-    <div class="col-label" style="color:${S.danger}">🔄 À reprendre</div>
-    ${urlsRework || `<p style="color:${S.inkLight};font-style:italic;font-size:11px">Aucune</p>`}
-  </div>
-  <div>
-    <div class="col-label" style="color:${S.blue}">💡 Référence</div>
-    ${urlsInspire || `<p style="color:${S.inkLight};font-style:italic;font-size:11px">Aucune</p>`}
-  </div>
-</div>`;
-
-  // ── BLOC 5 : Plan d'action ────────────────────────────────────
-  const leadsHtml = audit.leads.map(l => lead(
-    l.priority + " — " + l.label, l.action,
-    l.priority.includes("🔴") ? S.danger : l.priority.includes("🟠") ? S.warn : l.priority.includes("🟡") ? "#856404" : S.green,
-    l.priority.includes("🔴") ? S.dangerBg : l.priority.includes("🟠") ? S.warnBg : l.priority.includes("🟡") ? "#FFF9E6" : S.greenPale,
-  )).join("");
-
-  const bloc5 = `
-${section("05", "Plan d'action")}
-${leadsHtml || `<p style="color:${S.inkLight};font-style:italic;font-size:12px">Aucune piste générée</p>`}
-${aiText ? `${section("06", "Analyse IA détaillée")}<div class="ai-block">${aiText}</div>` : ""}`;
-
-  // ── Footer ────────────────────────────────────────────────────
-  const footer = `
-<div class="footer">
-  <div><div class="footer-brand">Sonate</div><div>Rapport généré le ${dateStr}</div></div>
-  <div style="text-align:right">${brandName} · ${site?.label || "—"}</div>
-</div>`;
-
-  // ── Assemblage final ──────────────────────────────────────────
-  const html = `<!DOCTYPE html>
-<html lang="fr">
-<head>
-<meta charset="UTF-8">
-<title>Audit GEO — ${brandName} — ${dateStr}</title>
-<style>${css}</style>
-</head>
-<body>
-${cover}
-<div class="content">
-${bloc1}
-${bloc2}
-${bloc3}
-${bloc4}
-${bloc5}
-</div>
-${footer}
-</body>
-</html>`;
-
-  const blob = new Blob([html], { type: "text/html;charset=utf-8" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = `audit-geo-${brandName.toLowerCase().replace(/\s+/g, "-")}-${dateFile}.html`;
-  a.click();
-  URL.revokeObjectURL(a.href);
-}
-
-
-
-// ── Analyse concurrentielle IA (forces/faiblesses) — pour l'export ──
-// Appelle Claude pour qualifier chaque concurrent détecté. Best-effort.
-async function generateCompetitorAnalysis(audit, brand, claudeKey) {
-  if (!claudeKey || !audit.top5Competitors?.length) return null;
-  const brandName = brand?.brand_name || "la marque";
-  const compLines = audit.top5Competitors.map(([name, s]) => {
-    const avgP = s.positions?.length ? (s.positions.reduce((a,b)=>a+b,0)/s.positions.length).toFixed(1) : "—";
-    return `- ${name} : ${s.mentions} mentions, position moy. #${avgP}`;
-  }).join("\n");
-
-  const prompt = `Tu es un expert GEO. Voici les concurrents de "${brandName}" détectés dans les réponses des IA génératives :
-
-${compLines}
-
-Pour CHAQUE concurrent, produis une analyse courte de ses forces et de son angle (pourquoi les LLM le citent). Réponds UNIQUEMENT en JSON valide, sans markdown :
-{
-  "competitors": [
-    { "name": "nom exact", "strengths": "2-3 forces concrètes (formats de contenu, positionnement)", "angle": "angle de différenciation pour rivaliser" }
-  ]
-}
-Ordre identique à la liste. Réponds en français, concis.`;
-
-  try {
-    const res = await fetch("/api/claude-geo", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Claude-Key": claudeKey },
-      body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 1400, messages: [{ role: "user", content: prompt }] }),
-    });
-    const raw = await res.text();
-    if (raw.trimStart().startsWith("<")) return null;
-    const data = JSON.parse(raw);
-    if (!res.ok) return null;
-    const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("\n").trim();
-    const cleaned = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();
-    let parsed;
-    try { parsed = JSON.parse(cleaned); }
-    catch { const s = cleaned.indexOf("{"), e = cleaned.lastIndexOf("}"); parsed = JSON.parse(cleaned.slice(s, e + 1)); }
-    return parsed?.competitors || null;
-  } catch { return null; }
-}
-
-// ── Export PRÉSENTATION — restitution client structurée ──────────
-// Synthèse des structures Silvera (deck pro) × audit ICE.
-// Sections : Cover · Sommaire · État des lieux · Forces/Opportunités par catégorie ·
-//            Sources & URLs · Concurrents (data + IA) · Roadmap ICE · Synthèse
-async function exportPresentation(audit, brand, site, questions, results, roadmapData, claudeKey, categories = []) {
-  const brandName = brand?.brand_name || "Marque";
-  const dateStr   = new Date().toLocaleDateString("fr-FR", { day: "2-digit", month: "long", year: "numeric" });
-  const dateFile  = new Date().toLocaleDateString("fr-FR").replace(/\//g, "-");
-
-  const S = {
-    green: "#1A3C2E", greenMid: "#2D5A42", greenLight: "#4A8C6A", greenPale: "#EAF2ED",
-    cream: "#F5F0E8", creamDark: "#E8E0CE", ink: "#1C1C1C", inkMid: "#4A4A4A", inkLight: "#909090",
-    white: "#FFFFFF", ok: "#2D6A4F", okBg: "#D8F3DC", warn: "#92400E", warnBg: "#FEF3C7",
-    danger: "#9B2335", dangerBg: "#FCE4E8", accent: "#E8541A", accentBg: "#FCEBE3",
-  };
-
-  const scoreColor = audit.presenceRate >= 70 ? S.ok : audit.presenceRate >= 50 ? S.green : audit.presenceRate >= 30 ? S.warn : S.danger;
-  const scoreLabel = audit.presenceRate >= 70 ? "Excellente présence" : audit.presenceRate >= 50 ? "Bonne présence" : audit.presenceRate >= 30 ? "Potentiel à développer" : "Potentiel à exploiter";
-
-  // Map catégories id -> nom
-  const catName = {};
-  (categories || []).forEach(c => { catName[c.id] = c.name; });
-
-  // ── Analyse concurrentielle IA (async, best-effort) ──
-  const compAI = await generateCompetitorAnalysis(audit, brand, claudeKey);
-  const compAIMap = {};
-  (compAI || []).forEach(c => { compAIMap[(c.name || "").toLowerCase()] = c; });
-
-  // ── Catégories : forces (marque domine) vs opportunités (faible présence) ──
-  const catRows = Object.entries(audit.byQuestionCategory || {})
-    .filter(([cid]) => cid !== "__none__")
-    .map(([cid, s]) => {
-      const rate = s.total ? Math.round((s.withBrand / s.total) * 100) : 0;
-      return { name: catName[cid] || "Sans catégorie", rate, qCount: s.qCount, withBrand: s.withBrand, total: s.total };
-    })
-    .sort((a, b) => b.rate - a.rate);
-  const catForces = catRows.filter(c => c.rate >= 50);
-  const catOpportunities = catRows.filter(c => c.rate < 50);
-
-  // ── Forces & faiblesses ──
-  const forces = [];
-  const faiblesses = [];
-  if (audit.presenceRate >= 50) forces.push(`Présence GEO solide : ${audit.presenceRate}% des réponses LLM citent la marque.`);
-  if (audit.avgMentionPos && parseFloat(audit.avgMentionPos) <= 3) forces.push(`Excellent positionnement : #${audit.avgMentionPos} en moyenne dans les tops.`);
-  if (audit.withRanked > 0) forces.push(`${audit.withRanked} réponses placent la marque dans un top numéroté.`);
-  if (catForces.length) forces.push(`Autorité sur ${catForces.length} catégorie${catForces.length > 1 ? "s" : ""} : ${catForces.slice(0,3).map(c=>c.name).join(", ")}.`);
-  if (audit.brandOwnUrls?.length > 0) forces.push(`${audit.brandOwnUrls.length} URLs du domaine propre citées comme sources.`);
-
-  if (audit.presenceRate < 30) faiblesses.push(`Présence GEO faible : seulement ${audit.presenceRate}% des réponses citent la marque.`);
-  if (audit.missingBrandQs?.length > 0) faiblesses.push(`${audit.missingBrandQs.length} questions sans aucune mention de la marque.`);
-  if (catOpportunities.length) faiblesses.push(`${catOpportunities.length} catégorie${catOpportunities.length > 1 ? "s" : ""} à conquérir : ${catOpportunities.slice(0,3).map(c=>c.name).join(", ")}.`);
-  const topComp = audit.top5Competitors?.[0];
-  if (topComp) faiblesses.push(`Concurrent dominant : ${topComp[0]} (${topComp[1]?.mentions || 0}× mentions).`);
-  if (audit.urlsToOptimize?.length > 0) faiblesses.push(`${audit.urlsToOptimize.length} URLs à optimiser (citées sans être en source).`);
-  if (!forces.length) forces.push("Données en cours de constitution — relancez des interrogations.");
-  if (!faiblesses.length) faiblesses.push("Aucune faiblesse majeure sur le périmètre actuel.");
-
-  // ── Roadmap ICE ──
-  let roadmap = [];
-  if (roadmapData?.roadmap?.length) {
-    roadmap = roadmapData.roadmap.map(r => ({ action: r.action, category: r.category || "—", impact: r.impact || 0, confidence: r.confidence || 0, ease: r.ease || 0 }));
-  } else if (audit.leads?.length) {
-    roadmap = audit.leads.map(l => {
-      const high = l.priority?.includes("🔴"), mid = l.priority?.includes("🟠") || l.priority?.includes("🟡");
-      return { action: (l.action || l.label || "").replace(/\*\*/g, ""), category: l.label || "—", impact: high ? 9 : mid ? 6 : 4, confidence: 7, ease: high ? 5 : 6 };
-    });
-  }
-  roadmap.sort((a, b) => (b.impact + b.confidence + b.ease) - (a.impact + a.confidence + a.ease));
-  const iceColor = (s) => s >= 24 ? S.ok : s >= 18 ? S.warn : S.inkLight;
-
-  // ── Analyse « Et maintenant ? » (générée dans Suivi GEO) : constats + opportunités ──
-  const hasNextSteps = !!(roadmapData && (roadmapData.brandAnalysis || roadmapData.categoryAnalysis?.length || roadmapData.summary));
-  const nsConstats = roadmapData?.summary || roadmapData?.brandAnalysis || "";
-  const nsBrand = (roadmapData?.brandAnalysis && roadmapData.brandAnalysis !== nsConstats) ? roadmapData.brandAnalysis : "";
-  const nsCats = Array.isArray(roadmapData?.categoryAnalysis) ? roadmapData.categoryAnalysis : [];
-  const esc2 = (t) => String(t || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-
-  // ── Favoris catégorisés (logique NextStepsAnalysis) ──
-  const resultsByQ = {};
-  results.forEach(r => { (resultsByQ[r.question_id] = resultsByQ[r.question_id] || []).push(r); });
-  const brandPosOf = (qId) => { const rs = resultsByQ[qId] || []; const ps = rs.map(r => r.brand_mention_position || r.brand_position).filter(p => p != null && p > 0); return ps.length ? Math.min(...ps) : null; };
-  const isMentioned = (qId) => (resultsByQ[qId] || []).some(r => r.brand_mentioned === true || r.brand_mentioned === 1);
-  const favs = questions.filter(q => q.is_favorite);
-  const BUCKET_LABELS = { defend: "À défendre", watch: "À surveiller", conquest_priority: "Conquête prioritaire", conquer: "À conquérir" };
-  const bucketOf = (q) => { const pos = brandPosOf(q.id), ment = isMentioned(q.id), kw = q.keyword_id; if (ment && pos != null && pos <= 3) return "defend"; if (ment && pos != null && pos >= 4 && pos <= 10) return "watch"; if (!ment && kw) return "conquest_priority"; return "conquer"; };
-  const favByBucket = { defend: [], watch: [], conquest_priority: [], conquer: [] };
-  favs.forEach(q => { favByBucket[bucketOf(q)].push({ q: q.question, pos: brandPosOf(q.id) }); });
-
-  // ── Sources par type de page (depuis urlDetails / topDomains) ──
-  const topDomainsRows = Object.entries(audit.topDomains || {}).sort((a, b) => b[1] - a[1]).slice(0, 8);
-
-  // ── Concurrents : data réelle + IA ──
-  const compRows = (audit.top5Competitors || []).map(([name, s]) => {
-    const avgP = s.positions?.length ? "#" + (s.positions.reduce((a,b)=>a+b,0)/s.positions.length).toFixed(1) : "—";
-    const ai = compAIMap[name.toLowerCase()];
-    return { name, mentions: s.mentions, avgP, strengths: ai?.strengths || "", angle: ai?.angle || "" };
-  });
-
-  // ── CSS ──
-  const css = `
-    * { margin:0; padding:0; box-sizing:border-box; }
-    body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; color:${S.ink}; background:${S.white}; line-height:1.5; }
-    .cover { background:${S.green}; color:${S.cream}; padding:72px 64px 56px; display:flex; flex-direction:column; gap:36px; }
-    .cover-tag { font-size:11px; letter-spacing:0.2em; text-transform:uppercase; opacity:0.65; }
-    .cover h1 { font-family:Georgia,serif; font-size:48px; font-weight:400; letter-spacing:-0.01em; margin-top:6px; }
-    .cover-sub { font-size:15px; opacity:0.85; margin-top:4px; }
-    .cover-kpis { display:flex; gap:18px; flex-wrap:wrap; }
-    .cover-kpi { flex:1; min-width:120px; border-left:2px solid ${S.greenLight}; padding-left:14px; }
-    .cover-kpi-val { font-size:30px; font-weight:700; letter-spacing:-0.01em; }
-    .cover-kpi-lbl { font-size:11px; opacity:0.7; text-transform:uppercase; letter-spacing:0.05em; margin-top:2px; }
-    .cover-meta { font-size:12px; opacity:0.55; }
-    .toc { padding:40px 64px; background:${S.cream}; }
-    .toc-title { font-size:11px; letter-spacing:0.18em; text-transform:uppercase; color:${S.inkLight}; margin-bottom:18px; }
-    .toc-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px 40px; }
-    .toc-item { display:flex; gap:12px; align-items:baseline; font-size:14px; }
-    .toc-num { font-family:Georgia,serif; color:${S.greenLight}; font-weight:700; min-width:24px; }
-    .content { padding:48px 64px 56px; }
-    .section-hd { display:flex; align-items:center; gap:14px; margin:48px 0 22px; }
-    .section-hd:first-child { margin-top:0; }
-    .section-num { width:34px; height:34px; border-radius:50%; background:${S.green}; color:${S.cream}; font-size:14px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
-    .section-title { font-family:Georgia,serif; font-size:24px; font-weight:400; color:${S.green}; }
-    .scorecard { display:flex; align-items:center; gap:22px; padding:26px; border-radius:14px; background:${S.greenPale}; margin-bottom:22px; }
-    .score-big { font-size:54px; font-weight:800; letter-spacing:-0.02em; line-height:1; }
-    .score-label { font-size:16px; font-weight:600; }
-    .score-sub { font-size:12px; color:${S.inkMid}; margin-top:3px; }
-    .kpi-row { display:flex; gap:14px; flex-wrap:wrap; }
-    .kpi { flex:1; min-width:120px; padding:16px 18px; border:1px solid ${S.creamDark}; border-radius:12px; }
-    .kpi-val { font-size:26px; font-weight:700; letter-spacing:-0.01em; }
-    .kpi-label { font-size:10px; color:${S.inkLight}; text-transform:uppercase; letter-spacing:0.05em; margin-top:4px; }
-    table { width:100%; border-collapse:collapse; margin:12px 0; font-size:13px; }
-    th { text-align:left; padding:9px 12px; background:${S.green}; color:${S.cream}; font-size:11px; text-transform:uppercase; letter-spacing:0.05em; font-weight:600; }
-    th.c, td.c { text-align:center; }
-    td { padding:9px 12px; border-bottom:1px solid ${S.cream}; vertical-align:top; }
-    tr:nth-child(even) td { background:#FBF9F5; }
-    .ice-badge { display:inline-block; min-width:30px; padding:2px 8px; border-radius:10px; font-weight:700; font-size:12px; color:${S.white}; }
-    .cat-pill { display:inline-block; padding:1px 9px; border-radius:10px; font-size:11px; font-weight:600; background:${S.greenPale}; color:${S.green}; }
-    .cat-pill.brand { background:${S.green}; color:${S.cream}; }
-    .twocol { display:flex; gap:18px; }
-    .twocol > div { flex:1; }
-    .card-list { padding:18px 20px; border-radius:12px; }
-    .card-list.forces { background:${S.okBg}; } .card-list.opp { background:${S.accentBg}; }
-    .card-list h3 { font-size:12px; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:12px; }
-    .card-list.forces h3 { color:${S.ok}; } .card-list.opp h3 { color:${S.accent}; }
-    .card-list .row { display:flex; justify-content:space-between; gap:10px; font-size:13px; margin-bottom:7px; }
-    .card-list .row b { font-variant-numeric:tabular-nums; }
-    .fw-grid { display:flex; gap:18px; }
-    .fw-col { flex:1; padding:20px 22px; border-radius:12px; }
-    .fw-col.forces { background:${S.okBg}; } .fw-col.faib { background:${S.dangerBg}; }
-    .fw-col h3 { font-size:13px; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:12px; }
-    .fw-col.forces h3 { color:${S.ok}; } .fw-col.faib h3 { color:${S.danger}; }
-    .fw-col li { font-size:13px; margin-bottom:9px; padding-left:18px; position:relative; list-style:none; }
-    .fw-col.forces li:before { content:"✓"; position:absolute; left:0; color:${S.ok}; font-weight:700; }
-    .fw-col.faib li:before { content:"!"; position:absolute; left:0; color:${S.danger}; font-weight:700; }
-    .bucket { margin-bottom:14px; } .bucket-hd { font-size:12px; font-weight:700; margin-bottom:5px; display:flex; align-items:center; gap:7px; }
-    .bucket-dot { width:8px; height:8px; border-radius:50%; } .bucket li { font-size:12px; color:${S.inkMid}; margin-bottom:3px; padding-left:16px; list-style:none; }
-    .synthese { background:${S.green}; color:${S.cream}; padding:40px 64px; }
-    .synthese h2 { font-family:Georgia,serif; font-size:28px; font-weight:400; margin-bottom:16px; }
-    .synthese li { font-size:14px; margin-bottom:8px; list-style:none; padding-left:22px; position:relative; }
-    .synthese li:before { content:"→"; position:absolute; left:0; opacity:0.6; }
-    .footer { padding:22px 64px; border-top:1px solid ${S.creamDark}; font-size:11px; color:${S.inkLight}; display:flex; justify-content:space-between; }
-    @media print { .section-hd { page-break-after:avoid; } table, .fw-grid, .twocol, .scorecard { page-break-inside:avoid; } }
-  `;
-
-  const TOC = [
-    "État des lieux", "Forces & opportunités par sujet", "Sources & URLs citées",
-    "Analyse concurrentielle",
-    ...(hasNextSteps ? ["Analyse — Et maintenant ?"] : []),
-    "Plan d'action priorisé — Roadmap ICE", "Synthèse",
-  ];
-
-  const cover = `<div class="cover">
-    <div><div class="cover-tag">Audit GEO · Generative Engine Optimization</div>
-      <h1>${brandName}</h1>
-      <div class="cover-sub">${site?.label || ""}${site?.domain ? " · " + site.domain : ""}</div></div>
-    <div class="cover-kpis">
-      <div class="cover-kpi"><div class="cover-kpi-val" style="color:${audit.presenceRate >= 50 ? "#A8E6C0" : "#F0C8A0"}">${audit.presenceRate}%</div><div class="cover-kpi-lbl">Présence IA</div></div>
-      <div class="cover-kpi"><div class="cover-kpi-val">${audit.withBrand}</div><div class="cover-kpi-lbl">Réponses avec marque</div></div>
-      <div class="cover-kpi"><div class="cover-kpi-val">${(audit.brandUrls?.length || 0)}</div><div class="cover-kpi-lbl">URLs citées</div></div>
-      <div class="cover-kpi"><div class="cover-kpi-val">${audit.total}</div><div class="cover-kpi-lbl">Réponses analysées</div></div>
-    </div>
-    <div class="cover-meta">${dateStr} · Sonate</div>
-  </div>`;
-
-  const toc = `<div class="toc"><div class="toc-title">Sommaire</div><div class="toc-grid">${
-    TOC.map((t, i) => `<div class="toc-item"><span class="toc-num">0${i+1}</span><span>${t}</span></div>`).join("")
-  }</div></div>`;
-
-  // BLOC 1 — État des lieux
-  const providersRows = Object.entries(audit.providerStats || {}).map(([pid, s]) => [pid, `${s.withBrand}/${s.total}`, `${pct(s.withBrand, s.total)}%`]);
-  const bloc1 = `
-    <div class="section-hd"><div class="section-num">1</div><div class="section-title">État des lieux</div></div>
-    <div class="scorecard"><div class="score-big" style="color:${scoreColor}">${audit.presenceRate}%</div>
-      <div><div class="score-label" style="color:${scoreColor}">${scoreLabel}</div>
-      <div class="score-sub">${audit.withBrand} réponses sur ${audit.total} citent ${brandName}</div></div></div>
-    <div class="kpi-row">
-      <div class="kpi"><div class="kpi-val" style="color:${S.green}">${audit.mentionCount || 0}</div><div class="kpi-label">Mentions · #${audit.avgMentionPos || "—"} moy.</div></div>
-      <div class="kpi"><div class="kpi-val" style="color:${S.warn}">${audit.evocationCount || 0}</div><div class="kpi-label">Évocations</div></div>
-      <div class="kpi"><div class="kpi-val" style="color:${S.green}">${audit.citationCount || 0}</div><div class="kpi-label">Citations · #${audit.avgCitationPos || "—"} moy.</div></div>
-      <div class="kpi"><div class="kpi-val" style="color:${S.green}">${Object.keys(audit.providerStats || {}).length}</div><div class="kpi-label">Providers</div></div>
-    </div>
-    ${providersRows.length ? `<table><thead><tr><th>Provider</th><th class="c">Présence</th><th class="c">Taux</th></tr></thead><tbody>${providersRows.map(r => `<tr><td>${r[0]}</td><td class="c">${r[1]}</td><td class="c">${r[2]}</td></tr>`).join("")}</tbody></table>` : ""}
-  `;
-
-  // BLOC 2 — Forces & opportunités par sujet
-  const bloc2 = `
-    <div class="section-hd"><div class="section-num">2</div><div class="section-title">Forces &amp; opportunités par sujet</div></div>
-    <div class="twocol">
-      <div class="card-list forces"><h3>✓ Sujets maîtrisés (≥ 50% présence)</h3>${
-        catForces.length ? catForces.slice(0,8).map(c => `<div class="row"><span>${c.name}</span><b>${c.rate}% · ${c.qCount} Q</b></div>`).join("") : `<div style="font-size:12px;color:${S.inkMid}">Aucune catégorie dominée pour l'instant.</div>`
-      }</div>
-      <div class="card-list opp"><h3>◷ Opportunités (&lt; 50% présence)</h3>${
-        catOpportunities.length ? catOpportunities.slice(0,8).map(c => `<div class="row"><span>${c.name}</span><b>${c.rate}% · ${c.qCount} Q</b></div>`).join("") : `<div style="font-size:12px;color:${S.inkMid}">Toutes les catégories sont bien couvertes.</div>`
-      }</div>
-    </div>
-  `;
-
-  // BLOC 3 — Sources & URLs
-  const bloc3 = `
-    <div class="section-hd"><div class="section-num">3</div><div class="section-title">Sources &amp; URLs citées</div></div>
-    <div class="kpi-row" style="margin-bottom:14px;">
-      <div class="kpi"><div class="kpi-val">${audit.brandOwnUrls?.length || 0}</div><div class="kpi-label">URLs domaine propre</div></div>
-      <div class="kpi"><div class="kpi-val">${audit.brandExternalUrls?.length || 0}</div><div class="kpi-label">URLs externes (marque)</div></div>
-      <div class="kpi"><div class="kpi-val">${audit.competitorUrls?.length || 0}</div><div class="kpi-label">URLs concurrentes</div></div>
-      <div class="kpi"><div class="kpi-val">${audit.referenceUrls?.length || 0}</div><div class="kpi-label">URLs de référence</div></div>
-    </div>
-    ${topDomainsRows.length ? `<table><thead><tr><th>Domaine le plus cité</th><th class="c">Citations</th></tr></thead><tbody>${
-      topDomainsRows.map(([d, c]) => `<tr><td>${d}</td><td class="c">${c}×</td></tr>`).join("")
-    }</tbody></table>` : ""}
-  `;
-
-  // BLOC 4 — Concurrents
-  const bloc4 = `
-    <div class="section-hd"><div class="section-num">4</div><div class="section-title">Analyse concurrentielle</div></div>
-    ${compRows.length ? `<table><thead><tr><th>Concurrent</th><th class="c">Mentions</th><th class="c">Pos. moy.</th><th>Forces &amp; angle (IA)</th></tr></thead><tbody>${
-      compRows.map(c => `<tr><td><b>${c.name}</b></td><td class="c">${c.mentions}×</td><td class="c">${c.avgP}</td><td>${
-        c.strengths ? `${c.strengths}${c.angle ? `<br><span style="color:${S.accent}">→ ${c.angle}</span>` : ""}` : `<span style="color:${S.inkLight}">—</span>`
-      }</td></tr>`).join("")
-    }</tbody></table>` : `<div style="font-size:13px;color:${S.inkLight};padding:12px 0;">Aucun concurrent détecté dans les réponses analysées.</div>`}
-  `;
-
-  // BLOC ANALYSE — « Et maintenant ? » (récupérée de Suivi GEO) : constats + opportunités
-  const blocAnalyse = hasNextSteps ? `
-    <div class="section-hd"><div class="section-num">5</div><div class="section-title">Analyse — Et maintenant&nbsp;?</div></div>
-    <div style="font-size:13px;color:${S.inkMid};margin-bottom:18px;">Synthèse stratégique issue de l'analyse « Et maintenant&nbsp;? » générée dans Suivi GEO.</div>
-
-    <div style="margin-bottom:22px;">
-      <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:${S.green};margin-bottom:8px;">1 · Constats sur l'état GEO</div>
-      <div style="font-size:13px;line-height:1.7;color:${S.ink};">${esc2(nsConstats) || "—"}</div>
-      ${nsBrand ? `<div style="font-size:13px;line-height:1.7;color:${S.inkMid};margin-top:8px;">${esc2(nsBrand)}</div>` : ""}
-    </div>
-
-    <div style="margin-bottom:8px;">
-      <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:${S.accent};margin-bottom:8px;">2 · Pistes non exploitées &amp; opportunités</div>
-      ${nsCats.length ? `<table><thead><tr><th>Sujet</th><th>Constat</th><th>Recommandation</th></tr></thead><tbody>${
-        nsCats.map(c => `<tr><td><b>${esc2(c.category)}</b></td><td>${esc2(c.synthesis)}</td><td style="color:${S.accent}">${esc2(c.recommendation)}</td></tr>`).join("")
-      }</tbody></table>` : `<div style="font-size:13px;color:${S.inkMid};">Aucune piste par sujet dans l'analyse. Les opportunités par catégorie figurent en section « Forces &amp; opportunités ».</div>`}
-    </div>
-  ` : "";
-
-  // BLOC 5 — Roadmap ICE
-  const roadmapRows = roadmap.map(r => {
-    const ice = r.impact + r.confidence + r.ease;
-    const isBrand = (r.category || "").toLowerCase() === "marque";
-    return `<tr><td>${r.action}</td><td><span class="cat-pill${isBrand ? " brand" : ""}">${r.category}</span></td><td class="c">${r.impact}</td><td class="c">${r.confidence}</td><td class="c">${r.ease}</td><td class="c"><span class="ice-badge" style="background:${iceColor(ice)}">${ice}</span></td></tr>`;
-  }).join("");
-  const bucketDots = { defend: S.ok, watch: S.warn, conquest_priority: S.accent, conquer: S.inkLight };
-  const favHtml = ["defend", "watch", "conquest_priority", "conquer"].map(b => {
-    const items = favByBucket[b]; if (!items.length) return "";
-    return `<div class="bucket"><div class="bucket-hd"><span class="bucket-dot" style="background:${bucketDots[b]}"></span>${BUCKET_LABELS[b]} · ${items.length}</div><ul>${items.map(it => `<li>${it.q}${it.pos ? ` (#${it.pos})` : ""}</li>`).join("")}</ul></div>`;
-  }).join("");
-  const bloc5 = `
-    <div class="section-hd"><div class="section-num">6</div><div class="section-title">3 · Plan d'action priorisé — Roadmap ICE</div></div>
-    <div style="font-size:13px; color:${S.inkMid}; margin-bottom:6px;">Priorisation par matrice ICE (Impact · Confidence · Ease). Score sur 30.</div>
-    ${roadmap.length ? `<table><thead><tr><th>Action</th><th>Catégorie</th><th class="c">I</th><th class="c">C</th><th class="c">E</th><th class="c">ICE</th></tr></thead><tbody>${roadmapRows}</tbody></table>` : `<div style="font-size:13px;color:${S.inkLight};padding:12px 0;">Générez l'analyse « Et maintenant ? » dans l'onglet Suivi GEO pour une roadmap ICE détaillée.</div>`}
-    ${favHtml ? `<div style="margin-top:24px;"><div style="font-size:13px;font-weight:600;color:${S.green};margin-bottom:10px;">Questions favorites par priorité</div>${favHtml}</div>` : ""}
-  `;
-
-  // BLOC 6 — Synthèse
-  const synthese = `<div class="synthese">
-    <div class="cover-tag" style="opacity:0.6;margin-bottom:10px;">En résumé</div>
-    <h2>${audit.presenceRate >= 50 ? `${brandName} a une présence IA solide.` : `${brandName} a du potentiel à exploiter.`}</h2>
-    <ul>
-      <li>Score de présence : <b>${audit.presenceRate}%</b> sur ${audit.total} réponses analysées.</li>
-      ${catForces.length ? `<li>Autorité établie sur : ${catForces.slice(0,3).map(c=>c.name).join(", ")}.</li>` : ""}
-      ${catOpportunities.length ? `<li>${catOpportunities.length} sujets à conquérir où les concurrents sont mieux placés.</li>` : ""}
-      ${topComp ? `<li>Concurrent à surveiller : ${topComp[0]}.</li>` : ""}
-      <li>${roadmap.length} actions priorisées dans la roadmap ICE.</li>
-    </ul>
-  </div>`;
-
-  const footer = `<div class="footer"><span>Audit GEO — ${brandName}</span><span>Sonate · ${dateStr}</span></div>`;
-
-  const html = `<!DOCTYPE html>
-<html lang="fr"><head><meta charset="UTF-8"><title>Audit GEO — ${brandName} — ${dateStr}</title><style>${css}</style></head>
-<body>${cover}${toc}<div class="content">${bloc1}${bloc2}${bloc3}${bloc4}${blocAnalyse}${bloc5}</div>${synthese}${footer}</body></html>`;
-
-  const blob = new Blob([html], { type: "text/html;charset=utf-8" });
-  const el = document.createElement("a");
-  el.href = URL.createObjectURL(blob);
-  el.download = `presentation-geo-${brandName.toLowerCase().replace(/\s+/g, "-")}-${dateFile}.html`;
-  el.click();
-  URL.revokeObjectURL(el.href);
-}
-
-
-// ── Section MODULES OUTILS — exploite SF/GSC/GA/Bing ─────────────
-// Chaque module a un switch on/off et un export CSV contextuel.
 function ToolModuleCard({ title, tier, icon, available, enabled, onToggle, count, children, onExport, exportLabel = "Exporter le lot" }) {
   const tierColor = tier === 1 ? "#1A7A4A" : tier === 2 ? "#C97820" : "#1A3C2E77";
   return (
@@ -2924,6 +2259,109 @@ function ToolModulesSection({ audit, sfRows, gscRows, gaRows, bingData, brand, c
 }
 
 // ── Main export ───────────────────────────────────────────────────
+// ════════ Nouveaux visuels GEO (palette Sonate) ════════
+const SON = { green: "#1A3C2E", greenMid: "#2D5A42", greenSoft: "#7E9A8C", accent: "#E8541A", cream: "#F5F0E8", creamDark: "#E8E0CE", ink: "#1C1C1C", inkMid: "#4A4A4A", inkLight: "#94A3B8", ok: "#2D6A4F", warn: "#C2790F", danger: "#9B2335" };
+
+// Funnel de visibilité : du périmètre testé à la citation comme source.
+function VisibilityFunnel({ funnel }) {
+  if (!Array.isArray(funnel) || !funnel.length) return null;
+  const max = Math.max(1, funnel[0].value);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {funnel.map((f, i) => {
+        const w = Math.max(6, Math.round((f.value / max) * 100));
+        const prev = i > 0 ? funnel[i - 1].value : null;
+        const conv = prev ? Math.round((f.value / (prev || 1)) * 100) : null;
+        const shade = i === 0 ? SON.greenSoft : i === 1 ? SON.greenMid : i === 2 ? SON.green : SON.accent;
+        return (
+          <div key={i} style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div style={{ width: 150, flexShrink: 0, textAlign: "right" }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: SON.green }}>{f.label}</div>
+              <div style={{ fontSize: 10, color: SON.inkLight }}>{f.sub}</div>
+            </div>
+            <div style={{ flex: 1, position: "relative", height: 30, background: "#1A3C2E08", borderRadius: 6 }}>
+              <div style={{ width: `${w}%`, height: "100%", background: shade, borderRadius: 6, display: "flex", alignItems: "center", paddingLeft: 10, transition: "width .3s" }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: "#fff" }}>{f.value}</span>
+              </div>
+            </div>
+            <div style={{ width: 52, flexShrink: 0, fontSize: 11, color: conv != null ? SON.inkMid : "transparent", fontWeight: 600 }}>{conv != null ? `${conv}%` : "—"}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Part de voix : barre empilée 100 % (marque en accent, concurrents en neutre).
+function ShareOfVoice({ sov }) {
+  if (!Array.isArray(sov) || !sov.length || sov.every(s => s.count === 0)) return null;
+  const palette = [SON.accent, "#3D6354", "#5E8071", "#88A99B", "#AEC5BA", "#CBDBD2"];
+  const shown = sov.filter(s => s.count > 0);
+  return (
+    <div>
+      <div style={{ display: "flex", height: 30, borderRadius: 6, overflow: "hidden", border: "1px solid #1A3C2E14" }}>
+        {shown.map((s, i) => (
+          <div key={i} title={`${s.name} — ${s.pct}% (${s.count})`} style={{ width: `${s.pct}%`, background: palette[i] || SON.greenSoft, minWidth: s.pct > 0 ? 2 : 0 }} />
+        ))}
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 16px", marginTop: 10 }}>
+        {shown.map((s, i) => (
+          <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}>
+            <span style={{ width: 9, height: 9, borderRadius: 2, background: palette[i] || SON.greenSoft, flexShrink: 0 }} />
+            <span style={{ fontWeight: i === 0 ? 700 : 500, color: i === 0 ? SON.accent : SON.green }}>{s.name}{i === 0 ? " (vous)" : ""}</span>
+            <span style={{ color: SON.inkMid }}>{s.pct}% · {s.count}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Matrice de co-occurrence : nb de réponses où 2 acteurs sont cités ensemble.
+function CoOccurrenceMatrix({ coMatrix }) {
+  const labels = coMatrix?.labels || [];
+  const counts = coMatrix?.counts || [];
+  if (labels.length < 2) return <div style={{ fontSize: 11, color: SON.inkLight, fontStyle: "italic", padding: "12px 0" }}>Pas assez de concurrents détectés pour la matrice de co-occurrence.</div>;
+  let mx = 1; for (let i = 0; i < counts.length; i++) for (let j = 0; j < counts.length; j++) if (i !== j) mx = Math.max(mx, counts[i][j]);
+  const short = (s) => (s || "").length > 12 ? (s.slice(0, 11) + "…") : s;
+  const cellBg = (i, j, v) => {
+    if (i === j) return "#1A3C2E0D";
+    if (!v) return "#fff";
+    const t = v / mx;
+    return `rgba(232,84,26,${(0.10 + t * 0.75).toFixed(2)})`; // dégradé orange
+  };
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table style={{ borderCollapse: "collapse", fontSize: 11 }}>
+        <thead>
+          <tr>
+            <th style={{ padding: 6 }} />
+            {labels.map((l, j) => (
+              <th key={j} title={l} style={{ padding: "6px 8px", fontWeight: 600, color: j === 0 ? SON.accent : SON.green, borderBottom: `2px solid ${SON.creamDark}`, whiteSpace: "nowrap", fontSize: 10 }}>{short(l)}{j === 0 ? " ★" : ""}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {labels.map((rl, i) => (
+            <tr key={i}>
+              <th title={rl} style={{ textAlign: "right", padding: "4px 8px", fontWeight: 600, color: i === 0 ? SON.accent : SON.green, whiteSpace: "nowrap", fontSize: 10 }}>{short(rl)}{i === 0 ? " ★" : ""}</th>
+              {labels.map((_, j) => {
+                const v = counts[i]?.[j] || 0;
+                return (
+                  <td key={j} title={`${labels[i]} ∩ ${labels[j]} : ${v} réponse${v > 1 ? "s" : ""}`} style={{ textAlign: "center", padding: "6px 8px", minWidth: 38, background: cellBg(i, j, v), color: i === j ? SON.green : (v ? SON.ink : "#CBD5E1"), fontWeight: i === j ? 700 : (v ? 600 : 400), border: "1px solid #1A3C2E0A" }}>{v}</td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div style={{ fontSize: 10.5, color: SON.inkLight, marginTop: 8, lineHeight: 1.5 }}>
+        Diagonale = nombre de réponses citant l'acteur. Hors diagonale = réponses où les deux acteurs sont cités <strong>ensemble</strong> (plus c'est orange, plus ils se disputent les mêmes réponses).
+      </div>
+    </div>
+  );
+}
+
 export default function GeoAuditTab({
   sites, projectId, project = null, corrMatrix = [], metrics = [], resultVals = [], bingData = {},
   // Props setup depuis App.jsx
@@ -3159,17 +2597,17 @@ export default function GeoAuditTab({
               ))}
             </div>
             <span data-tour="audit-export" style={{ display: "inline-flex", gap: 8 }}>
-              <button onClick={async () => { setExporting(true); try { await exportPresentation(audit, brand, site, siteQuestions, siteResults, roadmapData, claudeKey, categories); } catch(e) { console.error(e); } setExporting(false); }}
+              <button onClick={() => { setExporting(true); try { exportAuditPptx(audit, brand, site, roadmapData, categories); } catch(e) { console.error(e); } setTimeout(() => setExporting(false), 800); }}
                 disabled={noData || exporting}
-                title="Présentation client : état des lieux, forces/faiblesses, roadmap ICE"
+                title="PowerPoint éditable (.pptx) : score, visibilité, concurrence, sources, plan d'action"
                 style={{ padding: "4px 12px", background: noData ? "transparent" : "#1A3C2E", color: noData ? "#1A3C2E" : "#F0EBE0", border: "0.5px solid #1A3C2E22", borderRadius: 5, fontSize: 11, fontWeight: 500, cursor: noData ? "not-allowed" : "pointer" }}>
-                {exporting ? "…" : "⬇ Présentation"}
+                {exporting ? "…" : "⬇ PowerPoint"}
               </button>
-              <button onClick={() => { setExporting(true); exportPDF(audit, brand, site, aiText); setTimeout(() => setExporting(false), 1000); }}
+              <button onClick={() => { setExporting(true); try { exportAuditPdf(audit, brand, site, roadmapData, categories); } catch(e) { console.error(e); } setTimeout(() => setExporting(false), 800); }}
                 disabled={noData || exporting}
-                title="Rapport complet détaillé"
-                style={{ padding: "4px 12px", background: "transparent", color: noData ? "#1A3C2E" : "#1A3C2E", border: "0.5px solid #1A3C2E22", borderRadius: 5, fontSize: 11, fontWeight: 500, cursor: noData ? "not-allowed" : "pointer" }}>
-                {exporting ? "…" : "⬇ Rapport complet"}
+                title="PDF prêt à présenter — même contenu que le PowerPoint"
+                style={{ padding: "4px 12px", background: "transparent", color: "#1A3C2E", border: "0.5px solid #1A3C2E22", borderRadius: 5, fontSize: 11, fontWeight: 500, cursor: noData ? "not-allowed" : "pointer" }}>
+                {exporting ? "…" : "⬇ PDF"}
               </button>
               <button onClick={() => { try { downloadCsv(buildGeoPagesCsv({ audit, keywords }), `optimisations_geo_${new Date().toISOString().slice(0,10)}.csv`); } catch(e) { console.error(e); } }}
                 disabled={noData}
@@ -3251,6 +2689,14 @@ export default function GeoAuditTab({
                       <div style={{ fontSize: 10, color: "#1A3C2E", marginTop: 2 }}>{m.count} occurrence{m.count > 1 ? "s" : ""}</div>
                     </div>
                   ))}
+                </div>
+              )}
+
+              {/* Funnel de visibilité — du périmètre testé à la citation comme source */}
+              {Array.isArray(audit.visibilityFunnel) && (
+                <div style={{ marginBottom: 18 }}>
+                  <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E", marginBottom: 10 }}>Funnel de visibilité</div>
+                  <VisibilityFunnel funnel={audit.visibilityFunnel} />
                 </div>
               )}
 
@@ -3386,6 +2832,14 @@ export default function GeoAuditTab({
             ══════════════════════════════════════════════════════ */}
             <div data-tour="audit-competitors" style={{ display: "contents" }}><Section title="Paysage concurrentiel" sub="Concurrents détectés dans les réponses LLM — analysez leurs pages">
 
+              {/* Part de voix — marque vs concurrents */}
+              {Array.isArray(audit.shareOfVoice) && audit.shareOfVoice.some(s => s.count > 0) && (
+                <div style={{ marginBottom: 18 }}>
+                  <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E", marginBottom: 10 }}>Part de voix dans les réponses</div>
+                  <ShareOfVoice sov={audit.shareOfVoice} />
+                </div>
+              )}
+
               {/* Tableau M/É/C top 5 concurrents */}
               {(() => {
                 const brandName = brand?.brand_name || "Marque";
@@ -3439,6 +2893,14 @@ export default function GeoAuditTab({
                 </button>
               )}
 
+              {/* Matrice de co-occurrence — marque + top 5 concurrents */}
+              {audit.coMatrix && (audit.coMatrix.labels || []).length >= 2 && (
+                <div style={{ marginTop: 18, paddingTop: 16, borderTop: "0.5px solid #1A3C2E0C" }}>
+                  <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1A3C2E", marginBottom: 10 }}>Matrice de co-occurrence — qui apparaît avec qui</div>
+                  <CoOccurrenceMatrix coMatrix={audit.coMatrix} />
+                </div>
+              )}
+
               {/* Analyseur de pages concurrentes */}
               <CompetitorPageAnalyzer
                 competitors={competitors}
@@ -3471,6 +2933,18 @@ export default function GeoAuditTab({
                     </span>
                   ))}
                 </div>
+                {/* Sources d'autorité à cibler — RP / netlinking */}
+                {(() => {
+                  const authority = Object.entries(audit.topDomains)
+                    .filter(([d]) => !audit.brandUrls.some(u => u.domain === d) && !audit.competitorUrls.some(u => u.domain === d))
+                    .sort((a, b) => b[1] - a[1]).slice(0, 5).map(([d]) => d);
+                  if (!authority.length) return null;
+                  return (
+                    <div style={{ marginTop: 12, fontSize: 11, color: "#1A3C2E", background: "#1A3C2E08", borderLeft: "2px solid #E8541A", borderRadius: 6, padding: "9px 12px", lineHeight: 1.55 }}>
+                      <strong>Sources d'autorité à cibler.</strong> Les LLM s'appuient le plus sur&nbsp;: {authority.map((d, i) => <span key={d} style={{ fontWeight: 600 }}>{d}{i < authority.length - 1 ? ", " : ""}</span>)}. Cherchez à y être cité, publié ou lié (RP, contributions, fiches comparatives) — c'est là que se gagne la visibilité GEO.
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* Tableau URLs marque */}
