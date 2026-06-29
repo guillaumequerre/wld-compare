@@ -3,10 +3,48 @@
 // Export de l'audit GEO en .pptx (éditable) ET .pdf (présentable),
 // à partir d'UN seul modèle de slides → cohérence parfaite entre formats.
 //
-// Dépendances (à installer) :  npm install pptxgenjs jspdf
+// pptxgenjs / jsPDF sont chargés À LA VOLÉE depuis un CDN (au clic), pas
+// bundlés par webpack — sinon le build CRA échoue sur `node:fs` (build
+// Node de pptxgenjs). Aucune dépendance npm requise.
 // ════════════════════════════════════════════════════════════════════
-import pptxgen from "pptxgenjs";
-import { jsPDF } from "jspdf";
+
+const CDN = {
+  pptx: "https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/dist/pptxgen.bundle.js",
+  jspdf: "https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js",
+};
+
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const found = document.querySelector(`script[data-lib="${src}"]`);
+    if (found) {
+      if (found.dataset.loaded === "1") return resolve();
+      found.addEventListener("load", () => resolve());
+      found.addEventListener("error", () => reject(new Error("Échec chargement " + src)));
+      return;
+    }
+    const s = document.createElement("script");
+    s.src = src; s.async = true; s.dataset.lib = src;
+    s.addEventListener("load", () => { s.dataset.loaded = "1"; resolve(); });
+    s.addEventListener("error", () => reject(new Error("Échec chargement de la librairie d'export. Vérifiez votre connexion.")));
+    document.head.appendChild(s);
+  });
+}
+
+let _Pptx = null, _JsPDF = null;
+async function loadPptx() {
+  if (_Pptx) return _Pptx;
+  if (!window.PptxGenJS) await loadScript(CDN.pptx);
+  _Pptx = window.PptxGenJS;
+  if (!_Pptx) throw new Error("pptxgenjs indisponible.");
+  return _Pptx;
+}
+async function loadJsPDF() {
+  if (_JsPDF) return _JsPDF;
+  if (!(window.jspdf && window.jspdf.jsPDF)) await loadScript(CDN.jspdf);
+  _JsPDF = window.jspdf && window.jspdf.jsPDF;
+  if (!_JsPDF) throw new Error("jsPDF indisponible.");
+  return _JsPDF;
+}
 
 // ── Palette Sonate (sans #, pour pptxgenjs) ──
 const C = {
