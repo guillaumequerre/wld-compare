@@ -323,7 +323,7 @@ Sois direct, concis, actionnable. Pas de généralités.`;
           onClick={handleCTA}
           disabled={status === "loading" || !claudeKey}
           style={{ padding: "5px 14px", background: (status === "loading" || !claudeKey) ? "transparent" : "#1A3C2E", color: (status === "loading" || !claudeKey) ? "#1A3C2E" : "#F0EBE0", border: "0.5px solid #1A3C2E22", borderRadius: 6, fontSize: 11, fontWeight: 500, cursor: (status === "loading" || !claudeKey) ? "default" : "pointer" }}
-          title={!claudeKey ? "Clé Claude manquante dans ⚙️ Providers" : undefined}
+          title={!claudeKey ? "Aucune clé API Claude renseignée — ajoutez-la dans ⚙️ Providers" : undefined}
         >
           {status === "loading" ? "⏳ Analyse…" : "✦ Analyser par catégorie"}
         </button>
@@ -1130,7 +1130,10 @@ function computeAudit(questions, results, urlIndex, brand, site, calendarEntries
 
 
   // ── Top 5 concurrents depuis les mentions ─────────────────────
+  // La marque ne doit jamais figurer parmi ses propres concurrents.
+  const _brandCanonSet = new Set([brandName, ...brandAliases].filter(Boolean).map(t => canonName(t).toLowerCase().trim()));
   const competitorsRanked = Object.entries(compStats)
+    .filter(([name]) => { const c = canonName(name).toLowerCase().trim(); return c && !_brandCanonSet.has(c); })
     .filter(([, s]) => (s.mentions || 0) + (s.evocations || 0) + (s.citations || 0) > 0)
     .sort((a, b) => {
       // tri : d'abord par mentions, puis par meilleure position moyenne, puis évocations
@@ -1215,8 +1218,8 @@ function computeAudit(questions, results, urlIndex, brand, site, calendarEntries
   // ── Funnel de visibilité (du plus large au plus précis) ──
   const visibilityFunnel = [
     { label: "Réponses analysées", value: total, sub: "périmètre testé" },
-    { label: "Marque présente", value: withBrand, sub: "mentionnée ou évoquée" },
-    { label: "Marque nommée", value: mentionCount, sub: "citée par son nom" },
+    { label: "Marque mentionnée", value: mentionCount, sub: "présente dans un classement" },
+    { label: "Marque évoquée", value: evocationCount, sub: "présente dans le texte" },
     { label: "Citée comme source", value: citationCount, sub: "URL en source" },
   ];
 
@@ -1415,7 +1418,7 @@ function RoadmapAuditPanel({ roadmapData, setRoadmapData, questions, results, br
           </div>
         </div>
         <button onClick={run} disabled={status === "loading" || !claudeKey || !results.length}
-          title={!claudeKey ? "Clé Claude manquante dans \u2699\ufe0f Providers" : (!results.length ? "Aucun résultat à analyser" : undefined)}
+          title={!claudeKey ? "Aucune clé API Claude renseignée — ajoutez-la dans \u2699\ufe0f Providers" : (!results.length ? "Aucun résultat à analyser" : undefined)}
           style={{ padding: "5px 14px", background: (status === "loading" || !claudeKey || !results.length) ? "transparent" : "#1A3C2E", color: (status === "loading" || !claudeKey || !results.length) ? "#1A3C2E" : "#F0EBE0", border: "0.5px solid #1A3C2E22", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: (status === "loading" || !claudeKey || !results.length) ? "default" : "pointer" }}>
           {status === "loading" ? "Génération…" : roadmapData ? "↺ Régénérer" : "Générer le plan"}
         </button>
@@ -1789,6 +1792,7 @@ Commence DIRECTEMENT par ## POURQUOI LES LLM LES CITENT. Sois précis et actionn
             style={{ flex: 1, fontSize: 11, padding: "5px 10px", border: "0.5px solid #1A3C2E18", borderRadius: 6, outline: "none", color: "#1A3C2E", background: "#fff" }}
           />
           <button onClick={analyze} disabled={!url || !claudeKey || status === "loading"}
+            title={!claudeKey ? "Aucune clé API Claude renseignée — ajoutez-la dans ⚙️ Providers" : (!url ? "Saisissez une URL de concurrent à analyser" : undefined)}
             style={{ padding: "5px 14px", background: (!url||!claudeKey||status==="loading") ? "transparent" : "#1A3C2E", color: (!url||!claudeKey||status==="loading") ? "#1A3C2E" : "#F0EBE0", border: "0.5px solid #1A3C2E22", borderRadius: 6, fontSize: 11, fontWeight: 500, cursor: (!url||!claudeKey||status==="loading") ? "not-allowed" : "pointer" }}>
             {status === "loading" ? "Analyse…" : "Analyser"}
           </button>
@@ -1866,31 +1870,27 @@ Sois précis et cite des formats concrets (liste, FAQ, comparatif, données chif
     }
   };
 
+  const noKey = !claudeKey;
+  const tip = noKey
+    ? "Aucune clé API Claude renseignée — ajoutez-la dans ⚙️ Providers"
+    : status === "loading" ? "Génération du hint…"
+    : hint ? (open ? "Masquer le hint GEO" : "Voir le hint GEO")
+    : "Générer un hint GEO";
+
   return (
-    <div style={{ borderTop: "0.5px solid #1A3C2E06", marginTop: 4, paddingTop: 4 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        {hint ? (
-          <button onClick={() => setOpen(o => !o)}
-            style={{ fontSize: 10, color: "#C97820", background: "none", border: "none", cursor: "pointer", padding: 0, display: "flex", alignItems: "center", gap: 4, letterSpacing: "0.02em" }}>
-            <span>💡</span>
-            <span>{open ? "▲ Masquer le hint" : "▼ Voir le hint"}</span>
-          </button>
-        ) : (
-          <button onClick={run} disabled={!claudeKey || status === "loading"}
-            style={{ fontSize: 10, color: claudeKey ? "#C97820" : "#1A3C2E", background: "none", border: "none", cursor: claudeKey ? "pointer" : "not-allowed", padding: 0, display: "flex", alignItems: "center", gap: 4, letterSpacing: "0.02em", opacity: status === "loading" ? 0.6 : 1 }}
-            title={!claudeKey ? "Clé Claude manquante" : undefined}>
-            <span>💡</span>
-            <span>{status === "loading" ? "Génération…" : "Générer un hint GEO"}</span>
-          </button>
-        )}
-        {hint && (
-          <button onClick={run} disabled={status === "loading"}
-            style={{ fontSize: 9, color: "#1A3C2E", background: "none", border: "none", cursor: "pointer", padding: 0 }}
-            title="Regénérer">↺</button>
-        )}
-      </div>
+    <>
+      <button
+        onClick={hint ? () => setOpen(o => !o) : run}
+        disabled={noKey || status === "loading"}
+        title={tip}
+        style={{ flexShrink: 0, fontSize: 13, lineHeight: 1, background: hint ? "#FFFBEB" : "none", border: hint ? "0.5px solid #C9782033" : "none", borderRadius: 5, padding: hint ? "1px 5px" : "0 3px", cursor: noKey ? "not-allowed" : "pointer", opacity: noKey ? 0.35 : (status === "loading" ? 0.6 : 1), filter: noKey ? "grayscale(1)" : "none" }}>
+        {status === "loading" ? "⏳" : "💡"}
+      </button>
       {open && hint && (
-        <div style={{ marginTop: 6, padding: "8px 10px", background: "#FFFBEB", border: "0.5px solid #C9782022", borderRadius: 6, fontSize: 11, lineHeight: 1.7, color: status === "error" ? "#C0352A" : "#92400E" }}>
+        <div style={{ flexBasis: "100%", width: "100%", marginTop: 6, padding: "8px 10px", background: "#FFFBEB", border: "0.5px solid #C9782022", borderRadius: 6, fontSize: 11, lineHeight: 1.7, color: status === "error" ? "#C0352A" : "#92400E" }}>
+          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 2 }}>
+            <button onClick={run} disabled={status === "loading"} title="Regénérer" style={{ fontSize: 9, color: "#1A3C2E", background: "none", border: "none", cursor: "pointer", padding: 0 }}>↺ Regénérer</button>
+          </div>
           {status === "error" ? hint : hint.split("\n").map((line, i) => {
             if (!line.trim()) return <div key={i} style={{ height: 4 }} />;
             if (line.startsWith("- ") || line.startsWith("• ")) return <div key={i} style={{ paddingLeft: 10, marginBottom: 2 }}>· {line.slice(2)}</div>;
@@ -1898,7 +1898,7 @@ Sois précis et cite des formats concrets (liste, FAQ, comparatif, données chif
           })}
         </div>
       )}
-    </div>
+    </>
   );
 }
 
@@ -2067,7 +2067,7 @@ RÈGLES : Commence DIRECTEMENT par ## ÉTAT DES LIEUX. Recommandations concrète
           )}
           <button onClick={run} disabled={status === "loading" || !claudeKey}
             style={{ padding: "5px 14px", background: (!claudeKey || status === "loading") ? "transparent" : "#1A3C2E", color: (!claudeKey || status === "loading") ? "#1A3C2E" : "#F0EBE0", border: "0.5px solid #1A3C2E22", borderRadius: 6, fontSize: 11, fontWeight: 500, cursor: (!claudeKey || status === "loading") ? "not-allowed" : "pointer" }}
-            title={!claudeKey ? "Clé Claude manquante" : undefined}>
+            title={!claudeKey ? "Aucune clé API Claude renseignée — ajoutez-la dans ⚙️ Providers" : undefined}>
             {status === "loading" ? "Analyse…" : status === "done" ? "↺ Relancer" : "Analyser"}
           </button>
         </div>
@@ -2278,13 +2278,12 @@ const SON = { green: "#1A3C2E", greenMid: "#2D5A42", greenSoft: "#7E9A8C", accen
 // Funnel de visibilité : du périmètre testé à la citation comme source.
 function VisibilityFunnel({ funnel }) {
   if (!Array.isArray(funnel) || !funnel.length) return null;
-  const max = Math.max(1, funnel[0].value);
+  const total = Math.max(1, funnel[0].value);
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       {funnel.map((f, i) => {
-        const w = Math.max(6, Math.round((f.value / max) * 100));
-        const prev = i > 0 ? funnel[i - 1].value : null;
-        const conv = prev ? Math.round((f.value / (prev || 1)) * 100) : null;
+        const w = Math.max(6, Math.round((f.value / total) * 100));
+        const pct = i === 0 ? null : Math.round((f.value / total) * 100);
         const shade = i === 0 ? SON.greenSoft : i === 1 ? SON.greenMid : i === 2 ? SON.green : SON.accent;
         return (
           <div key={i} style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -2297,7 +2296,7 @@ function VisibilityFunnel({ funnel }) {
                 <span style={{ fontSize: 12, fontWeight: 700, color: "#fff" }}>{f.value}</span>
               </div>
             </div>
-            <div style={{ width: 52, flexShrink: 0, fontSize: 11, color: conv != null ? SON.inkMid : "transparent", fontWeight: 600 }}>{conv != null ? `${conv}%` : "—"}</div>
+            <div style={{ width: 64, flexShrink: 0, fontSize: 11, textAlign: "right", color: pct != null ? SON.inkMid : "transparent", fontWeight: 600 }}>{pct != null ? `${pct}% des réponses` : ""}</div>
           </div>
         );
       })}
@@ -2413,7 +2412,7 @@ function SentimentAuditPanel({ results, brand, claudeKey, projectId, siteId }) {
             : `${presentCount} réponse${presentCount > 1 ? "s" : ""} où la marque apparaît, analysable${presentCount > 1 ? "s" : ""} par l'IA`}
         </div>
         <button onClick={run} disabled={disabled}
-          title={!claudeKey ? "Clé Claude manquante dans \u2699\ufe0f Providers" : (!presentCount ? "Aucune réponse où la marque est présente" : undefined)}
+          title={!claudeKey ? "Aucune clé API Claude renseignée — ajoutez-la dans \u2699\ufe0f Providers" : (!presentCount ? "Aucune réponse où la marque est présente" : undefined)}
           style={{ padding: "5px 14px", background: disabled ? "transparent" : "#1A3C2E", color: disabled ? "#1A3C2E" : "#F0EBE0", border: "0.5px solid #1A3C2E22", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: disabled ? "default" : "pointer" }}>
           {status === "loading" ? "Analyse…" : data ? "↺ Ré-analyser" : "Analyser le sentiment"}
         </button>
@@ -2847,17 +2846,13 @@ export default function GeoAuditTab({
                   <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#C0352A", marginBottom: 8 }}>Questions sans mentions · {audit.missingBrandQs.length}</div>
                   {audit.missingBrandQs.length ? audit.missingBrandQs.map((q, i) => (
                     <div key={i} style={{ padding: "5px 0", borderBottom: "0.5px solid #1A3C2E08" }}>
-                      <div style={{ fontSize: 12, display: "flex", gap: 6, alignItems: "baseline" }}>
+                      <div style={{ fontSize: 12, display: "flex", flexWrap: "wrap", gap: 6, alignItems: "baseline" }}>
                         <span style={{ color: "#C0352A", flexShrink: 0, fontSize: 10 }}>✗</span>
                         {q.isFav && <span style={{ flexShrink: 0, fontSize: 10, color: "#C97820" }}>★</span>}
-                        <span style={{ flex: 1, color: "#1A3C2E", lineHeight: 1.5 }}>{q.question}</span>
+                        <span style={{ flex: 1, minWidth: 0, color: "#1A3C2E", lineHeight: 1.5 }}>{q.question}</span>
                         {q.volume > 0 && <span style={{ fontSize: 10, color: "#1A3C2E", flexShrink: 0 }}>{q.volume >= 1000 ? (q.volume/1000).toFixed(1)+"k" : q.volume}</span>}
+                        <AuditHintPanel question={q.question} claudeKey={claudeKey} brandName={brand?.brand_name || ""} />
                       </div>
-                      <AuditHintPanel
-                        question={q.question}
-                        claudeKey={claudeKey}
-                        brandName={brand?.brand_name || ""}
-                      />
                     </div>
                   )) : <div style={{ fontSize: 11, color: "#1A3C2E", fontStyle: "italic" }}>Toutes les questions ont une mention !</div>}
                 </div>
