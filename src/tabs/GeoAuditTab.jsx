@@ -2660,13 +2660,13 @@ export default function GeoAuditTab({
               ))}
             </div>
             <span data-tour="audit-export" style={{ display: "inline-flex", gap: 8 }}>
-              <button onClick={() => { setExporting(true); try { exportAuditPptx(audit, brand, site, roadmapData, categories); } catch(e) { console.error(e); } setTimeout(() => setExporting(false), 800); }}
+              <button onClick={async () => { setExporting(true); try { await exportAuditPptx(audit, brand, site, roadmapData, categories); } catch(e) { console.error(e); } finally { setExporting(false); } }}
                 disabled={noData || exporting}
                 title="PowerPoint éditable (.pptx) : score, visibilité, concurrence, sources, plan d'action"
                 style={{ padding: "4px 12px", background: noData ? "transparent" : "#1A3C2E", color: noData ? "#1A3C2E" : "#F0EBE0", border: "0.5px solid #1A3C2E22", borderRadius: 5, fontSize: 11, fontWeight: 500, cursor: noData ? "not-allowed" : "pointer" }}>
                 {exporting ? "…" : "⬇ PowerPoint"}
               </button>
-              <button onClick={() => { setExporting(true); try { exportAuditPdf(audit, brand, site, roadmapData, categories); } catch(e) { console.error(e); } setTimeout(() => setExporting(false), 800); }}
+              <button onClick={async () => { setExporting(true); try { await exportAuditPdf(audit, brand, site, roadmapData, categories); } catch(e) { console.error(e); } finally { setExporting(false); } }}
                 disabled={noData || exporting}
                 title="PDF prêt à présenter — même contenu que le PowerPoint"
                 style={{ padding: "4px 12px", background: "transparent", color: "#1A3C2E", border: "0.5px solid #1A3C2E22", borderRadius: 5, fontSize: 11, fontWeight: 500, cursor: noData ? "not-allowed" : "pointer" }}>

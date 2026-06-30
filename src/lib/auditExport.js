@@ -125,9 +125,10 @@ export function buildAuditDeck(audit, brand, site, roadmapData, categories = [])
 }
 
 // ════════════════════════ PPTX (éditable) ════════════════════════
-export function exportAuditPptx(audit, brand, site, roadmapData, categories = []) {
+export async function exportAuditPptx(audit, brand, site, roadmapData, categories = []) {
+  const PptxGenJS = await loadPptx();
   const d = buildAuditDeck(audit, brand, site, roadmapData, categories);
-  const p = new pptxgen();
+  const p = new PptxGenJS();
   p.defineLayout({ name: "W", width: 13.333, height: 7.5 });
   p.layout = "W";
   p.theme = { headFontFace: "Georgia", bodyFontFace: "Calibri" };
@@ -273,7 +274,8 @@ export function exportAuditPptx(audit, brand, site, roadmapData, categories = []
 }
 
 // ════════════════════════ PDF (présentable) ════════════════════════
-export function exportAuditPdf(audit, brand, site, roadmapData, categories = []) {
+export async function exportAuditPdf(audit, brand, site, roadmapData, categories = []) {
+  const jsPDF = await loadJsPDF();
   const d = buildAuditDeck(audit, brand, site, roadmapData, categories);
   // jsPDF (police standard WinAnsi) ne gère pas tout l'Unicode → on normalise.
   const sf = (t) => String(t == null ? "" : t)
